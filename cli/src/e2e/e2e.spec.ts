@@ -147,13 +147,22 @@ describe('trigger (current vs latest)', () => {
   })
 })
 
-describe('workspace folder name (what claude 2.1.274 tripped on)', () => {
-  it('keeps the session readable but drops every character a tool might rewrite', () => {
+describe('workspace folder name (what claude 2.1.274 and DeepSeek-V4-Flash-0731 tripped on)', () => {
+  it('keeps the session readable in the bundle, but gives the agent a one-separator cwd it cannot mis-transcribe', () => {
     const session = sessionName({ engine: 'claude', version: '2.1.274', testcase: 'grid-switch', at: new Date('2026-09-24T20:22:39Z') })
     expect(session).toContain('->') // the bundle keeps its readable name
     const dir = workspaceDirName(session)
-    expect(dir).toBe('claude-2.1.274_to_grid-switch-none--20260924T202239Z')
-    expect(dir).toMatch(/^[A-Za-z0-9._-]+$/)
+    expect(dir).toBe('claude-20260924T202239Z')
+    expect(dir).toMatch(/^[A-Za-z0-9-]+$/) // one separator class: no `.` or `_` to mis-type
+    expect(dir).not.toMatch(/[._]/)
+  })
+
+  it('drops the version/model/testcase from the agent cwd — the observed 2.1.277 failure was a one-char typo of them', () => {
+    // The failing run: DeepSeek-V4-Flash-0731 reconstructed the cwd and wrote `to_grid` as `to-grid`.
+    const session = sessionName({ engine: 'claude', version: '2.1.277', testcase: 'grid-switch', gridModel: 'none', at: new Date('2026-09-28T18:16:58Z') })
+    const dir = workspaceDirName(session)
+    expect(dir).toBe('claude-20260928T181658Z')
+    expect(dir).toMatch(/^[A-Za-z0-9-]+$/)
   })
 })
 

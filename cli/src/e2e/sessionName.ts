@@ -26,15 +26,27 @@ function sanitize(v: string): string {
 }
 
 /**
- * The agent's working folder, named after the session but with nothing a tool might reinterpret.
+ * The agent's working folder — short, and with ONE separator class, so a model that reconstructs the
+ * cwd when it writes a file has nothing confusable to mis-transcribe.
  *
- * The session name carries `->` and `@` (readable, grep-able, and fine as a bundle folder), and it
- * used to be the agent's cwd too. claude 2.1.274 turns the `->` in that path into `-` when it builds a
- * Write path, so its files landed in a sibling folder that does not exist for anyone else — every
- * write step failed as "out/hello-1.txt does not exist" with the file sitting next door (grid-dev,
- * 2026-09-25; 2.1.273 did not). A person's project folder does not look like that, so the agent's
- * does not either: letters, digits, `.`, `_` and `-` only.
+ * Two failures on this box, by two different actors, both from the folder being an unpronounceable
+ * 55-char string of mixed separators:
+ *
+ *   * claude 2.1.274 (the CLIENT) rewrote the `->` in the path to a `-` when it built a Write path,
+ *     so its file landed in a sibling folder and every write step failed as "out/hello-1.txt does not
+ *     exist" (grid-dev, 2026-09-25; 2.1.273 did not). That fix kept letters, digits, `.`, `_` and
+ *     `-` only.
+ *   * DeepSeek-V4-Flash-0731 (the MODEL, on a grid) reconstructed the cwd and wrote `to_grid` as
+ *     `to-grid` — a single misplaced character, because the name still mixed `_`, `-` and `.`
+ *     (grid-dev, 2026-09-28, claude 2.1.277). Same symptom: the file is written, "does not exist"
+ *     where the check looks, it just sits in a sibling directory.
+ *
+ * The full session name still identifies the run everywhere it matters (the trace, the bundle), so
+ * the working folder does not need to be readable back to a person: engine + timestamp, `-`
+ * separated, nothing else. `claude@2.1.277->grid-switch@none--20260928T181658Z` -> `claude-20260928T181658Z`.
  */
 export function workspaceDirName(session: string): string {
-  return session.replace(/->/g, '_to_').replace(/[^A-Za-z0-9._-]/g, '-')
+  const m = /^([^@]+)@.*--([0-9TZ]+)$/.exec(session)
+  if (!m) return `e2e-${session.replace(/[^A-Za-z0-9-]/g, '-')}`
+  return `${m[1]}-${m[2]}`
 }

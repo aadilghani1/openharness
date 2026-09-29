@@ -157,6 +157,13 @@ export interface ProbeOptions {
   readLog?: (kind: LogKind) => string[]
   /** A workspace file's content right now, or null when it does not exist (`workspace.ts readWorkspaceFile`). */
   readFile?: (relPath: string) => string | null
+  /**
+   * Locate bytes a model wrote to the wrong path, so a missed file check names the slip instead of
+   * just saying "does not exist". Given the check's own relative path and expected content, returns
+   * the path of a file in a SIBLING directory with exactly that content (`workspace.ts
+   * findMisdirectedFile`), or null. Absent, the miss note stays as it always was.
+   */
+  findMisdirectedFile?: (relPath: string, content: string) => string | null
   /** Whose wording the requests use (smokeChecks.ts scenarioFor): each names that engine's tool. */
   engine?: string
   /** The pane is "ready" once its screen stops changing for this long. A resumed TUI needs it. */
@@ -171,6 +178,7 @@ const DEFAULTS: Required<ProbeOptions> = {
   checkTimeoutMs: 90_000,
   readLog: () => [],
   readFile: () => null,
+  findMisdirectedFile: () => null,
   engine: 'claude',
   settleMs: 2_000,
   settleTimeoutMs: 60_000,
@@ -290,7 +298,18 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   if (check.log) note = `no ${check.log} log line for "${check.logPattern}"${logLines && logLines.length ? ` (got: ${logLines.join(' | ')})` : ''}`
   else if (check.file) {
     const content = o.readFile(check.file.path)
-    note = content === null ? `${check.file.path} does not exist` : `${check.file.path} is ${JSON.stringify(content.trim().slice(0, 120))}`
+    if (content !== null) {
+      note = `${check.file.path} is ${JSON.stringify(content.trim().slice(0, 120))}`
+    } else {
+      // It is not where the check looks. The model may have written the bytes to a sibling folder
+      // (a typo'd cwd) — say so, with where they actually landed, rather than a bare "does not exist".
+      let hint = `${check.file.path} does not exist`
+      if (check.file.equals !== undefined) {
+        const misdirected = o.findMisdirectedFile(check.file.path, check.file.equals)
+        if (misdirected) hint += ` — exact content found at ${misdirected} (wrong-path write)`
+      }
+      note = hint
+    }
   } else note = `${check.answerFromFile}'s token never appeared after the question`
   return { id: check.id, ref, status: 'stuck', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), note, ...(logLines ? { logLines } : {}), ...(dialogs.length ? { dialogs } : {}) }
 }

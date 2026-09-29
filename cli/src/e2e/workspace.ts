@@ -21,11 +21,11 @@
  *     codex's own `codex mcp add`, which writes `~/.codex/config.toml`, with its tools always allowed
  *     (`approveCodexMcpTools`) — and `removeCodexMcp` takes the entry out again when the run is over.
  */
-import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync, readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { randomInt } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import type { LogKind } from './smokeChecks.js'
 
 // Both assets are written from these strings, not copied from beside this file: the published CLI is
@@ -343,6 +343,49 @@ export function readWorkspaceFile(cwd: string, relPath: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Find a file a model mis-directed, by replicating the ONE likely slip.
+ *
+ * A grid model that reconstructs the working directory when it writes a file usually gets the cwd
+ * right but pastes it to a SIBLING directory — its own name with a single character changed (the
+ * cwd is long and mixes separators). DeepSeek-V4-Flash-0731 wrote `to_grid` as `to-grid`
+ * (grid-dev, 2026-09-28), so the bytes landed in a folder next to the run's own.
+ *
+ * `relPath` and `content` are the check's own (e.g. `out/hello-2.txt`, `hello from step 2`): walk
+ * `cwd`'s parent, check the same relative file in each SIBLING directory, and return the path of the
+ * match whose directory name shares the longest prefix with `cwd`'s own name — the typo'd sibling
+ * shares almost all of it, another run's directory shares very little. `null` when nothing matches.
+ */
+export function findMisdirectedFile(cwd: string, relPath: string, content: string): string | null {
+  const agentsDir = dirname(cwd)
+  const cwdName = basename(cwd)
+  const hay = content.trim()
+  let entries: string[]
+  try {
+    entries = readdirSync(agentsDir)
+  } catch {
+    return null
+  }
+  const prefixLen = (a: string, b: string): number => {
+    let i = 0
+    while (i < a.length && i < b.length && a[i] === b[i]) i++
+    return i
+  }
+  let best: { path: string; pref: number } | null = null
+  for (const name of entries) {
+    if (name === cwdName || name.startsWith('.')) continue
+    try {
+      if (readFileSync(join(agentsDir, name, relPath), 'utf8').trim() === hay) {
+        const pref = prefixLen(cwdName, name)
+        if (!best || pref > best.pref) best = { path: join(agentsDir, name, relPath), pref }
+      }
+    } catch {
+      /* no such file in this sibling — keep looking */
+    }
+  }
+  return best?.path ?? null
 }
 
 /** The log's lines right now (empty when it does not exist yet). */

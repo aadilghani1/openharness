@@ -34,7 +34,7 @@ import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
 import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
 
 const LAST_LEG = LEGS[LEGS.length - 1]
-import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp } from './workspace.js'
+import { prepareWorkspace, readLog, readWorkspaceFile, findMisdirectedFile, removeCodexMcp } from './workspace.js'
 import { sessionName, workspaceDirName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
 import { outDir, runDir } from './artifacts.js'
@@ -89,8 +89,11 @@ const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_
 async function checks(leg: LegOutcome['leg']): Promise<void> {
   const readLogs = workspace ? (kind: LogKind) => readLog(workspace!, kind) : undefined
   const readFile = workspace ? (rel: string) => readWorkspaceFile(workspace!, rel) : undefined
+  // A model that mis-types the cwd writes the file to a SIBLING folder; find where the bytes went so
+  // a missed file check says "wrong-path write" instead of a bare "does not exist".
+  const findWrong = workspace ? (rel: string, content: string) => findMisdirectedFile(workspace!, rel, content) : undefined
   const outcome = pane
-    ? await probeLeg(realTmux, pane, leg, { engine, checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}), ...(readFile ? { readFile } : {}) })
+    ? await probeLeg(realTmux, pane, leg, { engine, checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}), ...(readFile ? { readFile } : {}), ...(findWrong ? { findMisdirectedFile: findWrong } : {}) })
     : planned.find((l) => l.leg === leg)!
   legs.push(outcome)
   console.error(`[grid-e2e] ${leg}: ${outcome.checks.map((c) => `${c.id}=${c.status}`).join(' ')}${outcome.dialogs ? ` (answered: ${outcome.dialogs.join(', ')})` : ''}`)
