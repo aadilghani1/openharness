@@ -75,6 +75,11 @@ if(IDF_TARGET STREQUAL "esp32p4")
         esp_adc
         esp_codec_dev
         esp_driver_i2s
+        # Requirements discovery runs before custom prototype flags are available.
+        # Keep the standard Wi-Fi facade visible; the driver remains opt-in below.
+        esp_wifi
+        esp_netif
+        esp_event
     )
 
 else()   # esp32s3 — the round dial
@@ -196,6 +201,14 @@ if(DEVICE_HABITAT)
     )
 endif()
 
+if(DEVICE_PRO_WIFI)
+    if(NOT DEVICE_PRO_COMPANION OR NOT IDF_TARGET STREQUAL "esp32p4")
+        message(FATAL_ERROR "DEVICE_PRO_WIFI requires the Pro companion")
+    endif()
+    list(APPEND BOARD_SRCS "board/pro_wifi.c")
+    list(APPEND BOARD_REQUIRES esp_hosted esp_wifi_remote esp_wifi esp_netif esp_event)
+endif()
+
 idf_component_register(
     SRCS ${BOARD_SRCS}
     INCLUDE_DIRS
@@ -205,10 +218,43 @@ idf_component_register(
     REQUIRES ${BOARD_REQUIRES}
 )
 
+if(DEVICE_PRO_WIFI)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PRO_WIFI=1)
+endif()
+
 # The face the text compositor is drawing on. See HT_FACE_PX in ui/habitat/terminal.h for why this is a
 # build definition rather than a #if on the target.
 if(DEVICE_HABITAT AND IDF_TARGET STREQUAL "esp32p4")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE HT_FACE_PX=720)
+endif()
+
+if(DEVICE_PRO_COMPANION)
+    if(NOT DEVICE_HABITAT OR NOT IDF_TARGET STREQUAL "esp32p4")
+        message(FATAL_ERROR "DEVICE_PRO_COMPANION requires Habitat on ESP32-P4")
+    endif()
+    set(PRO_ART_DIR "${CMAKE_CURRENT_LIST_DIR}/../../prototype/pro-companion/generated")
+    if(NOT EXISTS "${PRO_ART_DIR}/pro_art.pack" OR NOT EXISTS "${PRO_ART_DIR}/pro_fonts.c")
+        message(FATAL_ERROR "Generate the Pro companion art and fonts before building")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PRO_COMPANION=1)
+    target_sources(${COMPONENT_LIB} PRIVATE "cable_speech.c" "ui/habitat/pro_canvas.c" "ui/habitat/pro_visual.c" "ui/habitat/pro_daemon.c"
+        "${PRO_ART_DIR}/pro_fonts.c")
+    target_include_directories(${COMPONENT_LIB} PRIVATE "ui/habitat" "${PRO_ART_DIR}")
+    target_add_binary_data(${COMPONENT_LIB} "${PRO_ART_DIR}/pro_art.pack" BINARY RENAME_TO pro_art_pack)
+endif()
+
+if(DEVICE_TIM_ILLUSTRATED)
+    if(NOT DEVICE_HABITAT OR NOT IDF_TARGET STREQUAL "esp32s3")
+        message(FATAL_ERROR "DEVICE_TIM_ILLUSTRATED requires Habitat on ESP32-S3")
+    endif()
+    set(TIM_ART_DIR "${CMAKE_CURRENT_LIST_DIR}/../../prototype/tim-illustrated/generated")
+    if(NOT EXISTS "${TIM_ART_DIR}/tim_art.pack")
+        message(FATAL_ERROR "Generate the illustrated Tim artwork before building")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_TIM_ILLUSTRATED=1)
+    target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/tim_illustrated.c")
+    target_include_directories(${COMPONENT_LIB} PRIVATE "${TIM_ART_DIR}")
+    target_add_binary_data(${COMPONENT_LIB} "${TIM_ART_DIR}/tim_art.pack" BINARY RENAME_TO tim_art_pack)
 endif()
 
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy

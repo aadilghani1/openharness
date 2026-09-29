@@ -11,6 +11,12 @@ void cable_transport_benchmark(void);
 #include "touch.h"
 #include "ui_perf.h"
 #include "audio_capture.h"
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_visual.h"
+#endif
+#ifdef DEVICE_TIM_ILLUSTRATED
+#include "tim_illustrated.h"
+#endif
 #include "cable_link.h"
 #include "board_pins.h"
 #include "board.h"
@@ -29,6 +35,7 @@ void cable_transport_benchmark(void);
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -59,7 +66,7 @@ static habitat_perf_t stats;
 static void (*power_cb)(bool);
 // Watch actual renderer progress independently of the USB and touch tasks.
 // A blocked panel call must not leave a responsive host controlling a frozen screen.
-enum { RENDER_MODEL, RENDER_POWER, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
+enum { RENDER_MODEL, RENDER_POWER, RENDER_PREPARE, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
        RENDER_SUBMIT, RENDER_HEALTH, RENDER_WAIT };
 static atomic_uint render_stage, render_progress_ms;
 static esp_timer_handle_t render_guard;
@@ -101,7 +108,7 @@ static void render_watch(void *arg)
     (void)arg;
     uint32_t elapsed = elapsed_since(&render_progress_ms);
     if (elapsed < 4000) return;
-    static const char *stages[] = {"model", "panel power", "damage", "raster",
+    static const char *stages[] = {"model", "panel power", "art preparation", "damage", "raster",
                                    "DMA wait", "panel submit", "health", "wake wait"};
     unsigned stage = atomic_load(&render_stage);
     ESP_LOGE("habitat", "renderer stalled %lu ms at %s; restarting", (unsigned long)elapsed,
@@ -200,7 +207,7 @@ void habitat_perf_get(habitat_perf_t *out)
 // has finished SCANNING a frame, which is what a buffer-switch scheme waits for; ours copies, so
 // waiting on the scan would fence against the wrong event and stall the first strip forever. The same
 // distinction is written up at length in ui/panel_pro.c, which learned it the hard way.
-static bool fence_release(void)
+static bool IRAM_ATTR fence_release(void)
 {
     ui_perf_flush_done();
     BaseType_t wake = pdFALSE;
@@ -210,7 +217,7 @@ static bool fence_release(void)
     return wake == pdTRUE;
 }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-static bool color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_event_data_t *event, void *ctx)
+static bool IRAM_ATTR color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_event_data_t *event, void *ctx)
 {
     (void)p;
     (void)event;
@@ -261,7 +268,11 @@ void display_wake(void)
 }
 void display_set_brightness(uint8_t value)
 {
+#ifdef DEVICE_PRO_COMPANION
+    pro_backlight_set(value < 20 ? 20 : value);
+#else
     (void)value; /* Palette brightness is applied once per scene, not per pixel. */
+#endif
 }
 static void wait_dma(void)
 {
@@ -347,7 +358,7 @@ static void heartbeat(void)
     // so a live cable cannot mask a stalled UI. Nothing is drawn for this once-a-minute report.
     ESP_LOGI("habitat",
              "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu inferred=%lu "
-             "frames=%lu bytes=%lu input_last_us=%lu muted=%d raster_max_us=%lu frame_max_us=%lu log_drops=%lu stack_free=%u%s%s",
+             "frames=%lu bytes=%lu input_last_us=%lu muted=%d raster_max_us=%lu frame_max_us=%lu prepare_max_us=%lu render_max_us=%lu log_drops=%lu stack_free=%u%s%s",
              (unsigned long)(now / 1000),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -356,7 +367,8 @@ static void heartbeat(void)
              (unsigned long)touch.inferred_releases, (unsigned long)perf.frames,
              (unsigned long)perf.bytes, (unsigned long)perf.input_last_us,
              (int)audio_notify_is_muted(), (unsigned long)perf.raster_max_us,
-             (unsigned long)perf.frame_max_us, (unsigned long)cable_link_dropped_logs(),
+             (unsigned long)perf.frame_max_us, (unsigned long)perf.prepare_max_us,
+             (unsigned long)perf.render_max_us, (unsigned long)cable_link_dropped_logs(),
              (unsigned)uxTaskGetStackHighWaterMark(NULL),
              touch.controller_ok ? "" : " TOUCH-DEAD",
              display_is_asleep() ? " asleep" : "");
@@ -423,6 +435,17 @@ static void render_task(void *arg)
         if (on && (fresh || force)) {
             if (!fresh)
                 scenes[front ^ 1] = scenes[front];
+            int64_t render_started = esp_timer_get_time();
+            render_progress(RENDER_PREPARE);
+#ifdef DEVICE_PRO_COMPANION
+            // Decompress only on the renderer, after releasing the UI model.
+            // Touch/voice state must never wait for an artwork cache miss.
+            pro_visual_prepare(&scenes[front ^ 1]);
+#endif
+#ifdef DEVICE_TIM_ILLUSTRATED
+            ht_tim_illustrated_prepare(&scenes[front ^ 1]);
+#endif
+            uint32_t prepare_us = (uint32_t)(esp_timer_get_time() - render_started);
             ht_damage_t damage;
             render_progress(RENDER_DAMAGE);
 #ifdef DEVICE_OCTOPUS_BENCH
@@ -434,6 +457,11 @@ static void render_task(void *arg)
 #endif
             if (damage.count)
                 paint(&scenes[front ^ 1], &damage);
+            uint32_t render_us = (uint32_t)(esp_timer_get_time() - render_started);
+            portENTER_CRITICAL(&stats_lock);
+            if (prepare_us > stats.prepare_max_us) stats.prepare_max_us = prepare_us;
+            if (render_us > stats.render_max_us) stats.render_max_us = render_us;
+            portEXIT_CRITICAL(&stats_lock);
 #ifdef DEVICE_OCTOPUS_BENCH
             octopus_perf_commit(tag, damage.pixels * 2, model_us, damage_us);
 #endif
@@ -504,7 +532,14 @@ void display_init(void)
         assert(pixels[i]);
     }
     display_bump_activity();
-    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 6144, NULL, 5, &renderer, 1) ==
+#if defined(DEVICE_PRO_COMPANION) || defined(DEVICE_TIM_ILLUSTRATED)
+    // The ROM inflater keeps its Huffman tables on the calling task's stack.
+    // Both illustrated renderers need room for that state, unlike ASCII Tim.
+    const unsigned render_stack = 24576;
+#else
+    const unsigned render_stack = 6144;
+#endif
+    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", render_stack, NULL, 5, &renderer, 1) ==
            pdPASS);
     touch_init();
     ESP_LOGI("habitat", "direct C renderer on a %dpx face: two %d-byte internal DMA buffers over %s",

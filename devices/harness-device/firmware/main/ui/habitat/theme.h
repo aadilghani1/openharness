@@ -4,6 +4,19 @@
 // Canvas matches the desktop terminal pane and Cmd N / Cmd P surfaces.
 // All colors are RGB565-representable at full brightness. Conversion and the
 // existing saved brightness setting remain at the UI boundary; no theme heap.
+#ifdef DEVICE_PRO_COMPANION
+#define HT_THEME_CANVAS    0xf4f2e8u
+#define HT_THEME_TEXT      0x263b34u
+#define HT_THEME_SECONDARY 0x627466u
+#define HT_THEME_ACCENT    0x78558eu
+#define HT_THEME_SELECTION 0xe6e8dcu
+#define HT_THEME_ERROR     0x9b3d4au
+#define HT_PATTERN_X 192
+#define HT_PATTERN_Y 252
+#define HT_PATTERN_STEP_X 168
+#define HT_PATTERN_STEP_Y 168
+#define HT_PATTERN_RADIUS 52
+#else
 #define HT_THEME_CANVAS    0x181818u
 #define HT_THEME_TEXT      0xefe7deu
 #define HT_THEME_SECONDARY 0xada6adu
@@ -14,6 +27,12 @@
 #endif
 #define HT_THEME_SELECTION 0x392c4au
 #define HT_THEME_ERROR     0xe7a6adu
+#define HT_PATTERN_X 157
+#define HT_PATTERN_Y 180
+#define HT_PATTERN_STEP_X 80
+#define HT_PATTERN_STEP_Y 74
+#define HT_PATTERN_RADIUS 30
+#endif
 // Desktop activityColor() / darkTerminalTheme ANSI status colors. Only the
 // inbox status mark gets color; pane name, message and navigation stay neutral.
 #define HT_THEME_DONE      0x0dbc79u

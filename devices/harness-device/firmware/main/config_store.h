@@ -32,6 +32,14 @@ bool config_save_habitat_options(uint8_t options);
 // Stable character id. Missing values use the image's default; the UI validates ids.
 uint8_t config_load_habitat_character(uint8_t fallback);
 bool config_save_habitat_character(uint8_t character);
+// Opt-in illustrated-art installation: select Tim once, then retain user choices.
+bool config_select_illustrated_tim_once(void);
+
+// Pro appearance is one preference: stable daemon id in the low byte, scene
+// choice in the high byte. The UI validates both and supplies the migration
+// fallback. This key never changes the round dial's character preference.
+uint16_t config_load_pro_appearance(uint16_t fallback);
+bool config_save_pro_appearance(uint16_t value);
 
 // The voice language the dial captures in. The daemon PROPOSES one from the computer's locale on every
 // `welcome`; once the user has picked here, this wins — the person holding the dial may well speak

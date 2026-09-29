@@ -93,6 +93,9 @@ static int paused_snprintf(char *out,size_t n,const char *format,...) {
     }
     return result;
 }
+// macOS's fortified stdio already supplies snprintf as a function-like macro.
+// This fixture intentionally interposes it to pause the model-list reader.
+#undef snprintf
 #define snprintf paused_snprintf
 static void handle_models(const cJSON *p);
 static void *deliver(void *arg) {(void)arg;reader_thread=true;handle_models(response);return NULL;}

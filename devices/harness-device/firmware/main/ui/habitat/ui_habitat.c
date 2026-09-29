@@ -9,9 +9,18 @@
 #include "draft.h"
 #include "gestures.h"
 #include "character.h"
+#ifdef DEVICE_TIM_ILLUSTRATED
+#include "tim_illustrated.h"
+#endif
 #include "perf_bench.h"
 #include "command_face.h"
 #include "theme.h"
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_canvas.h"
+#include "pro_visual.h"
+#include "audio_speech.h"
+#include "../companion_speech.h"
+#endif
 #ifdef DEVICE_CREATURE_GALLERY
 #include "creature_gallery.h"
 static ht_gallery_t gallery;
@@ -49,6 +58,10 @@ static ht_gallery_t gallery;
 #define PANE_RESULT_BYTES 1024
 typedef enum {
     HOME,
+#ifdef DEVICE_PRO_COMPANION
+    LAUNCHER,
+    DAEMONS, SCENES,
+#endif
     AGENTS,
     AGENT,
     READER,
@@ -74,6 +87,10 @@ typedef enum {
     A_NONE,
     A_FIND, A_FORM, A_FORM_MAIN, A_FORM_BACK, A_FORM_SEND, A_FORM_SAY,
     A_HOME,
+#ifdef DEVICE_PRO_COMPANION
+    A_LAUNCHER,
+    A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
+#endif
     A_AGENTS,
     A_AGENT,
     A_READER,
@@ -121,6 +138,12 @@ typedef enum {
     A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD,
     A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_DRAFT_COMMAND, A_NOTICE_READ
 } action_kind_t;
+#ifdef DEVICE_PRO_COMPANION
+typedef enum {
+    PRO_SPEECH_WARM, PRO_SPEECH_HAPPY, PRO_SPEECH_EXCITED, PRO_SPEECH_GENTLE,
+    PRO_SPEECH_SAD, PRO_SPEECH_THOUGHTFUL, PRO_SPEECH_CURIOUS, PRO_SPEECH_ANGRY
+} pro_speech_emotion_t;
+#endif
 typedef struct {
     action_kind_t kind;
     int value;
@@ -187,6 +210,17 @@ static EXT_RAM_BSS_ATTR struct {
     int bulk, offset;
     view_t view, voice_return;
     bool quiet, nap, locked, lock_armed, rim_enabled, focus_face, straight_title;
+#ifdef DEVICE_PRO_COMPANION
+    pro_scene_id_t scene_choice, preview_scene;
+    ht_character_t preview_character;
+    struct {
+        uint32_t id, poll_due;
+        char agent[ID_MAX], caption[240];
+        uint8_t emotion, level;
+        bool playing, pending;
+    } speech;
+    uint32_t speech_error_until;
+#endif
     bool muted;
     int pet_pose;
     uint32_t pet_until, nap_until, last_celebration;
@@ -276,6 +310,13 @@ static ht_rect_t pressed_rect;
 static bool queue(action_t a);
 static void view(view_t v);
 static const char *voice_status(void);
+#ifdef DEVICE_PRO_COMPANION
+static void pro_speech_cancel(bool any);
+static void pro_speech_tick(uint32_t now);
+static bool pro_speech_visible(void);
+static void pro_render_home(ht_scene_t *f);
+static void pro_render_voice(ht_scene_t *f);
+#endif
 static uint32_t ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static void copy(char *dst, size_t cap, const char *src)
 {
@@ -509,6 +550,9 @@ static int ensure(const char *id)
 }
 static void input_cancel(void)
 {
+#ifdef DEVICE_PRO_COMPANION
+    pro_speech_cancel(true);
+#endif
     ht_gesture_cancel(&gesture);
     ht_workspace_cancel_touch(&workspace);
     ht_scroll_cancel(&scroll);
@@ -586,6 +630,10 @@ static bool is_question(const char *id)
 }
 static uint16_t color(unsigned rgb)
 {
+#ifdef DEVICE_PRO_COMPANION
+    // An LCD's brightness belongs to its backlight. Keep ink contrast intact.
+    return ht_rgb(rgb);
+#else
     unsigned b = s.brightness < 8 ? 8 : s.brightness;
     if (rgb == HT_THEME_CANVAS) {
         // RGB565 has an extra green bit. Independently truncating a dim gray
@@ -595,6 +643,7 @@ static uint16_t color(unsigned rgb)
     }
     return ht_rgb((((rgb >> 16) * b / 100) << 16) | ((((rgb >> 8) & 255) * b / 100) << 8) |
                   ((rgb & 255) * b / 100));
+#endif
 }
 #define BG color(HT_THEME_CANVAS)
 #define FG color(HT_THEME_TEXT)
@@ -626,7 +675,13 @@ static void center(ht_scene_t *f, int y, const char *t, uint16_t c)
 }
 static void render_brand(ht_scene_t *f)
 {
+#ifdef DEVICE_PRO_COMPANION
+    ht_pro_center(f, 276, &ht_pro_56, FG, "Harness");
+    ht_pro_center(f, 374, &ht_pro_32, DIM, "A little update.");
+    ht_pro_center(f, 438, &ht_pro_24, DIM, "Keep your companion connected.");
+#else
     center(f, (466 - UI_FONT->height) / 2, "Harness", FG);
+#endif
 }
 static void control(ht_scene_t *f, int x, int y, int w, const char *label, action_kind_t a,
                     int value, bool enabled)
@@ -675,13 +730,21 @@ static int pro_panes_of(const char *id)
  */
 static bool pro_written_control(action_kind_t a)
 {
+#ifdef DEVICE_PRO_COMPANION
+    return a != A_NONE && a != A_PET && a != A_DRAFT_EDIT;
+#else
     return a == A_VOICE_ABORT || a == A_TAB || a == A_TAB_STRIP_LEFT || a == A_TAB_STRIP_RIGHT ||
            a == A_INBOX || a == A_AGENT || a == A_AGENTS || a == A_NOTICE;
+#endif
 }
 #endif
 static bool home_footer(action_kind_t action)
 {
+#ifdef DEVICE_PRO_COMPANION
+    return action != A_NONE && action != A_PET;
+#else
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN || action == A_CARRY_DROP;
+#endif
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -731,11 +794,185 @@ static bool choose_character(int id)
 {
     if ((unsigned)id >= HT_CHARACTER_COUNT) return false;
     if (character.id == (ht_character_id_t)id) return true;
+#ifdef DEVICE_PRO_COMPANION
+    if (!queue((action_t){.kind=A_APPEAR_SAVE, .value=id | (s.scene_choice << 8)})) return false;
+#else
     if (!queue((action_t){.kind=A_CHARACTER_SAVE, .value=id})) return false;
+#endif
     ht_character_select(&character, (ht_character_id_t)id);
     change();
     return true;
 }
+#ifdef DEVICE_PRO_COMPANION
+static bool pro_appearance_view(void)
+{
+    return s.view == DAEMONS || s.view == SCENES;
+}
+static void pro_appearance_open(view_t target)
+{
+    view(target);
+    if (s.view != target) return;
+    s.preview_character = character;
+    memset(&s.preview_character.motion, 0, sizeof s.preview_character.motion);
+    memset(&s.preview_character.delivery, 0, sizeof s.preview_character.delivery);
+    s.preview_scene = s.scene_choice;
+}
+static void pro_appearance_move(int delta)
+{
+    if (!pro_appearance_view()) return;
+    if (s.view == DAEMONS) {
+        int count = (int)pro_daemon_count();
+        int index = ((int)pro_daemon_index(s.preview_character.id) + delta + count) % count;
+        ht_character_select(&s.preview_character, pro_daemon_at((unsigned)index)->id);
+    } else {
+        s.preview_scene = (pro_scene_id_t)(((int)s.preview_scene + delta + PRO_SCENE_COUNT) % PRO_SCENE_COUNT);
+    }
+    change();
+}
+static bool pro_appearance_use(void)
+{
+    if (!pro_appearance_view()) return false;
+    ht_character_id_t id = s.preview_character.id;
+    pro_scene_id_t scene = s.preview_scene;
+    if ((unsigned)id >= HT_CHARACTER_COUNT || (unsigned)scene >= PRO_SCENE_COUNT) return false;
+    if (id != character.id || scene != s.scene_choice) {
+        if (!queue((action_t){.kind=A_APPEAR_SAVE, .value=(int)id | ((int)scene << 8)})) return false;
+        ht_character_select(&character, id);
+        s.scene_choice = scene;
+    }
+    view(HOME);
+    return true;
+}
+static bool pro_speech_allowed(const char *agent_id)
+{
+    const agent_t *a = active();
+    return s.ready && s.connected && !s.loading && !s.locked && !display_is_asleep() &&
+        (s.view == HOME || s.view == AGENT) && a && agent_id && !strcmp(a->id, agent_id) &&
+        !s.voice_open && !s.voice_start_pending && !s.voice_waiting && !audio_client_active() &&
+        !s.touch_down && !s.nap && !s.voice_retry_until && !carry.active &&
+        !carry.error[0] && !visit.pending && !is_question(a->id);
+}
+static bool pro_speech_visible(void)
+{
+    return s.speech.id && pro_speech_allowed(s.speech.agent);
+}
+static uint8_t pro_speech_emotion(const char *emotion)
+{
+    static const char *const names[] = {
+        "warm", "happy", "excited", "gentle", "sad", "thoughtful", "curious", "angry"
+    };
+    for (unsigned i = 0; emotion && i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(emotion, names[i])) return (uint8_t)i;
+    return PRO_SPEECH_WARM;
+}
+static void pro_speech_caption(char *dst, size_t cap, const char *src)
+{
+    if (!cap) return;
+    size_t used = 0;
+    bool space = false, clipped = false;
+    while (*src) {
+        const char *start = src;
+        uint32_t cp = ht_utf8_next(&src);
+        if (cp <= 32 || cp == 127) { space = used > 0; continue; }
+        size_t bytes = cp == 0xfffd ? 1 : (size_t)(src - start);
+        if (used + space + bytes >= cap) { clipped = true; break; }
+        if (space) dst[used++] = ' ';
+        if (cp == 0xfffd) dst[used] = '?';
+        else memcpy(dst + used, start, bytes);
+        used += bytes;
+        space = false;
+    }
+    if (clipped && cap >= 4) {
+        while (used && (used + 3 >= cap || dst[used - 1] == ' ')) {
+            used--;
+            while (used && ((unsigned char)dst[used] & 0xc0) == 0x80) used--;
+        }
+        memcpy(dst + used, "\xe2\x80\xa6", 3);
+        used += 3;
+    }
+    dst[used] = 0;
+}
+static void pro_speech_cancel(bool any)
+{
+    // abort is a metadata update plus worker notification, never codec I/O.
+    // Cancelling even the not-yet-presented session closes the begin/DOWN race.
+    if (any || s.speech.id) audio_speech_abort(any ? 0 : s.speech.id);
+    if (s.speech.id) { memset(&s.speech, 0, sizeof s.speech); change(); }
+}
+bool ui_companion_speech_begin(uint32_t id, const char *agent_id,
+                               const char *caption, const char *emotion)
+{
+    if (!id || !agent_id || !*agent_id || strnlen(agent_id, ID_MAX) >= ID_MAX ||
+        !caption || !*caption || strnlen(caption, 1025) > 1024) return false;
+    display_lock();
+    audio_speech_state_t audio;
+    audio_speech_snapshot(&audio);
+    bool empty_session = audio.id == id && audio.active && !audio.playing && !audio.received &&
+        audio.error == AUDIO_SPEECH_ERROR_NONE;
+    // The audio worker can finish and accept a new empty session between two
+    // 40 ms UI polls. Its new ID proves the old presentation has already ended.
+    if (empty_session && s.speech.id && s.speech.id != id) {
+        memset(&s.speech, 0, sizeof s.speech);
+        change();
+    }
+    bool accepted = !s.speech.id && pro_speech_allowed(agent_id) && empty_session;
+    if (accepted) {
+        pro_speech_caption(s.speech.caption, sizeof s.speech.caption, caption);
+        accepted = s.speech.caption[0] != 0;
+        if (accepted) {
+            s.speech.id = id;
+            COPY(s.speech.agent, agent_id);
+            s.speech.emotion = pro_speech_emotion(emotion);
+            s.speech.pending = true;
+            s.speech.poll_due = ms();
+            s.speech_error_until = 0;
+            change();
+        }
+    }
+    display_unlock();
+    return accepted;
+}
+void ui_companion_speech_clear(uint32_t id)
+{
+    display_lock();
+    if (!id || s.speech.id == id) pro_speech_cancel(id == 0);
+    display_unlock();
+}
+static void pro_speech_tick(uint32_t now)
+{
+    if (s.speech_error_until && (int32_t)(now - s.speech_error_until) >= 0) {
+        s.speech_error_until = 0;
+        change();
+    }
+    if (!s.speech.id) return;
+    if (!pro_speech_allowed(s.speech.agent)) { pro_speech_cancel(false); return; }
+    if ((int32_t)(now - s.speech.poll_due) < 0) return;
+    s.speech.poll_due = now + 40;
+    audio_speech_state_t audio;
+    audio_speech_snapshot(&audio);
+    if (audio.id != s.speech.id || (!audio.active && !audio.playing) ||
+        audio.error != AUDIO_SPEECH_ERROR_NONE) {
+        bool failed = audio.id == s.speech.id &&
+            (audio.error == AUDIO_SPEECH_ERROR_UNAVAILABLE || audio.error == AUDIO_SPEECH_ERROR_CODEC ||
+             audio.error == AUDIO_SPEECH_ERROR_TIMEOUT);
+        // Normal end is observed only after the last speaker DMA drain. Never
+        // dismiss or overwrite the pane's underlying result while speaking.
+        memset(&s.speech, 0, sizeof s.speech);
+        if (failed) s.speech_error_until = now + 5000;
+        change();
+        return;
+    }
+    bool playing = audio.playing;
+    bool pending = !playing;
+    uint8_t level = playing ? (audio.level > 4 ? 4 : audio.level) : 0;
+    bool visible_change = s.speech.playing != playing || s.speech.pending != pending ||
+        (!s.quiet && s.speech.level != level);
+    s.speech.playing = playing;
+    s.speech.pending = pending;
+    s.speech.level = level;
+    if (visible_change) change();
+}
+#endif
 static ht_character_mood_t character_mood(void)
 {
     if (!s.connected)
@@ -748,16 +985,33 @@ static ht_character_mood_t character_mood(void)
         return HT_CHARACTER_BOOPED;
     if (!s.quiet && s.pet_pose == 3)
         return HT_CHARACTER_DONE;
+#ifdef DEVICE_PRO_COMPANION
+    if (active() && active()->busy)
+#else
     if (working() > 0)
+#endif
         return HT_CHARACTER_WORKING;
     return HT_CHARACTER_IDLE;
 }
+#ifdef DEVICE_PRO_COMPANION
+static ht_character_mood_t pro_surface_mood(void)
+{
+    if (s.view == VOICE) return !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ?
+        HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING;
+    if (pro_speech_visible()) return s.speech.playing ? HT_CHARACTER_LISTENING : HT_CHARACTER_IDLE;
+    return character_mood();
+}
+#endif
 static bool home_caption_rotates(void)
 {
+#ifdef DEVICE_PRO_COMPANION
+    return false; // Pane identity and activity each have their own stable line.
+#else
     const agent_t *a = active();
     return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
         !s.loading && !s.nap && !s.quiet && !s.locked && !display_is_asleep() &&
         !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
+#endif
 }
 static bool home_caption_tick(uint32_t now)
 {
@@ -786,6 +1040,14 @@ static uint32_t status_wake_ms(uint32_t now)
 }
 static void surface_tick(uint32_t now)
 {
+#ifdef DEVICE_PRO_COMPANION
+    pro_speech_tick(now);
+    if (pro_appearance_view() && !s.locked && !display_is_asleep()) {
+        ht_character_tick(&s.preview_character, now, HT_CHARACTER_IDLE, s.quiet, true,
+                          false, HT_WIDTH / 2, 0, 0);
+        if (pro_visual_changed(&s.preview_character, HT_CHARACTER_IDLE, now, s.quiet, false)) change();
+    }
+#endif
     notice_flush_reads(now);
     if (s.view == TABS && !s.locked && !display_is_asleep() && ht_tab_carousel_tick(&tab_carousel, now)) change();
     if (home_caption_tick(now)) change();
@@ -793,7 +1055,11 @@ static void surface_tick(uint32_t now)
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !s.locked && !display_is_asleep() &&
+#ifdef DEVICE_PRO_COMPANION
+        (main || s.view == VOICE);
+#else
         ((main && s.connected && !s.loading) || s.view == VOICE);
+#endif
     uint32_t held = now - s.touch_started;
     bool review_preview = cable_client_supports(CABLE_FEATURE_DRAFT) &&
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
@@ -806,16 +1072,39 @@ static void surface_tick(uint32_t now)
         pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
+#ifdef DEVICE_PRO_COMPANION
+        view(LAUNCHER);
+#else
         tabs_open();
+#endif
         return;
     }
-    ht_character_mood_t mood = s.view == VOICE ?
+    ht_character_mood_t mood =
+#ifdef DEVICE_PRO_COMPANION
+        pro_surface_mood();
+#else
+        s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING) :
         character_mood();
-    if (ht_character_tick(&character, now, mood, s.quiet, visible,
-                           s.touch_down && !s.touch_cancelled, s.last_x,
-                           mood == HT_CHARACTER_LISTENING ? audio_client_input_level() : 0, s.character_activity))
-        change();
+#endif
+    bool changed = ht_character_tick(&character, now, mood, s.quiet, visible,
+                           s.touch_down && !s.touch_cancelled,
+                           s.last_x,
+                           mood == HT_CHARACTER_LISTENING ? audio_client_input_level() : 0, s.character_activity);
+#ifdef DEVICE_PRO_COMPANION
+    (void)changed; // ASCII motion is shared state; only visible bitmap changes need paint.
+    bool pro_visible = !s.locked && !display_is_asleep() && (main || s.view == VOICE);
+    ht_character_delivery_tick(&character, now, notice_unread() > 0, s.notice_sequence,
+                               pro_visible && main && !s.quiet);
+    ht_character_t portrait = character;
+    if (pro_speech_visible()) {
+        portrait.motion.reaction.pose.level = s.speech.level;
+        portrait.motion.reaction.pose.emotion = s.speech.emotion;
+    }
+    if (pro_visible && pro_visual_changed(&portrait, mood, now, s.quiet, main && notice_unread() > 0)) change();
+#else
+    if (changed) change();
+#endif
 }
 static void page_controls(ht_scene_t *f, int count)
 {
@@ -1283,10 +1572,18 @@ static bool question_view(view_t v)
 // THREE ROWS, NOT FIVE. Five at 38 px run 146 -> 336, past the position line; three end at 260.
 // A page is 348 / 17 = 20 cells x 3 = 60 characters, where it used to be 29 x 5 = 145 — so a long
 // question is three pages now, not one. That is the honest cost of the size.
+#ifdef DEVICE_PRO_COMPANION
+#define Q_ROWS 6
+#else
 #define Q_ROWS 3
+#endif
 static int question_rows(const char *value)
 {
+#ifdef DEVICE_PRO_COMPANION
+    return ht_pro_text_rows(value, &ht_pro_32, 608);
+#else
     return ht_text_rows(value, UI_FONT, 348);
+#endif
 }
 static void question_text(ht_scene_t *f, const char *value)
 {
@@ -1629,7 +1926,11 @@ static void render_form(ht_scene_t *f)
             !form.pending && (form.failed || (p->active && p->enabled && !p->busy)));
 }
 // Keep the scroll limit and drawn rows identical at the 28 px text size.
+#ifdef DEVICE_PRO_COMPANION
+#define DRAFT_ROWS 6
+#else
 #define DRAFT_ROWS 3
+#endif
 static void render_draft(ht_scene_t *f)
 {
     const ht_draft_page_t *p = &draft.page;
@@ -1693,13 +1994,31 @@ static void render_settings(ht_scene_t *f)
 }
 static void render_lock(ht_scene_t *f)
 {
+#ifdef DEVICE_PRO_COMPANION
+    ht_pro_center(f, 56, &ht_pro_42, FG, "A quiet moment.");
+    ht_pro_center(f, 126, &ht_pro_24, DIM, "Draw your pattern to return.");
+    for (int i = 0; i < 9; i++) {
+        int x = HT_PATTERN_X + (i % 3) * HT_PATTERN_STEP_X;
+        int y = HT_PATTERN_Y + (i / 3) * HT_PATTERN_STEP_Y;
+        bool selected = s.pattern_mask & (1 << i);
+        ht_pro_rect(f, x - 24, y - 24, 48, 48, 24, selected ? ACCENT : SEL);
+        ht_pro_rect(f, x - 7, y - 7, 14, 14, 7, selected ? color(0xfffdf5) : DIM);
+    }
+    ht_pro_center(f, 668, &ht_pro_24, s.pattern_error ? ERROR : DIM,
+                  s.pattern_error ? "That pattern didn't match. Try again." : "Your companion is locked.");
+#else
     center(f, 89, "Draw your pattern", FG);
     for (int i = 0; i < 9; i++) {
         int x = 137 + (i % 3) * 80, y = 156 + (i / 3) * 74;
         ht_text(f, x, y, 40, &ht_lock_dot, s.pattern_mask & (1 << i) ? ACCENT : DIM, BG, "o");
     }
     center(f, 386, s.pattern_error ? "Try again" : "Locked", DIM);
+#endif
 }
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_controls.inc"
+#include "pro_home.inc"
+#endif
 bool habitat_scene_take(ht_scene_t *f)
 {
 #ifdef DEVICE_CREATURE_GALLERY
@@ -1717,7 +2036,18 @@ bool habitat_scene_take(ht_scene_t *f)
         render_lock(f);
         return true;
     }
+#ifdef DEVICE_PRO_COMPANION
+    if (s.view == HOME || s.view == AGENT) { pro_render_home(f); return true; }
+    if (s.view == VOICE) { pro_render_voice(f); return true; }
+    if (pro_render_controls(f)) return true;
+#endif
     switch (s.view) {
+#ifdef DEVICE_PRO_COMPANION
+    case LAUNCHER:
+    case DAEMONS:
+    case SCENES:
+        break; // Handled by the Pro controls sheet above.
+#endif
     case FORM:
         render_form(f);
         break;
@@ -2003,6 +2333,28 @@ static void dispatch(action_t a)
     if (s.locked)
         return;
     switch (a.kind) {
+#ifdef DEVICE_PRO_COMPANION
+    case A_LAUNCHER:
+        view(LAUNCHER);
+        break;
+    case A_DAEMONS:
+        pro_appearance_open(DAEMONS);
+        break;
+    case A_SCENES:
+        pro_appearance_open(SCENES);
+        break;
+    case A_APPEAR_PREVIOUS:
+        pro_appearance_move(-1);
+        break;
+    case A_APPEAR_NEXT:
+        pro_appearance_move(1);
+        break;
+    case A_APPEAR_USE:
+        pro_appearance_use();
+        break;
+    case A_APPEAR_SAVE:
+        break; // Worker-only persistence, never emitted by browsing.
+#endif
     case A_DRAFT_EDIT:
     case A_DRAFT_APPEND:
     case A_DRAFT_UNDO:
@@ -2161,10 +2513,13 @@ static void dispatch(action_t a)
     case A_TAB:
         if (!s.connected || s.voice_open || s.loading || workspace_index(a.id)<0) break;
 #if HT_FACE_PX >= 720
-        // Choosing a tab asks to see ITS PANES — unless there is only one, in which case the pane IS
-        // the tab and the companion is the answer.
+#ifdef DEVICE_PRO_COMPANION
+        if (!strcmp(a.id,s.selected_tab)) { view(HOME); break; }
+        s.land_on_desk = false; // A workspace change returns to its companion; Panes is explicit.
+#else
         if (!strcmp(a.id,s.selected_tab)) { view(pro_panes_of(a.id) > 1 ? AGENTS : HOME); break; }
         s.land_on_desk = pro_panes_of(a.id) > 1;
+#endif
 #else
         if (!strcmp(a.id,s.selected_tab)) { view(HOME); break; }
 #endif
@@ -2172,7 +2527,9 @@ static void dispatch(action_t a)
             a.revision=workspace.serial;
             if (!queue(a)) { workspace_failed("Device busy. Choose the tab again."); break; }
             ht_visit_close(&visit); s.pending_focus[0]=0;
-#if HT_FACE_PX >= 720
+#ifdef DEVICE_PRO_COMPANION
+            view(HOME); s.loading=true;
+#elif HT_FACE_PX >= 720
             // NO INTERSTITIAL. Going to MESSAGE meant leaving the companion for a near-empty screen
             // and coming back — two whole-face repaints for well under a second, which reads as the
             // screen flashing rather than as progress. The panes page is where this is going anyway.
@@ -2195,6 +2552,9 @@ static void dispatch(action_t a)
         a.kind = A_VOICE; a.value = 7;
         dispatch(a); break;
     case A_VOICE:
+#ifdef DEVICE_PRO_COMPANION
+        pro_speech_cancel(true);
+#endif
         if (a.value != 2 && a.value != 4 && a.value != 5 && a.value != 6 && a.value != 7 && s.view != SELECTION && carry.error[0]) {
             COPY(s.title,"Carried text"); copy(s.message,sizeof carry.error,carry.error); view(MESSAGE); break;
         }
@@ -2313,6 +2673,9 @@ static void dispatch(action_t a)
         choose_character(a.value);
         break;
     case A_NAP:
+#ifdef DEVICE_PRO_COMPANION
+        pro_speech_cancel(true);
+#endif
         s.nap = !s.nap;
         s.nap_until = ms() + 15 * 60 * 1000;
         change();
@@ -2390,6 +2753,9 @@ static void dispatch(action_t a)
         // Advance to a preset, never beyond 100 or through an overflowing byte.
         s.brightness = s.brightness >= 100 ? 25 : (s.brightness / 25 + 1) * 25;
         a.value = s.brightness;
+#ifdef DEVICE_PRO_COMPANION
+        display_set_brightness((uint8_t)((s.brightness * 255 + 50) / 100));
+#endif
         queue(a);
         change();
         break;
@@ -2442,6 +2808,9 @@ static void dispatch(action_t a)
         break;
     case A_LOCK:
         if (config_lock_enabled()) {
+#ifdef DEVICE_PRO_COMPANION
+            pro_speech_cancel(true);
+#endif
             s.locked = true;
             change();
         }
@@ -2576,6 +2945,12 @@ static void worker(void *unused)
             if (!config_save_habitat_character((uint8_t)a.value))
                 ui_cable_toast("Character changed; saving failed.");
             break;
+#ifdef DEVICE_PRO_COMPANION
+        case A_APPEAR_SAVE:
+            if (!config_save_pro_appearance((uint16_t)a.value))
+                ui_cable_toast("Appearance changed; saving failed.");
+            break;
+#endif
         case A_HABITAT_SAVE:
             if (!config_save_habitat_options((uint8_t)a.value))
                 ui_cable_toast("Preference changed; saving failed.");
@@ -2625,6 +3000,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
 #endif
     if (!s.ready)
         return;
+#ifdef DEVICE_PRO_COMPANION
+    if (down && !s.touch_down) pro_speech_cancel(true);
+#endif
     if (s.locked) {
         if (down && !s.touch_down) {
             s.pattern[0] = 0;
@@ -2634,8 +3012,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         }
         if (down)
             for (int i = 0; i < 9; i++) {
-                int dx = x - (157 + i % 3 * 80), dy = y - (180 + i / 3 * 74);
-                if (dx * dx + dy * dy < 30 * 30 && !(s.pattern_mask & (1 << i))) {
+                int dx = x - (HT_PATTERN_X + i % 3 * HT_PATTERN_STEP_X);
+                int dy = y - (HT_PATTERN_Y + i / 3 * HT_PATTERN_STEP_Y);
+                if (dx * dx + dy * dy < HT_PATTERN_RADIUS * HT_PATTERN_RADIUS && !(s.pattern_mask & (1 << i))) {
                     size_t n = strlen(s.pattern);
                     snprintf(s.pattern + n, sizeof(s.pattern) - n, "%s%d", n ? "," : "", i);
                     s.pattern_mask |= 1 << i;
@@ -2692,11 +3071,17 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         }
         // A visible footer owns its entire contact, including the nearby rim.
         if (surface && !home_footer(pressed_action.kind) && s.rim_enabled && ht_scroll_on_rim(x, y)) pressed_action.kind = A_NONE;
+#ifndef DEVICE_PRO_COMPANION
         if (surface && pressed_action.kind==A_TABS && !s.touch_brake)
             ht_workspace_touch(&workspace,workspace_index(s.selected_tab),s.tab_count,x,y,now);
+#endif
 #if HT_FACE_PX >= 720
         // The strip's band is the first row of the face — 26..82 plus a thumb's margin.
+#ifdef DEVICE_PRO_COMPANION
+        s.tab_strip_held = false;
+#else
         s.tab_strip_held = (s.view == HOME || s.view == AGENT || s.view == AGENTS) && y < 96;
+#endif
         s.tab_strip_drag = 0;
 #endif
         if (s.view == TABS && pressed_action.kind == A_TAB) ht_tab_carousel_begin(&tab_carousel, x, now);
@@ -2718,7 +3103,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
     } else if (down && !s.touch_cancelled) {
         ht_gesture_move(&gesture, x, y);
         if (surface && home_footer(pressed_action.kind)) {
+#ifndef DEVICE_PRO_COMPANION
             if (pressed_action.kind==A_TABS && ht_workspace_move(&workspace,x,y,gesture.axis,now)) change();
+#endif
         } else if (s.view == TABS) {
             if (gesture.axis == 2 && ht_tab_carousel_move(&tab_carousel, x, now)) change();
         } else if ((s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1) {
@@ -2778,23 +3165,12 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (s.tab_strip_held && gesture.moved && gesture.axis == 2) {
             // The strip consumed this contact while it was moving; its end is not a choice.
         } else if (!tab_contact && pro_written_control(pressed_action.kind) &&
+                   !s.touch_cancelled && !gesture.guarded && !gesture.moved && !scrolled &&
+                   now - s.touch_started >= 25 && now - s.touch_started < 5000 &&
                    x >= pressed_rect.x && x < pressed_rect.x + pressed_rect.w &&
                    y >= pressed_rect.y && y < pressed_rect.y + pressed_rect.h) {
-            /*
-             * A BUTTON, JUDGED BY WHERE THE FINGER CAME UP — not by how far it wandered, and not by
-             * how long it stayed.
-             *
-             * ht_gesture_move() calls a contact "moved" at 12 px, which on this panel is 1.20 mm; a
-             * deliberate press with a fingertip drifts two to four. So a rule keyed on !gesture.moved
-             * fires for a still finger and not for a real one, and the scroll layer — same 12 px
-             * claim — has already taken the contact by the time the branch below is reached, which is
-             * why this sits above it.
-             *
-             * Down on the control, up on the control, activate. Drift inside it is a press; drift out
-             * of it is a cancel, which the bounds test gives for free. The strip's drag is checked
-             * first, so dragging the tab row scrolls it rather than choosing whichever tab the finger
-             * happened to leave.
-             */
+            // A deliberate written-control press may last longer than a creature tap.
+            // Motion, scroll ownership, cancellation, and leaving the target still cancel it.
             ht_gesture_cancel(&gesture);
             dispatch(pressed_action);
         } else
@@ -2840,7 +3216,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
             } else if (surface && pressed_action.kind == A_PET)
+#ifdef DEVICE_PRO_COMPANION
+                view(LAUNCHER);
+#else
                 tabs_open();
+#endif
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
                 if (surface) dispatch(pressed_action); // immediate, harmless acknowledgement
@@ -2848,7 +3228,16 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 ht_gesture_cancel(&gesture);
                 dispatch(pressed_action);
             }
-        } else if (gesture.axis == 1 && abs(dy) > 55 && abs(dy) > abs(dx)) {
+        }
+#ifdef DEVICE_PRO_COMPANION
+        else if (pro_appearance_view() && gesture.moved) {
+            // Preview motion is local. Neither direction can scroll the desktop,
+            // leave this sheet, save a preference or start the microphone.
+            if (gesture.axis == 2 && abs(dx) > 60 && abs(dx) > abs(dy))
+                pro_appearance_move(dx < 0 ? 1 : -1);
+        }
+#endif
+        else if (gesture.axis == 1 && abs(dy) > 55 && abs(dy) > abs(dx)) {
             if (s.view == TABS || s.view == AGENTS || s.view == SETTINGS) {
                 // The list consumed the drag already, including its final sample.
             } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
@@ -2861,7 +3250,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Its bounded reading cursor already consumed this vertical drag.
             } else if (surface) {
                 // A congested scroll queue cannot turn a scroll into navigation or voice.
-            } else if (s.start_y >= 400 && dy < 0)
+            } else if (s.start_y >= HT_HEIGHT - 66 && dy < 0)
                 view(HOME);
             else if (s.view == READER) {
                 int next = s.offset + (dy < 0 ? 5 : -5);
@@ -2930,13 +3319,33 @@ uint32_t habitat_next_wake_ms(void)
     uint32_t delay = 1000, now = ms();
     if (!s.ready)
         return delay;
-    if (s.voice_open)
+#ifdef DEVICE_PRO_COMPANION
+    if (!s.locked && !display_is_asleep() && pro_appearance_view())
+        delay = pro_visual_next_wake_ms(&s.preview_character, HT_CHARACTER_IDLE, now, s.quiet, false);
+    if (!s.locked && !display_is_asleep() && (s.view == HOME || s.view == AGENT || s.view == VOICE)) {
+        ht_character_t portrait = character;
+        if (pro_speech_visible()) {
+            portrait.motion.reaction.pose.level = s.speech.level;
+            portrait.motion.reaction.pose.emotion = s.speech.emotion;
+        }
+        delay = pro_visual_next_wake_ms(&portrait, pro_surface_mood(), now, s.quiet,
+                                        s.view != VOICE && notice_unread() > 0);
+    }
+    if (s.speech.id) {
+        int32_t left = (int32_t)(s.speech.poll_due - now);
+        uint32_t due = left > 0 ? (uint32_t)left : 1;
+        if (due < delay) delay = due;
+    }
+#endif
+    if (s.voice_open && delay > 125)
         delay = 125;
     if (s.view == TABS && tab_carousel.animating && !s.locked && !display_is_asleep()) delay = 16;
     if (selection.pending && delay > 100) delay = 100;
     if (visit.pending && delay > 100) delay = 100;
     if (s.view == FORM && delay > 100) delay = 100;
+#ifndef DEVICE_PRO_COMPANION
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
+#endif
     if (home_caption_rotates() && home_caption.next_ms && home_caption.next_ms < delay)
         delay = home_caption.next_ms;
     if (status_animated()) {
@@ -2950,7 +3359,11 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
+    uint32_t deadlines[] = {
+#ifdef DEVICE_PRO_COMPANION
+                            s.speech_error_until,
+#endif
+                            s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
                             s.voice_retry_until};
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
@@ -3045,6 +3458,9 @@ void habitat_tick(void)
 static void power(bool on)
 {
     if (!on) {
+#ifdef DEVICE_PRO_COMPANION
+        if (pro_appearance_view()) view(HOME);
+#endif
         input_cancel();
         if (!s.voice_open && selection.active) view(HOME);
         s.lock_armed = config_lock_enabled();
@@ -3067,10 +3483,23 @@ void ui_init(void)
     s.brightness = (config_load_brightness() * 100 + 127) / 255;
     s.muted = config_load_muted();
     memset(&character, 0, sizeof character);
+#ifdef DEVICE_TIM_ILLUSTRATED
+    ht_tim_illustrated_init();
+    if (!config_select_illustrated_tim_once())
+        ESP_LOGW("tim-art", "first-run character selection was not saved");
+#endif
     memset(&home_caption, 0, sizeof home_caption);
     uint8_t saved_character = config_load_habitat_character((uint8_t)ht_character_default());
     if (!ht_character_select(&character, (ht_character_id_t)saved_character))
         ht_character_select(&character, ht_character_default());
+#ifdef DEVICE_PRO_COMPANION
+    uint16_t appearance = config_load_pro_appearance((uint16_t)character.id | (PRO_SCENE_MATCH << 8));
+    if (!ht_character_select(&character, (ht_character_id_t)(appearance & 255)))
+        ht_character_select(&character, ht_character_default());
+    unsigned scene = appearance >> 8;
+    s.scene_choice = scene < PRO_SCENE_COUNT ? (pro_scene_id_t)scene : PRO_SCENE_MATCH;
+    pro_visual_init();
+#endif
     ESP_LOGI("habitat", "character %s; shared moods and controls", ht_character_name(character.id));
     uint8_t options = config_load_habitat_options();
     s.focus_face = (options & 1) != 0;
@@ -3098,6 +3527,9 @@ void ui_set_brightness(uint8_t level)
 {
     display_lock();
     s.brightness = (level * 100 + 127) / 255;
+#ifdef DEVICE_PRO_COMPANION
+    display_set_brightness(level);
+#endif
     change();
     display_unlock();
 }
@@ -4274,7 +4706,11 @@ void ui_draft_state(const cJSON *p)
             else view(HOME);
         } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
             if (ok && op == HT_DRAFT_MOVE) {
+#ifdef DEVICE_PRO_COMPANION
+                s.offset = direction < 0 ? question_rows(page.text)-DRAFT_ROWS : 0;
+#else
                 s.offset = direction < 0 ? question_rows(page.text)-5 : 0;
+#endif
                 if (s.offset < 0) s.offset = 0;
             } else if (ok && op == HT_DRAFT_UNDO) s.offset = 0;
             input_cancel(); change();

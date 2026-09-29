@@ -53,6 +53,7 @@ export const CableType = {
   Pcm: 0x02, // one chunk of 16-bit mono PCM, dial → daemon, during a voice turn
   Fw: 0x03, // one slice of a firmware image, daemon → dial only
   Log: 0x04, // one ESP_LOG line, dial → daemon, raw bytes (no JSON escaping)
+  Speech: 0x05, // host → Pro: session:u32le, offset:u32le, mono PCM16LE at 16 kHz
 } as const
 
 /**

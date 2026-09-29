@@ -1,0 +1,14 @@
+/* One registry of stable Pro daemon identities. Order follows drop init.
+ * TIM=0/TUX=1 predate this collection; persisted IDs must never be renumbered.
+ * symbol, key, name, matching scene, ambient bob (pixels)
+ */
+PRO_DAEMON(TIM,     "tim",     "Tim",     MEADOW, 2)
+PRO_DAEMON(GNU,     "gnu",     "GNU",     MEADOW, 1)
+PRO_DAEMON(LYNX,    "lynx",    "Lynx",    PAPER,  1)
+PRO_DAEMON(MUTT,    "mutt",    "Mutt",    MEADOW, 2)
+PRO_DAEMON(YAK,     "yak",     "Yak",     PAPER,  1)
+PRO_DAEMON(GOPHER,  "gopher",  "Gopher",  MEADOW, 2)
+PRO_DAEMON(BUG,     "bug",     "Bug",     DUSK,   3)
+PRO_DAEMON(TUX,     "tux",     "Tux",     SHORE,  1)
+PRO_DAEMON(AUK,     "auk",     "Auk",     SHORE,  1)
+PRO_DAEMON(BEASTIE, "beastie", "Beastie", DUSK,   2)

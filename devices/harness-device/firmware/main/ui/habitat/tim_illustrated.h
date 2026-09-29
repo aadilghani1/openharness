@@ -1,0 +1,9 @@
+#pragma once
+#include "character_layout.h"
+void ht_tim_illustrated_init(void);
+void ht_tim_illustrated_prepare(ht_scene_t *scene);
+bool ht_tim_illustrated_tick(ht_character_motion_t *motion, uint32_t now,
+    ht_character_mood_t mood, bool quiet, bool visible, bool down, int x,
+    unsigned level, uint32_t activity);
+void ht_tim_illustrated_draw(ht_scene_t *scene,const ht_character_face_t *face,
+    uint8_t frame,uint16_t ink,ht_character_size_t size,int y);

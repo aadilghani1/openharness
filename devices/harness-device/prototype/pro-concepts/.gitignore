@@ -1,0 +1,9 @@
+generated/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+build/
+main/gallery.pack
+main/gallery_assets.h
+tools/__pycache__/

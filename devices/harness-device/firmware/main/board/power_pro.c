@@ -1,33 +1,62 @@
-/*
- * The Pro's battery, through an IP5306 and an ADC.
- *
- * Same five questions as the dial's AXP2101 driver (power.h), different answers underneath.
- *
- * ⚠️ THE FUEL GAUGE IS NOT USED, DELIBERATELY. The IP5306 has a register that reports a battery
- * percentage and it is tempting; it is also documented only by community reverse-engineering and reads
- * back nonsense on this board (HARDWARE.md §7). The percentage here comes from measuring the voltage on
- * a divider and interpolating a Li-ion curve, which is less clever and actually right.
- *
- * ⚠️ AND "CHARGING" IS TRUE WHENEVER A USB CABLE IS IN. The IP5306's VIN is diode-OR'd from every USB
- * socket on the board, including the debug one, so plugging in to read the log makes it report charging.
- * That is the circuit behaving correctly, not a bug to chase: a bench session always looks like a charge.
- */
+/* Pro supply policy. The companion is a dock-only USB device.
+ * Keep the legacy battery driver for other Pro firmware builds. */
 #include "power.h"
-
-#include "board_i2c.h"
 #include "board_pins.h"
-
-#include "esp_adc/adc_oneshot.h"
+#include "driver/gpio.h"
+#include "esp_check.h"
 #include "esp_log.h"
 
 static const char *TAG = "power";
+static bool s_ready;
+
+void power_hold_init(void)
+{
+    // Q9/Q6 gate the battery boost supply; USB powers VCC5V independently.
+    // Preload before enabling output so the dock-only build never asserts it.
+#ifdef DEVICE_PRO_COMPANION
+    ESP_ERROR_CHECK(gpio_set_level(BSP_PWR_HOLD, 0));
+#else
+    ESP_ERROR_CHECK(gpio_set_level(BSP_PWR_HOLD, 1));
+#endif
+    // GPIO1 is also an LP/RTC pad. Take digital ownership explicitly rather
+    // than only changing the HP direction and inheriting its boot mux state.
+    const gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << BSP_PWR_HOLD,
+        .mode = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&cfg));
+}
+
+#ifdef DEVICE_PRO_COMPANION
+bool power_init(void)
+{
+    if (!s_ready) {
+        ESP_LOGI(TAG, "dock-only power; battery latch GPIO%d=%d",
+                 BSP_PWR_HOLD, gpio_get_level(BSP_PWR_HOLD));
+        s_ready = true;
+    }
+    return true;
+}
+
+// No cell, charger polling or battery ADC allocation in the dock-only build.
+int power_battery_pct(void) { return -1; }
+bool power_is_charging(void) { return false; }
+bool power_is_on_external(void) { return true; }
+#else
+#include "board_i2c.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 #define IP5306_REG_READ0 0x70   /* bit 3: 1 = charging */
 #define IP5306_REG_READ1 0x71   /* bit 3: 1 = full */
-
 static i2c_master_dev_handle_t s_ip5306;
 static adc_oneshot_unit_handle_t s_adc;
-static bool s_ready;
+static adc_cali_handle_t s_calibration;
+static int battery_mv(void);
 
 static bool ip5306_read(uint8_t reg, uint8_t *out)
 {
@@ -37,6 +66,7 @@ static bool ip5306_read(uint8_t reg, uint8_t *out)
 
 bool power_init(void)
 {
+    if (s_ready) return true;
     i2c_master_bus_handle_t bus = board_i2c_get();
     if (!bus) return false;
 
@@ -45,13 +75,13 @@ bool power_init(void)
         .device_address = BSP_IP5306_I2C_ADDR,
         .scl_speed_hz = BSP_I2C_FREQ_HZ,
     };
-    if (i2c_master_bus_add_device(bus, &dev, &s_ip5306) != ESP_OK) {
+    if (!s_ip5306 && i2c_master_bus_add_device(bus, &dev, &s_ip5306) != ESP_OK) {
         ESP_LOGE(TAG, "IP5306 would not open at 0x%02X", BSP_IP5306_I2C_ADDR);
         return false;
     }
 
     const adc_oneshot_unit_init_cfg_t unit = { .unit_id = ADC_UNIT_1 };
-    if (adc_oneshot_new_unit(&unit, &s_adc) != ESP_OK) {
+    if (!s_adc && adc_oneshot_new_unit(&unit, &s_adc) != ESP_OK) {
         ESP_LOGE(TAG, "battery ADC unit refused");
         return false;
     }
@@ -63,9 +93,23 @@ bool power_init(void)
         return false;
     }
 
+    const adc_cali_curve_fitting_config_t calibration = {
+        .unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_4,
+        .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    if (adc_cali_create_scheme_curve_fitting(&calibration, &s_calibration) != ESP_OK) {
+        ESP_LOGW(TAG, "battery ADC calibration unavailable; voltage is approximate");
+    }
+
     s_ready = true;
     ESP_LOGI(TAG, "IP5306 at 0x%02X · battery on ADC1_CH4 (GPIO%d, /%d divider)",
              BSP_IP5306_I2C_ADDR, BSP_VBAT_ADC_GPIO, BSP_VBAT_DIVIDER);
+    uint8_t charge = 0, full = 0;
+    bool charge_ok = ip5306_read(IP5306_REG_READ0, &charge);
+    bool full_ok = ip5306_read(IP5306_REG_READ1, &full);
+    ESP_LOGI(TAG, "battery latch GPIO%d=%d vbat_mv=%d calibrated=%d charger_read=%d charging=%d full=%d",
+             BSP_PWR_HOLD, gpio_get_level(BSP_PWR_HOLD), battery_mv(), s_calibration != NULL,
+             charge_ok && full_ok, charge_ok && (charge & 8), full_ok && (full & 8));
     return true;
 }
 
@@ -83,7 +127,12 @@ static int battery_mv(void)
     }
     if (!taken) return 0;
     /* 12 dB attenuation spans roughly 0–3100 mV across the 12-bit range; the divider is the rest. */
-    const int at_pin_mv = (sum / taken) * 3100 / 4095;
+    int at_pin_mv = 0;
+    if (s_calibration) {
+        if (adc_cali_raw_to_voltage(s_calibration, sum / taken, &at_pin_mv) != ESP_OK) return 0;
+    } else {
+        at_pin_mv = (sum / taken) * 3100 / 4095;
+    }
     return at_pin_mv * BSP_VBAT_DIVIDER;
 }
 
@@ -128,7 +177,7 @@ bool power_is_on_external(void)
     return ip5306_read(IP5306_REG_READ1, &v) && (v & 0x08);   /* full, still on the charger */
 }
 
-/* The dial's AXP2101 latches a power-key tap for software to collect. There is nothing to collect here:
- * the Pro's button is a plain GPIO and board/ptt_pro.c reads it directly, with the press edge and the
- * hold thresholds in one place. */
+#endif
+
+// The Pro button is a GPIO handled directly by ptt_pro.c.
 bool power_take_pwrkey_tap(void) { return false; }

@@ -15,6 +15,8 @@ export interface CableFleetOptions {
   /** Optional local selection. An empty list discovers all matching dials. */
   serials?: string[]
   intervalMs?: number
+  /** Optional local prototype session; other devices retain the supplied session. */
+  sessionForPort?: (port: DialPort) => SessionConstructor
 }
 
 export class CableFleet {
@@ -118,7 +120,8 @@ export class CableFleet {
         }
         return opened
       }
-      entry.session = new this.Session(host, new this.Log(join(this.logs, `usb-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`)), opener)
+      const Session = this.options.sessionForPort?.(port) ?? this.Session
+      entry.session = new Session(host, new this.Log(join(this.logs, `usb-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`)), opener)
       this.entries.set(id, entry)
       entry.session.start()
     }

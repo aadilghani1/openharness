@@ -28,7 +28,11 @@ code = r'''
 static bool cable_client_supports(uint32_t features) { (void)features; return true; }
 '''
 code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_READ_TOKEN_MAX')
-code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
+code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT',source=source)
+# The first Q_ROWS definition belongs to the Pro. Preserve the actual build
+# condition so this round-dial fixture uses the production three-row limit.
+rows = re.search(r'^#ifdef DEVICE_PRO_COMPANION\n#define Q_ROWS[^\n]*\n#else\n#define Q_ROWS[^\n]*\n#endif$', source, re.M)
+code += rows.group(0) + '\n' if rows else defines('Q_ROWS', source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
 code += source[source.index('typedef struct {\n    char key[256]'):source.index('static EXT_RAM_BSS_ATTR struct {')]
 code += r'''

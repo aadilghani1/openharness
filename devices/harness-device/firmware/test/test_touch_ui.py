@@ -39,7 +39,13 @@ code = r'''
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
-code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
+code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT',source=source)
+# Keep both branches: taking the first define would give a round replay the Pro's
+# six-row reading limits instead of the production round face's three rows.
+for name in ('Q_ROWS', 'DRAFT_ROWS'):
+    branch = re.search(r'^#ifdef DEVICE_PRO_COMPANION\n#define ' + name +
+                       r'[^\n]*\n#else\n#define ' + name + r'[^\n]*\n#endif$', source, re.M)
+    code += branch.group(0) + '\n' if branch else defines(name, source=source)
 if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
 code += '\n'.join(re.findall(r'^#define TAB_\w+ \d+$', source, re.M)) + '\n'
@@ -1083,7 +1089,8 @@ static void tab_frame_checks(void) {
     static uint16_t full[466*466], delta[466*466], patch[466*466];
     ht_scene_t previous={0};
     workspace_setup();
-    strcpy(s.tabs[1].name,"Device firmware and voice interaction experiments");
+    COPY(s.tabs[1].name,"Device firmware and voice interaction experiments");
+    assert(strlen(s.tabs[1].name)==sizeof s.tabs[1].name-1); // Exercise the real wire-name capacity.
     strcpy(s.tabs[2].name,"Caf\xc3\xa9 / infrastructure");
     dispatch((action_t){.kind=A_TABS});
     for(int position=-80;position<=3*HT_TAB_PITCH+80;position+=17) {
@@ -1471,7 +1478,8 @@ int main(int argc, char **argv) {
     workspace_setup(); s.connected=false; dispatch((action_t){.kind=A_TABS}); scene_take();
     assert(!action_enabled(A_TAB)); tap(32000,233,233); assert(!tab_switches && !starts);
     // Long names wrap without painting into the rim. The only footer is Back.
-    workspace_setup(); strcpy(s.tabs[1].name,"A workspace with a longer name for device development");
+    workspace_setup(); COPY(s.tabs[1].name,"A workspace with a longer name for device development");
+    assert(strlen(s.tabs[1].name)==sizeof s.tabs[1].name-1);
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"tabs-long-name");
     tap(33000,233,420); assert(s.view==HOME && !tab_switches && !starts);
     reset(); s.view=INBOX; dispatch((action_t){.kind=A_NOTICE,.id="off-tab-agent"});

@@ -188,3 +188,22 @@ describe('macOS USB inventory', () => {
     expect(parseDarwinDialPorts(dump)).toEqual([device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')])
   })
 })
+
+it('selects a prototype session by USB identity while preserving reference sessions', async () => {
+  const f = fixture()
+  const selected: string[] = []
+  class ProSession extends CableSession {
+    constructor(...args: ConstructorParameters<typeof CableSession>) { super(...args); selected.push('pro') }
+  }
+  class ReferenceSession extends CableSession {
+    constructor(...args: ConstructorParameters<typeof CableSession>) { super(...args); selected.push('reference') }
+  }
+  const fleet = new SourceFleet(ReferenceSession, f.host, f.logs, DialLog, {
+    ...f.options, sessionForPort: port => port.serialNumber === 'AA:01' ? ProSession : ReferenceSession,
+  })
+  try {
+    fleet.start()
+    await vi.waitFor(() => expect(selected).toEqual(['pro', 'reference']))
+    expect(f.options.open).toHaveBeenCalledTimes(2)
+  } finally { await fleet.stop() }
+})

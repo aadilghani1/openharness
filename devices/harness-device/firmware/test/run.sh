@@ -26,6 +26,9 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_character"
 python3 "$here/test_character_preferences.py"
+python3 "$here/test_pro_appearance_preferences.py"
+python3 "$here/test_pro_daemon_registry.py"
+python3 "$here/test_tim_art_preferences.py"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 \
    -o "$out/test_cable_frame" "$here/test_cable_frame.c" "$here/../main/cable_frame.c"
@@ -53,6 +56,10 @@ cc -std=c11 -Wall -Wextra -Werror -O1 \
    -o "$out/test_board" "$here/test_board.c" "$here/../main/board/board_table.c"
 "$out/test_board"
 python3 "$here/test_board_i2c.py"
+python3 "$here/test_pro_power.py"
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_pro_button" "$here/test_pro_button.c"
+"$out/test_pro_button"
 
 # New direct compositor: fuzz partial redraws against a fresh frame under UB/bounds sanitizers.
 # SANITIZERS=address,undefined also enables ASan on hosts with a compatible ASan runtime.

@@ -123,7 +123,11 @@ void config_save_voicelang(const char *lang)
 uint8_t config_load_brightness(void)
 {
     nvs_handle_t h;
+#ifdef DEVICE_PRO_COMPANION
+    uint8_t v = 220;    // LCD landscape default; an explicit saved level still wins.
+#else
     uint8_t v = 0x99;   // default ~60%
+#endif
     if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
         nvs_get_u8(h, "bright", &v);   // leaves v at default if key is absent
         nvs_close(h);
@@ -200,6 +204,41 @@ bool config_save_habitat_character(uint8_t character)
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok = nvs_set_u8(h, "habitat_char", character) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
+uint16_t config_load_pro_appearance(uint16_t fallback)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return fallback;
+    uint16_t value = fallback;
+    bool ok = nvs_get_u16(h, "pro_look", &value) == ESP_OK;
+    nvs_close(h);
+    return ok ? value : fallback;
+}
+bool config_save_pro_appearance(uint16_t value)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_set_u16(h, "pro_look", value) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
+bool config_select_illustrated_tim_once(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    uint8_t enabled = 0;
+    esp_err_t error = nvs_get_u8(h, "tim_art", &enabled);
+    bool ok = error == ESP_OK && enabled == 1;
+    if (!ok && (error == ESP_OK || error == ESP_ERR_NVS_NOT_FOUND)) {
+        // Tim is registry value zero. Write selection before the migration mark,
+        // so an interrupted install cannot mark an old selection as migrated.
+        ok = nvs_set_u8(h, "habitat_char", 0) == ESP_OK &&
+             nvs_set_u8(h, "tim_art", 1) == ESP_OK && nvs_commit(h) == ESP_OK;
+    }
     nvs_close(h);
     return ok;
 }

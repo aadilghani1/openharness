@@ -2,7 +2,11 @@
 #include "terminal.h"   // HT_WIDTH / HT_FACE_PX: a rim is a property of the face
 #include <stdlib.h>
 
+#ifdef DEVICE_PRO_COMPANION
+#define CLAIM_PX 24
+#else
 #define CLAIM_PX 12
+#endif
 #define REPORT_PX 8
 #define REPORT_MS 16
 #define MAX_SPEED 6000
@@ -105,8 +109,13 @@ void ht_scroll_move(ht_scroll_t *g, int x, int y, uint32_t now)
     }
     if (!g->axis) {
         int dx = abs(x - g->sx), dy = abs(y - g->sy);
+#ifdef DEVICE_PRO_COMPANION
+        if (dx >= CLAIM_PX && dx * 4 > dy * 5) g->axis = 2;
+        else if (dy >= CLAIM_PX && dy * 4 > dx * 5) g->axis = 1;
+#else
         if (dx >= CLAIM_PX && dx > dy) g->axis = 2;
         else if (dy >= CLAIM_PX && dy > dx) g->axis = 1;
+#endif
     }
     if (g->axis == 2) return;
     g->pending += y - g->y;

@@ -1,6 +1,20 @@
 #include "character.h"
 #include "octopus.h"
 #include "tux.h"
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_daemon.h"
+#include "pro_visual.h"
+#define PRO_DAEMON(symbol,key,name,scene,bob) \
+    static void paint_##symbol(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, \
+                               uint16_t ink, ht_character_size_t size, int y) { \
+        (void)ink; pro_visual_paint(s,HT_CHARACTER_##symbol,f,frame,size,y); \
+    }
+#include "pro_daemons.def"
+#undef PRO_DAEMON
+#endif
+#ifdef DEVICE_TIM_ILLUSTRATED
+#include "tim_illustrated.h"
+#endif
 #include <string.h>
 
 typedef struct {
@@ -12,8 +26,18 @@ typedef struct {
 
 // Adding artwork changes this registry and its adapter, never the action layer.
 static const character_definition_t characters[HT_CHARACTER_COUNT] = {
+#ifdef DEVICE_PRO_COMPANION
+#define PRO_DAEMON(symbol,key,name,scene,bob) [HT_CHARACTER_##symbol] = {name,pro_daemon_tick,paint_##symbol},
+#include "pro_daemons.def"
+#undef PRO_DAEMON
+#else
+#ifdef DEVICE_TIM_ILLUSTRATED
+    [HT_CHARACTER_TIM] = {"Tim", ht_tim_illustrated_tick, ht_tim_illustrated_draw},
+#else
     [HT_CHARACTER_TIM] = {"Tim", ht_octopus_motion_tick, ht_octopus_draw},
+#endif
     [HT_CHARACTER_TUX] = {"Tux", ht_tux_motion_tick, ht_tux_draw},
+#endif
 };
 static const character_definition_t *definition(ht_character_id_t id)
 {

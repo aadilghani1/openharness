@@ -9,6 +9,20 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/eppp_link:
+    component_hash: c1369b37f2b0b427b198ae14e07e7547d3da92b95fe4dc7f949e5de560b35f21
+    dependencies:
+    - name: espressif/esp_serial_slave_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.1.0
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.6
   espressif/esp_codec_dev:
     component_hash: 4779f31a3ba3f9b38aee1afe6ccb9ba8f6108dc3a6e77d39d7d714e9a215371b
     dependencies:
@@ -19,20 +33,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.2
-  espressif/esp_lcd_co5300:
-    component_hash: 1a5cbaa0069c3c72c238e5a1eb32ec9dd390ec1c7c46b24bf44b9037f2fe6c56
+  espressif/esp_hosted:
+    component_hash: f1792f36ef9a637adf2faa2662f3c4500b07f3d2ba65c25f3ed4824490ba59f9
     dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
     - name: idf
       require: private
-      version: '>=5.4'
+      version: '>=5.3'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.2.0
+    version: 2.12.13
   espressif/esp_lcd_touch:
     component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
     dependencies:
@@ -43,8 +53,8 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.2.1
-  espressif/esp_lcd_touch_cst816s:
-    component_hash: f017808eb754d3fe16987d413a2385f6356890f5737ee3fe36b6a548ea1d1d74
+  espressif/esp_lcd_touch_gt911:
+    component_hash: 737bdf29e0823eacf041381e81db2aaf5d378f3b5417df7f415f83319e3e790b
     dependencies:
     - name: espressif/esp_lcd_touch
       registry_url: https://components.espressif.com
@@ -56,31 +66,55 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.2
-  espressif/esp_websocket_client:
-    component_hash: ae561d39222a399ddda5e470913c3d54a3c0f53dce15b8d21a3aaa4226dd74b1
+    version: 1.2.1
+  espressif/esp_serial_slave_link:
+    component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
     dependencies:
     - name: idf
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com/
+      registry_url: https://components.espressif.com
       type: service
-    version: 1.2.3
-  espressif/libsodium:
-    component_hash: d4066b373fc6d4c5196db42aeea7faef4ac7f3080af96c2b74e2476c08b78dc1
+    version: 1.1.2
+  espressif/esp_wifi_remote:
+    component_hash: 67efd839bd84efb94b149a28044f9918473e7f4facf709bf4121744e4927df09
     dependencies:
+    - name: espressif/esp_hosted
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32h2, esp32p4]
+      version: '>=2.11'
+    - name: espressif/wifi_remote_over_eppp
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1'
     - name: idf
       require: private
-      version: '>=4.2'
+      version: '>=5.3'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.0.22~1
+    version: 1.3.2
+  espressif/wifi_remote_over_eppp:
+    component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
+    dependencies:
+    - name: espressif/eppp_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1'
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.3.3
   idf:
     source:
       type: idf
-    version: 5.5.0
+    version: 5.5.3
   lvgl/lvgl:
     component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
     dependencies: []
@@ -88,29 +122,30 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.5.0
-  waveshare/esp_lcd_touch_cst9217:
-    component_hash: f755f8e3ae61df23413256a6a447e367a4b844538229c183ff0e89dbbdc15319
+  waveshare/esp_lcd_st7703:
+    component_hash: d82de85750df3c6c9bfae4c49fdf8cc443e2387cb19507081968f71c11976378
     dependencies:
-    - name: espressif/esp_lcd_touch
+    - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
-      require: public
-      version: ^1.1.0
+      require: private
+      version: 0.*
     - name: idf
       require: private
-      version: '>=4.4.2'
+      version: '>=5.3'
     source:
       registry_url: https://components.espressif.com/
       type: service
+    targets:
+    - esp32p4
     version: 2.0.0
 direct_dependencies:
 - espressif/esp_codec_dev
-- espressif/esp_lcd_co5300
-- espressif/esp_lcd_touch_cst816s
-- espressif/esp_websocket_client
-- espressif/libsodium
+- espressif/esp_hosted
+- espressif/esp_lcd_touch_gt911
+- espressif/esp_wifi_remote
 - idf
 - lvgl/lvgl
-- waveshare/esp_lcd_touch_cst9217
-manifest_hash: c5505980965e154c4fb454b57b0844f7af33e68edde118fa25735edf295328f4
-target: esp32s3
+- waveshare/esp_lcd_st7703
+manifest_hash: 59efc5da57a71c0f2d590e8fad0885ce9e38d25296efc8dc63c515984aa79fe3
+target: esp32p4
 version: 2.0.0

@@ -3,6 +3,10 @@
 
 #include <stdbool.h>
 
+// Pro only: configure the supply latch before other initialization.
+// The dock-only companion leaves the battery supply disabled.
+void power_hold_init(void);
+
 // Lazily attach the AXP2101 to the shared I2C bus. Idempotent; safe to call from any task.
 // Returns false if the device couldn't be added (then the getters report "unknown").
 bool power_init(void);

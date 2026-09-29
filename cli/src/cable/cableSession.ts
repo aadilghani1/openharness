@@ -1,3 +1,5 @@
+import { CableSpeech, type SpeechProvider } from './cableSpeech.js'
+import { configuredCreatureVoice } from './creatureVoiceConfig.js'
 // The message layer: what the daemon and the dial SAY to each other, on top of the bytes serial.ts moves.
 //
 // Written twice — here and in devices/harness-device/firmware/main/cable_client.c — with no shared code, because one half
@@ -232,6 +234,8 @@ export interface RouteDecision {
  * and a network to prove that `hello` gets a `welcome`.
  */
 export interface CableHost {
+  /** Optional explicit provider for device conversation; keys never cross USB. */
+  creatureVoice?(): Promise<SpeechProvider | null>
   /** The computer at the other end of the cable — its identity, not "the" machine's. */
   localMachine(): { id: string; name: string }
   /** Every machine the owner has, local row included. Never rejects: `source` explains a short list. */
@@ -486,6 +490,14 @@ export class CableSession {
   private readonly questionInbox = new QuestionInbox()
   private voiceGeneration = 0
   private voiceUploadId = ''
+  private readonly speech = new CableSpeech({
+    json: message => this.send(message as Message),
+    pcm: async payload => {
+      if (!this.link?.isOpen) return false
+      try { await this.link.write(encodeCableFrame(CableType.Speech, payload)); return true }
+      catch { return false }
+    },
+  }, () => this.host.creatureVoice ? this.host.creatureVoice() : configuredCreatureVoice())
 
   constructor(
     private readonly host: CableHost,
@@ -515,6 +527,7 @@ export class CableSession {
   }
 
   async stop(): Promise<void> {
+    this.speech.disconnect()
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
@@ -692,6 +705,7 @@ export class CableSession {
   }
 
   private onClosed(why: string): void {
+    this.speech.disconnect()
     this.log(`cable: closed (${why})`)
     this.cancelFormVoice()
     this.cancelSearchVoice()
@@ -777,6 +791,7 @@ export class CableSession {
           this.link = null
           return
         }
+        this.speech.capability(str('speech') === 'pcm16-v1')
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
@@ -843,12 +858,14 @@ export class CableSession {
         await this.syncMachines(true)
         return
       case 'machine.select':
+        this.speech.cancel()
         await this.selectMachine(str('machineId') ?? '')
         return
       case 'swarms.list':
         await this.syncSwarms(true)
         return
       case 'swarm.select':
+        this.speech.cancel()
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
         // pushes are the answer — the same shape as `machine.select`, minus the refusal, because the
         // window never refuses to show a tab it has.
@@ -915,6 +932,7 @@ export class CableSession {
           }
           // Remember where the dial IS, not just that it said so: followApp() compares against this to
           // avoid echoing the dial's own move back at it.
+          this.speech.focus(agentId)
           this.desiredFocus = agentId
           this.host.focus(agentId)
         }
@@ -1059,7 +1077,10 @@ export class CableSession {
       case 'agent.update':
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
+      case 'speech.state':
+        this.speech.state(msg); return
       case 'voice.begin': {
+        this.speech.cancel()
         this.cancelFormVoice()
         this.cancelSearchVoice()
         this.voiceDraftCreation = undefined
@@ -1467,7 +1488,11 @@ export class CableSession {
           const edited = turn.cmd ? `/${turn.cmd} ${words}` : words
           const text = carried ? withCarriedPassage(edited, carried)
             : selection?.ok && selection.text ? withSelectedPassage(edited, selection.text) : edited
-          const result = this.host.sendTurn(recipient, text)
+          this.speech.arm(recipient)
+          let result: ReturnType<CableHost['sendTurn']>
+          try { result = this.host.sendTurn(recipient, text) }
+          catch { this.speech.cancel(); throw new Error('Could not send that voice turn') }
+          if (result && !result.ok) this.speech.cancel()
           if (result && !result.ok) return { ok: false, error: 'Could not reach that harness. Check its connection.' }
           if (carried) this.passageCarry.clear(carried.id)
           return { ok: true }
@@ -1479,14 +1504,17 @@ export class CableSession {
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
     try {
+      this.speech.arm(agentId)
       const submitted = this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
+        this.speech.cancel()
         await reply({ t: 'voice.error', message: carried
           ? 'Could not reach that harness. Your carried text is still here.'
           : 'Could not reach that harness. Check its connection and try again.' })
         return
       }
     } catch (_) {
+      this.speech.cancel()
       await reply({ t: 'voice.error', message: 'Could not send. Check the terminal before trying again.' })
       return
     }
@@ -1822,6 +1850,7 @@ export class CableSession {
    * a turn is live and shows the user nothing that says so.
    */
   async turnStarted(agentId: string, text = ''): Promise<void> {
+    this.speech.processing(agentId)
     this.activityEndedAt.delete(agentId)
     const read = {}
     this.activityReads.set(agentId, read)
@@ -1862,7 +1891,10 @@ export class CableSession {
       if (!current()) return
       // A visible engine footer is direct evidence of work. Recover liveness even
       // when the transcript's turn.started happened before we attached.
-      if (activity) await this.send({ t: 'turn.started', agentId, text: activity })
+      if (activity) {
+        this.speech.observeBusy(agentId)
+        await this.send({ t: 'turn.started', agentId, text: activity })
+      }
       if (!current()) return
       await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
       if (this.activityLabels.get(agentId) !== (activity ?? '')) {
@@ -1876,6 +1908,7 @@ export class CableSession {
     }
   }
   async turnDone(agentId: string): Promise<void> {
+    this.speech.completed(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
@@ -1891,11 +1924,13 @@ export class CableSession {
    * notifies as it always did instead of losing the recap.
    */
   async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
+    this.speech.completed(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
     const who = this.whoIs(agentId)
-    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    const sent = await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    if (sent) void this.speech.summary(agentId, recap, text, this.desiredFocus, silent)
   }
 
   /**
@@ -1967,6 +2002,7 @@ export class CableSession {
     await this.send({ t: 'notif.seen', agentId, ...(readToken ? { readToken } : {}) })
   }
   async turnError(agentId: string, message: string): Promise<void> {
+    this.speech.failed(agentId);
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
@@ -2001,6 +2037,7 @@ export class CableSession {
   }
 
   async focusAgent(agentId: string): Promise<void> {
+    this.speech.focus(agentId)
     this.desiredFocus = agentId
     await this.send({ t: 'focus', agentId })
   }

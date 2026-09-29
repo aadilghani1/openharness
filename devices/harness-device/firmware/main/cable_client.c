@@ -1,5 +1,12 @@
 #include "cable_client.h"
 #include "cable_scroll.h"
+#include "cable_speech.h"
+#ifdef DEVICE_PRO_WIFI
+#include "board/pro_wifi.h"
+#endif
+#ifdef DEVICE_PRO_COMPANION
+#include "audio_speech.h"
+#endif
 
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -158,6 +165,9 @@ static void send_hello(void)
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
+#ifdef DEVICE_PRO_COMPANION
+    if (audio_speech_available()) msg_string(&root, "speech", "pcm16-v1");
+#endif
     // Also the device's USB serial number, so the daemon can tell one dial from another before a byte is
     // exchanged — and can tell a keepalive greeting from a new board.
     char mac[24] = "";
@@ -793,6 +803,7 @@ static void session_up(const cJSON *p)
 static void session_down(const char *why)
 {
     if (!s_session) return;
+    cable_speech_disconnect();
     s_session = false;
     atomic_store(&s_features, 0);
 
@@ -978,6 +989,17 @@ static void handle_message(const cJSON *root)
     if (!t) { s_bad++; return; }
     const cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "p");
     if (!p) p = root;   // flat messages are legal; `p` is a convenience, not a requirement
+    if (cable_speech_message(t, p)) return;
+#ifdef DEVICE_PRO_WIFI
+    if (!strcmp(t, "wifi.configure")) {
+        bool accepted = cable_client_is_connected() &&
+            pro_wifi_configure(str_of(p, "ssid"), str_of(p, "password"));
+        cJSON *reply = msg("wifi.accepted");
+        cJSON_AddBoolToObject(reply, "ok", accepted);
+        send_json(reply);
+        return;
+    }
+#endif
 
     if (strcmp(t, "welcome") == 0) { session_up(p); return; }
     if (strcmp(t, "ping") == 0) { send_json(msg("pong")); return; }
@@ -1192,6 +1214,13 @@ static void on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size
 {
     (void)version;
     (void)ctx;
+#ifdef DEVICE_PRO_COMPANION
+    if (type == CABLE_TYPE_SPEECH) {
+        s_last_rx_us = esp_timer_get_time();
+        cable_speech_pcm(payload, payload_len);
+        return;
+    }
+#endif
     if (type == CABLE_TYPE_FW) {
         s_last_rx_us = esp_timer_get_time();
         // Straight to flash, on this task. That is deliberate and it is what the credit window is sized
@@ -1228,6 +1257,7 @@ static void session_tick(void *ctx)
 {
     (void)ctx;
     fw_update_tick();
+    cable_speech_tick();
     if (s_session && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000) {
         session_down("silence");
     }

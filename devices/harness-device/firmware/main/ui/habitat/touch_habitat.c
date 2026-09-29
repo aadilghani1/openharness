@@ -191,7 +191,12 @@ static void task(void *arg)
 }
 void touch_init(void)
 {
-    assert(xTaskCreatePinnedToCore(task, "habitat_touch", 4096, NULL, 7, &touch_task_handle, 1) ==
+#ifdef DEVICE_PRO_COMPANION
+    const unsigned touch_stack = 10240;
+#else
+    const unsigned touch_stack = 4096;
+#endif
+    assert(xTaskCreatePinnedToCore(task, "habitat_touch", touch_stack, NULL, 7, &touch_task_handle, 1) ==
            pdPASS);
 }
 uint32_t touch_activity_generation(void) { return atomic_load(&presses); }

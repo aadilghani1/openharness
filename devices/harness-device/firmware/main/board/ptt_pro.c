@@ -1,26 +1,13 @@
-/*
- * The Pro's one button, doing the work the dial spreads over two.
- *
- * The dial has a BOOT button and, on one of the two variants, a PMIC power key (ptt.c). This board has a
- * single physical switch, so the same three meanings are told apart by how long it is held — and the
- * shortest one keeps the shortest gesture, because interrupting a running turn is the thing you reach
- * for in a hurry:
- *
- *   tap              → back / stop the turn      (the dial's BOOT press)
- *   hold ≥ 0.8 s     → screen off / on           (the dial's BOOT hold and PWR tap)
- *   hold ≥ 5 s       → power off                 (this board only — the dial has no off)
- *
- * The 5-second one exists because this board CAN switch itself off: PWR_HOLD released cuts the rail.
- * That is also why it is last and longest — it is the only irreversible one, and a UI that has frozen is
- * exactly when a person needs it, so it must not depend on anything above this task still working.
- *
- * The button is read on GPIO2 and the latch is held on GPIO1. They are separate pins by design
- * (HARDWARE.md §7), so reading the button here cannot disturb the latch.
+/* The Pro side button: tap to go back/stop, hold 0.8 s to toggle the screen.
+ * Dock-only companion firmware never cuts power or parks the button task;
+ * a subsequent press must still wake the screen after any length of hold.
+ * Legacy battery firmware additionally supports a five-second power-off.
  */
 #include "ptt.h"
 
 #include "board.h"
 #include "board_pins.h"
+#include "pro_button_filter.h"
 #include "ui/display.h"
 #include "ui/ui_screens.h"
 
@@ -32,9 +19,11 @@
 
 static const char *TAG = "ptt";
 
-#define POLL_MS            50    /* finer than the dial's 100ms: one button carries three meanings here */
+#define POLL_MS            20
 #define HOLD_SCREEN_MS     800
+#ifndef DEVICE_PRO_COMPANION
 #define HOLD_POWER_OFF_MS  5000
+#endif
 
 static void screen_toggle(const char *why)
 {
@@ -46,6 +35,7 @@ static void screen_toggle(const char *why)
     display_unlock();
 }
 
+#ifndef DEVICE_PRO_COMPANION
 /*
  * Cut the rail. Everything before the last line is courtesy — the screen going dark so the person sees
  * the press land, and a moment for any log or NVS write to drain. Releasing PWR_HOLD is not a request;
@@ -62,6 +52,8 @@ static void power_off(void)
     vTaskDelay(portMAX_DELAY);   /* not reached; the rail is gone */
 }
 
+#endif
+
 static void ptt_task(void *arg)
 {
     (void)arg;
@@ -72,14 +64,21 @@ static void ptt_task(void *arg)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&cfg);
+    ESP_ERROR_CHECK(gpio_config(&cfg));
 
     int prev = 1;                 /* active low: 1 = up, 0 = pressed */
     int64_t pressed_at = 0;
     bool screen_fired = false;
+    pro_button_filter_t filter = {0};
+    bool was_noisy = false;
 
     for (;;) {
-        const int now = gpio_get_level(BSP_PWR_BTN);
+        const uint32_t sample_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        const int now = !pro_button_sample(&filter, !gpio_get_level(BSP_PWR_BTN), sample_ms);
+        if (filter.noisy != was_noisy) {
+            ESP_LOGW(TAG, "button input %s", filter.noisy ? "noisy; waiting for stable release" : "stable again");
+            was_noisy = filter.noisy;
+        }
 
         if (prev == 1 && now == 0) {                      /* fresh press */
             /* The press edge acts at once, exactly as the dial's does — waiting to see whether it
@@ -91,7 +90,9 @@ static void ptt_task(void *arg)
             screen_fired = false;
         } else if (now == 0) {                            /* still down */
             const int64_t held_ms = (esp_timer_get_time() - pressed_at) / 1000;
+#ifndef DEVICE_PRO_COMPANION
             if (held_ms >= HOLD_POWER_OFF_MS) power_off();
+#endif
             if (!screen_fired && held_ms >= HOLD_SCREEN_MS) {
                 screen_fired = true;                      /* once per press */
                 screen_toggle("button hold");

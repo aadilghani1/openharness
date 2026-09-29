@@ -10,6 +10,9 @@ typedef enum {
 typedef struct {
     int8_t look;
     uint8_t hands, level, mail; // 0: no letter, 1: holding, 2: briefly lifting it.
+#ifdef DEVICE_PRO_COMPANION
+    uint8_t emotion; // Spoken delivery; artwork owns its face-specific expression.
+#endif
     bool blink, pressed;
 } ht_character_pose_t;
 typedef struct {

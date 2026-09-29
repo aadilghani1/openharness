@@ -68,6 +68,7 @@ typedef int cable_agent_t;
 static cable_agent_t *s_agents;
 static int64_t esp_timer_get_time(void) { return now; }
 static void fw_update_tick(void) {}
+static void cable_speech_tick(void) {}
 static void ui_set_connected(bool value) { connected = value; }
 static void session_down(const char *why) {
     (void)why; assert(owner == 1); down_count++; s_session = false; connected = false;

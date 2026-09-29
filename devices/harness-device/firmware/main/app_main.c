@@ -25,6 +25,10 @@
 #include "last_words.h"
 #include "board/board.h"
 #include "board/board_probe.h"
+#include "board/power.h"
+#ifdef DEVICE_PRO_WIFI
+#include "board/pro_wifi.h"
+#endif
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -178,9 +182,16 @@ static void refresh_task(void *arg)
 
 void app_main(void)
 {
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    // Set the supply policy before logging, NVS, display or I2C setup.
+    power_hold_init();
+#endif
     ram_telemetry_checkpoint("boot");
     last_words_boot();   // before the first log line, so the previous boot's ring is read, not overwritten
     board_detect();      // which dial this is — the panel's reset pin comes from here, so before display_init
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    power_init();
+#endif
     config_store_init();
 
     if (boot_button_held()) {
@@ -241,5 +252,10 @@ void app_main(void)
         esp_restart();
     }
     ram_telemetry_checkpoint("app_ready");
+#ifdef DEVICE_PRO_WIFI
+    // Reserve the renderer, USB and refresh task stacks before the radio can
+    // allocate its transport resources on a boot with saved Wi-Fi settings.
+    pro_wifi_start();
+#endif
     vTaskDelete(NULL);
 }

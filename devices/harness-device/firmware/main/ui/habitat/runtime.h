@@ -16,5 +16,6 @@ void habitat_render_notify(void);
 void habitat_input_stamp(int64_t now_us);
 typedef struct {
     uint32_t frames, bytes, raster_max_us, frame_max_us, input_last_us, input_max_us;
+    uint32_t prepare_max_us, render_max_us;
 } habitat_perf_t;
 void habitat_perf_get(habitat_perf_t *out);

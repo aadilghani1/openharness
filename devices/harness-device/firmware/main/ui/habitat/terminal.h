@@ -15,7 +15,11 @@
 #endif
 #define HT_WIDTH HT_FACE_PX
 #define HT_HEIGHT HT_FACE_PX
+#ifdef DEVICE_PRO_COMPANION
+#define HT_RUNS 64
+#else
 #define HT_RUNS 40
+#endif
 #define HT_TEXT_BYTES 128
 #define HT_DAMAGE_MAX 24
 typedef struct {
@@ -42,6 +46,28 @@ extern const ht_font_t ht_lock_dot;
 typedef struct {
     int16_t x, y, w, h;
 } ht_rect_t;
+#ifdef DEVICE_TIM_ILLUSTRATED
+typedef struct {
+    const uint16_t *pixels; // already in this panel's byte order
+    const uint8_t *alpha;
+    const void *asset;     // immutable descriptor, resolved after model unlock
+    uint32_t revision;
+    uint16_t width, height;
+} ht_sprite_t;
+#endif
+#ifdef DEVICE_PRO_COMPANION
+typedef struct ht_pro_font ht_pro_font_t;
+typedef struct {
+    const uint16_t *pixels;
+    const uint8_t *alpha;
+    uint16_t width, height;
+    uint32_t revision;
+    // Optional immutable Pro art descriptor. Scene construction records this
+    // without decoding. The renderer resolves pixels/alpha after model unlock,
+    // before damage/raster; old scenes subsequently serve damage comparison only.
+    const void *asset;
+} ht_pro_bitmap_t;
+#endif
 typedef struct {
     int16_t x, y, w;
     uint8_t arc; // 0 = straight, 1 = upper arc, 2 = lower arc
@@ -52,6 +78,15 @@ typedef struct {
     // Optional immutable RGB565 foreground per text cell (straight runs only).
     // At least as many entries as text cells; storage outlives both scenes.
     const uint16_t *colors;
+#ifdef DEVICE_TIM_ILLUSTRATED
+    ht_sprite_t sprite;
+#endif
+#ifdef DEVICE_PRO_COMPANION
+    uint8_t pro_kind, radius;
+    int16_t pro_height;
+    const ht_pro_font_t *pro_font;
+    ht_pro_bitmap_t bitmap;
+#endif
 } ht_run_t;
 typedef struct {
     uint16_t background;

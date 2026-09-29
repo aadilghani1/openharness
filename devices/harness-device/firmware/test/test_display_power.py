@@ -33,13 +33,19 @@ static ht_scene_t scenes[2];
 static bool painted;
 static void (*power_cb)(bool);
 static uint32_t clock_ms;
+static int64_t timing_us;
+static int stats_lock;
+static struct { uint32_t prepare_max_us, render_max_us; } stats;
+static int64_t esp_timer_get_time(void) { timing_us += 100; return timing_us; }
+static void portENTER_CRITICAL(int *lock) { assert(lock == &stats_lock); }
+static void portEXIT_CRITICAL(int *lock) { assert(lock == &stats_lock); }
 static unsigned frames, ticks, waits, locks, sleeps, wakes, full_frames, notifications;
 static unsigned stop_after;
 static int mode;
 static bool panel_on = true;
 static int panel, render_guard;
 static jmp_buf finished;
-enum { RENDER_MODEL, RENDER_POWER, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
+enum { RENDER_MODEL, RENDER_POWER, RENDER_PREPARE, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
        RENDER_SUBMIT, RENDER_HEALTH, RENDER_WAIT };
 typedef struct { void (*callback)(void *); const char *name; } esp_timer_create_args_t;
 #define pdTRUE 1
@@ -102,12 +108,13 @@ static void run(int which, uint32_t now, uint32_t activity, bool sleep, unsigned
     atomic_store(&asleep,sleep); atomic_store(&force_frame,false);
     memset(scenes,0,sizeof scenes); painted=mode!=4; panel_on=true; receipts=0; power_cb=power;
     frames=ticks=waits=locks=sleeps=wakes=full_frames=notifications=0;
-    stop_after=loops;
+    stop_after=loops; timing_us=0; memset(&stats,0,sizeof stats);
     if (!setjmp(finished)) render_task(NULL);
     assert(waits==loops);
 }
 int main(void) {
     run(4,1000,1000,false,1); assert(frames==1 && receipts==1);
+    assert(stats.prepare_max_us==100&&stats.render_max_us==200);
     run(5,1000,1000,true,1); assert(!frames && !receipts);
     // A wake between power sampling and force-frame consumption must survive.
     run(1,1000,1000,true,2);

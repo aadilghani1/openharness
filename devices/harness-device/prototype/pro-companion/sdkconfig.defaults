@@ -1,0 +1,8 @@
+# The fitted P4 is revision 3.2. Requires ESP-IDF 5.5.3 or later.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+# Keep bootloader generation compatible with the installed 0x8000 table.
+# The physical trial writes ONLY the app partition, never this bootloader.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

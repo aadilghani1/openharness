@@ -3,8 +3,10 @@
 build/
 build.dial/
 build.pro/
+build.pro-companion/
 managed_components/
 .cache/
+__pycache__/
 # dependencies.lock is TRACKED (2026-09-17): it is the exact component set the release was built and
 # flashed with. Ignoring it let every fresh checkout resolve the manifest anew — and the day LVGL 9.6.0
 # landed on the registry, a fresh build stopped booting. Regenerate it on purpose with

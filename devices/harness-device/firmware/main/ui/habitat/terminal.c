@@ -1,4 +1,7 @@
 #include "terminal.h"
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_canvas.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 #include "arc_geometry.inc"
@@ -372,6 +375,12 @@ int ht_wrap(ht_scene_t *s, int x, int y, int w, int lines, int skip, const ht_fo
 }
 ht_rect_t ht_run_bounds(const ht_run_t *r)
 {
+#ifdef DEVICE_TIM_ILLUSTRATED
+    if (r->sprite.width) return (ht_rect_t){r->x,r->y,r->sprite.width,r->sprite.height};
+#endif
+#ifdef DEVICE_PRO_COMPANION
+    if (r->pro_kind) return (ht_rect_t){r->x, r->y, r->w, r->pro_height};
+#endif
     if (r->arc) {
         const char *p = r->text; int count = 0;
         while (*p && count < HT_ARC_COLS) { ht_utf8_next(&p); count++; }
@@ -538,7 +547,7 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                     damage_add(d, shimmer_band(next), rows);
                     continue;
                 }
-                if (!old->arc && !next->arc && old->x == next->x && old->y == next->y && old->w == next->w &&
+                if (!old->arc && !next->arc && old->font && next->font && old->x == next->x && old->y == next->y && old->w == next->w &&
                     old->font == next->font && old->fg == next->fg && old->bg == next->bg) {
                     const char *p = old->text, *q = next->text;
                     int cell = 0, first = -1, last = -1;
@@ -903,6 +912,34 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
     }
 }
+#ifdef DEVICE_TIM_ILLUSTRATED
+static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    const ht_sprite_t *s=&r->sprite;
+    if(!s->pixels)return;
+    int left=imax(clip.x,r->x),right=imin(clip.x+clip.w,r->x+s->width);
+    int top=imax(clip.y,r->y),bottom=imin(clip.y+clip.h,r->y+s->height);
+    for(int y=top;y<bottom;y++){
+        size_t at=(size_t)(y-r->y)*s->width+left-r->x;
+        uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
+        int x=left;
+        while(x<right){
+            unsigned a=s->alpha?s->alpha[at]:255;
+            if(!a){at++;dst++;x++;continue;}
+            if(a==255){
+                size_t first=at;
+                do{at++;x++;}while(x<right && (!s->alpha || s->alpha[at]==255));
+                size_t n=at-first;memcpy(dst,s->pixels+first,n*2);dst+=n;continue;
+            }
+            uint16_t fg=panel16(s->pixels[at]),bg=panel16(*dst);
+            unsigned red=((fg>>11)*a+(bg>>11)*(255-a)+127)/255;
+            unsigned green=(((fg>>5)&63)*a+((bg>>5)&63)*(255-a)+127)/255;
+            unsigned blue=((fg&31)*a+(bg&31)*(255-a)+127)/255;
+            *dst++=panel16((red<<11)|(green<<5)|blue);at++;x++;
+        }
+    }
+}
+#endif
 void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
 {
     fill(out, (size_t)clip.w * clip.h, panel16(s->background));
@@ -912,6 +949,12 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
         ht_rect_t box = ht_run_bounds(r);
         if (!intersect(box, clip))
             continue;
+#ifdef DEVICE_TIM_ILLUSTRATED
+        if (r->sprite.width) { sprite_raster(r,clip,out); continue; }
+#endif
+#ifdef DEVICE_PRO_COMPANION
+        if (r->pro_kind) { ht_pro_raster(r, clip, out); continue; }
+#endif
         if (r->arc) { arc_raster(r, clip, out); continue; }
         int y1 = imax(clip.y, r->y), y2 = imin(clip.y + clip.h, r->y + f->height),
             x1 = imax(clip.x, r->x), x2 = imin(clip.x + clip.w, r->x + r->w);
