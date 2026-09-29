@@ -148,6 +148,9 @@ class CodeMachine {
   final String machineId;
 
   Uint8List? pinned;
+
+  /// Everything the phone sealed beside its identity in round 4 (`label`, `kind`).
+  Map<String, dynamic>? claim;
   late Uint8List _pairId;
   late String _pairIdB64;
   late String _ci;
@@ -204,6 +207,13 @@ class CodeMachine {
         );
         if (pub == null) return;
         pinned = pub;
+        final opened = aeadOpen(
+          pairKey(_isk!, _ci),
+          4,
+          utf8Bytes('e2e-id'),
+          b64d(payload['enc'] as String),
+        );
+        claim = jsonDecode(utf8.decode(opened!)) as Map<String, dynamic>;
         socket.emit('e2e_pake', {'pairId': _pairIdB64, 'round': 5, 'ok': true});
     }
   }

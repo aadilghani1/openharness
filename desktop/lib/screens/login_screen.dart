@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/services.dart';
 
+import '../core/test_run.dart';
 import '../core/web_form_factor.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -475,9 +476,7 @@ class _ActionState extends State<_Action> {
                       ? 'Sign in to open your workspace. Signing in a computer or '
                             'another browser? Sign in here first, then scan its code with '
                             'your camera — or in the Harness app: ⋯ → Scan a QR code.'
-                      : kIsWeb
-                      ? 'Sign in with your phone — scan a QR, no password.'
-                      : 'Sign in through your browser to continue.'),
+                      : 'Sign in with your phone — scan a QR, no password.'),
               key: const Key('login-idle-hint'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
@@ -875,10 +874,10 @@ class _SignInSheet extends StatefulWidget {
   State<_SignInSheet> createState() => _SignInSheetState();
 }
 
-/// Whether the sign-in sheet opens straight onto its phone QR. Off until the harness CLI's QR
-/// sign-in is released: an older CLI would take the browser anyway. Tests turn it on.
+/// Whether the sign-in sheet opens straight onto its phone QR. Off under `flutter test`, where
+/// a sign-in nobody asked for would spawn the fake CLI's login in every sheet test.
 @visibleForTesting
-bool signInSheetStartsQr = false; // on once the harness CLI's QR sign-in is released
+bool signInSheetStartsQr = !kUnderTest;
 
 class _SignInSheetState extends State<_SignInSheet> {
   AppNotifier get notifier => widget.notifier;

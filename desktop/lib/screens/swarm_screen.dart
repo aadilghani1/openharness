@@ -2409,12 +2409,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       keymap: _keymap,
       onConnectMachine: () => unawaited(_openMachines()),
       // The QR's `f`: the phone refuses a machine proving a different key.
-      machineFingerprint: app.viewer == null
-          ? null
-          : (remote) => machineFingerprintOf(app, remote),
+      machineFingerprint: (remote) => machineFingerprintOf(app, remote),
       // This computer's daemon keeps the group; a viewer's lives in the browser.
-      // The desktop app keeps its Add Phone as it was until the harness CLI's QR work is released.
-      groupMachines: null,
+      groupMachines: app.viewer == null ? app.api.groupMachines : null,
     ),
   );
 

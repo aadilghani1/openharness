@@ -7,6 +7,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'add_machine.dart';
 import 'link_page.dart';
 import 'welcome/connect_computer.dart';
 import 'tty_controls.dart';
@@ -128,6 +129,11 @@ class _Body extends StatelessWidget {
           ),
           for (final state in ordered) _row(context, state, tty),
           const SizedBox(height: 8),
+          FindAddRow(
+            label: 'Add a machine or browser',
+            detail: 'Scan the QR it shows to sign it in',
+            onTap: () => scanToApprove(context, notifier),
+          ),
           FindAddRow(
             label: 'Set up another computer',
             onTap: () => Navigator.of(context).push(

@@ -16,6 +16,7 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
+import 'add_machine.dart' show scanToApprove;
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
@@ -161,6 +162,13 @@ class _Body extends StatelessWidget {
           buildUsageSettingsRow(context, notifier),
           // The computers this phone reaches — here rather than a menu of their own: linking one is
           // a once-a-while errand, and Find already reaches every agent on them.
+          // Approving a sign-in by its QR: a computer (`harness login`, the desktop app) or a browser.
+          SettingsRow(
+            key: const Key('settings-scan-qr'),
+            title: 'Scan a QR code',
+            detail: 'Approve a computer or browser signing in',
+            onTap: () => scanToApprove(context, notifier),
+          ),
           SettingsRow(
             title: 'Computers',
             onTap: () => Navigator.of(context).push(

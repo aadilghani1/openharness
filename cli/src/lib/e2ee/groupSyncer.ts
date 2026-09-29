@@ -68,6 +68,8 @@ export class GroupSyncer {
   start(): void {
     this.seedFromExistingLinks()
     this.applyAll()
+    const members = this.deps.store.read().members
+    this.deps.log?.(`[group] ${members.filter((m) => m.kind === 'machine').length} machines, ${members.filter((m) => m.kind === 'viewer').length} phones/browsers in the roster`)
     this.scheduleFanOut(30_000)
     this.periodic = setInterval(() => this.scheduleFanOut(0), PERIODIC_MS)
     this.periodic.unref?.()
@@ -131,7 +133,10 @@ export class GroupSyncer {
     // A member that reached us is one we can reach: put back a pin the relay dropped when this machine
     // dialed it before it had heard of us (remoteRelay.ts unlinks a peer that answers e2e_denied).
     this.applyAll()
-    if (rosterDigest(result.roster) !== before) this.scheduleFanOut(1_000)
+    if (rosterDigest(result.roster) !== before) {
+      this.deps.log?.(`[group] from ${self?.machineId?.slice(0, 8) ?? self?.label ?? peerPub.slice(0, 8)}: +${result.upserted.length} −${result.dropped.length}`)
+      this.scheduleFanOut(1_000)
+    }
     return { self: this.deps.self(), ...result.roster, digest: rosterDigest(result.roster) }
   }
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/phone/add_machine.dart' show debugScanCamera;
+import 'package:harness_mobile/phone/welcome/scan_to_connect.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
@@ -252,6 +254,21 @@ void main() {
     await frames(tester, count: 6);
     expect(closes, isNotEmpty);
     expect(find.byType(SettingsPage), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('scanning a sign-in QR, by name', (tester) async {
+    debugScanCamera = const SizedBox();
+    addTearDown(() => debugScanCamera = null);
+    final (:app, :closes, opened: _, voice: _, stt: _) = await openFind(tester);
+    await tester.enterText(find.byType(TextField), '>scan');
+    await frames(tester);
+    await tester.tap(find.text('Scan a QR code', findRichText: true).last);
+    await frames(tester, count: 6);
+    expect(closes, isNotEmpty);
+    expect(find.byType(ScanToConnectPage), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await frames(tester);
     await close(tester, app);
   });
 

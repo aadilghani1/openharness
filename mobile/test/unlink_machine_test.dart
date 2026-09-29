@@ -25,6 +25,7 @@ class _Links implements PeerLinkClient {
     String code, {
     required String label,
     String? displayName,
+    String? expectedFingerprint,
   }) async => const CliLinkConnectResult(error: 'not used');
 
   @override

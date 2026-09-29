@@ -206,6 +206,11 @@ class CodeLinkRun {
     final ours = jsonEncode({
       'id': b64e(identity.pub),
       'sig': b64e(await pairBindSig(identity, transcript)),
+      // Sealed beside the identity, as the password link does: the machine files this phone under an
+      // authenticated name and, knowing it is a viewer, adds it to its trust group at once. A machine
+      // that predates the fields ignores them.
+      if (label.trim().isNotEmpty) 'label': label,
+      'kind': 'viewer',
     });
     send('e2e_pake', {
       'pairId': _pairIdB64,

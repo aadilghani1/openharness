@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../analytics/analytics.dart';
 import '../teams/team_controller.dart';
 import '../api/api_client.dart';
+import '../e2ee/bytes.dart' show b64d;
+import '../e2ee/keys.dart' show fingerprint;
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/group_sync.dart';
@@ -2028,12 +2030,19 @@ class AppNotifier extends ChangeNotifier {
 
   /// Pairs with [machineId] by the one-time code its desktop app showed, then reconnects it — the
   /// QR's way in, where [connectWithPassword] is the password's. Null on success, or what to show.
-  Future<String?> connectWithCode(String machineId, String code) async {
+  ///
+  /// [expectedFingerprint] is the machine key the QR named (`f`), checked before anything is pinned.
+  Future<String?> connectWithCode(
+    String machineId,
+    String code, {
+    String? expectedFingerprint,
+  }) async {
     final result = await peerLinks.connectWithCode(
       machineId,
       code,
       label: phoneClientDescriptor().name,
       displayName: machineStates[machineId]?.machine.displayName,
+      expectedFingerprint: expectedFingerprint,
     );
     if (result.error != null) return result.error;
     final state = machineStates[result.linkedMachineId ?? machineId];
@@ -3323,6 +3332,99 @@ class AppNotifier extends ChangeNotifier {
       for (final machine in remotes) _readMachineUsage(machine),
     ]);
     return [for (final answer in answers) ?answer];
+  }
+
+  /// Approves a sign-in QR — a browser's (`k=v`), or a machine's with [machine] — and takes the asker
+  /// into this phone's trust group: the
+  /// browser's key must be the one the QR's fingerprint names; the approval hands the browser this
+  /// phone's roster sealed under the QR's [code]; the browser joins this phone's roster. That
+  /// exchange is the approval; telling the machines follows in the background. Returns the machines
+  /// it will reach, or an error code (`FINGERPRINT`, `STORAGE`, or the backend's refusal).
+  Future<({String? error, int machines, String? machineId})> approveSignInByQr({
+    required String userCode,
+    required String code,
+    required String pub,
+    required String label,
+    String? qrFingerprint,
+    bool machine = false,
+  }) async {
+    final keys = viewer.keys;
+    final List<int> pubBytes;
+    try {
+      pubBytes = b64d(pub);
+    } on FormatException {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    String plain(String v) =>
+        v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+    if (pubBytes.length != 32 ||
+        (qrFingerprint != null &&
+            plain(fingerprint(pubBytes)) != plain(qrFingerprint))) {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    final GroupRoster roster;
+    try {
+      roster = await handoffRoster(
+        keys,
+        selfLabel: phoneClientDescriptor().name,
+      );
+    } catch (_) {
+      return (error: 'STORAGE', machines: 0, machineId: null);
+    }
+    String? machineId;
+    try {
+      final sealed = sealHandedRoster(roster, code: code, userCode: userCode);
+      if (machine) {
+        machineId = await api.approveMachineSignIn(
+          userCode,
+          sealedRoster: sealed,
+        );
+      } else {
+        await api.approveBrowserSignIn(userCode, sealedRoster: sealed);
+      }
+    } catch (e) {
+      return (error: '$e', machines: 0, machineId: null);
+    }
+    try {
+      await admitGroupMember(
+        keys,
+        GroupMember(
+          pub: pub,
+          kind: machine ? 'machine' : 'viewer',
+          label: label,
+          at: DateTime.now().millisecondsSinceEpoch,
+          machineId: machine ? machineId : null,
+        ),
+      );
+      // A machine is one this device dials: pinned now, by the key the QR vouched for.
+      if (machine && machineId != null) {
+        await keys.pin(machineId, pubBytes, label: label);
+      }
+    } catch (_) {
+      // Signed in all the same; the browser's own round tells the machines.
+    }
+    // The two now hold each other's keys: done. Telling the rest of the group — every machine of
+    // this account that is online — is background work, after a list that has a new machine on it.
+    unawaited(() async {
+      if (machine) {
+        try {
+          await refreshMachines();
+        } catch (_) {}
+      }
+      final online = [
+        for (final p in await keys.peers())
+          if (machineStates.containsKey(p.machineId) &&
+              machineStates[p.machineId]?.nodeOnline != false)
+            p.machineId,
+      ];
+      if (online.isNotEmpty) await _syncGroup(online.first, spread: true);
+    }());
+    final reach = [
+      for (final p in await keys.peers())
+        if (machineStates.containsKey(p.machineId) && p.machineId != machineId)
+          p.machineId,
+    ].length;
+    return (error: null, machines: reach, machineId: machineId);
   }
 
   Future<MachineUsage?> _readMachineUsage(MachineState machine) async {

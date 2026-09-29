@@ -38,7 +38,7 @@ beforeEach(() => {
 
 /** A minimal web peer that runs the CPace responder + session handshake against the manager. */
 class WebPeer {
-  constructor(readonly role: 'web' | 'device' = 'web') {}
+  constructor(readonly role: 'web' | 'device' = 'web', readonly sealExtra: Record<string, unknown> = {}) {}
   identity = C.newIdentity()
   session?: { c2s: Uint8Array; s2c: Uint8Array; groupKey: Uint8Array; epoch: string; myEph: import('./core.js').Ephemeral }
   adapterPub?: Uint8Array
@@ -75,7 +75,7 @@ class WebPeer {
       if (!C.pairBindVerify(C.b64d(adId.id), pr.th!, C.b64d(adId.sig))) throw new Error('adapter bind sig failed')
       this.adapterPub = C.b64d(adId.id) // pin
 
-      const sealed = C.aeadSeal(C.pairKey(pr.isk!, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify({ id: C.b64e(this.identity.pub), sig: C.b64e(C.pairBindSig(this.identity.priv, pr.th!)) })))
+      const sealed = C.aeadSeal(C.pairKey(pr.isk!, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify({ id: C.b64e(this.identity.pub), sig: C.b64e(C.pairBindSig(this.identity.priv, pr.th!)), ...this.sealExtra })))
       return { type: 'e2e_pake', payload: { pairId: pr.pairIdB64, round: 4, enc: C.b64e(sealed) } }
     }
     return null // round 5 (ok/error) — nothing to send
@@ -334,6 +334,41 @@ describe('E2eeManager pairing', () => {
     mgr.onPair(C.newPairCode()) // becomes active (round 1 out)
     mgr.handleFrame('c6', { type: 'e2e_pair_intent', payload: { requestId: 'r2', pairId: C.b64e(C.newPairId()), label: 'x' } })
     expect((takeLast('e2e_pair_intent_result').payload as Record<string, unknown>).error).toBe('PAIRING_BUSY')
+  })
+})
+
+describe('E2eeManager code pairing joins the trust group', () => {
+  async function pairWith(peer: WebPeer, onPeerLinked = vi.fn()) {
+    const h = machine({ onPeerLinked })
+    h.mgr.handleFrame('p', peer.intent(C.newPairId()))
+    const code = C.newPairCode(); peer.setCode(code)
+    const pairing = h.mgr.onPair(code)
+    h.mgr.handleFrame('p', peer.onPake(h.lastFor('p', 'e2e_pake')!)!)
+    h.mgr.handleFrame('p', peer.onPake(h.lastFor('p', 'e2e_pake')!)!)
+    return { h, result: await pairing, onPeerLinked }
+  }
+
+  it('a phone that seals kind and label is announced to the group, under its authenticated name', async () => {
+    const phone = new WebPeer('web', { kind: 'viewer', label: "Dee's iPhone" })
+    const { h, result, onPeerLinked } = await pairWith(phone)
+    expect(result).toMatchObject({ ok: true, label: "Dee's iPhone" })
+    expect(onPeerLinked).toHaveBeenCalledWith({ pub: C.b64e(phone.identity.pub), kind: 'viewer', machineId: undefined, label: "Dee's iPhone" })
+    expect(h.mgr.pairedPeers().find((p) => p.identityPub === C.b64e(phone.identity.pub))).toMatchObject({ kind: 'viewer', label: "Dee's iPhone", role: 'web' })
+  })
+
+  it('an older phone (nothing sealed) pairs as before and is left to its own group sync', async () => {
+    const phone = new WebPeer()
+    const { h, result, onPeerLinked } = await pairWith(phone)
+    expect(result).toMatchObject({ ok: true, label: 'Chrome · macOS' })
+    expect(onPeerLinked).not.toHaveBeenCalled()
+    expect(h.mgr.pairedPeers()[0].kind).toBeUndefined()
+  })
+
+  it('a hardware device never joins the group, whatever it seals', async () => {
+    const device = new WebPeer('device', { kind: 'viewer', label: 'x' })
+    const { result, onPeerLinked } = await pairWith(device)
+    expect(result.ok).toBe(true)
+    expect(onPeerLinked).not.toHaveBeenCalled()
   })
 })
 

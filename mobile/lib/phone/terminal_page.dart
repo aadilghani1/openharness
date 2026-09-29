@@ -44,6 +44,7 @@ import 'delete_agent.dart';
 import 'held_height.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
+import 'add_machine.dart' show scanToApprove;
 import 'settings_page.dart';
 import 'session_work_page.dart';
 import 'terminal_action_column.dart';
@@ -2366,6 +2367,14 @@ class _TerminalPageState extends State<TerminalPage>
                 label: 'Leave the sample',
                 onTap: () => sample.leave(),
               ),
+            // A computer or browser signing in shows a QR; this phone approves it — the one thing
+            // only a signed-in phone can do, so it sits with the app's own screens.
+            PhoneSheetAction(
+              icon: LucideIcons.scanQrCode300,
+              label: 'Scan a QR code',
+              chevron: true,
+              onTap: () => unawaited(scanToApprove(context, widget.notifier)),
+            ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
               label: 'Settings',

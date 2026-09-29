@@ -332,6 +332,7 @@ class FakeLinks implements PeerLinkClient {
     String code, {
     required String label,
     String? displayName,
+    String? expectedFingerprint,
   }) async {
     codes.add((machineId, code, label));
     return codeResult;

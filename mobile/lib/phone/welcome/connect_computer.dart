@@ -9,6 +9,7 @@ import 'package:harness_mobile/state/app_state.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'scan_to_connect.dart';
+import '../add_machine.dart';
 import 'set_up_computer.dart';
 
 /// Setting up a computer, for a phone that is signed in — the same page as the first screen's "Not
@@ -101,54 +102,26 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
       camera: widget.scanCamera,
     );
     if (!mounted || code == null) return;
-    final machineId = code.machineId, pairCode = code.pairCode;
-    if (machineId == null || pairCode == null) {
-      _say(
-        "That code can't pair a computer. Scan the one in Harness ▸ Add Phone….",
-        failed: true,
-      );
-      return;
-    }
-    _say('Pairing…');
-    if (!widget.notifier.machineStates.containsKey(machineId)) {
-      // Bounded: a slow network is a reason to say so, not to leave "Pairing…" up for good.
-      try {
-        await widget.notifier.refreshMachines().timeout(
-          const Duration(seconds: 5),
-          onTimeout: () {},
-        );
-      } catch (_) {
-        // ⚠️ A list that could not be read says nothing about whether the computer is on the
-        // account, so it is not "isn't on your account" — and thrown on from here, it left
-        // "Pairing…" up for good.
-        if (!mounted) return;
-        _say(
-          "Couldn't reach your account. Check your connection and scan again.",
-          failed: true,
-        );
-        return;
-      }
-    }
+    // Scan → the code's checks → "Add this machine?" → pairing → the trust group (add_machine.dart).
+    final outcome = await addMachineFromCode(
+      context,
+      widget.notifier,
+      code,
+      onStatus: (status) => _say(status),
+    );
     if (!mounted) return;
-    if (!widget.notifier.machineStates.containsKey(machineId)) {
-      _say(
-        "That computer isn't on your account. Sign in to Harness on it "
-        'with ${widget.notifier.currentUser?.email ?? 'this account'}.',
-        failed: true,
-      );
-      return;
-    }
-    final error = await widget.notifier.connectWithCode(machineId, pairCode);
-    if (!mounted) return;
-    if (error == null) {
-      HapticFeedback.mediumImpact();
-      _say(null);
-      // From Computers, the list it came from has the computer now; at home, the shell moves on
-      // by itself once a computer is ready.
-      if (widget.onBack case final back?) back();
-    } else {
-      HapticFeedback.heavyImpact();
-      _say(error, failed: true);
+    switch (outcome) {
+      case MachineAdded():
+        HapticFeedback.mediumImpact();
+        _say(null);
+        // From Computers, the list it came from has the computer now; at home, the shell moves on
+        // by itself once a computer is ready.
+        if (widget.onBack case final back?) back();
+      case AddMachineCancelled():
+        _say(null);
+      case AddMachineFailed(:final message):
+        HapticFeedback.heavyImpact();
+        _say(message, failed: true);
     }
   }
 

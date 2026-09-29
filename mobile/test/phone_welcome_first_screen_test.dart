@@ -41,10 +41,16 @@ void main() {
     });
 
     test('ignores codes that are not ours', () {
-      expect(ConnectCode.parse('https://example.com/pair#e=a@b.co'), isNull);
+      // Any host serving the app is taken (a local or LAN build is `http://<ip>:<port>/pair`); the
+      // path and the fields are what make it ours.
+      expect(ConnectCode.parse('https://example.com/connect#e=a@b.co'), isNull);
       expect(
-        ConnectCode.parse('http://harness.autonomous.ai/pair#e=a@b.co'),
+        ConnectCode.parse('ftp://harness.autonomous.ai/pair#e=a@b.co'),
         isNull,
+      );
+      expect(
+        ConnectCode.parse('http://192.168.1.4:8080/pair#e=a@b.co')?.email,
+        'a@b.co',
       );
       expect(
         ConnectCode.parse('https://harness.autonomous.ai/pair#m=m1'),

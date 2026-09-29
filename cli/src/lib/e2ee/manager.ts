@@ -614,17 +614,22 @@ export class E2eeManager {
         if (!slot.active.isk || !slot.active.th) { this.failPair('TIMEOUT'); return true }
         const opened = C.aeadOpen(C.pairKey(slot.active.isk, ci), 4, C.utf8('e2e-id'), C.b64d(String(p.enc)))
         if (!opened) { this.failPair('CODE_MISMATCH'); return true }
-        const webId = JSON.parse(new TextDecoder().decode(opened)) as { id: string; sig: string }
+        const webId = JSON.parse(new TextDecoder().decode(opened)) as { id: string; sig: string; machineId?: unknown; kind?: unknown; label?: unknown }
         if (!C.pairBindVerify(C.b64d(webId.id), slot.active.th, C.b64d(webId.sig))) { this.failPair('CODE_MISMATCH'); return true }
-        // pin the paired client identity
-        this.store.addPaired(webId.id, slot.label, this.now(), slot.role)
+        // pin the paired client identity. A newer phone also seals what it is, as the password link does:
+        // that label is authenticated (the intent's is not), and a `kind` makes it a trust-group member, so
+        // this machine announces it to the group at once instead of waiting for the phone's own sync.
+        const joiner = slot.role === 'web' ? parseJoiner(webId) : null
+        const label = joiner?.kind ? joiner.label : slot.label
+        this.store.addPaired(webId.id, label, this.now(), slot.role, joiner?.kind ? { machineId: joiner.machineId, kind: joiner.kind } : undefined)
         this.deps.onIdentityPaired?.(connId, webId.id)
+        if (joiner?.kind) { try { this.deps.onPeerLinked?.({ pub: webId.id, ...joiner }) } catch { /* the pairing itself stands */ } }
         const fp = this.fingerprint()
         this.deps.sendTo(connId, { type: 'e2e_pake', payload: { pairId: slot.pairIdB64, round: 5, ok: true, fingerprint: fp } })
         const resolve = slot.active.resolve
         this.notifyTrustedWebDevicePairCleared(slot, 'paired')
         this.clearSlot()
-        resolve({ ok: true, label: slot.label, fingerprint: fp })
+        resolve({ ok: true, label, fingerprint: fp })
         return true
       }
     } catch {

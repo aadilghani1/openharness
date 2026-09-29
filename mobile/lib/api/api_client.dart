@@ -59,6 +59,60 @@ class ApiClient {
   }
 
   // -- machines --
+  // -- a machine asking to be signed in (`harness login`'s QR, /api/device-auth) --
+
+  /// What the sign-in request [userCode] is: the asking computer's name and fingerprint, where it
+  /// asked from, and whether this account already has a machine for that computer.
+  Future<MachineSignInRequest> lookupMachineSignIn(String userCode) async {
+    final res = await _dio.get(
+      '/api/device-auth/lookup',
+      queryParameters: {'userCode': userCode},
+    );
+    return MachineSignInRequest.fromJson(
+      unwrapApiResponse(res) as Map<String, dynamic>,
+    );
+  }
+
+  /// Sign a BROWSER in to this account (its sign-in QR, `k=v`), handing it this phone's trust group
+  /// sealed under the QR's pairing code (`viewer/group_sync.dart` `sealHandedRoster`).
+  Future<void> approveBrowserSignIn(
+    String userCode, {
+    required String sealedRoster,
+  }) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/device-auth/approve',
+        data: {'userCode': userCode, 'sealedRoster': sealedRoster},
+      ),
+    );
+  }
+
+  /// Sign that machine in to this account. Answers the machine id it is now.
+  ///
+  /// [sealedRoster]: this device's trust group, sealed under the QR's pairing code
+  /// (`viewer/group_sync.dart` `sealHandedRoster`), for the machine to open — it joins the group
+  /// without either side dialling the other first.
+  Future<String> approveMachineSignIn(
+    String userCode, {
+    String? sealedRoster,
+  }) async {
+    final res = await _dio.post(
+      '/api/device-auth/approve',
+      data: {'userCode': userCode, 'sealedRoster': ?sealedRoster},
+    );
+    final data = unwrapApiResponse(res) as Map<String, dynamic>;
+    return data['machineId'] as String;
+  }
+
+  /// "Not me": the request is refused, and the machine is told so.
+  Future<void> denyMachineSignIn(String userCode) async {
+    final res = await _dio.post(
+      '/api/device-auth/deny',
+      data: {'userCode': userCode},
+    );
+    unwrapApiResponse(res);
+  }
+
   Future<List<Machine>> machines() async {
     final res = await _dio.get('/api/machines');
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
@@ -219,4 +273,49 @@ String describeApiError(Object error) {
     }
   }
   return '$error';
+}
+
+/// `GET /api/device-auth/lookup`: a machine asking this account to sign it in.
+class MachineSignInRequest {
+  const MachineSignInRequest({
+    required this.label,
+    this.viewer = false,
+    this.pub,
+    this.fingerprint,
+    this.country,
+    this.expiresAt,
+    this.existingMachineName,
+  });
+
+  final String label;
+
+  /// A browser asking (kind `viewer`), not a machine.
+  final bool viewer;
+
+  /// A browser's E2EE public key (base64), to check against its QR and take into the group.
+  final String? pub;
+  final String? fingerprint;
+  final String? country;
+  final DateTime? expiresAt;
+
+  /// This account already has a machine for that computer (signing in again reuses it).
+  final String? existingMachineName;
+
+  factory MachineSignInRequest.fromJson(Map<String, dynamic> json) {
+    final expires = json['expiresAt'];
+    final existing = json['existingMachine'];
+    return MachineSignInRequest(
+      viewer: json['kind'] == 'viewer',
+      pub: json['pub'] is String ? json['pub'] as String : null,
+      label: (json['label'] as String?)?.trim().isNotEmpty == true
+          ? json['label'] as String
+          : 'computer',
+      fingerprint: json['fingerprint'] as String?,
+      country: json['country'] as String?,
+      expiresAt: expires is int
+          ? DateTime.fromMillisecondsSinceEpoch(expires)
+          : null,
+      existingMachineName: existing is Map ? existing['name'] as String? : null,
+    );
+  }
 }

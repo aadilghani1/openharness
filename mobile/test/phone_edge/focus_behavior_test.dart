@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/phone/add_machine.dart' show debugScanCamera;
+import 'package:harness_mobile/phone/welcome/scan_to_connect.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/phone/phone_search_catalog.dart'
@@ -377,6 +379,21 @@ void main() {
       await frames(tester);
       expect(find.text('Cancel'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
+      await frames(tester);
+
+      // Scanning a sign-in QR sits with the app's own screens: a door, to the camera.
+      debugScanCamera = const SizedBox();
+      addTearDown(() => debugScanCamera = null);
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      await tapInView(tester, find.text('Scan a QR code'));
+      await frames(tester);
+      expect(find.byType(ScanToConnectPage), findsOneWidget);
+      expect(
+        find.text('Scan the QR on the computer or browser signing in'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Not now'));
       await frames(tester);
 
       await tester.tap(find.byKey(const ValueKey('terminal-title')));

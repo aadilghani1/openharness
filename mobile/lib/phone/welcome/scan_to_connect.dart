@@ -36,6 +36,10 @@ class ScanToConnectPage extends StatefulWidget {
     this.signingIn = false,
     this.fallbackLabel = 'Use email instead',
     this.camera,
+    this.title = 'Scan the code on your computer',
+    this.hint = 'On your Mac: Harness ▸ Add Phone…',
+    this.allowPaste = false,
+    this.readClipboard,
   });
 
   final ValueChanged<ConnectCode> onCode;
@@ -52,6 +56,17 @@ class ScanToConnectPage extends StatefulWidget {
   /// Stands in for the camera in tests and renders. Null opens the real one.
   final Widget? camera;
 
+  /// What the page asks for, and the line under it.
+  final String title, hint;
+
+  /// Offers "Paste link instead": the `…/pair#…` link a computer prints beside its QR ("Can't
+  /// scan? Open this on your phone"). This app opens no links of its own, so pasting is the way in
+  /// without a camera.
+  final bool allowPaste;
+
+  /// Stands in for the clipboard in tests. Null reads the real one.
+  final Future<String?> Function()? readClipboard;
+
   @override
   State<ScanToConnectPage> createState() => _ScanToConnectPageState();
 }
@@ -59,6 +74,30 @@ class ScanToConnectPage extends StatefulWidget {
 class _ScanToConnectPageState extends State<ScanToConnectPage> {
   /// Set once a code of ours is read: the camera keeps reporting it every frame.
   bool _done = false;
+
+  /// The clipboard held something that is not one of our links.
+  String? _pasteError;
+
+  Future<void> _paste() async {
+    if (_done) return;
+    String? text;
+    try {
+      text =
+          await (widget.readClipboard?.call() ??
+              Clipboard.getData(Clipboard.kTextPlain).then((d) => d?.text));
+    } catch (_) {
+      text = null;
+    }
+    if (!mounted || _done) return;
+    final code = ConnectCode.parse(text ?? '');
+    if (code == null) {
+      setState(() => _pasteError = "That isn't a Harness sign-in link.");
+      return;
+    }
+    _done = true;
+    HapticFeedback.mediumImpact();
+    widget.onCode(code);
+  }
 
   void _onDetect(BarcodeCapture capture) {
     if (_done) return;
@@ -102,10 +141,16 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
                           errorBuilder: (context, error) => Center(
                             child: Padding(
                               padding: const EdgeInsets.all(24),
-                              child: TtyText(
-                                'No camera. Allow it in Settings, or use your email.',
-                                color: tty.faint,
-                                size: TtySize.meta,
+                              // Wraps: a TtyText is one line, and this sentence is wider than the square.
+                              child: Text(
+                                widget.allowPaste
+                                    ? 'No camera. Allow it in Settings, or paste the link instead.'
+                                    : 'No camera. Allow it in Settings, or use your email.',
+                                textAlign: TextAlign.center,
+                                style: tty.style(
+                                  size: TtySize.meta,
+                                  color: tty.faint,
+                                ),
                               ),
                             ),
                           ),
@@ -120,7 +165,7 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
           child: TtyText(
-            widget.signingIn ? 'Signing in…' : 'Scan the code on your computer',
+            widget.signingIn ? 'Signing in…' : widget.title,
             size: TtySize.title,
             weight: FontWeight.w600,
           ),
@@ -128,11 +173,7 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
         const SizedBox(height: 6),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: TtyText(
-            'On your Mac: Harness ▸ Add Phone…',
-            color: tty.faint,
-            size: TtySize.meta,
-          ),
+          child: TtyText(widget.hint, color: tty.faint, size: TtySize.meta),
         ),
         const SizedBox(height: 10),
         // The one line of trust on the way in: the scan hands a phone the run of a computer, and
@@ -154,6 +195,27 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
           ),
         ),
         const SizedBox(height: 16),
+        if (widget.allowPaste) ...[
+          Center(
+            child: TtyTextButton(
+              key: const Key('scan-paste-link'),
+              label: 'Paste link instead',
+              onPressed: () => _paste(),
+            ),
+          ),
+          if (_pasteError case final error?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Tty.origin, 2, Tty.origin, 6),
+              child: Center(
+                child: TtyText(
+                  error,
+                  key: const Key('scan-paste-error'),
+                  color: tty.red,
+                  size: TtySize.meta,
+                ),
+              ),
+            ),
+        ],
         Center(
           child: TtyTextButton(
             label: widget.fallbackLabel,
@@ -174,6 +236,10 @@ Future<ConnectCode?> scanForCode(
   BuildContext context, {
   required String fallbackLabel,
   Widget? camera,
+  String? title,
+  String? hint,
+  bool allowPaste = false,
+  Future<String?> Function()? readClipboard,
 }) async {
   ConnectCode? scanned;
   await Navigator.of(context).push(
@@ -184,6 +250,10 @@ Future<ConnectCode?> scanForCode(
           child: ScanToConnectPage(
             camera: camera,
             fallbackLabel: fallbackLabel,
+            title: title ?? 'Scan the code on your computer',
+            hint: hint ?? 'On your Mac: Harness ▸ Add Phone…',
+            allowPaste: allowPaste,
+            readClipboard: readClipboard,
             onCode: (code) {
               scanned = code;
               Navigator.of(page).pop();

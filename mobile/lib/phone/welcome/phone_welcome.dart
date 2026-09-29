@@ -118,6 +118,9 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     if (machineId != null && pairCode != null) {
       widget.notifier.pendingPairing = (machineId: machineId, code: pairCode);
     }
+    // A machine's sign-in QR names no account: this phone signs in first (its own email), then
+    // scans that machine again from Machines ▸ Add a machine.
+    if (code.email.isEmpty) return;
     _email.text = code.email;
     final signIn = code.signIn;
     if (signIn != null) {

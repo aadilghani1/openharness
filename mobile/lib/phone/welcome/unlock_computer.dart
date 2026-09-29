@@ -147,6 +147,7 @@ class _UnlockComputerState extends State<UnlockComputer> {
     final error = await widget.notifier.connectWithCode(
       machine.machineId,
       pairCode,
+      expectedFingerprint: code.fingerprint,
     );
     if (!mounted) return;
     setState(() {

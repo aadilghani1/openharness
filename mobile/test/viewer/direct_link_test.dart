@@ -150,6 +150,50 @@ void main() {
       expect((await keys.peer('machine-1'))!.pub, machineIdentity.pub);
     });
 
+    test('seals what it is beside its identity, so the machine adds it to its group', () async {
+      final (link, socket, _) = await linkClient();
+      final machine = CodeMachine(socket, machineIdentity, 'K7QM-4XPT');
+      await link.connectWithCode(
+        'machine-1',
+        'k7qm4xpt',
+        label: "Dee's iPhone",
+      );
+      expect(machine.claim, containsPair('kind', 'viewer'));
+      expect(machine.claim, containsPair('label', "Dee's iPhone"));
+    });
+
+    test(
+      'a machine whose key is not the QR\'s fingerprint is not pinned',
+      () async {
+        final (link, socket, keys) = await linkClient();
+        CodeMachine(socket, machineIdentity, 'K7QM-4XPT');
+        final result = await link.connectWithCode(
+          'machine-1',
+          'k7qm4xpt',
+          label: 'iPhone',
+          expectedFingerprint: 'DEADBEEFDEADBEEF',
+        );
+        expect(result.error, contains('fingerprint doesn’t match'));
+        expect(await keys.peer('machine-1'), isNull);
+      },
+    );
+
+    test('the QR\'s fingerprint matches however it is spelled', () async {
+      final (link, socket, keys) = await linkClient();
+      CodeMachine(socket, machineIdentity, 'K7QM-4XPT');
+      final spelled = fingerprint(machineIdentity.pub)
+          .replaceAll('·', '')
+          .toLowerCase();
+      final result = await link.connectWithCode(
+        'machine-1',
+        'k7qm4xpt',
+        label: 'iPhone',
+        expectedFingerprint: spelled,
+      );
+      expect(result.error, isNull);
+      expect((await keys.peer('machine-1'))!.pub, machineIdentity.pub);
+    });
+
     test('each failure reads as a sentence, never a bare code', () async {
       for (final (code, expected) in [
         (

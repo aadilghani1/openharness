@@ -225,7 +225,10 @@ import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayClient.js'
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from './lib/e2ee/groupSyncer.js'
-import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
+import { renderQr } from './lib/qrTerminal.js'
+import { newPairCode, pairLink, pairLinkBase, runQrLink, signInLink, type GroupView, type QrLinkEvent } from './lib/qrLink.js'
+import { TrustGroupStore, parseRoster, type GroupMember } from './lib/e2ee/trustGroup.js'
+import { openHandedRoster } from './lib/e2ee/handedRoster.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
@@ -401,7 +404,11 @@ ${PROCESS_ENGINES.map((engine) => `  ${ENGINE_CLI_COMMANDS[engine]}`).join('\n')
 A launcher that hands the pane to one of these works the same — "ori claude" is a Claude Code agent.
 
 Machine:
-  harness login                sign in with SSO and save this computer's session
+  harness login                sign in by phone: shows a QR code — scan it with the phone's camera
+                               (opens Harness in its browser) or the Harness app (⋯ → Scan a QR code),
+                               then approve; this machine joins your devices, no password to set
+  harness login --browser      sign in with SSO in the browser instead
+  harness login --qr           the QR sign-in even without a terminal (GUI clients, with --json)
   harness login --force        stop the daemon and sign in with a different SSO account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
@@ -465,6 +472,8 @@ every future connect, until you change or clear it:
   harness remote-password status   show whether one is set, and its fingerprint
   harness remote-password clear   remove this machine's remote password
   harness link connect <id>    join a machine using ITS remote password (fully automatic)
+  harness link qr              show a QR; scan it with Harness on your phone to link this machine
+                               (no password) — it then joins your trust group
                                (--name=<label> names the machine in messages instead of its id)
   harness link list            list machines this one has linked
   harness link unlink <id>     remove a linked machine's trust
@@ -796,7 +805,7 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean; entryPoint?: string } = {},
+  opts: { chained?: boolean; entryPoint?: string; qr?: boolean } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
   // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
@@ -807,7 +816,9 @@ async function loginCommand(
     // `chained` is `harness grid login`, which runs the hand-off itself and reports it as its own
     // result — doing it here too would sign in to the grid twice and print two answers for one act.
     let grid: Record<string, unknown> = {}
-    if (!opts.chained) {
+    // A sign-in by phone is a Harness session, which the grid's hand-off (an Autonomous account token)
+    // always refuses — so it is not attempted, and the grid is left for `harness grid login`.
+    if (!opts.chained && !opts.qr) {
       try {
         grid = await attachGridToSignIn(await new AuthSessionManager(backendHttpBase()).accessToken(), json, installing)
       } catch {
@@ -819,7 +830,8 @@ async function loginCommand(
     if (opts.chained) return { signedIn: true, alreadySignedIn }
     if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true, ...grid } : { type: 'result', status: 'success', ...grid })
     else if (alreadySignedIn) console.log('\n  ✓ Already signed in. Run `harness start` to connect this computer.\n')
-    else console.log('\n  ✓ Signed in. Run `harness start` to connect this computer.\n')
+    // A QR sign-in starts Harness itself next (`finishQrLogin`): no step left to tell the person about.
+    else if (!qrSignedIn) console.log('\n  ✓ Signed in. Run `harness start` to connect this computer.\n')
     return { signedIn: true, alreadySignedIn }
   }
   if (readAuthSession() && !force) {
@@ -842,7 +854,11 @@ async function loginCommand(
     }
     return await succeed(true)
   }
-  if (!force) return await browserSignIn(json, emit, () => succeed(false), entryPoint)
+  // By phone (a QR) or by browser. The QR is the default for a person at a terminal — over SSH it is
+  // the only one that works without pasting a callback URL — and what the desktop asks for by `--qr`.
+  const signIn = (after: () => Promise<SignInOutcome>): Promise<SignInOutcome> =>
+    opts.qr ? qrSignIn(json, emit, after) : browserSignIn(json, emit, after, entryPoint)
+  if (!force) return await signIn(() => succeed(false))
   // A forced login may intentionally switch SSO accounts. The old daemon must not keep streaming
   // under its existing socket while this process replaces the durable session — and no NEW daemon
   // may come up on the old session in the meantime. The desktop app re-runs `harness start` whenever
@@ -866,7 +882,7 @@ async function loginCommand(
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
       if (readAuthSession()) await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
+      return await signIn(() => succeed(false, installing))
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
     })
@@ -895,6 +911,198 @@ async function loginCommand(
  * an exit code (`emit`); on the human path it is thrown. `succeed` finishes the job once the
  * session is on disk.
  */
+/** Set by a QR sign-in: what the approving phone handed over — its trust group, already merged here —
+ *  for `finishQrLogin` to report once the daemon is up on the new sign-in. */
+let qrJoinedGroup: { phone: string; machines: Array<{ machineId: string; label: string }> } | null = null
+/** This run signed in by phone (`qrSignIn`), so `finishQrLogin` — not a plain daemon restart — follows. */
+let qrSignedIn = false
+
+/**
+ * `harness login` by phone: show a QR, and a phone already signed in to Harness scans it and approves.
+ * The backend then hands this computer a sign-in of its own (`/api/device-auth`), bound to it. The QR
+ * also carries a one-time code that reaches only the phone, by its camera: the phone checks this
+ * machine's key against the QR's fingerprint, takes it into its trust group, and hands back its own
+ * roster sealed under that code (`lib/e2ee/handedRoster.ts`). Approval is the whole exchange — the two
+ * hold each other's keys — and the group sync spreads the rest in the background. No browser, no password.
+ */
+async function qrSignIn(
+  json: boolean,
+  emit: (line: Record<string, unknown>) => void,
+  succeed: () => Promise<SignInOutcome>,
+): Promise<SignInOutcome> {
+  const fail = (code: string, message: string): SignInOutcome => {
+    if (json) emit({ type: 'result', status: 'error', code, message })
+    else console.error(`\n  ✗ ${message}\n`)
+    process.exitCode = 1
+    return { signedIn: false }
+  }
+  const store = new E2eeStore()
+  store.init()
+  const fingerprint = store.fingerprint()
+  const host = hostname()
+  const cid = computerId()
+  const base = backendHttpBase()
+  const pairCode = newPairCode()
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  let drawn = false
+  for (;;) {
+    let start: { userCode?: string; deviceCode?: string; expiresIn?: number; interval?: number }
+    try {
+      const res = await fetch(`${base}/api/device-auth/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ computerId: cid, label: host, fingerprint, pub: b64e(store.getIdentity().pub) }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { data?: typeof start; error?: { message?: string } }
+      if (!res.ok || !body.data?.userCode || !body.data.deviceCode) {
+        return fail('BACKEND_ERROR', body.error?.message ?? `Could not start a sign-in (HTTP ${res.status}).`)
+      }
+      start = body.data
+    } catch (err) {
+      return fail('BACKEND_ERROR', `Could not reach Harness (${(err as Error).message}).`)
+    }
+    const url = signInLink({ userCode: start.userCode!, code: pairCode, fingerprint, hostname: host, base: pairLinkBase(env.WEB_URL) })
+    const expiresAt = Date.now() + (start.expiresIn ?? 180) * 1000
+    emit({ type: 'qr', url, fingerprint, expiresAt })
+    if (!json) {
+      if (drawn && process.stdout.isTTY) process.stdout.write('\x1b[2J\x1b[H')
+      drawn = true
+      console.log('\n  Sign in this machine with your phone')
+      console.log('  ─────────────────────────────────────────────')
+      for (const line of renderQr(url)) console.log(line)
+      console.log('\n  Scan it with your phone, either:')
+      console.log('    • its Camera — point it at the code and tap the link. Harness opens in the')
+      console.log("      phone's browser: sign in if asked (same account), then tap Approve.")
+      console.log('    • the Harness app — ⋯ → Scan a QR code, then Approve.')
+      console.log(`\n  machine      ${host}`)
+      console.log(`  fingerprint  ${fingerprint}   ← check your phone shows the same`)
+      console.log(`\n  Can't scan? Open this link on your phone:\n  ${url}`)
+      console.log('  No phone? Sign in with the browser instead:  harness login --browser\n')
+      console.log('  Waiting for your phone to approve…   (Ctrl-C to cancel)')
+    }
+    while (Date.now() < expiresAt) {
+      await sleep(Math.max(1, start.interval ?? 2) * 1000)
+      let poll: { status?: string; error?: string; token?: string; refreshToken?: string; expiresIn?: number; autonomousEnv?: 'prod' | 'stag'; machineId?: string; sealedRoster?: string }
+      try {
+        const res = await fetch(`${base}/api/device-auth/poll`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ deviceCode: start.deviceCode }),
+        })
+        poll = ((await res.json().catch(() => ({}))) as { data?: typeof poll }).data ?? {}
+      } catch {
+        continue // a dropped poll is only a dropped poll
+      }
+      if (poll.status === 'pending') continue
+      if (poll.status === 'denied') return fail('DENIED', 'Declined on your phone. Nothing was signed in.')
+      if (poll.status === 'expired') break
+      if (poll.status === 'approved' && poll.token) {
+        writeAuthSession({
+          version: 1,
+          accessToken: poll.token,
+          ...(poll.refreshToken ? { refreshToken: poll.refreshToken } : {}),
+          ...(poll.expiresIn ? { expiresAt: Date.now() + poll.expiresIn * 1000 } : {}),
+          autonomousEnv: poll.autonomousEnv ?? 'prod',
+          computerId: cid,
+          ...(poll.machineId ? { machineId: poll.machineId } : {}),
+          updatedAt: Date.now(),
+        })
+        qrSignedIn = true
+        qrJoinedGroup = joinHandedGroup(poll.sealedRoster, { code: pairCode, userCode: start.userCode!, selfPub: b64e(store.getIdentity().pub), selfMachineId: poll.machineId })
+        emit({ type: 'approved', machineId: poll.machineId })
+        if (!json) console.log('\n  ✓ Approved on your phone — this machine is signed in.')
+        return await succeed()
+      }
+    }
+    // Expired unscanned: a fresh request and a fresh QR (the pairing code stays — it never left here).
+    if (!json) console.log('  (That code expired — here is a fresh one.)')
+  }
+}
+
+/**
+ * The approving phone's roster, opened with the QR's code and merged into this machine's trust group
+ * before the daemon starts — which then pins and trusts every member (`GroupSyncer.start`). Null when
+ * nothing came (a phone that predates the handoff) or it does not open.
+ */
+function joinHandedGroup(
+  sealed: string | undefined,
+  opts: { code: string; userCode: string; selfPub: string; selfMachineId?: string },
+): { phone: string; machines: Array<{ machineId: string; label: string }> } | null {
+  const raw = sealed ? openHandedRoster(sealed, opts) : null
+  if (!raw) return null
+  const roster = parseRoster(raw)
+  if (!roster.members.length) return null
+  new TrustGroupStore().merge(roster, opts.selfPub)
+  // The phone put itself first; any viewer will do for the name.
+  const phone = roster.members.find((m) => m.kind === 'viewer')?.label ?? 'your phone'
+  const machines = roster.members
+    .filter((m) => m.kind === 'machine' && m.machineId && m.machineId !== opts.selfMachineId)
+    .map((m) => ({ machineId: m.machineId!, label: m.label }))
+  return { phone, machines }
+}
+
+/**
+ * After a QR sign-in: bring the daemon up on the new sign-in (`harness start` in a child process — it
+ * restarts a daemon still serving another identity, then exits) and ask it for a group round now rather
+ * than at its first scheduled one. The keys were exchanged at approval, so nothing here waits on the
+ * phone: what follows is background work the daemon keeps doing.
+ */
+async function finishQrLogin(json: boolean): Promise<void> {
+  const joined = qrJoinedGroup
+  const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
+  if (!json) {
+    if (joined) console.log(`  ✓ ${joined.phone} handed over your devices (${joined.machines.length} machine${joined.machines.length === 1 ? '' : 's'}).`)
+    console.log('  Starting Harness on this machine…')
+  }
+  await new Promise<void>((resolve) => {
+    const child = spawn(process.execPath, [...process.execArgv, SCRIPT_PATH, 'start'], {
+      stdio: json ? 'ignore' : 'inherit',
+      env: process.env,
+    })
+    child.once('exit', () => resolve())
+    child.once('error', () => resolve())
+  })
+  if (!json) console.log('  Adding this machine to your devices…')
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const status = await daemonTry('GET', '/api/status').catch(() => null)
+    if (status?.body.signedIn === true && status.body.connected === true) break
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  if (!joined) {
+    const message = 'Signed in, but your phone sent no devices — update Harness there, then run: harness link qr'
+    emit({ type: 'result', status: 'error', code: 'NO_ROSTER', message })
+    if (!json) console.log(`\n  ! ${message}\n`)
+    return
+  }
+  await daemonTry('POST', '/api/group/sync').catch(() => null)
+  // What this machine reaches is its whole group now — the phone's roster merged into whatever it
+  // already knew — named from the account's machine list (the roster only knows how each member was
+  // first introduced), and only machines on this account.
+  const group = await daemonTry('GET', '/api/group').catch(() => null)
+  const self = (group?.body.self as { machineId?: string } | undefined)?.machineId
+  const members = ((group?.body.members ?? []) as Array<{ kind?: string; machineId?: string; label?: string }>)
+    .filter((m) => m.kind === 'machine' && m.machineId && m.machineId !== self)
+  const known = members.length ? members.map((m) => ({ machineId: m.machineId!, label: m.label ?? m.machineId! })) : joined.machines
+  const listed = await daemonTry('GET', '/api/machines').catch(() => null)
+  const rows = (((listed?.body.data as Record<string, unknown> | undefined)?.machines) ?? []) as Array<{ machineId?: string; name?: string }>
+  const onAccount = new Map(rows.filter((r) => r.machineId).map((r) => [r.machineId!, r.name || r.machineId!]))
+  const machines = known
+    .filter((m) => onAccount.size === 0 || onAccount.has(m.machineId))
+    .map((m) => ({ machineId: m.machineId, name: onAccount.get(m.machineId) ?? m.label }))
+  emit({ type: 'linked', label: joined.phone })
+  emit({ type: 'synced', machines })
+  emit({ type: 'result', status: 'success', label: joined.phone, machines })
+  if (json) return
+  console.log(`\n  ✓ Linked with ${joined.phone}`)
+  if (machines.length) {
+    console.log(`  ✓ This machine reaches ${machines.length} machine${machines.length === 1 ? '' : 's'}, and they reach it:`)
+    console.log(`      ${machines.map((m) => m.name).join(' · ')}\n`)
+  } else {
+    console.log('  ✓ Machines you link later reach this one too.\n')
+  }
+}
+
 async function browserSignIn(
   json: boolean,
   emit: (line: Record<string, unknown>) => void,
@@ -7171,6 +7379,145 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
   return { res, json }
 }
 
+/**
+ * A one-time sign-in code for a phone (`h` in the QR), minted by the running daemon against its own
+ * session. The daemon answers this only over its owner-only Unix socket — it is a credential for its
+ * ninety seconds — so it is asked there. Null when there is none: no socket (Windows), a daemon
+ * signed in by a phone (a Harness session cannot hand one off), or an older daemon.
+ */
+async function daemonHandoff(): Promise<string | null> {
+  const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, daemonPort())
+  if (!socketPath) return null
+  const { request } = await import('http')
+  return new Promise<string | null>((resolve) => {
+    const req = request({ socketPath, method: 'POST', path: '/api/auth/handoff', headers: { 'x-adapter-local': '1' }, timeout: 5000 }, (res) => {
+      let body = ''
+      res.on('data', (d) => { body += d })
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body) as { data?: { code?: unknown }; code?: unknown }
+          const code = json.data?.code ?? json.code
+          resolve(res.statusCode === 200 && typeof code === 'string' ? code : null)
+        } catch { resolve(null) }
+      })
+    })
+    req.on('error', () => resolve(null))
+    req.on('timeout', () => { req.destroy(); resolve(null) })
+    req.end()
+  })
+}
+
+/** A local daemon call that reports failure instead of exiting — for loops that must decide themselves. */
+async function daemonTry(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = { 'x-adapter-local': '1' }
+  if (body) headers['content-type'] = 'application/json'
+  const res = await fetch(`http://127.0.0.1:${daemonPort()}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> }
+}
+
+/**
+ * `harness link qr` — link this machine to a signed-in phone by scanning, instead of a remote password.
+ * Shows a QR for the phone (the Harness app, or its camera → Harness in the browser), keeps the daemon
+ * armed with the code in it, and once the phone pairs, waits for the trust group to bring in the rest.
+ */
+async function linkQrCommand(json: boolean): Promise<void> {
+  await linkQrFlow(json)
+}
+
+/** The body of `harness link qr`: a machine already signed in, linked to a phone by scanning. */
+async function linkQrFlow(json: boolean): Promise<void> {
+  const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
+  const fail = (code: string, message: string): void => {
+    if (json) console.log(JSON.stringify({ type: 'result', status: 'error', code, message }))
+    else console.error(`\n  ✗ ${message}\n`)
+    process.exitCode = 1
+  }
+  let status: Record<string, unknown>
+  try { status = (await daemonTry('GET', '/api/status')).body } catch {
+    fail('DAEMON_NOT_RUNNING', 'Harness is not running on this computer. Start it first: harness start'); return
+  }
+  const machineId = typeof status.machineId === 'string' ? status.machineId : ''
+  const fingerprint = typeof status.fingerprint === 'string' ? status.fingerprint : ''
+  if (status.signedIn !== true || !/^[a-f0-9]{32}$/.test(machineId) || !fingerprint) {
+    fail('NOT_SIGNED_IN', 'This computer is not signed in. Run: harness login'); return
+  }
+  const me = await daemonTry('GET', '/api/auth/me').catch(() => null)
+  const user = ((me?.body.data as Record<string, unknown> | undefined)?.user ?? {}) as Record<string, unknown>
+  const email = typeof user.email === 'string' ? user.email : undefined
+  const host = hostname()
+  const redraw = !json && process.stdout.isTTY
+  let drawn = false
+
+  // Whether this daemon can sign a phone in as well (an Autonomous sign-in can; a phone-approved one cannot).
+  let signsIn = false
+  const show = async (code: string): Promise<void> => {
+    const signIn = await daemonHandoff()
+    signsIn = !!signIn
+    const url = pairLink({ machineId, code, fingerprint, hostname: host, email, signIn: signIn ?? undefined, base: pairLinkBase(env.WEB_URL) })
+    emit({ type: 'qr', url, fingerprint, machineId })
+    if (json) return
+    if (redraw && drawn) process.stdout.write('\x1b[2J\x1b[H')
+    drawn = true
+    console.log('\n  Add this machine to your devices')
+    console.log('  ─────────────────────────────────────────────')
+    for (const line of renderQr(url)) console.log(line)
+    console.log('\n  Scan it with your phone, either:')
+    console.log('    • its Camera — point it at the code and tap the link. Harness opens in the')
+    console.log("      phone's browser: sign in if asked (same account), then tap Approve.")
+    console.log('    • the Harness app — ⋯ → Scan a QR code, then Approve.')
+    console.log(`\n  machine      ${host}  (${machineId.slice(0, 8)}…)`)
+    console.log(`  fingerprint  ${fingerprint}   ← your phone shows the same`)
+    if (email) console.log(`  account      ${email}`)
+    console.log(`\n  Can't scan? Open this on your phone:\n  ${url}\n`)
+  }
+  const note = (e: QrLinkEvent): void => {
+    emit({ ...e })
+    if (json) return
+    if (e.type === 'waiting') console.log('  Waiting for your phone…   (Ctrl-C to cancel)')
+    else if (e.type === 'mismatch') console.log('  ✗ That code did not match. A new one is above — scan again.')
+    else if (e.type === 'rotated') console.log('  (A new code, so an old photo of this screen is useless.)')
+    else if (e.type === 'rate_limited') console.log('  Too many attempts — waiting a minute before trying again.')
+    else if (e.type === 'linked') console.log(`\n  ✓ Linked with ${e.label}`)
+    else if (e.type === 'syncing') console.log('  Adding this machine to your devices…')
+  }
+
+  const result = await runQrLink({
+    // A sign-in code lives 90 s, so a QR carrying one is redrawn before it goes stale.
+    get rotateMs() { return signsIn ? 80_000 : undefined },
+    pair: (code) => daemonTry('POST', '/api/pair', { code }),
+    group: async () => {
+      const { body } = await daemonTry('GET', '/api/group')
+      return Array.isArray(body.members) ? { members: body.members as GroupView['members'] } : null
+    },
+    show,
+    note,
+  })
+  if (!result.ok) {
+    const messages: Record<string, string> = {
+      DAEMON_UNREACHABLE: 'Lost the connection to Harness on this computer. Check it is running: harness status',
+      PAIRING_UNAVAILABLE: 'This version of Harness cannot pair here. Update it: harness update',
+    }
+    fail(result.error, messages[result.error] ?? `Linking failed (${result.error}). Try again.`)
+    return
+  }
+  // Names from the account's machine list; the roster only knows how each member was first introduced.
+  const listed = await daemonTry('GET', '/api/machines').catch(() => null)
+  const rows = (((listed?.body.data as Record<string, unknown> | undefined)?.machines) ?? []) as Array<{ machineId?: string; name?: string }>
+  const nameOf = (id: string, fallback: string): string => rows.find((r) => r.machineId === id)?.name || fallback
+  const machines = result.machines.map((m) => ({ machineId: m.machineId, name: nameOf(m.machineId, m.label) }))
+  if (json) {
+    console.log(JSON.stringify({ type: 'synced', machines }))
+    console.log(JSON.stringify({ type: 'result', status: 'success', label: result.label, machines }))
+    return
+  }
+  if (machines.length) {
+    console.log(`  ✓ This machine now reaches ${machines.length} machine${machines.length === 1 ? '' : 's'}, and they reach it:`)
+    console.log(`      ${machines.map((m) => m.name).join(' · ')}\n`)
+  } else {
+    console.log(`  ✓ ${result.label} can reach this machine. Machines you link later join the same group.\n`)
+  }
+}
+
 /** `harness pair <code>` — send a browser/device pairing code to the running daemon (localhost). */
 async function pairCommand(code: string | undefined): Promise<void> {
   if (!code) {
@@ -7986,9 +8333,18 @@ switch (cmd) {
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity() : undefined)
-      .catch(onError)
+    {
+      // QR by default for a person at a terminal; `--browser` for the SSO page; a script (`--json`, or
+      // no terminal) keeps the browser flow unless it asks for `--qr`, as the desktop app does.
+      const qr = flags.includes('--qr') || (!flags.includes('--browser') && !flags.includes('--json') && !!process.stdin.isTTY)
+      loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag(), qr })
+        .then(async (outcome) => {
+          if (!outcome.signedIn) return
+          if (qrSignedIn) await finishQrLogin(flags.includes('--json'))
+          else await restartDaemonForIdentity()
+        })
+        .catch(onError)
+    }
     break
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }
@@ -8154,6 +8510,7 @@ switch (cmd) {
       const displayName = flags.find((flag) => flag.startsWith('--name='))?.slice('--name='.length)
       linkConnectCommand(args[1], flags.includes('--stdin'), flags.includes('--json'), displayName).catch(onError)
     }
+    else if (args[0] === 'qr') linkQrCommand(flags.includes('--json')).catch(onError)
     else if (args[0] === 'list') linkListCommand().catch(onError)
     else if (args[0] === 'unlink') linkUnlinkCommand(args[1]).catch(onError)
     else { console.error(`Unknown command: link ${args[0] ?? ''}`); usage(1) }

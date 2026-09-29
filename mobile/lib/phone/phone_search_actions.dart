@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'add_machine.dart' show scanToApprove;
 import 'agent_index.dart';
 import 'agents_list_page.dart';
 import 'agents_page.dart' show openNewAgent;
@@ -47,6 +48,12 @@ List<PhoneCommand> phoneSearchCommands(
       run: () =>
           Navigator.of(context)
               .push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
+    ),
+    PhoneCommand(
+      id: 'device.scan',
+      title: 'Scan a QR code',
+      detail: 'Approve a computer or browser signing in',
+      run: () => scanToApprove(context, notifier),
     ),
     PhoneCommand(
       id: 'app.settings',

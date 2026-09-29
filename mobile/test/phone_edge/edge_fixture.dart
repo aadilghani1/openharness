@@ -313,6 +313,7 @@ class EdgeLinks implements PeerLinkClient {
     String code, {
     required String label,
     String? displayName,
+    String? expectedFingerprint,
   }) async => error == null
       ? CliLinkConnectResult(linkedMachineId: machineId)
       : CliLinkConnectResult(error: error);

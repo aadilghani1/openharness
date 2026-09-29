@@ -67,6 +67,7 @@ class DirectLink implements PeerLinkClient {
     String code, {
     required String label,
     String? displayName,
+    String? expectedFingerprint,
   }) async {
     final start = await _start();
     if (start.failed != null) return start.failed!;
@@ -82,6 +83,14 @@ class DirectLink implements PeerLinkClient {
     );
     switch (result) {
       case PasswordLinked(:final peerPub, :final fingerprint):
+        // The QR named the machine's key; a different one means this is not the machine on that
+        // screen, whoever answered for its id. Nothing is pinned.
+        if (expectedFingerprint != null &&
+            !sameFingerprint(fingerprint, expectedFingerprint)) {
+          return const CliLinkConnectResult(
+            error: 'That machine’s fingerprint doesn’t match its code. Nothing was linked.',
+          );
+        }
         return _pin(machineId, peerPub, fingerprint);
       case PasswordLinkFailed(:final code):
         final name = displayName == null || displayName.isEmpty
@@ -197,4 +206,11 @@ class DirectLink implements PeerLinkClient {
 String _asCliPrints(DateTime at) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${at.year}-${two(at.month)}-${two(at.day)} ${two(at.hour)}:${two(at.minute)}';
+}
+
+/// Two fingerprints as the same key, however they are written (`5F80·61C4…`, `5f8061c4…`).
+bool sameFingerprint(String a, String b) {
+  String norm(String v) => v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+  final x = norm(a), y = norm(b);
+  return x.isNotEmpty && x == y;
 }

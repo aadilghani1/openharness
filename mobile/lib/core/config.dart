@@ -6,8 +6,14 @@ class AppConfig {
 
   const AppConfig({required this.apiBaseUrl, this.autonomousEnv = 'prod'});
 
+  /// The production backend, unless a build names another with
+  /// `--dart-define=HARNESS_API_URL=…` — a local stack (`http://127.0.0.1:8085` from the simulator),
+  /// as the desktop and web builds take the same define.
   static const AppConfig dev = AppConfig(
-    apiBaseUrl: 'https://harness-api.autonomous.ai',
+    apiBaseUrl: String.fromEnvironment(
+      'HARNESS_API_URL',
+      defaultValue: 'https://harness-api.autonomous.ai',
+    ),
     autonomousEnv: 'prod',
   );
 
