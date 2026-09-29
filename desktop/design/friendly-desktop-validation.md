@@ -1,9 +1,10 @@
 # Friendly desktop validation
 
-Validated on 2026-09-29 on `experiment/friendly-desktop`, against `a26237c9`.
-This remains an unmerged experiment for local review.
+The polished checkpoint `e888bda8` was validated on 2026-09-29 on
+`experiment/friendly-desktop`, against `a26237c9`. This remains an unmerged
+experiment for local review. The compact iteration below adds the team feedback.
 
-## Results
+## Polished checkpoint results
 
 | Check | Result |
 | --- | --- |
@@ -74,3 +75,49 @@ Native tests inject Flutter keys and use fake daemons. They do not establish
 physical AppKit IME or VoiceOver behavior. Linux widget variants passed; no
 Linux native build was performed. Live-account review remained read-only, and
 live screenshots are not repository fixtures.
+
+## Compact launch iteration
+
+Final validation on 2026-09-29, against `a26237c9`:
+
+| Check | Result |
+| --- | --- |
+| Full desktop unit/widget suite | 4,471 passed; 12 skipped |
+| Native macOS interaction fixture | 19 passed |
+| Dart analysis | No issues |
+| Formatting | 12 changed Dart files checked |
+| Normal macOS debug build | Passed; compact Cmd-N opened for review |
+| Changed executable-line coverage | 1,973 / 1,973 (100%) |
+| Complete creation form and controller | 3,645 / 3,645 (100%) |
+| Resource picker coverage gate | 1,265 / 1,265 (100%) |
+
+All three coverage gates passed using the single final full-suite trace from
+the current source. No earlier traces or coverage exclusions were needed.
+These are executable-line measurements, not exhaustive branch or input coverage.
+
+The team review identified two needs: immediate keyboard launch and discoverable
+controls. Empty-task Cmd-N now opens at 560 points wide with Start focused.
+Machine is in the header; Project and Agent remain the main fields. Approvals
+and Worktree stay directly accessible. Add task reveals the composer; Options
+reveals Branch, Model, and Profile in the same dialog. Restored tasks remain
+visible, and empty task editors can be collapsed.
+
+The last explicit approval selection is saved per agent. Worktree is saved per
+machine/project. The existing preference files are extended without changing
+their paths or replacing agent/project recents. Unsupported stored approval
+modes are ignored, storage failures retain the in-memory choice, and pending or
+restored drafts keep their reviewed values. Automatic retry recovery does not
+replace an explicit worktree preference.
+
+Independent test drives added 23 compact interaction journeys and 24 preference
+scenarios. They found and verified fixes for an invisible Tab stop, loss of
+focus after a failed launch, disabled-Start keyboard recovery, late preference
+repainting, and a draft whose resolved worktree choice was not snapshotted.
+The macOS fixture now includes seven compact journeys alongside the existing
+12 composer/search journeys; all 19 passed. The fixture uses fake app state and
+daemons, including when Return submits a launch.
+
+Synthetic visual review covered compact and expanded layouts, both themes,
+600-point windows, and 160% text size. The normal app is rebuilt after the native
+fixture, with the compact Cmd-N left open for review. Physical AppKit IME and
+VoiceOver remain outside this validation.

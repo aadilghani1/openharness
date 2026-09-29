@@ -435,6 +435,7 @@ class NewHarnessController extends ChangeNotifier {
         : harnessId != null && engine != null && !isHarnessId(engine)
         ? engine
         : _initialEngine(isHarnessId(engine) ? null : engine);
+    _restorePermissionMode();
     _model = isTerminal ? null : draft?.model;
     _modelUsage = modelUsage;
     _ownsModelUsage = modelUsage == null;
@@ -458,6 +459,7 @@ class NewHarnessController extends ChangeNotifier {
       _project = draft.project;
       this.task = draft.task;
       _mode = draft.permissionMode;
+      _chosenModes[_engine] = _mode;
       _profile = draft.profile;
       _profileChosen = draft.profileChosen;
       _attempt = draft.attempt;
@@ -496,12 +498,13 @@ class NewHarnessController extends ChangeNotifier {
         } else if (!_selectionTouched && draft == null && isHarnessId(engine)) {
           _engine = _initialEngine(null);
         }
+        _restorePermissionMode();
         _refresh();
       }),
     );
     unawaited(
       app.projectHistory.load().then((_) {
-        if (!_disposed && !listEquals(_seen, _signature())) _refresh();
+        if (!_disposed && !locked) _refresh();
       }),
     );
     // What the machine has is asked when the box opens, as the form does: an
@@ -523,6 +526,7 @@ class NewHarnessController extends ChangeNotifier {
           return;
         }
         _engine = _initialEngine(null);
+        _restorePermissionMode();
         _refresh();
       }),
     );
@@ -636,7 +640,10 @@ class NewHarnessController extends ChangeNotifier {
   bool get isGitProject => _gitProject.isGit && !isTerminal;
   bool get canUseWorktree => isGitProject && !checkingGit;
   bool get worktree =>
-      isGitProject && (_worktree ?? worktreeByDefault(_gitProject));
+      isGitProject &&
+      (_worktree ??
+          app.projectHistory.worktreeFor(_machineId, _project.folder ?? '') ??
+          worktreeByDefault(_gitProject));
 
   /// With Worktree on, what a new branch starts from; off, the branch the
   /// folder is on. Unchosen, the default for the mode.
@@ -707,6 +714,11 @@ class NewHarnessController extends ChangeNotifier {
   void toggleWorktree() {
     if (locked || !canUseWorktree) return;
     _worktree = !worktree;
+    if (_project.folder case final folder?) {
+      unawaited(
+        app.projectHistory.selectWorktree(_machineId, folder, _worktree!),
+      );
+    }
     error = null;
     _refresh();
   }
@@ -1011,7 +1023,7 @@ class NewHarnessController extends ChangeNotifier {
     project: _project,
     task: task,
     permissionMode: _mode,
-    worktree: _worktree,
+    worktree: isGitProject ? worktree : _worktree,
     branchRef: _branchRef,
     branchName: _branchName,
     placeholder: isGitProject ? placeholder : _placeholder,
@@ -1067,6 +1079,12 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The permission mode picked, by id; an engine without it uses its default.
   String _mode = kDefaultPermissionMode;
+  final _chosenModes = <String, String>{};
+  String _permissionFor(String engine) =>
+      _chosenModes[engine] ??
+      app.agentPreference.permissionModeFor(_baseOf(engine)) ??
+      kDefaultPermissionMode;
+  void _restorePermissionMode() => _mode = _permissionFor(_engine);
 
   /// The engine a choice launches: a store harness runs ON one of them.
   String _baseOf(String engine) => isHarnessId(engine)
@@ -1084,8 +1102,9 @@ class NewHarnessController extends ChangeNotifier {
       _settingsEngine == _engine ? _profile : null;
   List<PermissionMode> get _settingsModes =>
       permissionModesOf(_baseOf(_settingsEngine));
-  String get _settingsMode => _settingsModes.any((mode) => mode.id == _mode)
-      ? _mode
+  String get _settingsMode =>
+      _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
+      ? _permissionFor(_settingsEngine)
       : kDefaultPermissionMode;
   bool get takesTask => takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
@@ -1110,7 +1129,7 @@ class NewHarnessController extends ChangeNotifier {
   List<NewHarnessOption> agentSettingsFor(String engine) {
     final modes = permissionModesOf(_baseOf(engine));
     final mode =
-        modes.where((mode) => mode.id == _mode).firstOrNull ??
+        modes.where((mode) => mode.id == _permissionFor(engine)).firstOrNull ??
         modes.where((mode) => mode.id == kDefaultPermissionMode).firstOrNull;
     return [
       if (mode != null)
@@ -1815,6 +1834,8 @@ class NewHarnessController extends ChangeNotifier {
       case NewHarnessField.mode:
         _selectEngine(_settingsEngine);
         _mode = option.id;
+        _chosenModes[_engine] = _mode;
+        unawaited(app.agentPreference.selectPermissionMode(_base, _mode));
       case NewHarnessField.profile:
         _selectEngine(_settingsEngine);
         _profile = option.profile;
@@ -1835,6 +1856,7 @@ class NewHarnessController extends ChangeNotifier {
       _resetProfiles();
     }
     _engine = engine;
+    if (changed) _restorePermissionMode();
     if (isTerminal) _model = null;
     if (changed &&
         _harnessId == null &&

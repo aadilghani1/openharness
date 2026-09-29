@@ -68,6 +68,19 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _queryText = TextEditingController();
   late final _taskText = TextEditingController(text: box.task);
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
+  final _taskToggleFocus = FocusNode(debugLabel: 'New harness add task');
+  late bool _taskExpanded = box.task.isNotEmpty;
+  bool get _expanded => _taskExpanded || box.advancedOpen;
+  bool get _desktopStartEnabled =>
+      !box.busy &&
+      !box.linkingProfile &&
+      box.requiredChoice == null &&
+      !box.taskTooLong;
+  FocusNode get _desktopDefaultFocus => _taskExpanded
+      ? _taskFocus
+      : _desktopStartEnabled
+      ? _desktopFocus[_Row.start]!
+      : _focus;
   final _dialogScope = FocusScopeNode(
     debugLabel: 'New harness dialog',
     traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
@@ -126,7 +139,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (!mounted) return;
       if (box.checking) _row = _Row.start;
       _syncField();
-      (widget.desktop && !box.checking ? _taskFocus : _focus).requestFocus();
+      (widget.desktop ? _desktopDefaultFocus : _focus).requestFocus();
     });
   }
 
@@ -139,6 +152,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _queryText.dispose();
     _taskText.dispose();
     _taskFocus.dispose();
+    _taskToggleFocus.dispose();
     _dialogScope.dispose();
     _machineFocus.dispose();
     for (final node in _desktopFocus.values) {
@@ -153,6 +167,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   NewHarnessField? _observedField;
   void _onBox() {
     if (!mounted) return;
+    // Explicit tasks and restored drafts are never hidden behind Add task.
+    if (box.task.isNotEmpty) _taskExpanded = true;
+    if (_taskText.text != box.task) {
+      _taskText.value = TextEditingValue(
+        text: box.task,
+        selection: TextSelection.collapsed(offset: box.task.length),
+      );
+    }
     if (_queryText.text != box.query) {
       _queryText.value = TextEditingValue(
         text: box.query,
@@ -176,7 +198,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         NewHarnessField.launch => _Row.start,
         _ => _row,
       };
-      if (_advancedRows.contains(next) && !box.advancedOpen) {
+      final hidden = widget.desktop
+          ? {_Row.model, _Row.profile, _Row.branch}.contains(next)
+          : _advancedRows.contains(next);
+      if (hidden && !box.advancedOpen) {
         box.toggleAdvanced();
       }
       if (next != _row) {
@@ -187,6 +212,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     if (_row == _Row.model && !_picking) _takeWheel();
     setState(() {});
+    // A required choice or a pending launch disables Start. Keep Escape and
+    // keyboard recovery inside the dialog while its button rebuilds.
+    if (widget.desktop &&
+        _desktopFocus[_Row.start]!.hasFocus &&
+        !_desktopStartEnabled) {
+      _focusEditor();
+    }
     _revealRow();
   }
 
@@ -208,7 +240,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             forward ? origin.nextFocus() : origin.previousFocus();
           }
         } else {
-          _taskFocus.requestFocus();
+          _desktopDefaultFocus.requestFocus();
         }
         _restoreChoiceFocus = false;
         _chooserTraversal = null;
@@ -803,7 +835,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           _focusEditor();
           _revealRow();
         } else {
-          _focus.requestFocus();
+          _focusEditor();
         }
     }
   }
@@ -1009,6 +1041,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _creationTask() {
     if (_picking) _closeDesktopChooser();
+    setState(() => _taskExpanded = true);
     _restoreChoiceFocus = false;
     _chooserTraversal = null;
     _focusEditor();
@@ -1022,6 +1055,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+    if (event is KeyRepeatEvent &&
+        (event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      return KeyEventResult.handled;
+    }
     if (widget.desktop && !_picking) {
       if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
       if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -1034,14 +1072,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         if (event is KeyDownEvent) unawaited(_start());
         return KeyEventResult.handled;
       }
+      if (_focus.hasPrimaryFocus &&
+          (event.logicalKey == LogicalKeyboardKey.enter ||
+              event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+        if (event is KeyDownEvent) unawaited(_start());
+        return KeyEventResult.handled;
+      }
       // The multiline editor and native button focus own ordinary editing,
       // Enter, and Tab. Typing must never become a configuration search.
       return KeyEventResult.ignored;
-    }
-    if (event is KeyRepeatEvent &&
-        (event.logicalKey == LogicalKeyboardKey.enter ||
-            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
-      return KeyEventResult.handled;
     }
     // Candidate navigation and confirmation belong to the input method. Keep
     // these keys out of both the picker and ancestor focus-traversal shortcuts.
@@ -1289,9 +1328,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           'creation.project_machine': () =>
               _runCreationCommand(_creationMachine),
           'creation.task': () => _runCreationCommand(_creationTask),
-          if (box.usesProfile)
-            'creation.options': () =>
-                _runCreationCommand(() => _activateRow(_Row.advanced)),
+          'creation.options': () =>
+              _runCreationCommand(() => _activateRow(_Row.advanced)),
           'creation.project_new': () => _runCreationCommand(
             () => _creationProject(NewHarnessController.newProjectId),
           ),
@@ -1338,6 +1376,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       child: Focus(
         key: const ValueKey('new-harness-form'),
         focusNode: _focus,
+        skipTraversal: widget.desktop,
         onKeyEvent: _onKey,
         child: widget.desktop
             ? Material(
@@ -1441,7 +1480,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: LayoutBuilder(
       builder: (context, constraints) {
         final choosing = _picking;
-        final width = constraints.maxWidth.clamp(0.0, 720.0);
+        final width = constraints.maxWidth.clamp(
+          0.0,
+          _expanded ? 720.0 : 560.0,
+        );
         final folder = box.project.folder;
         final projectName =
             box.project.name ??
@@ -1475,65 +1517,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        'New harness',
-                                        style: DesktopChrome.text(
-                                          size: 20,
-                                          medium: true,
-                                        ),
-                                      ),
-                                    ),
-                                    FocusTraversalOrder(
-                                      order: const NumericFocusOrder(11),
-                                      child: IconButton(
-                                        key: const ValueKey(
-                                          'new-harness-close',
-                                        ),
-                                        tooltip: 'Close new harness',
-                                        onPressed: () {
-                                          if (box.requestDismiss()) {
-                                            widget.onClose();
-                                          }
-                                        },
-                                        icon: const Icon(
-                                          Icons.close_rounded,
-                                          size: 18,
-                                        ),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                                _desktopHeader(),
                                 const SizedBox(height: 20),
                                 if (_installing case final run?)
                                   _desktopInstallPane(run)
                                 else ...[
                                   Wrap(
-                                    spacing: 10,
+                                    spacing: 12,
                                     runSpacing: 12,
                                     children: [
-                                      _desktopField(
-                                        title: 'Machine',
-                                        order: 1,
-                                        anchor: _machineAnchor,
-                                        child: DesktopPill(
-                                          key: const ValueKey(
-                                            'new-harness-machine',
-                                          ),
-                                          focusNode: _machineFocus,
-                                          label: box.machineLabel,
-                                          semanticLabel:
-                                              'Machine, ${box.machineLabel}',
-                                          icon: Icons.laptop_mac_rounded,
-                                          menu: true,
-                                          onPressed: box.locked
-                                              ? null
-                                              : _openMachineChooser,
-                                        ),
-                                      ),
                                       _desktopField(
                                         title: 'Project',
                                         order: 2,
@@ -1544,166 +1536,38 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                           label: projectName,
                                         ),
                                       ),
-                                      if (box.isGitProject ||
-                                          box.checkingGit ||
-                                          box.gitError != null)
-                                        _desktopField(
-                                          title: 'Branch',
-                                          order: 3,
-                                          anchor: _desktopAnchors[_Row.branch]!,
-                                          child: _desktopChoiceButton(
-                                            _Row.branch,
-                                            Icons.account_tree_outlined,
-                                            mono: true,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 20),
-                                  Material(
-                                    key: const ValueKey('new-harness-composer'),
-                                    color: DesktopChrome.field,
-                                    shape: DesktopChrome.shape(radius: 10),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(16),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          FocusTraversalOrder(
-                                            order: const NumericFocusOrder(4),
-                                            child: TextField(
-                                              key: const ValueKey(
-                                                'new-harness-task',
-                                              ),
-                                              controller: _taskText,
-                                              focusNode: _taskFocus,
-                                              minLines: 3,
-                                              maxLines: 7,
-                                              readOnly:
-                                                  box.locked || !box.takesTask,
-                                              style: DesktopChrome.text(
-                                                size: 15,
-                                              ),
-                                              cursorColor: DesktopChrome.accent,
-                                              onChanged: box.setTask,
-                                              onTapOutside: (_) {},
-                                              decoration: InputDecoration(
-                                                hintText: box.takesTask
-                                                    ? 'What would you like to work on?'
-                                                    : 'Open a terminal in this project',
-                                                hintStyle: DesktopChrome.text(
-                                                  size: 15,
-                                                  color: DesktopChrome.muted,
-                                                ),
-                                                border: InputBorder.none,
-                                                enabledBorder: InputBorder.none,
-                                                focusedBorder: InputBorder.none,
-                                                isCollapsed: true,
-                                                filled: false,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 16),
-                                          Wrap(
-                                            spacing: 8,
-                                            runSpacing: 8,
-                                            children: [
-                                              _desktopField(
-                                                order: 5,
-                                                anchor:
-                                                    _desktopAnchors[_Row
-                                                        .agent]!,
-                                                child: _desktopChoiceButton(
-                                                  _Row.agent,
-                                                  Icons.code_rounded,
-                                                ),
-                                              ),
-                                              if (!box.isTerminal)
-                                                _desktopField(
-                                                  order: 6,
-                                                  anchor:
-                                                      _desktopAnchors[_Row
-                                                          .model]!,
-                                                  child: _desktopChoiceButton(
-                                                    _Row.model,
-                                                    Icons.auto_awesome_outlined,
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      if (box.hasModes)
-                                        _desktopField(
-                                          order: 7,
-                                          anchor:
-                                              _desktopAnchors[_Row.approvals]!,
-                                          child: _desktopChoiceButton(
-                                            _Row.approvals,
-                                            Icons.verified_user_outlined,
-                                          ),
-                                        ),
-                                      if (box.canUseWorktree)
-                                        FocusTraversalOrder(
-                                          order: const NumericFocusOrder(8),
-                                          child: DesktopPill(
-                                            key: const ValueKey(
-                                              'new-harness-field-worktree',
-                                            ),
-                                            focusNode:
-                                                _desktopFocus[_Row.worktree],
-                                            label: 'New worktree',
-                                            icon: box.worktree
-                                                ? Icons.check_box_rounded
-                                                : Icons
-                                                      .check_box_outline_blank_rounded,
-                                            selected: box.worktree,
-                                            tooltip: 'Keep this task in its own Git worktree',
-                                            onPressed: box.locked
-                                                ? null
-                                                : box.toggleWorktree,
-                                          ),
-                                        ),
-                                      if (box.usesProfile)
-                                        FocusTraversalOrder(
-                                          order: const NumericFocusOrder(9),
-                                          child: DesktopPill(
-                                            key: const ValueKey(
-                                              'new-harness-field-advanced',
-                                            ),
-                                            focusNode:
-                                                _desktopFocus[_Row.advanced],
-                                            label: 'Options',
-                                            icon: Icons.tune_rounded,
-                                            selected: box.advancedOpen,
-                                            onPressed: box.locked
-                                                ? null
-                                                : _toggleAdvanced,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  if (box.advancedOpen && box.usesProfile) ...[
-                                    const SizedBox(height: 12),
-                                    _desktopField(
-                                      order: 9.5,
-                                      title: 'Codex profile',
-                                      anchor: _desktopAnchors[_Row.profile]!,
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
+                                      _desktopField(
+                                        title: 'Agent',
+                                        order: 3,
+                                        anchor: _desktopAnchors[_Row.agent]!,
                                         child: _desktopChoiceButton(
-                                          _Row.profile,
-                                          Icons.person_outline_rounded,
+                                          _Row.agent,
+                                          Icons.code_rounded,
                                         ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (box.hasModes || box.canUseWorktree) ...[
+                                    const SizedBox(height: 12),
+                                    _desktopQuickSettings(),
+                                  ],
+                                  if (_taskExpanded) ...[
+                                    const SizedBox(height: 20),
+                                    _desktopTaskEditor(),
+                                  ],
+                                  if (box.advancedOpen) ...[
+                                    const SizedBox(height: 20),
+                                    _desktopSettings(),
+                                  ] else ...[
+                                    const SizedBox(height: 14),
+                                    Text(
+                                      _desktopSettingsSummary,
+                                      key: const ValueKey(
+                                        'new-harness-settings-summary',
+                                      ),
+                                      style: DesktopChrome.text(
+                                        size: 12,
+                                        color: DesktopChrome.muted,
                                       ),
                                     ),
                                   ],
@@ -1729,31 +1593,94 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                     const SizedBox(height: 12),
                                     _status(),
                                   ],
-                                  const SizedBox(height: 20),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          box.taskTooLong
-                                              ? 'Your message is too long.'
-                                              : !box.takesTask &&
-                                                    box.task.isNotEmpty
-                                              ? 'Your task is kept when you switch agents.'
-                                              : box.task.isEmpty &&
-                                                    box.takesTask
-                                              ? 'A task is optional.'
-                                              : '',
-                                          style: DesktopChrome.text(
-                                            size: 12,
-                                            color: box.taskTooLong
-                                                ? _theme.red
-                                                : DesktopChrome.muted,
-                                          ),
-                                        ),
+                                  if (box.taskTooLong ||
+                                      !box.takesTask &&
+                                          box.task.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      box.taskTooLong
+                                          ? 'Your message is too long.'
+                                          : 'Your task is kept when you switch agents.',
+                                      style: DesktopChrome.text(
+                                        size: 12,
+                                        color: box.taskTooLong
+                                            ? _theme.red
+                                            : DesktopChrome.muted,
                                       ),
-                                      const SizedBox(width: 12),
-                                      _desktopStartButton(),
-                                    ],
+                                    ),
+                                  ],
+                                  const SizedBox(height: 20),
+                                  LayoutBuilder(
+                                    builder: (context, footer) {
+                                      final actions = Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          if (box.takesTask || _taskExpanded)
+                                            FocusTraversalOrder(
+                                              order: const NumericFocusOrder(
+                                                4.5,
+                                              ),
+                                              child: DesktopPill(
+                                                key: const ValueKey(
+                                                  'new-harness-task-toggle',
+                                                ),
+                                                focusNode: _taskToggleFocus,
+                                                label: !_taskExpanded
+                                                    ? 'Add task'
+                                                    : box.task.isEmpty
+                                                    ? 'Hide task'
+                                                    : 'Edit task',
+                                                icon: Icons.notes_rounded,
+                                                selected: _taskExpanded,
+                                                onPressed: box.locked
+                                                    ? null
+                                                    : _toggleDesktopTask,
+                                              ),
+                                            ),
+                                          FocusTraversalOrder(
+                                            order: const NumericFocusOrder(5),
+                                            child: DesktopPill(
+                                              key: const ValueKey(
+                                                'new-harness-field-advanced',
+                                              ),
+                                              focusNode:
+                                                  _desktopFocus[_Row.advanced],
+                                              label: 'Options',
+                                              icon: Icons.tune_rounded,
+                                              selected: box.advancedOpen,
+                                              onPressed: box.locked
+                                                  ? null
+                                                  : _toggleAdvanced,
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                      if (footer.maxWidth <
+                                          400 *
+                                              MediaQuery.textScalerOf(context)
+                                                  .scale(1)) {
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            actions,
+                                            const SizedBox(height: 12),
+                                            Align(
+                                              alignment: Alignment.centerRight,
+                                              child: _desktopStartButton(),
+                                            ),
+                                          ],
+                                        );
+                                      }
+                                      return Row(
+                                        children: [
+                                          Expanded(child: actions),
+                                          const SizedBox(width: 12),
+                                          _desktopStartButton(),
+                                        ],
+                                      );
+                                    },
                                   ),
                                 ],
                               ],
@@ -1788,6 +1715,202 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         );
       },
     ),
+  );
+
+  Widget _desktopHeader() => LayoutBuilder(
+    builder: (context, constraints) {
+      final title = Text(
+        'New harness',
+        style: DesktopChrome.text(size: 20, medium: true),
+      );
+      final machine = _desktopField(
+        order: 1,
+        anchor: _machineAnchor,
+        child: DesktopPill(
+          key: const ValueKey('new-harness-machine'),
+          focusNode: _machineFocus,
+          label: box.machineLabel,
+          semanticLabel: 'Machine, ${box.machineLabel}',
+          tooltip: 'Machine: ${box.machineLabel}',
+          icon: Icons.laptop_mac_rounded,
+          menu: true,
+          onPressed: box.locked ? null : _openMachineChooser,
+        ),
+      );
+      final close = FocusTraversalOrder(
+        // Start is last, so Tab wraps directly to Machine.
+        order: const NumericFocusOrder(9.9),
+        child: IconButton(
+          key: const ValueKey('new-harness-close'),
+          tooltip: 'Close new harness',
+          onPressed: () {
+            if (box.requestDismiss()) {
+              widget.onClose();
+            }
+          },
+          icon: const Icon(Icons.close_rounded, size: 18),
+          visualDensity: VisualDensity.compact,
+        ),
+      );
+      if (constraints.maxWidth <
+          480 * MediaQuery.textScalerOf(context).scale(1)) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: title),
+                close,
+              ],
+            ),
+            const SizedBox(height: 12),
+            machine,
+          ],
+        );
+      }
+      return Row(
+        children: [
+          Expanded(child: title),
+          const SizedBox(width: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: machine,
+          ),
+          const SizedBox(width: 8),
+          close,
+        ],
+      );
+    },
+  );
+
+  void _toggleDesktopTask() {
+    if (_taskExpanded && box.task.isEmpty) {
+      setState(() => _taskExpanded = false);
+      _chooserOrigin = _taskToggleFocus;
+      _restoreChoiceFocus = true;
+      _chooserTraversal = null;
+      _focusEditor();
+    } else {
+      _creationTask();
+    }
+  }
+
+  String get _desktopSettingsSummary => [
+    if (!box.isTerminal) box.modelLabel,
+    if (box.isGitProject) box.branchRowLabel,
+    if (box.usesProfile && box.profileLabel != null) box.profileLabel!,
+  ].join(' · ');
+
+  Widget _desktopTaskEditor() => Material(
+    key: const ValueKey('new-harness-composer'),
+    color: DesktopChrome.field,
+    shape: DesktopChrome.shape(radius: 10),
+    clipBehavior: Clip.antiAlias,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: FocusTraversalOrder(
+        order: const NumericFocusOrder(4),
+        child: TextField(
+          key: const ValueKey('new-harness-task'),
+          controller: _taskText,
+          focusNode: _taskFocus,
+          minLines: 3,
+          maxLines: 7,
+          readOnly: box.locked || !box.takesTask,
+          style: DesktopChrome.text(size: 15),
+          cursorColor: DesktopChrome.accent,
+          onChanged: box.setTask,
+          onTapOutside: (_) {},
+          decoration: InputDecoration(
+            hintText: box.takesTask
+                ? 'What would you like to work on?'
+                : 'Open a terminal in this project',
+            hintStyle: DesktopChrome.text(size: 15, color: DesktopChrome.muted),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            isCollapsed: true,
+            filled: false,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _desktopQuickSettings() => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      if (box.hasModes)
+        _desktopField(
+          order: 3.5,
+          anchor: _desktopAnchors[_Row.approvals]!,
+          child: _desktopChoiceButton(
+            _Row.approvals,
+            Icons.verified_user_outlined,
+          ),
+        ),
+      if (box.canUseWorktree)
+        _desktopField(
+          order: 3.6,
+          anchor: _desktopAnchors[_Row.worktree]!,
+          child: DesktopPill(
+            key: const ValueKey('new-harness-field-worktree'),
+            focusNode: _desktopFocus[_Row.worktree],
+            label: 'New worktree',
+            icon: box.worktree
+                ? Icons.check_box_rounded
+                : Icons.check_box_outline_blank_rounded,
+            selected: box.worktree,
+            tooltip: 'Keep this task in its own Git worktree',
+            onPressed: box.locked ? null : box.toggleWorktree,
+          ),
+        ),
+    ],
+  );
+
+  Widget _desktopSettings() => Wrap(
+    key: const ValueKey('new-harness-settings'),
+    spacing: 12,
+    runSpacing: 12,
+    children: [
+      if (box.isGitProject || box.checkingGit || box.gitError != null)
+        _desktopField(
+          title: 'Branch',
+          order: 6,
+          anchor: _desktopAnchors[_Row.branch]!,
+          child: _desktopChoiceButton(
+            _Row.branch,
+            Icons.account_tree_outlined,
+            mono: true,
+          ),
+        ),
+      if (!box.isTerminal)
+        _desktopField(
+          title: 'Model',
+          order: 7,
+          anchor: _desktopAnchors[_Row.model]!,
+          child: _desktopChoiceButton(_Row.model, Icons.auto_awesome_outlined),
+        ),
+      if (box.usesProfile)
+        _desktopField(
+          title: 'Codex profile',
+          order: 9.5,
+          anchor: _desktopAnchors[_Row.profile]!,
+          child: _desktopChoiceButton(
+            _Row.profile,
+            Icons.person_outline_rounded,
+          ),
+        ),
+      if (box.isTerminal &&
+          !box.isGitProject &&
+          !box.checkingGit &&
+          box.gitError == null)
+        Text(
+          'No additional options for this folder.',
+          style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
+        ),
+    ],
   );
 
   Widget _desktopField({
@@ -1837,11 +1960,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   );
 
   Widget _desktopStartButton() {
-    final shortcut = effectiveCommandHint(
-      context,
-      'picker.add_here',
-      contextKind: KeymapContext.picker,
-    );
+    final shortcut = !_taskExpanded
+        ? '↵'
+        : effectiveCommandHint(
+            context,
+            'picker.add_here',
+            contextKind: KeymapContext.picker,
+          );
     final label = box.busy
         ? (_checkingLaunch ? 'Checking…' : 'Starting…')
         : box.checking
@@ -1852,13 +1977,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       child: FilledButton(
         key: const ValueKey('new-harness-field-start'),
         focusNode: _desktopFocus[_Row.start],
-        onPressed:
-            !box.busy &&
-                !box.linkingProfile &&
-                box.requiredChoice == null &&
-                !box.taskTooLong
-            ? _start
-            : null,
+        onPressed: _desktopStartEnabled ? _start : null,
         style:
             FilledButton.styleFrom(
               backgroundColor: grid.AppPalette.accent,
@@ -3089,6 +3208,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _hideChoices = false;
     });
     box.setQuery('');
+    if (widget.desktop) {
+      _chooserOrigin = _desktopFocus[_Row.advanced];
+      _restoreChoiceFocus = true;
+      _chooserTraversal = null;
+    }
     _focusEditor();
     _revealRow();
   }

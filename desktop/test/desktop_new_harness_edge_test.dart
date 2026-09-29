@@ -218,6 +218,11 @@ Future<_Fixture> _mount(
     ),
   );
   await tester.pumpAndSettle();
+  if (find.byKey(const ValueKey('new-harness-task')).evaluate().isEmpty &&
+      box.takesTask) {
+    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
+    await tester.pumpAndSettle();
+  }
   return fixture;
 }
 
@@ -425,8 +430,15 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('new-harness-machine')));
       await tester.pumpAndSettle();
       await tester.enterText(_query, 'Studio');
-      final taskBounds = tester.getRect(_task);
-      await tester.tapAt(taskBounds.topRight + const Offset(-12, 12));
+      final surface = tester.getRect(
+        find.byKey(const ValueKey('new-harness-surface')),
+      );
+      final chooser = tester.getRect(
+        find.byKey(const ValueKey('new-harness-chooser-surface')),
+      );
+      final outside = surface.topLeft + const Offset(12, 12);
+      expect(chooser.contains(outside), isFalse);
+      await tester.tapAt(outside);
       await tester.pumpAndSettle();
       expect(_query, findsNothing);
       expect(fixture.closes, 0);

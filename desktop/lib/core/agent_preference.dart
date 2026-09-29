@@ -1,8 +1,9 @@
 import 'dart:convert';
 
 import 'local_key_value_store.dart';
+import 'permission_modes.dart';
 
-/// Remembers an agent choice, independently of a machine, profile or permission.
+/// Remembers agent choices and each agent's last explicit approval mode.
 class AgentPreference {
   AgentPreference(this.storage);
   final LocalKeyValueStore? storage;
@@ -19,6 +20,8 @@ class AgentPreference {
   bool advancedOpen = false;
   List<String> recentHarnesses = const [];
   final _enginesByHarness = <String, String>{};
+  final _permissionsByEngine = <String, String>{};
+  String? permissionModeFor(String engine) => _permissionsByEngine[engine];
   String? engineFor(String? harnessId) =>
       _enginesByHarness[harnessId ?? 'coding'];
 
@@ -91,6 +94,14 @@ class AgentPreference {
       recent = ids(data['agents'], false);
       recentHarnesses = ids(data['harnesses'], true);
       advancedOpen = data['advancedOpen'] == true;
+      if (data['permissionsByEngine'] case final Map permissions) {
+        for (final engine in kEnginePermissionModes.keys) {
+          final mode = permissions[engine];
+          if (permissionModesOf(engine).any((item) => item.id == mode)) {
+            _permissionsByEngine[engine] = mode as String;
+          }
+        }
+      }
       if (data['enginesByHarness'] case final Map choices) {
         for (final entry in choices.entries) {
           if (entry.key is String &&
@@ -150,6 +161,14 @@ class AgentPreference {
     await _save();
   }
 
+  Future<void> selectPermissionMode(String engine, String mode) async {
+    if (!permissionModesOf(engine).any((item) => item.id == mode)) return;
+    await load();
+    _permissionsByEngine[engine] = mode;
+    _revision++;
+    await _save();
+  }
+
   Future<void> _save() {
     final snapshot = jsonEncode({
       'engine': value,
@@ -158,6 +177,7 @@ class AgentPreference {
       'harnesses': recentHarnesses,
       'enginesByHarness': _enginesByHarness,
       'advancedOpen': advancedOpen,
+      'permissionsByEngine': _permissionsByEngine,
     });
     return _writes = _writes.then((_) async {
       try {

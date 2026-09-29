@@ -164,6 +164,12 @@ Future<void> _new(WidgetTester tester) async {
   await key(tester, LogicalKeyboardKey.keyN, cmd: true);
   await tester.pump(const Duration(milliseconds: 100));
   expect(_form, findsOneWidget);
+  // These journeys exercise the expanded composer. Compact entry has its own
+  // test-drive suite; enter task mode through the same visible control.
+  if (_task.evaluate().isEmpty) {
+    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
+    await tester.pumpAndSettle();
+  }
 }
 
 Future<void> _nativeCommand(WidgetTester tester, String command) async {
@@ -185,11 +191,11 @@ Future<void> _tabTo(WidgetTester tester, Finder target) async {
 }
 
 const _nativeSmokeJourneys = {
-  'Cmd-N immediately focuses the task and Return never launches',
+  'Add task focuses the editor and Return never launches',
   'Tab and Shift-Tab remain inside the composer and reach controls',
   'Space opens a focused chooser without starting',
   'Return opens a focused chooser without starting',
-  'machine appears before project in the shared context row',
+  'machine appears above project in the compact header',
   'Tab leaves a chooser without applying its highlight',
   'Shift-Tab leaves a chooser without applying its highlight',
   'Escape closes only the chooser and returns to its control',
@@ -209,7 +215,7 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('Cmd-N immediately focuses the task and Return never launches', (
+  journey('Add task focuses the editor and Return never launches', (
     tester,
   ) async {
     final workspace = await _mount(tester, withTerminal: true);
@@ -229,6 +235,7 @@ void main({bool nativeSmoke = false}) {
   ) async {
     await _mount(tester, withTerminal: true);
     await _new(tester);
+    await openLaunchRow(tester, 'advanced');
     final seen = <String>{};
     for (var i = 0; i < 32; i++) {
       await key(tester, LogicalKeyboardKey.tab);
@@ -280,7 +287,7 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('machine appears before project in the shared context row', (
+  journey('machine appears above project in the compact header', (
     tester,
   ) async {
     await _mount(tester);
@@ -288,12 +295,8 @@ void main({bool nativeSmoke = false}) {
     final machine = find.byKey(const ValueKey('new-harness-machine'));
     final project = find.byKey(const ValueKey('new-harness-field-project'));
     expect(
-      tester.getTopLeft(machine).dx,
-      lessThan(tester.getTopLeft(project).dx),
-    );
-    expect(
-      tester.getTopLeft(machine).dy,
-      closeTo(tester.getTopLeft(project).dy, 2),
+      tester.getBottomLeft(machine).dy,
+      lessThan(tester.getTopLeft(project).dy),
     );
   });
 
@@ -313,9 +316,13 @@ void main({bool nativeSmoke = false}) {
         expect(
           _ownsFocus(
             tester,
-            reverse
-                ? _task
-                : find.byKey(const ValueKey('new-harness-field-model')),
+            find.byKey(
+              ValueKey(
+                reverse
+                    ? 'new-harness-field-project'
+                    : 'new-harness-field-approvals',
+              ),
+            ),
           ),
           isTrue,
         );
@@ -406,7 +413,9 @@ void main({bool nativeSmoke = false}) {
               : 'new-harness-field-$field',
         ),
       );
-      if (field == 'profile') await openLaunchRow(tester, 'advanced');
+      if (['model', 'branch', 'profile'].contains(field)) {
+        await openLaunchRow(tester, 'advanced');
+      }
       await tester.tap(opener);
       await tester.pump();
       expect(_chooser, findsOneWidget);
@@ -711,6 +720,8 @@ void main({bool nativeSmoke = false}) {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
     await tester.pumpAndSettle();
     await tester.enterText(_task, 'Browse without losing this task');
     await key(tester, LogicalKeyboardKey.keyO, ctrl: true);

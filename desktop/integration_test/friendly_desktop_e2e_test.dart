@@ -5,8 +5,9 @@ import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../test/desktop_dialog_interaction_test.dart' as interactions;
+import '../test/desktop_compact_launch_test.dart' as compact;
 
-/// Exercise twelve core user journeys in the macOS Flutter engine/window.
+/// Exercise compact launch and composer journeys in the macOS engine/window.
 ///
 /// Run serially with other native fixtures:
 /// FLUTTER_TEST=1 flutter test -d macos --no-pub \
@@ -40,4 +41,5 @@ void main() {
     await windowManager.focus();
   });
   interactions.main(nativeSmoke: true);
+  compact.main(nativeSmoke: true);
 }

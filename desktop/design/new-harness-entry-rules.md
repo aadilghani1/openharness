@@ -4,8 +4,8 @@ Presentation follows the [terminal dialog design system](terminal-dialogs.md).
 Use that guide for current visuals; this document owns entry and launch behavior.
 On `experiment/friendly-desktop`, the [desktop experiment](friendly-desktop-experiment.md)
 overrides presentation, keyboard traversal, selected-machine project prompts,
-and ordinary workspace draft dismissal behavior below. Launch safety and entry
-ownership still apply.
+ordinary workspace draft dismissal, and remembered approval/worktree defaults
+below. Launch safety and entry ownership still apply.
 
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit
@@ -91,6 +91,11 @@ catalog listing.
 The existing local state store retains separate engine and harness recents and
 the last successful engine per harness. Legacy preference keys and the app data
 directory stay in place. Fresh forms use successful launches, not canceled edits.
+On the desktop experiment, approvals separately remember the last explicit
+selection for each agent. Worktree remembers the last explicit toggle for each
+project on each machine, even when the form is later dismissed. Unsupported
+saved modes are ignored; drafts and pending receipts retain their reviewed
+values. Automatic retry recovery never changes these remembered preferences.
 
 ## Model selection
 
@@ -119,7 +124,8 @@ is needed while continuing to allow ordinary subscription launches.
 
 ## Git projects
 
-Git projects enable Branch and Worktree. Worktree defaults to **Yes**;
+Git projects enable Branch and Worktree. Worktree defaults to **Yes** when the
+project has no saved worktree preference;
 Enter, Space, Left/Right, Page Up/Down, or a click toggles `[x]` and `[ ]`.
 An empty repository explains that a commit is required for a worktree and asks
 for a choice. Folders without Git keep both rows disabled. Discovery runs on the selected machine
