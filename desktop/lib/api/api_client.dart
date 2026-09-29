@@ -286,6 +286,42 @@ class ApiClient {
         as String;
   }
 
+  /// The account's trust-group board since [since] (`GET /api/group/board`): signed member vouches,
+  /// which the caller checks itself (`group_sync.dart` `acceptVouches`) — this server cannot mint one.
+  /// `entries` null when unchanged since [since]; null overall when it cannot be read.
+  Future<({int revision, List<Object?>? entries})?> readGroupBoard({
+    int? since,
+  }) async {
+    try {
+      final res = await _dio.get(
+        '/api/group/board',
+        queryParameters: {'since': ?since},
+      );
+      final data = unwrapApiResponse(res);
+      if (data is! Map || data['revision'] is! int) return null;
+      final entries = data['entries'];
+      return (
+        revision: data['revision'] as int,
+        entries: entries is List ? entries : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Adds vouches this device signed to the account's board; true when the server took them.
+  Future<bool> postGroupBoard(List<Map<String, Object>> entries) async {
+    if (entries.isEmpty) return true;
+    try {
+      unwrapApiResponse(
+        await _dio.post('/api/group/board', data: {'entries': entries}),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Sign a BROWSER in to this account (its sign-in QR, `k=v`), handing it this device's trust
   /// group sealed under the QR's pairing code (`viewer/group_sync.dart` `sealHandedRoster`).
   Future<void> approveBrowserSignIn(

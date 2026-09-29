@@ -13,6 +13,7 @@ import '../e2ee/bytes.dart' show b64d;
 import '../e2ee/keys.dart' show fingerprint;
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
+import '../viewer/account_events.dart' show AccountEvents;
 import '../viewer/group_sync.dart';
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
@@ -1349,6 +1350,7 @@ class AppNotifier extends ChangeNotifier {
     _desk.ensure();
     // The zoo the same way: the daemon on the chip is account state.
     zoo.ensure();
+    _startAccountEvents();
     try {
       // The request already in flight (above).
       final failure = await machineRefresh;
@@ -1410,6 +1412,7 @@ class AppNotifier extends ChangeNotifier {
       return; // idempotent: several sources can race here
     }
     _invalidateAuthWork();
+    _stopAccountEvents();
     currentUser = null;
     signingIn = false;
     // The code was scanned into the session that just ended — see [logout].
@@ -1529,6 +1532,7 @@ class AppNotifier extends ChangeNotifier {
     // session goes too, so the NEXT launch doesn't silently sign back in without ever showing the
     // login screen.
     unawaited(cliLogin.logout());
+    _stopAccountEvents();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
     // Tiles go, the saved layout stays: signing out and back in is the same
@@ -1581,6 +1585,7 @@ class AppNotifier extends ChangeNotifier {
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
     if (machine == null || code != 4404) return;
+    final justLost = !machine.needsLink;
     // The relay found no linked trust for this machine: it waits for this phone's password form (or
     // a scanned code), which reconnects when it lands. Nothing is polled — the desktop retries every
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
@@ -1598,6 +1603,8 @@ class AppNotifier extends ChangeNotifier {
       'This machine is no longer linked. Link it again to reconnect.',
     );
     notifyListeners();
+    // Its key may be on the account's group board already — a member vouched for it.
+    if (justLost) unawaited(refreshGroup());
   }
 
   /// The token a viewer's relay socket dials with.
@@ -2068,6 +2075,125 @@ class AppNotifier extends ChangeNotifier {
     return links is DirectLink && _paneLayout != null ? links.syncGroup : null;
   }
 
+  /// The account's own socket (`viewer/account_events.dart`): group and machine-list pushes, whether
+  /// or not any machine is linked yet. Open while signed in.
+  AccountEvents? _accountEvents;
+
+  /// A missed `group_changed` (a dropped socket, a push while suspended) is caught by this.
+  Timer? _groupRefreshTimer;
+
+  /// The group board's revision last read ([refreshGroup]); null before the first read.
+  int? _groupBoardRevision;
+  Future<void>? _groupRefresh;
+
+  void _startAccountEvents() {
+    final links = peerLinks;
+    if (_accountEvents != null || links is! DirectLink || _paneLayout == null) {
+      return;
+    }
+    final events = _accountEvents = links.accountEvents((type, payload) {
+      if (_disposed || status != AppStatus.authenticated) return;
+      switch (type) {
+        case 'group_changed':
+          unawaited(refreshGroup());
+        case 'machines_changed':
+          unawaited(refreshMachines().catchError((Object _) {}));
+      }
+    });
+    events.start();
+    _groupRefreshTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => unawaited(refreshGroup()),
+    );
+    // What the group settled while this phone was signed out or closed.
+    unawaited(refreshGroup());
+  }
+
+  void _stopAccountEvents() {
+    _groupRefreshTimer?.cancel();
+    _groupRefreshTimer = null;
+    unawaited(_accountEvents?.close());
+    _accountEvents = null;
+    _groupBoardRevision = null;
+  }
+
+  /// Brings this phone's trust group up to date, in the background:
+  ///
+  /// 1. the account's signed board (`GET /api/group/board`), believed only where a member this phone
+  ///    already trusts signed (`group_sync.dart` `adoptBoard`) — how it learns a machine it shares no
+  ///    other machine with;
+  /// 2. then a roster swap with a group machine that is online, which passes this phone's news on.
+  ///
+  /// Machines that gained a key connect; machines the group dropped go back to needing a link
+  /// ([_afterGroupSync]). One refresh at a time; a call during one runs another after it.
+  Future<void> refreshGroup() {
+    // A push that lands while a refresh is running may carry what that refresh read too early: it
+    // runs once more afterwards rather than joining it.
+    if (_groupRefresh != null) {
+      _groupRefreshAgain = true;
+      return _groupRefresh!;
+    }
+    return _groupRefresh = () async {
+      do {
+        _groupRefreshAgain = false;
+        await _refreshGroup();
+      } while (_groupRefreshAgain && !_disposed);
+    }().whenComplete(() => _groupRefresh = null);
+  }
+
+  bool _groupRefreshAgain = false;
+
+  Future<void> _refreshGroup() async {
+    final links = peerLinks;
+    if (_disposed ||
+        links is! DirectLink ||
+        _paneLayout == null ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    final revision = _authRevision;
+    try {
+      final board = await api.readGroupBoard(since: _groupBoardRevision);
+      if (!_authWorkCurrent(revision)) return;
+      // Only news is passed on to every machine at once; otherwise one machine, at the usual pace.
+      var news = false;
+      if (board != null) {
+        _groupBoardRevision = board.revision;
+        if (board.entries case final entries?) {
+          news = true;
+          await _afterGroupSync(await adoptBoard(viewer.keys, entries));
+        }
+      }
+      final online = [
+        for (final p in await viewer.keys.peers())
+          if (machineStates[p.machineId]?.nodeOnline == true) p.machineId,
+      ];
+      if (online.isNotEmpty && _authWorkCurrent(revision)) {
+        await _syncGroup(online.first, spread: news);
+      }
+    } catch (_) {
+      // Background work: the next push, resume or safety-net tick tries again.
+    }
+  }
+
+  /// This phone's word for [subjects] on the account's board, so devices that share no machine with
+  /// it still hear. Best effort: the relay swap carries the same news where it can.
+  Future<void> _vouch(List<Map<String, Object>> subjects) async {
+    if (subjects.isEmpty) return;
+    try {
+      final identity = await viewer.keys.identity();
+      await api.postGroupBoard([
+        for (final subject in subjects) await signVouch(identity, subject),
+      ]);
+    } catch (_) {}
+  }
+
+  /// What reading [entries] off the account's group board does to the machine list — the middle of
+  /// [refreshGroup], without the backend.
+  @visibleForTesting
+  Future<void> adoptGroupBoardForTest(Object? entries) async =>
+      _afterGroupSync(await adoptBoard(viewer.keys, entries));
+
   final Map<String, DateTime> _groupSyncedAt = {};
   static const _groupResync = Duration(minutes: 5);
 
@@ -2318,6 +2444,7 @@ class AppNotifier extends ChangeNotifier {
     // [PhoneDesk.ensure] makes that once.
     _desk.ensure();
     zoo.ensure();
+    _startAccountEvents();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -3385,17 +3512,24 @@ class AppNotifier extends ChangeNotifier {
     } catch (e) {
       return (error: '$e', machines: 0, machineId: null);
     }
+    final member = GroupMember(
+      pub: pub,
+      kind: machine ? 'machine' : 'viewer',
+      label: label,
+      at: DateTime.now().millisecondsSinceEpoch,
+      machineId: machine ? machineId : null,
+    );
+    // On the account's board too: devices that share no machine with this phone learn the new
+    // member from it, within seconds (`group_changed`).
+    // Awaited (briefly): the approving tab or app is often closed the moment it says done, and a vouch
+    // still in flight then would never leave.
+    // (A machine the backend named no id for cannot be stated: the board would refuse it.)
+    if (!machine || machineId != null) {
+      await _vouch([memberSubject(member)])
+          .timeout(const Duration(seconds: 5), onTimeout: () {});
+    }
     try {
-      await admitGroupMember(
-        keys,
-        GroupMember(
-          pub: pub,
-          kind: machine ? 'machine' : 'viewer',
-          label: label,
-          at: DateTime.now().millisecondsSinceEpoch,
-          machineId: machine ? machineId : null,
-        ),
-      );
+      await admitGroupMember(keys, member);
       // A machine is one this device dials: pinned now, by the key the QR vouched for.
       if (machine && machineId != null) {
         await keys.pin(machineId, pubBytes, label: label);
@@ -4542,6 +4676,15 @@ class AppNotifier extends ChangeNotifier {
       _startOfflineRetry(machine);
     } else {
       _stopOfflineRetry(machineId);
+      // A socket dialled while the machine was away (a machine just linked, say, still starting)
+      // never finished its handshake: nobody was there to answer it, and nothing will now. Dial it
+      // again rather than leave it "connecting" behind a machine that is back.
+      if (wasOnline == false &&
+          !machine.needsLink &&
+          machine.connectionStatus != ConnectionStatus.connected) {
+        await _pool?.closeMachine(machineId);
+        _connectMachine(machine);
+      }
       if (wasOnline == false) {
         for (final pane in panesFor(machineId)) {
           pane.session?.transportLost(
@@ -5872,6 +6015,8 @@ class AppNotifier extends ChangeNotifier {
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
     if (status == AppStatus.authenticated) unawaited(zoo.refresh());
+    // And the group: a `group_changed` sent while it was away reached nobody either.
+    if (status == AppStatus.authenticated) unawaited(refreshGroup());
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -5901,6 +6046,7 @@ class AppNotifier extends ChangeNotifier {
     }
     _channelControllers.clear();
     _disposed = true;
+    _stopAccountEvents();
     _closedHistory.clear();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();

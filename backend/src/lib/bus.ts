@@ -684,6 +684,21 @@ export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) =
   return addSub(deskChannel(userId), cb as Cb)
 }
 
+// Per-USER trust-group invalidation: a member was vouched for or removed on the account's group board
+// (routes/groupBoard.ts). Every device of the account re-reads the board and syncs: a hint only — what a
+// device believes comes from the signatures on the board, never from this frame.
+export interface GroupChangedMsg { revision: number }
+
+const groupChannel = (userId: string): string => `group:${userId}`
+
+export function publishGroupChanged(userId: string, msg: GroupChangedMsg): Promise<number> {
+  return safePublish(groupChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeGroupChanged(userId: string, cb: (msg: GroupChangedMsg) => void): Promise<() => void> {
+  return addSub(groupChannel(userId), cb as Cb)
+}
+
 // Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as
 // the desk and a separate channel, so a desk change never re-fetches the zoo and the other way round.
 export interface ZooChangedMsg { revision: number }

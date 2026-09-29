@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
-  desk: vi.fn(), zoo: vi.fn(), machines: vi.fn(),
-  deskUnsub: vi.fn(), zooUnsub: vi.fn(), machinesUnsub: vi.fn(),
+  desk: vi.fn(), zoo: vi.fn(), group: vi.fn(), machines: vi.fn(),
+  deskUnsub: vi.fn(), zooUnsub: vi.fn(), groupUnsub: vi.fn(), machinesUnsub: vi.fn(),
 }))
-vi.mock('./bus.js', () => ({ subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeDeviceMachineListChanged: m.machines }))
+vi.mock('./bus.js', () => ({ subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeGroupChanged: m.group, subscribeDeviceMachineListChanged: m.machines }))
 
 import { relayAccountPushes } from './adapterAccountPushes.js'
 
@@ -16,6 +16,7 @@ describe('account pushes on a daemon socket', () => {
     vi.resetAllMocks()
     m.desk.mockResolvedValue(m.deskUnsub)
     m.zoo.mockResolvedValue(m.zooUnsub)
+    m.group.mockResolvedValue(m.groupUnsub)
     m.machines.mockResolvedValue(m.machinesUnsub)
   })
 
@@ -23,7 +24,15 @@ describe('account pushes on a daemon socket', () => {
     await relayAccountPushes('user-1', vi.fn(), on)
     expect(m.desk).toHaveBeenCalledWith('user-1', expect.any(Function))
     expect(m.zoo).toHaveBeenCalledWith('user-1', expect.any(Function))
+    expect(m.group).toHaveBeenCalledWith('user-1', expect.any(Function))
     expect(m.machines).toHaveBeenCalledWith('user-1', expect.any(Function))
+  })
+
+  it('hands the daemon a group change, so it re-reads the board', async () => {
+    const send = vi.fn()
+    await relayAccountPushes('user-1', send, on)
+    m.group.mock.calls[0][1]({ revision: 4 })
+    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'group_changed', payload: { revision: 4 } } })
   })
 
   it('hands the daemon a desk change as a connection-less down frame carrying the revision', async () => {
@@ -53,6 +62,7 @@ describe('account pushes on a daemon socket', () => {
     stop()
     expect(m.deskUnsub).toHaveBeenCalledOnce()
     expect(m.zooUnsub).toHaveBeenCalledOnce()
+    expect(m.groupUnsub).toHaveBeenCalledOnce()
     expect(m.machinesUnsub).toHaveBeenCalledOnce()
   })
 
@@ -61,6 +71,7 @@ describe('account pushes on a daemon socket', () => {
     await expect(relayAccountPushes('user-1', vi.fn(), on)).rejects.toThrow('redis unreachable')
     expect(m.deskUnsub).toHaveBeenCalledOnce()
     expect(m.zooUnsub).toHaveBeenCalledOnce()
+    expect(m.groupUnsub).toHaveBeenCalledOnce()
   })
 
   it('never listens on the zoo channel while the server has daemons off', async () => {

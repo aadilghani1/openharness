@@ -188,7 +188,12 @@ void main() {
       (_) => {'members': [], 'removed': []},
       beforeReply: () => admitGroupMember(
         keys,
-        GroupMember(pub: browserPub, kind: 'viewer', label: 'Chrome on macOS', at: 99),
+        GroupMember(
+          pub: browserPub,
+          kind: 'viewer',
+          label: 'Chrome on macOS',
+          at: 99,
+        ),
       ),
     );
     await syncTrustGroup(
@@ -327,6 +332,79 @@ void main() {
         userCode: 'VECTORUSERCODE',
       ),
       vector,
+    );
+  });
+
+  group('the group board', () {
+    test('signs the statement the CLI signs, byte for byte', () async {
+      // The same vector as cli/src/lib/e2ee/groupBoard.spec.ts.
+      final signer = await E2eeIdentity.fromSeed(
+        List.generate(32, (i) => i + 1),
+      );
+      final v = await signVouch(signer, {
+        'pub': 'ZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoM=',
+        'kind': 'machine',
+        'machineId': 'a' * 32,
+        'label': 'studio',
+        'at': 1700000000000,
+      });
+      expect(v['signer'], 'ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=');
+      expect(
+        v['sig'],
+        'vAhKE9/5zgVV7fU9V6NiT8dqPlFjVgI6xRSzAxCCxQh+gsL9hlzJ51ozgyZe2PNOQi8hKfagAWJgQzQxsmM5Dg==',
+      );
+    });
+
+    test(
+      'a browser the phone approved learns a machine the phone approved later',
+      () async {
+        final web = ViewerKeyStore(storage: _Memory());
+        final phone = await E2eeIdentity.generate();
+        final app = await E2eeIdentity.generate();
+        final stranger = await E2eeIdentity.generate();
+        // What web1 got at its sign-in: the phone, and no machine.
+        await admitGroupMember(
+          web,
+          GroupMember(
+            pub: b64e(phone.pub),
+            kind: 'viewer',
+            label: 'phone',
+            at: 5,
+          ),
+        );
+        final board = [
+          await signVouch(phone, {
+            'pub': b64e(app.pub),
+            'kind': 'machine',
+            'machineId': 'b' * 32,
+            'label': 'app1',
+            'at': 10,
+          }),
+          // Nobody web1 trusts: ignored.
+          await signVouch(stranger, {
+            'pub': b64e(stranger.pub),
+            'kind': 'machine',
+            'machineId': 'c' * 32,
+            'label': 'evil',
+            'at': 11,
+          }),
+        ];
+        final outcome = await adoptBoard(web, board);
+        expect(outcome.pinned, ['b' * 32]);
+        expect((await web.peer('b' * 32))!.pub, app.pub);
+        expect(await web.peer('c' * 32), isNull);
+
+        // The phone takes it back out: web1 drops it.
+        final gone = await adoptBoard(web, [
+          await signVouch(phone, {
+            'pub': b64e(app.pub),
+            'at': 20,
+            'removed': true,
+          }),
+        ]);
+        expect(gone.unpinned, ['b' * 32]);
+        expect(await web.peer('b' * 32), isNull);
+      },
     );
   });
 }

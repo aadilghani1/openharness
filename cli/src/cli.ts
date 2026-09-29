@@ -229,6 +229,7 @@ import { renderQr } from './lib/qrTerminal.js'
 import { newPairCode, pairLink, pairLinkBase, runQrLink, signInLink, type GroupView, type QrLinkEvent } from './lib/qrLink.js'
 import { TrustGroupStore, parseRoster, type GroupMember } from './lib/e2ee/trustGroup.js'
 import { openHandedRoster } from './lib/e2ee/handedRoster.js'
+import { memberSubject, signVouch, type Vouch } from './lib/e2ee/groupBoard.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
@@ -913,7 +914,7 @@ async function loginCommand(
  */
 /** Set by a QR sign-in: what the approving phone handed over — its trust group, already merged here —
  *  for `finishQrLogin` to report once the daemon is up on the new sign-in. */
-let qrJoinedGroup: { phone: string; machines: Array<{ machineId: string; label: string }> } | null = null
+let qrJoinedGroup: { phone: string; approver?: GroupMember; machines: Array<{ machineId: string; label: string }> } | null = null
 /** This run signed in by phone (`qrSignIn`), so `finishQrLogin` — not a plain daemon restart — follows. */
 let qrSignedIn = false
 
@@ -1027,18 +1028,31 @@ async function qrSignIn(
 function joinHandedGroup(
   sealed: string | undefined,
   opts: { code: string; userCode: string; selfPub: string; selfMachineId?: string },
-): { phone: string; machines: Array<{ machineId: string; label: string }> } | null {
+): { phone: string; approver?: GroupMember; machines: Array<{ machineId: string; label: string }> } | null {
   const raw = sealed ? openHandedRoster(sealed, opts) : null
   if (!raw) return null
   const roster = parseRoster(raw)
   if (!roster.members.length) return null
   new TrustGroupStore().merge(roster, opts.selfPub)
-  // The phone put itself first; any viewer will do for the name.
-  const phone = roster.members.find((m) => m.kind === 'viewer')?.label ?? 'your phone'
+  // The phone put itself first (`handoffRoster`); any viewer will do for the name.
+  const approver = roster.members.find((m) => m.kind === 'viewer')
+  const phone = approver?.label ?? 'your phone'
   const machines = roster.members
     .filter((m) => m.kind === 'machine' && m.machineId && m.machineId !== opts.selfMachineId)
     .map((m) => ({ machineId: m.machineId!, label: m.label }))
-  return { phone, machines }
+  return { phone, ...(approver ? { approver } : {}), machines }
+}
+
+/** Add vouches to the account's group board with this computer's session. True when accepted. */
+async function postGroupVouches(entries: Vouch[]): Promise<boolean> {
+  const accessToken = await new AuthSessionManager(backendHttpBase()).accessToken()
+  const res = await fetch(`${backendHttpBase()}/api/group/board`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', 'x-autonomous-env': readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV },
+    body: JSON.stringify({ entries }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  return res.ok
 }
 
 /**
@@ -1075,6 +1089,9 @@ async function finishQrLogin(json: boolean): Promise<void> {
     if (!json) console.log(`\n  ! ${message}\n`)
     return
   }
+  // This machine's word for the phone that approved it, on the account's board: a device that trusts
+  // this machine but has not met that phone yet (and shares no machine with it) learns it there.
+  if (joined.approver) await postGroupVouches([signVouch(groupIdentity(), memberSubject(joined.approver))]).catch(() => false)
   await daemonTry('POST', '/api/group/sync').catch(() => null)
   // What this machine reaches is its whole group now — the phone's roster merged into whatever it
   // already knew — named from the account's machine list (the roster only knows how each member was
@@ -4533,9 +4550,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const { machines, source } = machineListCache.list()
       return source !== 'backend' ? null : new Set(machines.filter((m) => m.state !== 'offline').map((m) => m.machineId))
     },
+    // The account's signed board (lib/e2ee/groupBoard.ts): what reaches devices this machine shares no
+    // relay session with, and what it learns from them.
+    board: {
+      read: async (since) => {
+        const res = await proxyBackend('GET', `/api/group/board${since === null ? '' : `?since=${since}`}`)
+        const data = res.status === 200 && res.body.success === true ? res.body.data as { revision?: unknown; entries?: unknown } : null
+        return data && typeof data.revision === 'number' ? { revision: data.revision, ...(data.entries !== undefined ? { entries: data.entries } : {}) } : null
+      },
+      post: async (entries) => (await proxyBackend('POST', '/api/group/board', { entries })).status === 200,
+    },
+    sign: (subject) => signVouch(groupIdentity(), subject),
     log: (line) => console.log(line),
   })
   backend.groupSync = groupSyncer
+  backend.onGroupChanged = () => groupSyncer?.groupChanged()
   backend.onPeerLinked = (peer) => groupSyncer?.linked(peer)
   backend.onUnpaired = (pub) => groupSyncer?.unpaired(pub)
   if (session?.machineId) groupSyncer.start()
@@ -7914,6 +7943,13 @@ async function trustLinkedMachine(peer: LinkedPeer): Promise<void> {
 
 /** This machine as its trust group knows it — see groupSyncer.ts's SELF_STAMP for the stamp. */
 let groupSelfPub: string | null = null
+/** This machine's E2EE identity, for signing its vouches on the group board. */
+let groupIdentityCache: { priv: Uint8Array; pub: Uint8Array } | null = null
+function groupIdentity(): { priv: Uint8Array; pub: Uint8Array } {
+  groupIdentityCache ??= new E2eeStore().init()
+  return groupIdentityCache
+}
+
 function groupSelf(): GroupMember {
   groupSelfPub ??= b64e(new E2eeStore().init().pub)
   const machineId = readAuthSession()?.machineId

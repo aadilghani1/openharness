@@ -351,3 +351,115 @@ describe('relayRequester', () => {
     expect(detached).toBe(2)
   })
 })
+
+describe('GroupSyncer and the account\'s board', () => {
+  /** One machine whose roster already has the phone; a board in memory, read the way cli.ts reads it. */
+  async function setup() {
+    const B = await import('./groupBoard.js')
+    const phone = C.newIdentity(), self = C.newIdentity(), app1 = C.newIdentity()
+    const store = new (class extends G.TrustGroupStore {
+      roster: import('./trustGroup.js').Roster = { members: [], removed: [] }
+      override read() { return JSON.parse(JSON.stringify(this.roster)) }
+      override write(r: import('./trustGroup.js').Roster) { this.roster = JSON.parse(JSON.stringify(r)) }
+      override blocked() { return new Set<string>() }
+      override block() {}
+      override unblock() {}
+    })()
+    store.roster.members.push({ pub: C.b64e(phone.pub), kind: 'viewer', label: 'phone', at: 5 })
+    const board = { revision: 0, entries: [] as import('./groupBoard.js').Vouch[], posted: [] as import('./groupBoard.js').Vouch[] }
+    const peers = new MemPeers(), trusted = new Set<string>()
+    const syncer = new S.GroupSyncer({
+      store,
+      peers: peers as unknown as import('./machinePeers.js').MachinePeerStore,
+      self: () => ({ pub: C.b64e(self.pub), kind: 'machine', machineId: 's'.repeat(32), label: 'self', at: S.SELF_STAMP }),
+      trust: (p) => { trusted.add(p.pub) },
+      untrust: (p) => { trusted.delete(p) },
+      paired: () => [],
+      request: async () => null,
+      board: {
+        read: async (since) => since === board.revision ? { revision: board.revision } : { revision: board.revision, entries: board.entries },
+        post: async (entries) => { board.posted.push(...entries); return true },
+      },
+      sign: (subject) => B.signVouch(self, subject),
+      now: () => 1_000,
+    })
+    return { B, phone, self, app1, board, peers, trusted, syncer }
+  }
+
+  it('a machine the phone vouched for is pinned and let in; an unchanged board reads nothing', async () => {
+    const { B, phone, app1, board, peers, trusted, syncer } = await setup()
+    board.entries.push(B.signVouch(phone, { pub: C.b64e(app1.pub), kind: 'machine', machineId: 'b'.repeat(32), label: 'app1', at: 10 }))
+    board.revision = 1
+    expect(await syncer.adoptBoard()).toBe(true)
+    expect(peers.get('b'.repeat(32))?.pub).toBe(C.b64e(app1.pub))
+    expect(trusted.has(C.b64e(app1.pub))).toBe(true)
+    expect(await syncer.adoptBoard()).toBe(false)
+    syncer.stop()
+  })
+
+  it('a stranger\'s vouch is ignored', async () => {
+    const { B, app1, board, peers, syncer } = await setup()
+    const stranger = C.newIdentity()
+    board.entries.push(B.signVouch(stranger, { pub: C.b64e(app1.pub), kind: 'machine', machineId: 'b'.repeat(32), label: 'app1', at: 10 }))
+    board.revision = 1
+    expect(await syncer.adoptBoard()).toBe(false)
+    expect(peers.get('b'.repeat(32))).toBeNull()
+    syncer.stop()
+  })
+
+  it('linking and removing put this machine\'s signed word on the board', async () => {
+    const { B, self, app1, board, syncer } = await setup()
+    const pub = C.b64e(app1.pub)
+    syncer.linked({ pub, kind: 'machine', label: 'app1', machineId: 'b'.repeat(32) })
+    syncer.remove(pub)
+    await Promise.resolve()
+    expect(board.posted.map((v) => [v.signer, v.subject.pub, v.subject.removed ?? false])).toEqual([
+      [C.b64e(self.pub), pub, false],
+      [C.b64e(self.pub), pub, true],
+    ])
+    expect(B.acceptVouches({ members: [{ pub: C.b64e(self.pub), kind: 'machine', machineId: 's'.repeat(32), label: 'self', at: 1 }], removed: [] }, 'x', board.posted, 1_000).removed.map((t) => t.pub)).toEqual([pub])
+    syncer.stop()
+  })
+})
+
+describe('GroupSyncer board reads', () => {
+  it('a push during a read reads once more after it, so the later vouch is not lost', async () => {
+    const B = await import('./groupBoard.js')
+    const phone = C.newIdentity(), self = C.newIdentity(), app1 = C.newIdentity()
+    const store = new (class extends G.TrustGroupStore {
+      roster: import('./trustGroup.js').Roster = { members: [{ pub: C.b64e(phone.pub), kind: 'viewer', label: 'phone', at: 5 }], removed: [] }
+      override read() { return JSON.parse(JSON.stringify(this.roster)) }
+      override write(r: import('./trustGroup.js').Roster) { this.roster = JSON.parse(JSON.stringify(r)) }
+      override blocked() { return new Set<string>() }
+      override block() {}
+      override unblock() {}
+    })()
+    const entries: import('./groupBoard.js').Vouch[] = []
+    let revision = 0, release: () => void = () => {}
+    const peers = new MemPeers()
+    const syncer = new S.GroupSyncer({
+      store,
+      peers: peers as unknown as import('./machinePeers.js').MachinePeerStore,
+      self: () => ({ pub: C.b64e(self.pub), kind: 'machine', machineId: 's'.repeat(32), label: 'self', at: S.SELF_STAMP }),
+      trust: () => {}, untrust: () => {}, paired: () => [], request: async () => null,
+      board: {
+        // The first read answers with the board as it was, and only after the vouch below landed.
+        read: async (since) => {
+          const snapshot = { revision, entries: [...entries] }
+          if (revision === 0) await new Promise<void>((r) => { release = r })
+          return since === snapshot.revision ? { revision: snapshot.revision } : snapshot
+        },
+        post: async () => true,
+      },
+      now: () => 1_000,
+    })
+    const first = syncer.adoptBoard()
+    entries.push(B.signVouch(phone, { pub: C.b64e(app1.pub), kind: 'machine', machineId: 'b'.repeat(32), label: 'app1', at: 10 }))
+    revision = 1
+    void syncer.adoptBoard() // the push for that vouch, while the first read is out
+    release()
+    expect(await first).toBe(true)
+    expect(peers.get('b'.repeat(32))?.pub).toBe(C.b64e(app1.pub))
+    syncer.stop()
+  })
+})

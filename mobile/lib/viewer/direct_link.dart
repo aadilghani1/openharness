@@ -5,6 +5,7 @@ import '../core/config.dart';
 import '../e2ee/keys.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'account_events.dart';
 import 'code_link.dart';
 import 'group_sync.dart';
 import 'password_link.dart';
@@ -160,6 +161,18 @@ class DirectLink implements PeerLinkClient {
       fingerprint: fingerprint,
     );
   }
+
+  /// The account's own socket (`account_events.dart`): account-wide pushes, whether or not any machine
+  /// is linked. Not started; the caller starts and closes it.
+  AccountEvents accountEvents(
+    void Function(String type, Map<String, dynamic> payload) onEvent,
+  ) => AccountEvents(
+    token: auth.accessToken,
+    uri: Uri.parse('${config.wsBaseUrl}/api/web-ws')
+        .replace(queryParameters: {'autonomousEnv': config.autonomousEnv}),
+    socket: socket,
+    onEvent: onEvent,
+  );
 
   /// Swaps trust-group rosters with [machineId] ([syncTrustGroup]): the machines this phone learns of
   /// are pinned — no password for them — and the machine learns this phone and whatever it linked.

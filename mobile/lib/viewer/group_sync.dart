@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../e2ee/bytes.dart';
 import '../e2ee/envelope.dart';
+import '../e2ee/keys.dart' show E2eeIdentity, verifySignature;
 import '../e2ee/primitives.dart';
 import '../e2ee/relay_session_crypto.dart';
 import 'password_link.dart' show RelaySocketFactory, defaultRelaySocket;
@@ -491,4 +492,119 @@ Object? openHandedRoster(
   } on FormatException {
     return null;
   }
+}
+
+// ── The account's group board ─────────────────────────────────────────────────────────────────────
+//
+// Signed statements ("vouches") about who is in the group, kept by the backend so a device can learn a
+// member it shares no machine with — a browser approved by a phone that had no machine yet, then a
+// machine approved by that phone. The CLI's `lib/e2ee/groupBoard.ts` signs and checks the same bytes
+// (one test vector pins both):
+//
+//   sig = ed25519(signer, lvCat('group-vouch-v1', pub, kind | 'removed', machineId | '', label | '', at))
+//
+// Trust stays on the device: a vouch counts only when its signer is a member this device already
+// trusts (or itself), growing to a fixpoint. The server, holding no member's key, cannot add anyone.
+
+/// The bytes a vouch's signature covers.
+Uint8List vouchMessage(Map<String, Object?> subject) => lvCat([
+  'group-vouch-v1',
+  '${subject['pub']}',
+  subject['removed'] == true ? 'removed' : '${subject['kind'] ?? ''}',
+  '${subject['machineId'] ?? ''}',
+  '${subject['label'] ?? ''}',
+  '${subject['at']}',
+]);
+
+/// A member as a board statement.
+Map<String, Object> memberSubject(GroupMember m) => {
+  'pub': m.pub,
+  'kind': m.kind,
+  'machineId': ?m.machineId,
+  'label': m.label,
+  'at': m.at,
+};
+
+/// A vouch about [subject], signed by [identity].
+Future<Map<String, Object>> signVouch(
+  E2eeIdentity identity,
+  Map<String, Object> subject,
+) async => {
+  'subject': subject,
+  'signer': b64e(identity.pub),
+  'sig': b64e(await identity.sign(vouchMessage(subject))),
+};
+
+/// The part of a board this device believes, as a roster to merge: members and removals signed by a key
+/// it already trusts — its roster's members and itself — growing to a fixpoint. A self-vouch is carried
+/// for others and never believed on its own; a key the group removed vouches for nobody.
+Future<GroupRoster> acceptVouches(
+  GroupRoster local,
+  String selfPub,
+  Object? entries, {
+  DateTime? now,
+}) async {
+  final removedAt = {for (final t in local.removed) t.pub: t.at};
+  final trusted = {selfPub, for (final m in local.members) m.pub};
+  final pending = <Map<Object?, Object?>>[
+    if (entries is List)
+      for (final e in entries.take(_maxMembers + _maxTombstones))
+        if (e is Map &&
+            e['subject'] is Map &&
+            e['signer'] is String &&
+            e['sig'] is String &&
+            (e['signer'] != (e['subject'] as Map)['pub'] ||
+                e['signer'] == selfPub))
+          e,
+  ];
+  final members = <GroupMember>[];
+  final removed = <GroupTombstone>[];
+  final done = <int>{};
+  var progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (var i = 0; i < pending.length; i++) {
+      final v = pending[i];
+      if (done.contains(i) || !trusted.contains(v['signer'])) continue;
+      done.add(i);
+      final subject = Map<String, Object?>.from(v['subject'] as Map);
+      final List<int> signer, sig;
+      try {
+        signer = b64d(v['signer'] as String);
+        sig = b64d(v['sig'] as String);
+      } on FormatException {
+        continue;
+      }
+      if (signer.length != 32 || sig.length != 64) continue;
+      if (!await verifySignature(signer, vouchMessage(subject), sig)) continue;
+      if (subject['removed'] == true) {
+        if (GroupTombstone.tryParse(subject, now: now) case final t?) {
+          removed.add(t);
+        }
+        continue;
+      }
+      final member = GroupMember.tryParse(subject, now: now);
+      if (member == null) continue;
+      members.add(member);
+      final tomb = removedAt[member.pub];
+      if (tomb != null && tomb >= member.at) continue;
+      if (trusted.add(member.pub)) progressed = true;
+    }
+  }
+  return GroupRoster(members, removed);
+}
+
+/// Takes in what this device believes of a board ([acceptVouches]) and pins or drops machines to match.
+Future<GroupSyncOutcome> adoptBoard(
+  ViewerKeyStore keys,
+  Object? entries,
+) async {
+  final selfPub = b64e((await keys.identity()).pub);
+  final merged = await keys.updateGroupRoster((current) async {
+    final local = await _seededFrom(keys, current, selfPub);
+    final accepted = await acceptVouches(local, selfPub, entries);
+    final m = mergeGroupRoster(local, accepted, selfPub);
+    return (m.roster.toJson(), m);
+  });
+  return _apply(keys, merged);
 }

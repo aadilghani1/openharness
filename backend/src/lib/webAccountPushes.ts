@@ -1,4 +1,4 @@
-import { subscribeDeskChanged, subscribeZooChanged } from './bus.js'
+import { subscribeDeskChanged, subscribeGroupChanged, subscribeZooChanged } from './bus.js'
 
 /**
  * The account documents a WEB socket hears about — the desk and the zoo — forwarded to the clients
@@ -9,6 +9,8 @@ import { subscribeDeskChanged, subscribeZooChanged } from './bus.js'
  *  - `desk_changed` — the account's tabs.
  *  - `zoo_changed`  — the account's daemons and eggs (routes/zoo.ts), its own frame: a desk change
  *    never re-fetches the zoo and the other way round.
+ *  - `group_changed` — the account's trust-group board (routes/groupBoard.ts): a browser or phone
+ *    re-reads it and trusts only what a member it already trusts signed.
  *
  * ⚠️ A phone holds one of these sockets PER MACHINE, so it hears each change once per machine. The
  * revision is what makes that harmless: an app already at that revision fetches nothing.
@@ -23,6 +25,7 @@ export async function relayWebDocumentPushes(userId: string, send: (frame: unkno
   try {
     unsubs.push(await subscribeDeskChanged(userId, (msg) => { send({ type: 'desk_changed', payload: { revision: msg.revision } }) }))
     if (opts.zoo) unsubs.push(await subscribeZooChanged(userId, (msg) => { send({ type: 'zoo_changed', payload: { revision: msg.revision } }) }))
+    unsubs.push(await subscribeGroupChanged(userId, (msg) => { send({ type: 'group_changed', payload: { revision: msg.revision } }) }))
   } catch (err) {
     stop()
     throw err

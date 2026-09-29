@@ -216,7 +216,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * backend blocks its OWN `__`-prefixed control frames from web clients for the same reason; these
  * two escaped that rule because they are not `__`-prefixed.
  */
-const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed'])
+const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'group_changed'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */
@@ -760,6 +760,9 @@ export class BackendSocket {
   pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
   onZooChanged: ((revision: number) => void) | null = null
+  /** The account's trust-group board changed (a `group_changed` from the backend) — cli.ts has the group
+   *  syncer re-read it and compare rosters now. A hint only: what counts is what a trusted member signed. */
+  onGroupChanged: ((revision: number) => void) | null = null
   /**
    * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
    * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
@@ -1848,6 +1851,14 @@ export class BackendSocket {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
       this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
+      return
+    }
+
+    // The account's trust-group board changed: a phone vouched for a new device, or a member was
+    // removed. The group syncer re-reads the board and swaps rosters now. Backend-only, like the rest.
+    if (type === 'group_changed') {
+      const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
+      this.onGroupChanged?.(typeof revision === 'number' ? revision : 0)
       return
     }
 

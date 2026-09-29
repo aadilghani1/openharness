@@ -1,4 +1,4 @@
-import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeZooChanged } from './bus.js'
+import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeGroupChanged, subscribeZooChanged } from './bus.js'
 
 /**
  * The pushes a daemon socket carries for its ACCOUNT rather than for its machine: something the
@@ -11,6 +11,8 @@ import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeZooCh
  *  - `desk_changed`     — the account's tabs.
  *  - `zoo_changed`      — the account's daemons and eggs (routes/zoo.ts). Its own frame, so a desk
  *    change never re-fetches the zoo and the other way round.
+ *  - `group_changed`    — the account's trust-group board (routes/groupBoard.ts): the daemon re-reads
+ *    it and syncs, trusting only vouches signed by a member it already trusts.
  *  - `machines_changed` — the account's machine list: a machine created / renamed / deleted, or a
  *    shared harness invited / taken back (routes/harnessShares.ts pokes the recipient). This is what
  *    lets the app discover invitations without polling `/api/machines` + `/api/harness-shares`.
@@ -32,6 +34,9 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
         send({ t: 'down', connId: '', frame: { type: 'zoo_changed', payload: { revision: msg.revision } } })
       }))
     }
+    unsubs.push(await subscribeGroupChanged(userId, (msg) => {
+      send({ t: 'down', connId: '', frame: { type: 'group_changed', payload: { revision: msg.revision } } })
+    }))
     unsubs.push(await subscribeDeviceMachineListChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: msg.reason } } })
     }))

@@ -15,6 +15,7 @@ import type { MachinePeerStore } from './machinePeers.js'
 import type { LinkedPeer } from './manager.js'
 import type { PairedClient } from './store.js'
 import { parseMember, parseRoster, rosterDigest, type GroupMember, type MergeResult, type Roster, type TrustGroupStore } from './trustGroup.js'
+import { acceptVouches, memberSubject, parseBoardEntries, type Vouch, type VouchSubject } from './groupBoard.js'
 
 export const GROUP_SYNC = 'group_sync'
 /** The stamp a device's description of ITSELF carries: older than anything, so any removal beats it and
@@ -47,6 +48,14 @@ export interface GroupSyncerDeps {
   dropSessions?: (machineId: string) => void
   /** Machines worth dialing now; null = unknown, try every member. */
   reachable?: () => Set<string> | null
+  /** The account's signed group board (groupBoard.ts), through the backend: read it since a revision
+   *  (null = unreachable; `entries` absent = unchanged), and add vouches to it. Absent: relay only. */
+  board?: {
+    read: (since: number | null) => Promise<{ revision: number; entries?: unknown } | null>
+    post: (entries: Vouch[]) => Promise<boolean>
+  }
+  /** A vouch about [subject] signed by this machine's identity. */
+  sign?: (subject: VouchSubject) => Vouch
   now?: () => number
   log?: (line: string) => void
 }
@@ -68,6 +77,8 @@ export class GroupSyncer {
   start(): void {
     this.seedFromExistingLinks()
     this.applyAll()
+    // Whatever the group settled while this machine was away, from the board — before the first round.
+    void this.adoptBoard()
     const members = this.deps.store.read().members
     this.deps.log?.(`[group] ${members.filter((m) => m.kind === 'machine').length} machines, ${members.filter((m) => m.kind === 'viewer').length} phones/browsers in the roster`)
     this.scheduleFanOut(30_000)
@@ -84,6 +95,64 @@ export class GroupSyncer {
 
   roster(): Roster { return this.deps.store.read() }
 
+  /** The board's revision last read; null before the first read. */
+  private boardRevision: number | null = null
+  private boardRead: Promise<boolean> | null = null
+  private boardReadAgain = false
+
+  /**
+   * Read the account's group board and take in what a member this machine already trusts signed there
+   * (groupBoard.ts `acceptVouches`); a change is applied and passed on like any roster swap. True when
+   * the roster changed. One read at a time: a call during one (a push that may carry what that read saw
+   * too early) reads once more after it.
+   */
+  adoptBoard(): Promise<boolean> {
+    if (this.boardRead) { this.boardReadAgain = true; return this.boardRead }
+    const run = (async () => {
+      let changed = false
+      do {
+        this.boardReadAgain = false
+        changed = (await this.readBoard().catch(() => false)) || changed
+      } while (this.boardReadAgain)
+      return changed
+    })().finally(() => { this.boardRead = null })
+    this.boardRead = run
+    return run
+  }
+
+  private async readBoard(): Promise<boolean> {
+    const board = this.deps.board
+    if (!board) return false
+    const got = await board.read(this.boardRevision)
+    if (!got) return false
+    this.boardRevision = got.revision
+    if (got.entries === undefined) return false
+    const local = this.deps.store.read()
+    const incoming = acceptVouches(local, this.selfPub(), parseBoardEntries(got.entries), this.now())
+    if (!incoming.members.length && !incoming.removed.length) return false
+    const before = rosterDigest(local)
+    const result = this.deps.store.merge(incoming, this.selfPub())
+    this.apply(result)
+    if (rosterDigest(result.roster) === before) return false
+    this.deps.log?.(`[group] board r${got.revision}: +${result.upserted.length} −${result.dropped.length}`)
+    this.scheduleFanOut(1_000)
+    return true
+  }
+
+  /** The backend said the group changed (`group_changed`): read the board. Its own posts echo back
+   *  too, so a round with everyone follows only news ([readBoard] schedules it). */
+  groupChanged(): void {
+    void this.adoptBoard()
+  }
+
+  /** Put this machine's word for [members] (or their removal) on the board, so devices that share no
+   *  machine with it still hear. Best effort: the relay swap carries the same news where it can. */
+  private vouch(subjects: VouchSubject[]): void {
+    const { board, sign } = this.deps
+    if (!board || !sign || !subjects.length) return
+    void board.post(subjects.map((s) => sign(s))).catch(() => false)
+  }
+
   /** A device just linked to or from this machine over the remote password: it joins the group, and the
    *  rest of the group hears of it. */
   linked(peer: LinkedPeer): void {
@@ -92,6 +161,7 @@ export class GroupSyncer {
     if (!member) return
     this.deps.store.unblock(member.pub) // linking again is the way back after an unpair
     this.apply(this.deps.store.add(member, this.selfPub()))
+    this.vouch([memberSubject(member)])
     this.scheduleFanOut(0)
   }
 
@@ -100,6 +170,8 @@ export class GroupSyncer {
     const known = this.deps.store.read().members.some((m) => m.pub === pub)
     const result = this.deps.store.remove(pub, this.selfPub(), this.now())
     this.apply(result)
+    const tomb = result.roster.removed.find((t) => t.pub === pub)
+    if (tomb) this.vouch([{ pub, at: tomb.at, removed: true }])
     // Not in the roster (a link that predates it): still stop trusting it here.
     if (!known) this.forget(pub)
     this.scheduleFanOut(0)
