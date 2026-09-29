@@ -699,7 +699,8 @@ void main() {
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsWidgets);
     expect(resourceSearch(tester).isModelMode, isTrue);
-    expect(tester.getSize(resourceScope(':')).height, greaterThan(620));
+    expect(tester.getSize(resourceScope(':')).height, greaterThan(300));
+    expect(tester.getRect(resourceScope(':')).top, greaterThan(24));
     expect(tester.getRect(resourceScope(':')).bottom, lessThan(760));
     tester.view.physicalSize = const Size(1200, 480);
     await tester.pump();
@@ -732,7 +733,7 @@ void main() {
     final panel = tester.getRect(resourceScope(':'));
     expect(panel.right, lessThanOrEqualTo(1200));
     expect(panel.top, greaterThan(0));
-    expect(panel.width, greaterThan(1000));
+    expect(panel.width, inInclusiveRange(900, 1000));
     expect(find.byType(Dialog), findsNothing);
     expect(resourceSearch(tester).isModelMode, isTrue);
     // The top-5 catalog model stays visible without pressing "Get models".

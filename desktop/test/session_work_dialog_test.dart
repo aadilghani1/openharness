@@ -243,11 +243,11 @@ void main() {
       expect(find.text('Merged'), findsNWidgets(3));
       expect(find.textContaining('completed'), findsNothing);
       await captureDialog(tester, boundary, 'merged-pull-requests');
-      await tester.tap(find.text('[ Load more ]'));
+      await tester.tap(find.widgetWithText(TextButton, 'Load more'));
       await tester.pumpAndSettle();
       expect(calls, [0, 4]);
       expect(find.text('Merged'), findsNWidgets(3));
-      expect(find.text('[ Load more ]'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Load more'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

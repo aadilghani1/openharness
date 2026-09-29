@@ -63,11 +63,19 @@ Future<void> focusLaunchRow(WidgetTester tester, String name) async {
       return within;
     }
 
+    final visited = <String?>[];
     for (var i = 0; i < 32 && !focused(); i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
+      // Native frames can complete before the deferred focus restoration from
+      // opening the composer. Wait for that transition before the next key.
+      await tester.pumpAndSettle();
+      visited.add(FocusManager.instance.primaryFocus?.debugLabel);
     }
-    expect(focused(), isTrue, reason: '$target is reachable with Tab');
+    expect(
+      focused(),
+      isTrue,
+      reason: '$target is reachable with Tab; visited $visited',
+    );
     await tester.ensureVisible(row);
     await tester.pumpAndSettle();
     return;

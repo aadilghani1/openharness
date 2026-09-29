@@ -88,7 +88,12 @@ void main() {
           find.descendant(of: input, matching: find.byType(EditableText)),
         );
         final panel = tester.widget<Material>(
-          find.byKey(const ValueKey('swarm-search-results')),
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('swarm-search-results')),
+                matching: find.byType(Material),
+              )
+              .first,
         );
         expect(panel.color, grid.AppPalette.cardBg);
         expect(field.style!.color, grid.AppPalette.textPrimary);
@@ -115,20 +120,20 @@ void main() {
                 : grid.AppPalette.textSecondary,
           );
         }
-        final previewText = tester.widgetList<Text>(
-          find.descendant(
-            of: find.byKey(const ValueKey('swarm-search-preview')),
-            matching: find.byType(Text),
-          ),
+        final previewText = find.descendant(
+          of: find.byKey(const ValueKey('swarm-search-preview')),
+          matching: find.byType(Text),
         );
-        expect(previewText, isNotEmpty);
-        for (final style in [...previewText.map((text) => text.style!)]) {
-          expect(style.fontFamily, pane.textStyle.fontFamily);
-          expect(style.fontFamilyFallback, pane.textStyle.fontFamilyFallback);
-          expect(style.fontSize, pane.textStyle.fontSize);
-          expect(style.height, pane.textStyle.height);
-          expect(style.letterSpacing, 0);
-          expect(style.wordSpacing, 0);
+        expect(previewText, findsWidgets);
+        for (final element in previewText.evaluate()) {
+          final style = DefaultTextStyle.of(element).style
+              .merge((element.widget as Text).style);
+          expect(
+            style.fontFamily,
+            isIn([grid.AppType.sansFamily, grid.AppType.monoFamily]),
+          );
+          expect(style.fontSize, isIn([11.0, 12.0, 15.0]));
+          expect(style.height ?? 1, inInclusiveRange(1.0, 1.6));
         }
         expect(search.selected!.id, selectedId);
         expect(field.controller, same(controller));
@@ -163,13 +168,12 @@ void main() {
         of: preview,
         matching: find.text('Checkout retries'),
       );
-      final context = find.text('Test host:storefront  (feat/safe-retries)');
+      final context = find.text('Test host · storefront · feat/safe-retries');
       expect(context, findsOneWidget);
       expect(find.descendant(of: preview, matching: context), findsOneWidget);
-      final cell = terminalCellSizeOf(tester.element(input));
       expect(
-        tester.getTopLeft(context).dy - tester.getTopLeft(title).dy,
-        closeTo(cell.height, .01),
+        tester.getTopLeft(context).dy,
+        greaterThan(tester.getBottomLeft(title).dy),
       );
       expect(
         tester
@@ -186,12 +190,9 @@ void main() {
       await tester.enterText(input, 'Workspace sync');
       await tester.pumpAndSettle();
       final waiting = tester.widget<Text>(find.text('Needs your input'));
-      expect(waiting.style!.fontSize, 18);
-      expect(waiting.style!.height, 1.4);
-      expect(
-        waiting.style!.color,
-        tester.widget<TerminalView>(find.byType(TerminalView)).theme.yellow,
-      );
+      expect(waiting.style!.fontSize, 12);
+      expect(waiting.style!.height, 1.45);
+      expect(waiting.style!.color, grid.AppPalette.warn);
       await key(tester, LogicalKeyboardKey.escape);
       expect(find.byKey(const ValueKey('swarm-search-results')), findsNothing);
 
@@ -215,7 +216,14 @@ void main() {
         expect(
           tester
               .widget<Material>(
-                find.byKey(const ValueKey('new-harness-chooser-surface')),
+                find
+                    .descendant(
+                      of: find.byKey(
+                        const ValueKey('new-harness-chooser-surface'),
+                      ),
+                      matching: find.byType(Material),
+                    )
+                    .first,
               )
               .color,
           grid.AppPalette.cardBg,
@@ -252,7 +260,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('new-harness-status')))
+            .widget<Text>(
+              find.descendant(
+                of: find.byKey(const ValueKey('new-harness-chooser-surface')),
+                matching: find.byKey(const ValueKey('new-harness-status')),
+              ),
+            )
             .style!
             .color,
         tester.widget<TerminalView>(find.byType(TerminalView)).theme.red,

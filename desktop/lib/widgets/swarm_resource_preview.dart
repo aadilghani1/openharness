@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -80,6 +81,7 @@ class SwarmResourcePreview extends StatefulWidget {
     required this.onRefocus,
     required this.onModalChanged,
     required this.onCommands,
+    this.resourcePollInterval,
   });
   final SwarmSearchController search;
   final SearchPreviewControls controls;
@@ -87,6 +89,10 @@ class SwarmResourcePreview extends StatefulWidget {
   final VoidCallback onRefocus;
   final ValueChanged<bool> onModalChanged;
   final VoidCallback onCommands;
+
+  /// Override the resource refresh cadence for an isolated fixture. Omitted
+  /// intervals poll every ten seconds in the app and stay disabled in tests.
+  final Duration? resourcePollInterval;
 
   @override
   State<SwarmResourcePreview> createState() => _SwarmResourcePreviewState();
@@ -147,16 +153,26 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     widget.onRefocus();
   }
 
-  void _focusActions({bool last = false}) {
+  void _focusActions() {
     final selectedId = row?.id;
     if (selectedId == null) return;
-    void focus() {
+    void focus({bool afterBuild = false}) {
       if (!mounted || row?.id != selectedId) return;
       final actions = _visibleActions()
           .where((a) => a.onPressed != null)
           .toList();
-      final action = last ? actions.lastOrNull : actions.firstOrNull;
+      final action = actions.firstOrNull;
       final node = action == null ? _actionFocus : _buttonFocus[action.command];
+      // A selection can arrive immediately before Return, before its preview
+      // has built these buttons. Retry once after that frame rather than
+      // focusing an unattached scope and losing the first keyboard action.
+      if (!afterBuild && action != null && node?.context == null) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => focus(afterBuild: true),
+        );
+        WidgetsBinding.instance.ensureVisualUpdate();
+        return;
+      }
       (node ?? _actionFocus).requestFocus();
       if (node?.context case final context?) Scrollable.ensureVisible(context);
     }
@@ -169,15 +185,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
   }
 
-  bool _traverseActions(bool forward, {bool stay = false}) {
+  bool _traverseActions(bool forward) {
     if (row == null ||
         widget.search.showsTypeHints ||
         !widget.search.supportsPreview) {
       return false;
-    }
-    if (!_actionFocus.hasFocus) {
-      _focusActions(last: !forward);
-      return true;
     }
     final actions = _visibleActions()
         .where((a) => a.onPressed != null)
@@ -188,9 +200,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final next = index < 0
         ? (forward ? 0 : actions.length - 1)
         : index + (forward ? 1 : -1);
-    if (next < 0 || next >= actions.length) {
-      if (!stay) widget.onRefocus();
-    } else {
+    if (next >= 0 && next < actions.length) {
       final node = _buttonFocus[actions[next].command]!;
       node.requestFocus();
       if (node.context case final context?) Scrollable.ensureVisible(context);
@@ -242,9 +252,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     widget.controls.dispatch = _dispatch;
     widget.controls.commands = _commands;
     widget.search.addListener(_searchChanged);
-    if (!kUnderTest) {
+    final interval =
+        widget.resourcePollInterval ??
+        (kUnderTest ? null : const Duration(seconds: 10));
+    if (interval != null) {
       _resourceTimer = Timer.periodic(
-        const Duration(seconds: 10),
+        interval,
         (_) => unawaited(_readResources()),
       );
     }
@@ -253,12 +266,24 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   SwarmPreviewScrollController _scrollController() =>
       SwarmPreviewScrollController(
         search: widget.search,
-        lineHeight: () => terminalCellSizeOf(context).height,
+        lineHeight: () => DesktopChrome.of(context)
+            ? MediaQuery.textScalerOf(context).scale(13) * 1.5
+            : terminalCellSizeOf(context).height,
       );
 
   @override
   void didUpdateWidget(SwarmResourcePreview oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controls != widget.controls) {
+      if (oldWidget.controls.dispatch == _dispatch) {
+        oldWidget.controls.dispatch = null;
+      }
+      if (oldWidget.controls.commands == _commands) {
+        oldWidget.controls.commands = null;
+      }
+      widget.controls.dispatch = _dispatch;
+      widget.controls.commands = _commands;
+    }
     if (oldWidget.search != widget.search) {
       oldWidget.search.removeListener(_searchChanged);
       widget.search.addListener(_searchChanged);
@@ -269,8 +294,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   @override
   void dispose() {
-    widget.controls.dispatch = null;
-    widget.controls.commands = null;
+    // A new palette can register its preview before the previous overlay is
+    // disposed. Only release this preview's own callbacks.
+    if (widget.controls.dispatch == _dispatch) widget.controls.dispatch = null;
+    if (widget.controls.commands == _commands) widget.controls.commands = null;
     widget.search.removeListener(_searchChanged);
     _resourceTimer?.cancel();
     _actionFocus.dispose();
@@ -303,7 +330,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       return true;
     }
     if (command == 'picker.resource_add_api' && widget.search.isModelMode) {
-      _editApi(null);
+      _addApi();
       return true;
     }
     if (command == 'picker.focus_actions') {
@@ -312,7 +339,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
     if (_actionFocus.hasFocus &&
         (command == 'picker.next' || command == 'picker.previous')) {
-      return _traverseActions(command == 'picker.next', stay: true);
+      return _traverseActions(command == 'picker.next');
     }
     if (command == 'picker.cancel') {
       if (!_actionFocus.hasFocus) return false;
@@ -320,6 +347,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       return true;
     }
     if (command == 'picker.accept') {
+      // An empty result remains an inert picker, including the native command
+      // bridge. Consume Return so it cannot escape to the workspace beneath it.
+      if (row == null) return true;
       if (_actionFocus.hasFocus) {
         if (_focusedResource != row?.id) {
           widget.onRefocus();
@@ -342,7 +372,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           final selected = row!;
           unawaited(_run(() => widget.search.getModel(selected)));
         }
-        if (row?.isCreate == true) _editApi(null);
+        if (row?.isCreate == true) _addApi();
         // Model rows perform Use/Get directly; unavailable rows stay put.
         return true;
       }
@@ -459,6 +489,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       _pending.add(id);
       _errors.remove(id);
     });
+    // A control becomes disabled while its request is running. Return to the
+    // query before Flutter drops that button's focus into an unnamed scope.
+    if (_actionFocus.hasFocus) widget.onRefocus();
     String? error;
     try {
       error = await action();
@@ -482,8 +515,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   HarnessSession? get _session {
     final selected = row;
-    if (selected?.agentId == null) return null;
-    final machine = app.stateOf(selected!.machineId!);
+    if (selected == null || selected.agentId == null) return null;
+    final machine = app.stateOf(selected.machineId!);
     final agent = machine?.agents
         .where((agent) => agent.id == selected.agentId)
         .firstOrNull;
@@ -557,6 +590,52 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   Widget _actionButtons() {
     final target = row?.id;
     final cell = terminalCellSizeOf(context);
+    final desktop = DesktopChrome.of(context);
+    Widget button(_ResourceAction action) {
+      final node = _buttonFocus.putIfAbsent(
+        action.command,
+        () => FocusNode(debugLabel: action.label),
+      );
+      final VoidCallback? invoke = action.onPressed == null
+          ? null
+          : () {
+              if (row?.id != target) return;
+              // Resolve again so stale widgets cannot act on an old resource.
+              final current = _visibleActions()
+                  .where((a) => a.command == action.command)
+                  .firstOrNull;
+              current?.onPressed?.call();
+            };
+      if (desktop) {
+        final shortcut = effectiveCommandHint(
+          context,
+          action.command,
+          contextKind: KeymapContext.picker,
+        );
+        return Semantics(
+          liveRegion: action.label == 'Working…',
+          child: DesktopPill(
+            key: ValueKey('resource-action:${action.command}'),
+            focusNode: node,
+            label: action.label,
+            compact: true,
+            onPressed: invoke,
+            foregroundColor: action.command == 'picker.resource_remove'
+                ? Theme.of(context).colorScheme.error
+                : null,
+            tooltip: [action.label, ?shortcut].join(' · '),
+          ),
+        );
+      }
+      return TerminalTextAction(
+        key: ValueKey('resource-action:${action.command}'),
+        focusNode: node,
+        label: action.label,
+        padding: EdgeInsets.zero,
+        onPressed: invoke,
+      );
+    }
+
     final controls = Focus(
       focusNode: _actionFocus,
       onFocusChange: (focused) {
@@ -565,34 +644,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       },
       child: Wrap(
         key: const ValueKey('swarm-search-resource-actions'),
-        spacing: cell.width * 2,
-        runSpacing: cell.height,
-        children: [
-          for (final action in _visibleActions())
-            TerminalTextAction(
-              key: ValueKey('resource-action:${action.command}'),
-              focusNode: _buttonFocus.putIfAbsent(
-                action.command,
-                () => FocusNode(debugLabel: action.label),
-              ),
-              label: action.label,
-              padding: EdgeInsets.zero,
-              onPressed: action.onPressed == null
-                  ? null
-                  : () {
-                      if (row?.id != target) return;
-                      // Resolve again so stale widgets cannot operate on an old resource.
-                      final current = _visibleActions()
-                          .where((a) => a.command == action.command)
-                          .firstOrNull;
-                      current?.onPressed?.call();
-                    },
-            ),
-        ],
+        spacing: desktop ? 8 : cell.width * 2,
+        runSpacing: desktop ? 8 : cell.height,
+        children: [for (final action in _visibleActions()) button(action)],
       ),
     );
-    void next() => _traverseActions(true, stay: true);
-    void previous() => _traverseActions(false, stay: true);
+    void next() => _traverseActions(true);
+    void previous() => _traverseActions(false);
     if (KeymapTheme.of(context) != null) {
       return KeymapRegion(
         contextKind: KeymapContext.picker,
@@ -618,6 +676,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   Widget _controlHints() {
+    final desktop = DesktopChrome.of(context);
     String? key(String command) => effectiveCommandHint(
       context,
       command,
@@ -654,7 +713,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                   ? 'setup'
                   : 'Manage'
             : widget.search.actionLabel(row)}',
-      if (key('picker.complete') case final tab?) '$tab pane',
+      if (key('picker.complete') case final tab?)
+        '$tab ${desktop ? 'controls' : 'pane'}',
       if (key('picker.cancel') case final escape? when managing || starting)
         '$escape ${starting ? 'cancel' : 'back'}',
     ];
@@ -665,15 +725,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     );
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: cell.width * 2,
-        vertical: cell.height,
+        horizontal: desktop ? 18 : cell.width * 2,
+        vertical: desktop ? 12 : cell.height,
       ),
       child: Text(
         hints.join('  ·  '),
         key: const ValueKey('resource-control-hints'),
-        style: terminalContentStyle(
-          color: theme.foreground.withValues(alpha: .54),
-        ),
+        style: desktop
+            ? DesktopChrome.text(size: 11, color: DesktopChrome.muted)
+            : terminalContentStyle(
+                color: theme.foreground.withValues(alpha: .54),
+              ),
       ),
     );
   }
@@ -681,7 +743,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   List<_ResourceAction> _actions() {
     final search = widget.search;
     final selected = row;
-    final busy = _pending.contains(selected?.id ?? search.title);
+    if (selected == null) return const [];
+    final busy = _pending.contains(selected.id);
     if (search.isModelDownloadsRow(selected)) {
       return [
         _ResourceAction(
@@ -691,7 +754,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         ),
       ];
     }
-    if (selected?.isCreate == true) {
+    if (selected.isCreate) {
       if (search.isMachineMode) {
         return [
           _ResourceAction(
@@ -710,14 +773,14 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         return [
           _ResourceAction(
             'Add',
-            busy ? null : () => _editApi(null),
+            busy ? null : _addApi,
             command: 'picker.accept',
           ),
         ];
       }
       return [
         _ResourceAction(
-          selected!.title.replaceFirst('New ', 'Create '),
+          selected.title.replaceFirst('New ', 'Create '),
           busy ? null : _open,
           command: 'picker.accept',
         ),
@@ -725,11 +788,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
     if (search.isStoreMode) {
       return [
-        _ResourceAction(
-          'Open in Store',
-          selected == null ? null : _open,
-          command: 'picker.accept',
-        ),
+        _ResourceAction('Open in Store', _open, command: 'picker.accept'),
       ];
     }
     if (search.isModelMode) {
@@ -825,8 +884,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         ),
       ];
     }
-    if (selected?.isMachine == true) {
-      final machine = app.stateOf(selected!.machineId!);
+    if (selected.isMachine) {
+      final machine = app.stateOf(selected.machineId!);
       if (machine == null) return [];
       final secondary = _secondaryActions();
       return [
@@ -857,7 +916,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       _ResourceAction(
         session?.needsInput == true
             ? 'Answer'
-            : selected?.isProject == true
+            : selected.isProject
             ? 'Harnesses'
             : session?.agent.isStopped == true
             ? 'Resume & open'
@@ -884,6 +943,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         ),
     ];
   }
+
+  void _addApi() => _editApi(null);
 
   void _editApi(String? id, {bool removing = false}) {
     final catalog = widget.search.models;
@@ -938,7 +999,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (selected?.isCreate != true)
           _ResourceAction(
             'Add API connection',
-            () => _editApi(null),
+            _addApi,
             command: 'picker.resource_add_api',
           ),
         if (model?.api case final api?) ...[
@@ -1031,7 +1092,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   Widget _modelPreview() {
-    final catalog = widget.search.models!;
+    final catalog = widget.search.models;
+    if (catalog == null) return _details(['No matching models']);
     if (widget.search.isModelDownloadsRow(row)) {
       return _details([
         'Get models',
@@ -1044,7 +1106,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         catalog.manager.scanning ? 'Finding models…' : 'No matching models',
       ]);
     }
-    final cell = terminalCellSizeOf(context);
+    final desktop = DesktopChrome.of(context);
+    final cell = desktop ? const Size(8, 16) : terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
@@ -1105,13 +1168,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               width: cell.width * 9,
               child: Text(
                 label,
-                style: terminalContentStyle(color: theme.muted),
+                style: desktop
+                    ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+                    : terminalContentStyle(color: theme.muted),
               ),
             ),
             Expanded(
               child: Text(
                 value,
-                style: terminalContentStyle(color: theme.foreground),
+                style: desktop
+                    ? DesktopChrome.text(size: 12)
+                    : terminalContentStyle(color: theme.foreground),
               ),
             ),
           ],
@@ -1122,7 +1189,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     Widget errorLine(String text) {
       return Padding(
         padding: EdgeInsets.only(top: cell.height),
-        child: Text(text, style: terminalContentStyle(color: theme.yellow)),
+        child: Text(
+          text,
+          style: desktop
+              ? DesktopChrome.text(
+                  size: 12,
+                  color: Theme.of(context).colorScheme.error,
+                )
+              : terminalContentStyle(color: theme.yellow),
+        ),
       );
     }
 
@@ -1135,11 +1210,18 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       children: [
         Text(
           entry.name,
-          style: terminalContentStyle(color: theme.foreground)
-              .copyWith(fontWeight: FontWeight.bold),
+          style: desktop
+              ? DesktopChrome.text(size: 15, medium: true)
+              : terminalContentStyle(color: theme.foreground)
+                    .copyWith(fontWeight: FontWeight.bold),
         ),
         SizedBox(height: cell.height),
-        Text(statusWord, style: terminalContentStyle(color: theme.foreground)),
+        Text(
+          statusWord,
+          style: desktop
+              ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+              : terminalContentStyle(color: theme.foreground),
+        ),
         if (widget.search.modelUseErrorId == entry.id &&
             widget.search.modelUseError != null)
           errorLine(widget.search.modelUseError!),
@@ -1175,10 +1257,6 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               'Downloads and starts on ${entry.node ?? 'this machine'}.',
             ),
         ],
-        if (entry.api case final api?) ...[
-          labelValue('Host', api.baseUrl),
-          labelValue('Key', api.keyEnv),
-        ],
         if (entry.subscription case final subscription?) ...[
           ...((subscription['details'] as List?) ?? const [])
               .map((d) => '$d')
@@ -1210,8 +1288,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         ],
         if (operation?.error case final err?) errorLine(err),
         if (catalog.manager.error case final err?) errorLine(err),
-        SizedBox(height: cell.height),
-        _actionButtons(),
+        if (!desktop) ...[SizedBox(height: cell.height), _actionButtons()],
       ],
     );
   }
@@ -1316,6 +1393,61 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   /// The preview's lines: the first is the title, `''` is a blank row, and a `(label, value)`
   /// pair is a labelled row — [_kDetailLabelColumns] columns of label, the value wrapping beside it.
   Widget _details(List<Object> lines, {bool controls = false}) {
+    if (DesktopChrome.of(context)) {
+      return ListView(
+        controller: _scroll,
+        padding: const EdgeInsets.all(18),
+        children: [
+          for (var i = 0; i < lines.length; i++)
+            switch (lines[i]) {
+              '' => const SizedBox(height: 12),
+              (final String label, final String value) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final labelText = Text(
+                      label,
+                      style: DesktopChrome.text(
+                        size: 12,
+                        color: DesktopChrome.muted,
+                      ),
+                    );
+                    final valueText = Text(
+                      value,
+                      style: DesktopChrome.text(size: 12),
+                    );
+                    return constraints.maxWidth < 260
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [labelText, valueText],
+                          )
+                        : Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(width: 72, child: labelText),
+                              Expanded(child: valueText),
+                            ],
+                          );
+                  },
+                ),
+              ),
+              final line => Padding(
+                padding: EdgeInsets.only(bottom: i == 0 ? 5 : 3),
+                child: Text(
+                  '$line',
+                  style: DesktopChrome.text(
+                    size: i == 0 ? 15 : 12,
+                    medium: i == 0,
+                    color: i == 0
+                        ? DesktopChrome.foreground
+                        : DesktopChrome.muted,
+                  ),
+                ),
+              ),
+            },
+        ],
+      );
+    }
     final cell = terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
@@ -1362,6 +1494,47 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   Widget _typeHints() {
+    if (DesktopChrome.of(context)) {
+      return ListView(
+        controller: _scroll,
+        padding: const EdgeInsets.all(18),
+        children: [
+          Text(
+            'Find your next task',
+            style: DesktopChrome.text(size: 15, medium: true),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Search harnesses, or type a prefix to choose a category.',
+            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            key: const ValueKey('swarm-search-type-hints'),
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final (prefix, label) in [
+                ('@', 'Machines'),
+                ('#', 'Projects'),
+                (':', 'Models'),
+                ('*', 'Store'),
+                ('>', 'Commands'),
+              ])
+                DesktopPill(
+                  key: ValueKey('swarm-search-scope:$prefix'),
+                  label: '$prefix  $label',
+                  compact: true,
+                  onPressed: () {
+                    widget.search.setQuery('$prefix ');
+                    widget.onRefocus();
+                  },
+                ),
+            ],
+          ),
+        ],
+      );
+    }
     final cell = terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
@@ -1430,14 +1603,14 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             terminal: true,
           );
         }
-        final cell = terminalCellSizeOf(context);
+        final desktop = DesktopChrome.of(context);
+        final cell = desktop ? const Size(9, 12) : terminalCellSizeOf(context);
         final theme = terminalThemeFor(
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
-        final desktop = DesktopChrome.of(context);
         final actions = [
-          if (!_isManagement)
+          if (desktop || !_isManagement)
             Padding(
               padding: EdgeInsets.fromLTRB(
                 cell.width * 2,
@@ -1449,120 +1622,138 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             ),
           _controlHints(),
         ];
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.search.isModelMode &&
-                widget.search.models?.manager.error != null)
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  cell.width * 2,
-                  cell.height,
-                  cell.width * 2,
-                  0,
-                ),
-                child: Text(
-                  'Local models · ${widget.search.models!.manager.error}',
-                  key: const ValueKey('local-model-inventory-notice'),
-                  style: terminalContentStyle(color: theme.yellow),
-                ),
-              ),
-            if (_pending.contains(row?.id))
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  cell.width * 2,
-                  cell.height,
-                  cell.width * 2,
-                  0,
-                ),
-                child: Text(
-                  'Working…',
-                  style: terminalContentStyle(
-                    color: theme.foreground.withValues(alpha: .54),
+        return LayoutBuilder(
+          builder: (context, constraints) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.search.isModelMode &&
+                  widget.search.models?.manager.error != null)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    cell.width * 2,
+                    cell.height,
+                    cell.width * 2,
+                    0,
+                  ),
+                  child: Text(
+                    'Local models · ${widget.search.models!.manager.error}',
+                    key: const ValueKey('local-model-inventory-notice'),
+                    style: desktop
+                        ? DesktopChrome.text(
+                            size: 12,
+                            color: Theme.of(context).colorScheme.error,
+                          )
+                        : terminalContentStyle(color: theme.yellow),
                   ),
                 ),
-              ),
-            if (_errors[row?.id] case final error?)
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: cell.width * 2,
-                  vertical: cell.height,
-                ),
-                child: Text(
-                  error,
-                  style: terminalContentStyle(color: theme.yellow),
-                ),
-              ),
-            Expanded(
-              flex: desktop ? 3 : 1,
-              child: _editingApi
-                  ? ApiPickerForm(
-                      key: _apiFormKey,
-                      controller: widget.search.models!.manager.apis,
-                      connectionId: _apiConnectionId,
-                      removing: _apiRemoving,
-                      onClose: _closeApiForm,
-                      onFocusChanged: widget.search.setManaging,
-                      onSwitchPane: _switchPane,
-                    )
-                  : _editingMachine
-                  ? MachinePickerForm(
-                      key: _formKey,
-                      app: app,
-                      kind: _machineForm!,
-                      machineId: row?.machineId,
-                      onClose: _closeMachineForm,
-                      onFocusChanged: widget.search.setManaging,
-                      onSwitchPane: _switchPane,
-                    )
-                  : widget.search.showsTypeHints
-                  ? _typeHints()
-                  : row?.isCreate == true
-                  ? _details([
-                      ...widget.search.createDescription.split('\n'),
-                    ], controls: _machineSetup)
-                  : widget.search.isStoreMode
-                  ? _details([
-                      if (row?.storeId case final id?) ...[
-                        widget.search.storeEntries[id]?.name ?? '',
-                        widget.search.storeEntries[id]?.category ?? '',
-                        '',
-                        widget.search.storeEntries[id]?.description ?? '',
-                        if (widget.search.storeEntries[id]?.author
-                            case final author?)
-                          'By $author',
-                      ] else
-                        'No matching store entries',
-                    ])
-                  : row?.isMachine == true
-                  ? _machinePreview()
-                  : widget.search.isModelMode
-                  ? _modelPreview()
-                  : SwarmSearchPreview(
-                      key: const ValueKey('swarm-search-preview'),
-                      search: widget.search,
-                      terminal: true,
-                    ),
-            ),
-            if (row != null &&
-                !widget.search.showsTypeHints &&
-                !_editingMachine &&
-                !_editingApi) ...[
-              if (desktop)
-                Flexible(
-                  flex: 2,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: actions,
-                    ),
+              if (_pending.contains(row?.id) && (!desktop || _session == null))
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    cell.width * 2,
+                    cell.height,
+                    cell.width * 2,
+                    0,
                   ),
-                )
-              else
-                ...actions,
+                  child: Text(
+                    'Working…',
+                    style: desktop
+                        ? DesktopChrome.text(
+                            size: 12,
+                            color: DesktopChrome.muted,
+                          )
+                        : terminalContentStyle(
+                            color: theme.foreground.withValues(alpha: .54),
+                          ),
+                  ),
+                ),
+              if (_errors[row?.id] case final error?)
+                Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: cell.width * 2,
+                    vertical: cell.height,
+                  ),
+                  child: Text(
+                    error,
+                    style: desktop
+                        ? DesktopChrome.text(
+                            size: 12,
+                            color: Theme.of(context).colorScheme.error,
+                          )
+                        : terminalContentStyle(color: theme.yellow),
+                  ),
+                ),
+              Expanded(
+                child: _editingApi
+                    ? ApiPickerForm(
+                        key: _apiFormKey,
+                        controller: widget.search.models!.manager.apis,
+                        connectionId: _apiConnectionId,
+                        removing: _apiRemoving,
+                        onClose: _closeApiForm,
+                        onFocusChanged: widget.search.setManaging,
+                        onSwitchPane: _switchPane,
+                      )
+                    : _editingMachine
+                    ? MachinePickerForm(
+                        key: _formKey,
+                        app: app,
+                        kind: _machineForm!,
+                        machineId: row?.machineId,
+                        onClose: _closeMachineForm,
+                        onFocusChanged: widget.search.setManaging,
+                        onSwitchPane: _switchPane,
+                      )
+                    : widget.search.showsTypeHints
+                    ? _typeHints()
+                    : row?.isCreate == true
+                    ? _details([
+                        ...widget.search.createDescription.split('\n'),
+                      ], controls: _machineSetup)
+                    : widget.search.isStoreMode
+                    ? _details([
+                        if (row?.storeId case final id?) ...[
+                          widget.search.storeEntries[id]?.name ?? '',
+                          widget.search.storeEntries[id]?.category ?? '',
+                          '',
+                          widget.search.storeEntries[id]?.description ?? '',
+                          if (widget.search.storeEntries[id]?.author
+                              case final author?)
+                            'By $author',
+                        ] else
+                          'No matching store entries',
+                      ])
+                    : row?.isMachine == true
+                    ? _machinePreview()
+                    : widget.search.isModelMode
+                    ? _modelPreview()
+                    : SwarmSearchPreview(
+                        key: const ValueKey('swarm-search-preview'),
+                        search: widget.search,
+                        terminal: true,
+                      ),
+              ),
+              if (row != null &&
+                  !widget.search.showsTypeHints &&
+                  !_editingMachine &&
+                  !_editingApi) ...[
+                if (desktop)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: math.min(140, constraints.maxHeight * .55),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: actions,
+                      ),
+                    ),
+                  )
+                else
+                  ...actions,
+              ],
             ],
-          ],
+          ),
         );
       },
     );

@@ -561,7 +561,13 @@ void main() {
     expect(frame.center.dx, tester.view.physicalSize.width / 2);
     expect(frame.bottom, lessThan(tester.view.physicalSize.height));
     expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
-    expect(FocusManager.instance.primaryFocus!.debugLabel, 'new-harness-form');
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('new-harness-task')))
+          .focusNode!
+          .hasFocus,
+      isTrue,
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);

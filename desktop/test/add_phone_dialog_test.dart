@@ -175,7 +175,7 @@ void main() {
     );
     expect(find.byType(PhonePairQr), findsNothing);
     expect(daemon.codes, isEmpty);
-    await tester.tap(find.text('[ Connect a machine ]'));
+    await tester.tap(find.widgetWithText(TextButton, 'Connect a machine'));
     await tester.pump();
     expect(opened, isTrue);
     expect(find.byType(AddPhoneDialog), findsNothing);
@@ -348,14 +348,14 @@ void main() {
       expect(find.text('2d'), findsNWidgets(2));
       // Three, then the rest on request: the list must not outweigh the QR.
       expect(find.text('Older phone'), findsNothing);
-      await tester.tap(find.text('[ + 2 more ]'));
+      await tester.tap(find.widgetWithText(TextButton, '+ 2 more'));
       await tester.pump();
       expect(find.text('Oldest phone'), findsOneWidget);
 
       await tester.tap(
         find.descendant(
           of: find.byKey(const ValueKey('add-phone-device-BBBB')),
-          matching: find.text('[ remove ]'),
+          matching: find.widgetWithText(TextButton, 'remove'),
         ),
       );
       await tester.pump();
@@ -381,7 +381,7 @@ void main() {
         removeDevice: (_) async => false,
       );
       await tester.pump();
-      await tester.tap(find.text('[ remove ]'));
+      await tester.tap(find.widgetWithText(TextButton, 'remove'));
       await tester.pump();
       await tester.pump();
       expect(find.text("Dee's iPhone"), findsOneWidget);

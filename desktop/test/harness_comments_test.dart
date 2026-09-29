@@ -39,8 +39,8 @@ void main() {
     await tester.pump();
     expect(find.text('Looks good 👋'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('[ Remove ]'), findsNothing);
-    await tester.tap(find.text('[ Sign in to comment ]'));
+    expect(find.widgetWithText(TextButton, 'Remove'), findsNothing);
+    await tester.tap(find.widgetWithText(TextButton, 'Sign in to comment'));
     expect(signIns, 1);
     await tester.pumpWidget(const SizedBox());
   });
@@ -76,14 +76,14 @@ void main() {
         'Hello team',
       );
       await tester.pump();
-      await tester.tap(find.text('[ Comment ]'));
+      await tester.tap(find.widgetWithText(TextButton, 'Comment'));
       await tester.pump();
       expect(find.textContaining('Your draft is saved'), findsOneWidget);
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         'Hello team',
       );
-      await tester.tap(find.text('[ Comment ]'));
+      await tester.tap(find.widgetWithText(TextButton, 'Comment'));
       await tester.pump();
       expect(requests, hasLength(2));
       expect(requests[0]['id'], requests[1]['id']);
@@ -92,7 +92,7 @@ void main() {
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         isEmpty,
       );
-      await tester.tap(find.text('[ Remove ]'));
+      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
       await tester.pump();
       expect(find.text('Hello team'), findsNothing);
       expect(tester.takeException(), isNull);

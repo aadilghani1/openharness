@@ -93,6 +93,7 @@ import '../widgets/restart_agent_action.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_form.dart';
+import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_search_panel.dart';
 import '../widgets/open_harness_intent.dart';
 import '../widgets/pane_grid.dart';
@@ -346,6 +347,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _searchCatalog = SwarmSearchCatalog();
   final _searchText = TextEditingController();
   final _searchFocus = FocusNode(debugLabel: 'Search harnesses');
+  final _searchDialogScope = FocusScopeNode(
+    debugLabel: 'Search dialog',
+    traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+  );
   // Prefix edits switch between command and resource layouts. Keep the same
   // editor mounted so its text-input connection and composition survive.
   late GlobalKey _searchInputKey;
@@ -356,7 +361,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   SwarmSearchController? _search;
   OverlayEntry? _searchOverlay;
   DeviceFinder? _searchDevice;
-  final _resourcePreviewKey = GlobalKey();
+  var _resourcePreviewKey = GlobalKey();
 
   /// New Harness, open in the box. Never open beside the search: they are two
   /// modes of one surface, and opening either closes the other.
@@ -365,6 +370,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _deviceFormId, _deviceFormMachine;
   String _deviceFormSurface = 'new';
   OverlayEntry? _newHarnessOverlay;
+  var _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
 
   /// Escape keeps unfinished work with the machine/project/agent it started
   /// from. Switching context must not carry a task into the wrong project or
@@ -697,6 +703,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _newHarness?.dispose();
     _navigation.dispose();
     _searchFocus.dispose();
+    _searchDialogScope.dispose();
     _searchText.dispose();
     _tabScroll.dispose();
     _canvasFocus.dispose();
@@ -2488,10 +2495,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // A fresh launcher uses saved choices on this computer. Only an explicit
     // split inherits its source pane; changing focus never changes Cmd-N's
     // defaults.
-    final focused =
-        source == _NewHarnessSource.workspace && requestedSplit != null
+    final draftSource = source == _NewHarnessSource.workspace
         ? app.focusedPane ?? _newTabSources[target]
         : null;
+    final focused = requestedSplit != null ? draftSource : null;
     final machine = focused == null ? null : app.stateOf(focused.machineId);
     final agent = machine?.agents
         .where((agent) => agent.id == focused?.agentId)
@@ -2555,7 +2562,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         source: source,
         machineId: id,
         requestedEngine: engine,
-        sourceAgentId: focused?.agentId,
+        sourceAgentId: draftSource?.agentId,
         folder: initialFolder,
         projectName: projectName,
       ),
@@ -2702,9 +2709,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         draft ??
         (savedDraft != null &&
                 (savedDraft.attempt?.awaitingConfirmation == true ||
-                    (origin.source != _NewHarnessSource.workspace &&
-                        task == null &&
-                        matchesSelection(savedDraft)))
+                    (task == null && matchesSelection(savedDraft)))
             ? savedDraft
             : null);
     if (resumed != null) _newHarnessDrafts.remove(origin);
@@ -2723,7 +2728,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       split: split,
       placement: placement,
     );
+    _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
     final content = NewHarnessForm(
+      key: _newHarnessFormKey,
       controller: box,
       desktop: true,
       devicePort: _newHarnessDevicePort = DeviceFormPort(),
@@ -2774,29 +2781,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 return Stack(
                   children: [
                     Positioned.fill(
-                      child: BlockSemantics(
-                        child: GestureDetector(
-                          key: const ValueKey('new-harness-dismiss'),
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {
-                            if (box.requestDismiss()) {
-                              final target = box.swarmId ?? app.activeSwarmId;
-                              _closeNewHarness();
-                              app.cancelSwarmDraft(target);
-                            }
-                          },
-                          // A quiet page for starting a task, with no terminal
-                          // text competing behind the composer.
-                          child: ColoredBox(color: grid.AppPalette.windowBg),
-                        ),
+                      child: DesktopDialogBackdrop(
+                        key: const ValueKey('new-harness-dismiss'),
+                        onDismiss: () => _newHarnessFormKey.currentState
+                            ?.dismissFromOutside(),
                       ),
                     ),
                     Positioned.fill(
                       top: _native ? 0 : _tabBarHeight,
                       child: Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: terminalCellSizeOf(context).width * 2,
-                          vertical: terminalCellSizeOf(context).height,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 24,
                         ),
                         child: content,
                       ),
@@ -2882,7 +2878,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 notifier: app,
                 machineId: machineId,
                 initialPath: box.project.folder,
-                terminal: true,
+                desktop: true,
               ),
             );
     } finally {
@@ -2920,6 +2916,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 notifier: app,
                 machineId: machineId,
                 initialPath: initialPath,
+                desktop: true,
               ),
             );
     } finally {
@@ -4486,6 +4483,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // boundary to keep its programmatic focus request out of the picker.
     _canvasFocus.descendantsAreFocusable = false;
     _searchInputKey = GlobalKey();
+    _resourcePreviewKey = GlobalKey();
     _search = SwarmSearchController(
       app,
       _navigation.recent,
@@ -4965,6 +4963,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final contents = SwarmSearchKeys(
+              desktop: true,
               search: search,
               editing: _searchText,
               onChoose: _chooseSearch,
@@ -4974,7 +4973,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               onCommands: _showSearchCommands,
               previewControls: _previewControls,
               onRefocus: _focusSearch,
-              child: scoped,
+              child: FocusScope(node: _searchDialogScope, child: scoped),
             );
             return Stack(
               children: [
@@ -4991,15 +4990,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 // A click outside closes it. Block the dimmed workspace from
                 // VoiceOver while the dialog owns the keyboard.
                 Positioned.fill(
-                  child: BlockSemantics(
-                    child: GestureDetector(
-                      key: const ValueKey('swarm-search-dismiss'),
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _dismissSearch,
-                      child: ColoredBox(
-                        color: Colors.black.withValues(alpha: .70),
-                      ),
-                    ),
+                  child: DesktopDialogBackdrop(
+                    key: const ValueKey('swarm-search-dismiss'),
+                    onDismiss: _dismissSearch,
                   ),
                 ),
                 Positioned.fill(
@@ -6325,7 +6318,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final prefs = appearancePrefsStore.value.prompt;
       final storeWidth = math.min(
         WorkspaceStoreButton.widthOf(context),
-        math.max(0.0, constraints.maxWidth - cell.width * 14),
+        math.max(0.0, constraints.maxWidth - cell.width * 22),
       );
       final tabBudget = math.max(
         0.0,

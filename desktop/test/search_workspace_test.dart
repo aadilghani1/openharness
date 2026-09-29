@@ -69,7 +69,7 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const ValueKey('swarm-search-type-hints')),
+          find.byKey(const ValueKey('search-category-All')),
           findsOneWidget,
         );
         await key(tester, LogicalKeyboardKey.escape);

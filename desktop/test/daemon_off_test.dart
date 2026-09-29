@@ -466,7 +466,8 @@ void main() {
   testWidgets('a 404 is off: no slot and the bar from before daemons, at '
       'every width', (tester) async {
     seedStatusBarWorkspace(app);
-    // This historical layout includes Share; keep its independent experiment
+    // This baseline includes the native search button and reserves a visible
+    // tab at narrow widths. Keep the independent Share experiment
     // enabled while checking that daemons reserve no space.
     await experiments.set(ExperimentalFeature.shareButton, true);
     await mount(tester);

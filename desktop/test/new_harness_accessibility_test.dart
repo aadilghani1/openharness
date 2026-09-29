@@ -60,9 +60,12 @@ void main() {
         .controller;
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
-    // Arrow keys now edit the task; project is an ordinary accessible button.
-    final task = find.byKey(const ValueKey('new-harness-task'));
-    expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+    // A choice returns to its originating accessible control.
+    final agentButton = find.descendant(
+      of: find.byKey(const ValueKey('new-harness-field-agent')),
+      matching: find.byType(TextButton),
+    );
+    expect(tester.widget<TextButton>(agentButton).focusNode!.hasFocus, isTrue);
     await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
     expect(box.field, NewHarnessField.projectMenu);
     expect(input, isEmpty);

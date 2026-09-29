@@ -102,7 +102,7 @@ void main() {
         find.textContaining('Sign in with an invited email'),
         findsOneWidget,
       );
-      expect(find.text('[ Sign in ]'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
       expect(find.byType(SharedHarnessPanel), findsNothing);
       await tester.pumpWidget(const SizedBox());
       status = 403;

@@ -166,7 +166,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await key(tester, LogicalKeyboardKey.enter);
     await typeHarnessQuery(tester, 'first-project');
     await key(tester, LogicalKeyboardKey.enter);
   }
@@ -268,7 +267,7 @@ void main() {
     await chooseProject(tester);
     await startHarness(tester);
     await tester.pump();
-    expect(find.text('Starting harness…'), findsOneWidget);
+    expect(find.text('Starting…'), findsOneWidget);
     await tester.tap(start);
     await key(tester, LogicalKeyboardKey.enter);
     expect(app.launches, hasLength(1));
@@ -293,7 +292,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pumpAndSettle();
     app.creation = null;
-    await chooseProject(tester);
+    expect(
+      tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller
+          .projectFolderRequest
+          ?.name,
+      project?.name,
+    );
     await tester.tap(start);
     await tester.pumpAndSettle();
     expect(app.launches, hasLength(2));

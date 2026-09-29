@@ -268,10 +268,17 @@ void main() {
           box = tester
               .widget<NewHarnessForm>(find.byType(NewHarnessForm))
               .controller;
-          expect(box.task, isEmpty);
-          expect(box.mode, 'auto');
-          expect(box.profileLabel, isNot('Work'));
-          expect(box.project.repository, isNull);
+          expect(
+            box.task,
+            '  Review before changing anything\nKeep the patch small  ',
+          );
+          expect(box.mode, 'readOnly');
+          expect(box.profileLabel, profile);
+          expect(
+            box.project.repository?.url,
+            'https://github.com/acme/terminal-tools.git',
+          );
+          expect(app.projectHistory.selected('m'), '/work/project');
           expect(connection.requests, isEmpty);
           await tester.pumpWidget(const SizedBox());
           return;
@@ -357,7 +364,7 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
       await tester.pump();
       expect(box.task, 'Keep this first task');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(connection.requests, hasLength(2));
       expect(connection.requests.last.type, 'agent_create_status');
@@ -422,8 +429,6 @@ void main() {
           ),
         ),
       );
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.enterText(input, projectQuery);
       await tester.pump(const Duration(milliseconds: 250));
@@ -756,7 +761,7 @@ void main() {
       expect(box.placement, HarnessPlacement.currentTab);
       box.setFolder('/work/project');
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(box.busy, isTrue);
       expect(
@@ -811,7 +816,7 @@ void main() {
       expect(box.checking, isTrue);
       await keepsPendingBox();
       expect(connection.requests, hasLength(1));
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(connection.requests.last.type, 'agent_create_status');
       connection.created();
@@ -847,7 +852,7 @@ void main() {
           .controller
           .setFolder('/work/project');
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       final request = connection.requests.single;
       expect(request.payload.containsKey('prompt'), isFalse);
@@ -878,7 +883,7 @@ void main() {
       expect(find.byType(NewHarnessForm), findsNothing);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.enter);
       await tester.pump();
       expect(connection.requests, hasLength(2));
       expect(connection.requests.last.type, 'agent_create_status');

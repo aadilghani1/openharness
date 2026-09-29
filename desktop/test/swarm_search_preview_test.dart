@@ -451,7 +451,13 @@ void main() {
           await page(pump: false);
           expect(
             previewPosition().pixels,
-            closeTo(terminalCellSizeOf(tester.element(field)).height, .01),
+            closeTo(
+              inline
+                  ? terminalCellSizeOf(tester.element(field)).height
+                  : MediaQuery.textScalerOf(tester.element(field)).scale(13) *
+                        1.5,
+              .01,
+            ),
           );
           expect(search.selected!.id, selected);
           expect(editor.controller.value, value);

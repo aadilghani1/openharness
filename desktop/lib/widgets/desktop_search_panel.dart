@@ -1,4 +1,6 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -33,8 +35,8 @@ class DesktopSearchPanel extends StatelessWidget {
 
   static const categories = [
     ('All', ''),
-    ('Projects', '#'),
     ('Machines', '@'),
+    ('Projects', '#'),
     ('Models', ':'),
     ('Store', '*'),
     ('Commands', '>'),
@@ -58,19 +60,22 @@ class DesktopSearchPanel extends StatelessWidget {
     return DesktopChrome(
       child: Align(
         alignment: Alignment.topCenter,
-        child: Material(
+        child: DesktopDialogSurface(
           key: const ValueKey('swarm-search-results'),
-          color: DesktopChrome.surface,
-          elevation: 24,
-          shadowColor: Colors.black.withValues(alpha: .4),
-          shape: DesktopChrome.shape(),
-          clipBehavior: Clip.antiAlias,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (search.split != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                  child: Text(
+                    search.title,
+                    style: DesktopChrome.text(size: 13, medium: true),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 12, 10),
+                padding: const EdgeInsets.fromLTRB(20, 8, 12, 8),
                 child: Row(
                   children: [
                     Icon(
@@ -95,9 +100,30 @@ class DesktopSearchPanel extends StatelessWidget {
                         ),
                       ),
                     ),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: editing,
+                      builder: (context, value, _) => value.text.isEmpty
+                          ? const SizedBox(width: 48, height: 48)
+                          : _toolbarButton(
+                              context,
+                              key: const ValueKey('search-clear-query'),
+                              tooltip: 'Clear search',
+                              onPressed: () {
+                                editing.clear();
+                                search.setQuery('');
+                                onRefocus();
+                              },
+                              icon: Icon(
+                                Icons.cancel_rounded,
+                                size: 16,
+                                color: DesktopChrome.muted,
+                              ),
+                            ),
+                    ),
                     ListenableBuilder(
                       listenable: search,
-                      builder: (context, _) => IconButton(
+                      builder: (context, _) => _toolbarButton(
+                        context,
                         key: const ValueKey('search-toggle-preview'),
                         tooltip: search.previewVisible
                             ? 'Hide preview'
@@ -115,7 +141,9 @@ class DesktopSearchPanel extends StatelessWidget {
                         ),
                       ),
                     ),
-                    IconButton(
+                    _toolbarButton(
+                      context,
+                      key: const ValueKey('search-close'),
                       tooltip: 'Close search',
                       onPressed: onClose,
                       icon: const Icon(Icons.close_rounded, size: 18),
@@ -128,31 +156,16 @@ class DesktopSearchPanel extends StatelessWidget {
                 listenable: search,
                 builder: (context, _) => SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                  child: Row(
-                    children: [
-                      for (final (label, prefix) in categories)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: DesktopPill(
-                            key: ValueKey('search-category-$label'),
-                            label: label,
-                            selected: _prefix == prefix,
-                            tooltip: prefix.isEmpty
-                                ? 'Search everything'
-                                : '$label · $prefix',
-                            onPressed: () {
-                              final words = search.wordsQuery;
-                              search.setQuery(
-                                prefix.isEmpty
-                                    ? words
-                                    : '$prefix $words'.trimRight(),
-                              );
-                              onRefocus();
-                            },
-                          ),
-                        ),
-                    ],
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+                  child: _SearchScopes(
+                    selected: _prefix,
+                    onRefocus: onRefocus,
+                    onChanged: (prefix) {
+                      final words = search.wordsQuery;
+                      search.setQuery(
+                        prefix.isEmpty ? words : '$prefix $words'.trimRight(),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -163,8 +176,10 @@ class DesktopSearchPanel extends StatelessWidget {
                     search: search,
                     onChoose: onChoose,
                     onRefocus: onRefocus,
-                    fitRows: true,
-                    // The category pills already explain the empty search.
+                    // Keep the dialog, editor, and footer stationary while a
+                    // query gains a preview or changes to an empty result.
+                    fitRows: false,
+                    // The scope control already explains the empty search.
                     // Give results the full width until there is a preview.
                     showPreview: !search.showsTypeHints,
                     sideBySideMinWidth: 840,
@@ -178,20 +193,76 @@ class DesktopSearchPanel extends StatelessWidget {
                   horizontal: 18,
                   vertical: 11,
                 ),
-                child: Wrap(
-                  spacing: 22,
-                  runSpacing: 8,
-                  children: [
-                    _hint(context, 'picker.next', 'Browse'),
-                    _hint(context, 'picker.accept', 'Open'),
-                    _hint(context, 'picker.cancel', 'Close'),
-                  ],
+                child: ListenableBuilder(
+                  listenable: search,
+                  builder: (context, _) => Wrap(
+                    spacing: 20,
+                    runSpacing: 8,
+                    children: [
+                      _hint(context, 'picker.next', 'Browse'),
+                      _hint(
+                        context,
+                        'picker.accept',
+                        search.selected == null
+                            ? 'Open'
+                            : search.actionLabel(search.selected!),
+                      ),
+                      _hint(context, 'picker.cancel', 'Back'),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _toolbarButton(
+    BuildContext context, {
+    required Key key,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required Widget icon,
+    bool? isSelected,
+  }) {
+    final parent = KeymapRegion.of(context);
+    void activate() => onPressed?.call();
+    final button = IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      isSelected: isSelected,
+      icon: icon,
+    );
+    return KeymapRegion(
+      contextKind: KeymapContext.picker,
+      composing: parent?.composing,
+      actions: {
+        ...?parent?.actions,
+        'picker.accept': activate,
+        'picker.complete': () =>
+            FocusManager.instance.primaryFocus?.nextFocus(),
+        'picker.complete_back': () =>
+            FocusManager.instance.primaryFocus?.previousFocus(),
+      },
+      child: KeymapTheme.of(context) == null
+          ? CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.enter): activate,
+                const SingleActivator(LogicalKeyboardKey.numpadEnter): activate,
+              },
+              child: button,
+            )
+          : Shortcuts(
+              shortcuts: const {
+                SingleActivator(LogicalKeyboardKey.enter): DoNothingIntent(),
+                SingleActivator(LogicalKeyboardKey.numpadEnter):
+                    DoNothingIntent(),
+              },
+              child: button,
+            ),
     );
   }
 
@@ -212,6 +283,152 @@ class DesktopSearchPanel extends StatelessWidget {
           style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
         ),
       ],
+    );
+  }
+}
+
+/// Native segmented keyboard navigation stays inside the scope control.
+/// Pointer selection returns directly to typing; Return does the same for keys.
+class _SearchScopes extends StatefulWidget {
+  const _SearchScopes({
+    required this.selected,
+    required this.onChanged,
+    required this.onRefocus,
+  });
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onRefocus;
+
+  @override
+  State<_SearchScopes> createState() => _SearchScopesState();
+}
+
+class _SearchScopesState extends State<_SearchScopes> {
+  var _focused = false;
+  var _revealScheduled = false;
+  BuildContext? _selectedContext;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // A resize or larger system text can put the active scope outside the
+    // horizontal viewport even when its selection did not change.
+    MediaQuery.sizeOf(context);
+    MediaQuery.textScalerOf(context);
+    _revealSelection();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SearchScopes oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected != widget.selected) _revealSelection();
+  }
+
+  void _revealSelection() {
+    if (_revealScheduled) return;
+    _revealScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _revealScheduled = false;
+      if (!mounted) return;
+      final selected = _selectedContext;
+      if (selected != null && selected.mounted) {
+        Scrollable.ensureVisible(selected, alignment: .5);
+      }
+    });
+  }
+
+  void _move(int delta) {
+    final scopes = DesktopSearchPanel.categories;
+    final index = scopes.indexWhere((scope) => scope.$2 == widget.selected);
+    widget.onChanged(scopes[(index + delta) % scopes.length].$2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final parent = KeymapRegion.of(context);
+    return KeymapRegion(
+      contextKind: KeymapContext.picker,
+      composing: parent?.composing,
+      actions: {
+        ...?parent?.actions,
+        'picker.accept': widget.onRefocus,
+        'picker.next': () => _move(1),
+        'picker.previous': () => _move(-1),
+        'picker.control_next': () => _move(1),
+        'picker.control_previous': () => _move(-1),
+        'picker.complete': () =>
+            FocusManager.instance.primaryFocus?.nextFocus(),
+        'picker.complete_back': () =>
+            FocusManager.instance.primaryFocus?.previousFocus(),
+      },
+      child: Focus(
+        canRequestFocus: false,
+        onFocusChange: (focused) => setState(() => _focused = focused),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(
+              color: _focused ? DesktopChrome.focusRing : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: Listener(
+            onPointerUp: (_) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) widget.onRefocus();
+              });
+            },
+            child: CupertinoSlidingSegmentedControl<String>(
+              groupValue: widget.selected,
+              backgroundColor: DesktopChrome.foreground.withValues(alpha: .045),
+              thumbColor: Color.alphaBlend(
+                DesktopChrome.foreground.withValues(alpha: .10),
+                DesktopChrome.surface,
+              ),
+              padding: const EdgeInsets.all(3),
+              onValueChanged: (prefix) {
+                if (prefix != null) widget.onChanged(prefix);
+              },
+              children: {
+                for (final (label, prefix) in DesktopSearchPanel.categories)
+                  prefix: Builder(
+                    builder: (segmentContext) {
+                      // Cupertino measures a second copy of each label, so a
+                      // GlobalKey on a segment would collide. Both copies have
+                      // the same position inside their segment's layout box.
+                      if (widget.selected == prefix) {
+                        _selectedContext = segmentContext;
+                      }
+                      return Tooltip(
+                        message: prefix.isEmpty
+                            ? 'Search harnesses'
+                            : 'Type $prefix to search ${label.toLowerCase()}',
+                        child: Padding(
+                          key: ValueKey('search-category-$label'),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          child: Text(
+                            label,
+                            style: DesktopChrome.text(
+                              size: 12,
+                              medium: widget.selected == prefix,
+                              color: widget.selected == prefix
+                                  ? DesktopChrome.foreground
+                                  : DesktopChrome.muted,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

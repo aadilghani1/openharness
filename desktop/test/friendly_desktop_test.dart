@@ -200,10 +200,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(box.task, task);
+    await capture(tester, 'new-harness-project-chooser');
     await key(tester, LogicalKeyboardKey.escape);
     expect(tester.widget<TextField>(field).controller!.text, task);
     await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
     await tester.pumpAndSettle();
+    await capture(tester, 'new-harness-agent-chooser');
     await tester.tap(find.byKey(const ValueKey('new-harness-option-claude')));
     await tester.pumpAndSettle();
     expect(box.engine, 'claude');
@@ -308,6 +310,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        await capture(tester, 'new-harness-chooser-narrow-${brightness.name}');
         await key(tester, LogicalKeyboardKey.escape);
         expect(box.task, task);
       },

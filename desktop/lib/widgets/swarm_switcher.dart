@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'swarm_search_field.dart';
 
@@ -137,6 +138,7 @@ class SwarmSearchKeys extends StatelessWidget {
     this.onCommands,
     this.onRefocus,
     this.previewControls,
+    this.desktop = false,
     required this.child,
   });
   final SwarmSearchController? search;
@@ -151,6 +153,7 @@ class SwarmSearchKeys extends StatelessWidget {
   final VoidCallback? onCommands;
   final VoidCallback? onRefocus;
   final SearchPreviewControls? previewControls;
+  final bool desktop;
   final Widget child;
 
   @override
@@ -199,6 +202,14 @@ class SwarmSearchKeys extends StatelessWidget {
       }
     });
     void complete(bool forward) => run(() {
+      if (desktop) {
+        if (forward) {
+          FocusManager.instance.primaryFocus?.nextFocus();
+        } else {
+          FocusManager.instance.primaryFocus?.previousFocus();
+        }
+        return;
+      }
       if (previewControls?.invoke(
             forward ? 'picker.complete' : 'picker.complete_back',
           ) ==
@@ -334,12 +345,13 @@ class SwarmSearchKeys extends StatelessWidget {
               const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
                   move(1),
               const SingleActivator(LogicalKeyboardKey.arrowUp): () => move(-1),
-              if (previewControls != null) ...{
+              if (previewControls != null)
                 const SingleActivator(
                   LogicalKeyboardKey.period,
                   meta: true,
                 ): () =>
                     run(() => previewControls!.invoke('picker.resource_more')),
+              if (previewControls != null || desktop) ...{
                 const SingleActivator(LogicalKeyboardKey.tab): () =>
                     complete(true),
                 const SingleActivator(
@@ -562,6 +574,21 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     search.resultPage.addListener(_pageResults);
   }
 
+  @override
+  void didUpdateWidget(SwarmSearchResults oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.search != search) {
+      oldWidget.search.removeListener(_changed);
+      oldWidget.search.resultPage.removeListener(_pageResults);
+      search.addListener(_changed);
+      search.resultPage.addListener(_pageResults);
+      _lastPage = search.resultPage.value;
+      _announced = null;
+      _rowWidgets.clear();
+      _revealSelection();
+    }
+  }
+
   void _pageResults() {
     final pages = search.resultPage.value - _lastPage;
     _lastPage = search.resultPage.value;
@@ -771,9 +798,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             compactAction,
             grid.AppType.monoFamily,
             grid.AppTheme.palette.value,
+            desktop ? grid.AppTheme.brightness.value : null,
             widget.bios ? theme : null,
             acceptKey,
             widget.terminal,
+            desktop,
             stacked,
             activityAge,
             row.isModel ? search.modelRowAction(row) : null,
@@ -829,13 +858,18 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   selectedColor: desktop
                       ? DesktopChrome.foreground
                       : Colors.white,
-                  hoverColor: Colors.transparent,
+                  hoverColor: desktop
+                      ? DesktopChrome.foreground.withValues(alpha: .045)
+                      : Colors.transparent,
+                  focusColor: desktop
+                      ? DesktopChrome.accent.withValues(alpha: .08)
+                      : null,
                   // BoxRowHighlight draws the selection, the same
                   // in both modes of the box.
                   selectedTileColor: Colors.transparent,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(
-                      widget.terminal
+                      widget.terminal && !desktop
                           ? 0
                           : desktop
                           ? 10
@@ -850,24 +884,26 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   contentPadding: const EdgeInsets.symmetric(horizontal: 10),
                   // The dock uses its full-row highlight for
                   // selection; prefixes only appear in the input.
-                  leading: widget.terminal
+                  leading: widget.terminal && !desktop
                       ? null
                       : desktop
-                      ? Icon(
-                          row.isProject
-                              ? Icons.folder_outlined
-                              : row.isMachine
-                              ? Icons.laptop_mac_rounded
-                              : row.isModel
-                              ? Icons.auto_awesome_outlined
-                              : row.isStore
-                              ? Icons.widgets_outlined
-                              : row.isCommand
-                              ? Icons.keyboard_command_key_rounded
-                              : Icons.terminal_rounded,
-                          size: 18,
-                          color: DesktopChrome.muted,
-                        )
+                      ? row.isStore
+                            ? StoreMark(size: 20, enabled: canSubmit)
+                            : Icon(
+                                row.isProject
+                                    ? Icons.folder_outlined
+                                    : row.isMachine
+                                    ? Icons.laptop_mac_rounded
+                                    : row.isModel
+                                    ? Icons.auto_awesome_outlined
+                                    : row.isStore
+                                    ? Icons.widgets_outlined
+                                    : row.isCommand
+                                    ? Icons.keyboard_command_key_rounded
+                                    : Icons.terminal_rounded,
+                                size: 18,
+                                color: DesktopChrome.muted,
+                              )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -987,8 +1023,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   ? Padding(
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Material(
+                        key: ValueKey('swarm-search-line:${row.id}'),
                         color: highlighted
-                            ? DesktopChrome.foreground.withValues(alpha: .09)
+                            ? DesktopChrome.selection
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                         child: tile,
@@ -1023,44 +1060,51 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               Expanded(
                 child: search.rows.isEmpty
                     ? Center(
-                        child: Text(
-                          search.isCommandMode
-                              ? 'No matching commands'
-                              : search.sessionFilter == SessionFilter.needsInput
-                              ? search.matchQuery.isEmpty
-                                    ? 'No harnesses need your input'
-                                    : 'No matching harnesses'
-                              : search.isModelMode
-                              ? 'No matching models'
-                              : search.isStoreMode
-                              ? 'No matching store entries'
-                              : search.isHelpMode
-                              ? 'No matching modes or help'
-                              : search.isProjectMode
-                              ? 'No matching projects'
-                              : search.isMachineMode
-                              ? 'No matching machines'
-                              : search.adding &&
-                                    search.query.isEmpty &&
-                                    search.capacity <= 0
-                              ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
-                              : search.adding && search.query.isEmpty
-                              ? 'No harnesses yet. Start an agent or choose @ machines to connect a machine.'
-                              : search.adding
-                              ? 'No matching harnesses'
-                              : 'No matching results',
-                          style: desktop
-                              ? DesktopChrome.text(color: DesktopChrome.muted)
-                              : widget.bios
-                              ? terminalContentStyle(
-                                  color: theme.foreground.withValues(
-                                    alpha: .54,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Text(
+                            search.isCommandMode
+                                ? 'No matching commands'
+                                : search.sessionFilter ==
+                                      SessionFilter.needsInput
+                                ? search.matchQuery.isEmpty
+                                      ? 'No harnesses need your input'
+                                      : 'No matching harnesses'
+                                : search.isModelMode
+                                ? 'No matching models'
+                                : search.isStoreMode
+                                ? 'No matching store entries'
+                                : search.isHelpMode
+                                ? 'No matching modes or help'
+                                : search.isProjectMode
+                                ? 'No matching projects'
+                                : search.isMachineMode
+                                ? 'No matching machines'
+                                : search.adding &&
+                                      search.query.isEmpty &&
+                                      search.capacity <= 0
+                                ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
+                                : search.adding && search.query.isEmpty
+                                ? desktop
+                                      ? 'No harnesses yet. Start one with New Harness, or choose Machines to connect a computer.'
+                                      : 'No harnesses yet. Start an agent or choose @ machines to connect a machine.'
+                                : search.adding
+                                ? 'No matching harnesses'
+                                : 'No matching results',
+                            textAlign: TextAlign.center,
+                            style: desktop
+                                ? DesktopChrome.text(color: DesktopChrome.muted)
+                                : widget.bios
+                                ? terminalContentStyle(
+                                    color: theme.foreground.withValues(
+                                      alpha: .54,
+                                    ),
+                                  )
+                                : grid.AppType.monoLabel(
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white60,
                                   ),
-                                )
-                              : grid.AppType.monoLabel(
-                                  fontWeight: FontWeight.w400,
-                                  color: Colors.white60,
-                                ),
+                          ),
                         ),
                       )
                     : Padding(
@@ -1076,6 +1120,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                           order: const NumericFocusOrder(1),
                           child: FocusTraversalGroup(
                             policy: OrderedTraversalPolicy(),
+                            descendantsAreTraversable: !desktop,
                             child: ListView.builder(
                               key: const ValueKey('swarm-search-result-list'),
                               padding: EdgeInsets.symmetric(
@@ -1207,8 +1252,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // The list is what is being read; the preview confirms it.
-                  Expanded(flex: 5, child: results),
-                  if (widget.terminal)
+                  Expanded(flex: desktop ? 11 : 5, child: results),
+                  if (desktop)
+                    VerticalDivider(
+                      width: 1,
+                      thickness: 1,
+                      color: DesktopChrome.rim,
+                    )
+                  else if (widget.terminal)
                     VerticalDivider(
                       width: 1,
                       thickness: 1,
@@ -1217,11 +1268,33 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     )
                   else
                     const SizedBox(width: 8),
-                  Expanded(flex: 5, child: preview ?? const SizedBox()),
+                  Expanded(
+                    flex: desktop ? 9 : 5,
+                    child: preview ?? const SizedBox(),
+                  ),
                 ],
               )
             : preview == null
             ? results
+            : desktop
+            ? Column(
+                children: [
+                  SizedBox(
+                    height: math.min(
+                      height * .45,
+                      16 +
+                          _rowHeight *
+                              (search.isModelMode
+                                      ? modelRows.length
+                                      : search.rows.length)
+                                  .clamp(1, 4),
+                    ),
+                    child: results,
+                  ),
+                  Divider(height: 1, color: DesktopChrome.rim),
+                  Expanded(child: preview),
+                ],
+              )
             : search.resultsFromBottom
             ? Column(
                 children: [
@@ -1387,8 +1460,16 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         ? hit
         : null;
     if (DesktopChrome.of(context)) {
+      final title = widget.search.isModelMode && row.isCreate
+          ? 'Add API connection'
+          : widget.search.isModelDownloadsRow(row)
+          ? widget.search.modelDownloadsVisible
+                ? 'Hide catalog'
+                : 'Get models'
+          : row.title;
       final unavailable = widget.search.sessionUnavailable(row);
       final api = row.isModel ? widget.search.apiRowState(row) : null;
+      final underApi = row.isModel && widget.search.isApiModelRow(row);
       final action = row.isModel ? widget.search.modelRowAction(row) : null;
       final status = unavailable ?? action ?? api?.hint;
       final activity = widget.search.activityOf(row);
@@ -1398,16 +1479,31 @@ class _SearchRowContentState extends State<_SearchRowContent> {
           ? 'now'
           : harnessActivityAge(activity, widget.search.openedAt);
       final detail = row.terminalDetail ?? row.detail;
+      Widget trailingLabel(String text) => Text(
+        text,
+        key: api != null
+            ? ValueKey('api-row-hint:${row.id}')
+            : row.isModel
+            ? ValueKey('model-row-status:${row.id}')
+            : null,
+        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+      );
       return Semantics(
-        label: '${row.title}\n$detail${status == null ? '' : ', $status'}',
+        label:
+            '$title\n$detail${status == null ? '' : ', $status'}'
+            '${status == null && activity != null ? ', Last active ${activity.toLocal()}' : ''}'
+            '${snippet == null ? '' : ', Found in conversation: ${snippet.plainSnippet}'}',
+        excludeSemantics: true,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
+                if (underApi) const SizedBox(width: 32),
                 if (api != null) ...[
                   Icon(
+                    key: ValueKey('api-row-marker:${row.id}'),
                     api.open
                         ? Icons.expand_more_rounded
                         : Icons.chevron_right_rounded,
@@ -1418,7 +1514,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
                 Expanded(
                   child: SearchResultText(
-                    row.title,
+                    title,
                     matches: matches.where((match) => match.title),
                     style: DesktopChrome.text(
                       color: unavailable == null
@@ -1429,17 +1525,19 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ),
                 if (status ?? age case final trailing?) ...[
                   const SizedBox(width: 12),
-                  Text(
-                    trailing,
-                    style: DesktopChrome.text(
-                      size: 12,
-                      color: DesktopChrome.muted,
-                    ),
-                  ),
+                  if (status == null && activity != null)
+                    Tooltip(
+                      message: 'Last active ${activity.toLocal()}',
+                      child: trailingLabel(trailing),
+                    )
+                  else
+                    trailingLabel(trailing),
                 ],
               ],
             ),
-            if (!row.isCommand && (detail.isNotEmpty || snippet != null)) ...[
+            if (!row.isCommand &&
+                !underApi &&
+                (detail.isNotEmpty || snippet != null)) ...[
               const SizedBox(height: 2),
               snippet != null
                   ? SessionSnippetText(
@@ -1452,8 +1550,13 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   : SearchResultText(
                       detail,
                       matches: matches.where((match) => !match.title),
-                      style: grid.AppType.monoMeta(color: DesktopChrome.muted)
-                          .copyWith(fontSize: 12),
+                      style: row.isMachine || row.isModel || row.isStore
+                          ? DesktopChrome.text(
+                              size: 12,
+                              color: DesktopChrome.muted,
+                            )
+                          : grid.AppType.monoMeta(color: DesktopChrome.muted)
+                                .copyWith(fontSize: 12),
                     ),
             ],
           ],

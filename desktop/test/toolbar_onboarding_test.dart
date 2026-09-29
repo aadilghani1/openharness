@@ -521,7 +521,15 @@ void main() {
       expect(find.byType(OnboardingCard), findsNothing);
       await tester.enterText(resourceField, ':local');
       await tester.pump();
-      expect(find.text('Qwen3.8-27B'), findsOneWidget);
+      // The compact palette scrolls its catalog rather than filling the page.
+      await selectResource(tester, 'model:local:qwen');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('model:local:qwen')),
+          matching: find.text('Qwen3.8-27B', findRichText: true),
+        ),
+        findsOneWidget,
+      );
       expect(app.actions, isEmpty);
       expect(journey.completed(OnboardingStep.models), isFalse);
       expect(app.panes.single.agentId, 'work');

@@ -518,7 +518,7 @@ void main() {
   });
 
   testWidgets(
-    'Cmd-N uses local saved defaults regardless of the focused pane',
+    'Cmd-N keeps drafts with their source pane and uses defaults in another',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
@@ -543,8 +543,8 @@ void main() {
       await tester.pump();
       await key(tester, shortcut, cmd: true);
       expect(box(tester).engine, 'codex');
-      expect(box(tester).project.folder, '/work/openharness');
-      expect(box(tester).task, isEmpty);
+      expect(box(tester).project.name, 'keyboard-review');
+      expect(box(tester).task, 'Review this project');
       expect(connections.values.expand((c) => c.starts), isEmpty);
       await dismiss(tester);
       await tester.pumpWidget(const SizedBox());
@@ -553,7 +553,7 @@ void main() {
   );
 
   testWidgets(
-    'fresh Cmd-N keeps successful defaults and discards canceled edits',
+    'reopened Cmd-N restores reviewed edits and starts in the current tab',
     (tester) async {
       await mount(tester, store: false);
       final origin = app.activeSwarm;
@@ -576,15 +576,17 @@ void main() {
       expect(connections.values.expand((c) => c.starts), isEmpty);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       draft = box(tester);
-      expect(draft.task, isEmpty);
-      expect(draft.project.folder, '/work/openharness');
+      expect(draft.task, 'Check keyboard focus');
+      expect(draft.project.name, 'keyboard-review');
       expect(draft.placement, HarnessPlacement.currentTab);
+      // Keep the launch on the fake daemon; no local project is created.
+      app.machineStates['m']!.localOnly = false;
       await acceptSetupOrSearch(tester);
       final connection = connections['m']!;
       expect(connection.starts, hasLength(1));
       expect(connection.starts.single['engine'], 'codex');
-      expect(connection.starts.single['cwd'], '/work/openharness');
-      expect(connection.starts.single['prompt'], isNull);
+      expect(connection.starts.single['projectName'], 'keyboard-review');
+      expect(connection.starts.single['prompt'], 'Check keyboard focus');
       expect(connection.starts.single['dsh'], isNull);
       connection.created();
       await tester.pump();

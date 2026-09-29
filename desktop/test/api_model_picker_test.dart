@@ -195,18 +195,24 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(find.textContaining('models to run a harness'), findsNothing);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('swarm-search-preview')),
+            matching: find.textContaining('models to run a harness'),
+          ),
+          findsNothing,
+        );
 
         // Folded: a marker to open it, and how many models it has at the end of its row.
         expect(
           tester
-              .widget<Text>(
+              .widget<Icon>(
                 find.byKey(
                   const ValueKey('api-row-marker:model:api:openrouter'),
                 ),
               )
-              .data,
-          '▸',
+              .icon,
+          Icons.chevron_right_rounded,
         );
         expect(
           tester
@@ -249,7 +255,7 @@ void main() {
         final marker = find.byKey(
           const ValueKey('api-row-marker:model:api:openrouter'),
         );
-        expect(tester.widget<Text>(marker).data, '▾');
+        expect(tester.widget<Icon>(marker).icon, Icons.expand_more_rounded);
         expect(
           tester
               .getTopLeft(

@@ -782,6 +782,9 @@ void main() {
     await tester.pump();
     app.adoptSessionForTest(terminal('a0', []));
     app.adoptSessionForTest(terminal('a1', []));
+    // The adoption seam does not notify. Lay out the focused pane and its
+    // model control before comparing the bar against subsequent turn events.
+    app.notifyListeners();
     await tester.pump();
     final beforeTurns = tester.getRect(slot);
     // a1 is in front: its turn is seen already; a0's is not.

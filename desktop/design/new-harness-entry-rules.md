@@ -2,6 +2,10 @@
 
 Presentation follows the [terminal dialog design system](terminal-dialogs.md).
 Use that guide for current visuals; this document owns entry and launch behavior.
+On `experiment/friendly-desktop`, the [desktop experiment](friendly-desktop-experiment.md)
+overrides presentation, keyboard traversal, selected-machine project prompts,
+and ordinary workspace draft dismissal behavior below. Launch safety and entry
+ownership still apply.
 
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit

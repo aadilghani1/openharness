@@ -44,7 +44,7 @@ class NewHarnessForm extends StatefulWidget {
   final bool desktop;
 
   @override
-  State<NewHarnessForm> createState() => _NewHarnessFormState();
+  State<NewHarnessForm> createState() => NewHarnessFormState();
 }
 
 enum _Row {
@@ -59,13 +59,32 @@ enum _Row {
   start,
 }
 
-class _NewHarnessFormState extends State<NewHarnessForm> {
+/// The workspace backdrop shares the form's dismissal hierarchy. A chooser
+/// consumes a dismissal before the composer (and its draft) can be dismissed.
+class NewHarnessFormState extends State<NewHarnessForm> {
   NewHarnessController get box => widget.controller;
   final _focus = FocusNode(debugLabel: 'new-harness-form');
   final _inputFocus = FocusNode(debugLabel: 'new-harness-query');
   final _queryText = TextEditingController();
   late final _taskText = TextEditingController(text: box.task);
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
+  final _dialogScope = FocusScopeNode(
+    debugLabel: 'New harness dialog',
+    traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+  );
+  final _desktopCanvasKey = GlobalKey();
+  final _desktopAnchors = {for (final row in _Row.values) row: GlobalKey()};
+  final _desktopFocus = {
+    for (final row in _Row.values)
+      row: FocusNode(debugLabel: 'New harness ${row.name}'),
+  };
+  final _machineAnchor = GlobalKey();
+  final _machineFocus = FocusNode(debugLabel: 'New harness machine');
+  FocusNode? _chooserOrigin;
+  GlobalKey? _chooserAnchor;
+  bool _restoreChoiceFocus = false;
+  bool? _chooserTraversal;
+  bool _focusScheduled = false;
   final _fieldsScroll = ScrollController();
   final _choicesScroll = ScrollController();
   _Row _row = _Row.start;
@@ -120,6 +139,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _queryText.dispose();
     _taskText.dispose();
     _taskFocus.dispose();
+    _dialogScope.dispose();
+    _machineFocus.dispose();
+    for (final node in _desktopFocus.values) {
+      node.dispose();
+    }
     _fieldsScroll.dispose();
     _choicesScroll.dispose();
     _focus.dispose();
@@ -167,15 +191,53 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _focusEditor() {
+    if (_focusScheduled) return;
+    _focusScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusScheduled = false;
       if (!mounted) return;
-      (_picking
-              ? _inputFocus
-              : widget.desktop
-              ? _taskFocus
-              : _focus)
-          .requestFocus();
+      if (_picking) {
+        _inputFocus.requestFocus();
+      } else if (widget.desktop) {
+        final origin = _chooserOrigin;
+        if (_restoreChoiceFocus &&
+            origin?.context != null &&
+            origin!.canRequestFocus) {
+          origin.requestFocus();
+          if (_chooserTraversal case final forward?) {
+            forward ? origin.nextFocus() : origin.previousFocus();
+          }
+        } else {
+          _taskFocus.requestFocus();
+        }
+        _restoreChoiceFocus = false;
+        _chooserTraversal = null;
+      } else {
+        _focus.requestFocus();
+      }
     });
+  }
+
+  void dismissFromOutside() {
+    if (widget.desktop && _picking && !box.locked) {
+      _closeDesktopChooser();
+    } else {
+      _runCommand(_cancel);
+    }
+  }
+
+  void _closeDesktopChooser({bool? next}) {
+    _folderAction = null;
+    box.setQuery('');
+    box.focusField(NewHarnessField.launch);
+    setState(() {
+      _row = _Row.start;
+      _listOpen = false;
+      _hideChoices = true;
+    });
+    _restoreChoiceFocus = true;
+    _chooserTraversal = next;
+    _focusEditor();
   }
 
   /// The field a row edits, or null where the row is its own answer.
@@ -408,13 +470,22 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           _choicesScroll.hasClients &&
           box.cursor >= 0 &&
           box.cursor < box.options.length) {
-        final top =
-            List.generate(
-              box.cursor,
-              _choiceLines,
-            ).fold<int>(0, (a, b) => a + b) *
-            _rowHeight;
-        final bottom = top + _choiceLines(box.cursor) * _rowHeight;
+        final top = widget.desktop
+            ? 6 +
+                  List.generate(
+                    box.cursor,
+                    _desktopChoiceHeight,
+                  ).fold<double>(0, (a, b) => a + b)
+            : List.generate(
+                    box.cursor,
+                    _choiceLines,
+                  ).fold<int>(0, (a, b) => a + b) *
+                  _rowHeight;
+        final bottom =
+            top +
+            (widget.desktop
+                ? _desktopChoiceHeight(box.cursor)
+                : _choiceLines(box.cursor) * _rowHeight);
         final position = _choicesScroll.position;
         if (top < position.pixels ||
             bottom > position.pixels + position.viewportDimension) {
@@ -498,8 +569,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _revealRow();
   }
 
-  void _switchPane() {
+  void _switchPane({bool reverse = false}) {
     if (box.locked) return;
+    if (widget.desktop && _picking) {
+      _closeDesktopChooser(next: !reverse);
+      return;
+    }
     if (_picking) {
       _backToRows();
     } else if (_hasChoices) {
@@ -593,7 +668,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       i >= 0 && i < box.options.length && covered < height;
       i += direction
     ) {
-      covered += _choiceLines(i) * _rowHeight;
+      covered += widget.desktop
+          ? _desktopChoiceHeight(i)
+          : _choiceLines(i) * _rowHeight;
       count++;
     }
     box.page(direction, count);
@@ -620,6 +697,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// open a prompt or the system chooser instead of answering the row.
   void _openDoor(NewHarnessOption option) {
     if (box.locked || !option.enabled) return;
+    if (option.id == NewHarnessController.changeMachineId) {
+      // focusField(machine) remembers the prompt and its uncommitted query.
+      // Clearing first loses a typed name/path when Escape comes back here.
+      _chooseFolderMachine(switch (box.field) {
+        NewHarnessField.projectName => NewHarnessController.newProjectId,
+        NewHarnessField.projectRepository => NewHarnessController.repositoryId,
+        _ => NewHarnessController.existingProjectId,
+      }, preferLocal: false);
+      return;
+    }
     box.setQuery('');
     if (option.id == NewHarnessController.manageModelsId) {
       unawaited(box.app.runLocalModel(context));
@@ -641,14 +728,6 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       unawaited(box.refreshProfiles());
       return;
     }
-    if (option.id == NewHarnessController.changeMachineId) {
-      _chooseFolderMachine(switch (box.field) {
-        NewHarnessField.projectName => NewHarnessController.newProjectId,
-        NewHarnessField.projectRepository => NewHarnessController.repositoryId,
-        _ => NewHarnessController.existingProjectId,
-      }, preferLocal: false);
-      return;
-    }
     if (option.id == NewHarnessController.browseId) {
       unawaited(_browse());
       return;
@@ -658,6 +737,17 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   void _chooseFolderMachine(String action, {bool preferLocal = true}) {
     _folderAction = action;
+    if (widget.desktop && preferLocal) {
+      // Machine is already the first explicit configuration choice. Continue
+      // on that machine; Change machine remains available in the path chooser.
+      box.focusField(switch (action) {
+        NewHarnessController.newProjectId => NewHarnessField.projectName,
+        NewHarnessController.repositoryId => NewHarnessField.projectRepository,
+        _ => NewHarnessField.project,
+      });
+      setState(() => _listOpen = true);
+      return;
+    }
     box.focusField(NewHarnessField.machine);
     if (preferLocal) {
       final local = box.options.indexWhere(
@@ -691,6 +781,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   Future<void> _start() async {
     if (box.busy) return;
+    _restoreChoiceFocus = false;
     if (box.requiredChoice case final choice?) {
       box.focusField(choice.field);
       setState(() => _listOpen = true);
@@ -727,9 +818,28 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _openDoor(option);
     } else {
       final field = box.field;
+      if (widget.desktop &&
+          field == NewHarnessField.machine &&
+          _folderAction != null) {
+        // The controller owns the originating prompt: names and repository
+        // URLs travel to another machine; paths only survive on the same one.
+        box.accept(option);
+        _focusEditor();
+        _revealRow();
+        return;
+      }
       final prompt = _prompts.contains(box.field);
       box.applyOption(option);
-      if (box.error != null) return;
+      final taskWarning =
+          (field == NewHarnessField.harness ||
+                  field == NewHarnessField.agent) &&
+              box.isTerminal &&
+              box.engine == option.id &&
+              box.compatibleEngines.contains(option.id) &&
+              box.task.trim().isNotEmpty
+          ? box.error
+          : null;
+      if (box.error != null && taskWarning == null) return;
       box.setQuery('');
       if (field == NewHarnessField.machine && _folderAction != null) {
         box.focusField(switch (_folderAction) {
@@ -748,8 +858,15 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           box.focusField(NewHarnessField.harness);
         }
         _folderAction = null;
-        _selectRow(_Row.start);
+        if (widget.desktop) {
+          _closeDesktopChooser();
+        } else {
+          _selectRow(_Row.start);
+        }
       }
+      // Terminal was selected successfully. Keep the draft warning visible
+      // after returning to the composer, where Start still asks for consent.
+      if (taskWarning != null) box.warn(taskWarning);
     }
     _focusEditor();
     _revealRow();
@@ -788,8 +905,19 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     if (box.field == NewHarnessField.agent && _picking) {
       box.focusField(NewHarnessField.harness);
       setState(() => _listOpen = true);
+    } else if (widget.desktop &&
+        box.field == NewHarnessField.machine &&
+        _folderAction != null) {
+      box.back();
+      setState(() => _listOpen = true);
     } else if (_prompts.contains(box.field) && _folderAction != null) {
-      _chooseFolderMachine(_folderAction!, preferLocal: false);
+      if (widget.desktop) {
+        _folderAction = null;
+        box.focusField(NewHarnessField.projectMenu);
+        setState(() => _listOpen = true);
+      } else {
+        _chooseFolderMachine(_folderAction!, preferLocal: false);
+      }
     } else if (_prompts.contains(box.field) ||
         (box.field == NewHarnessField.machine && _folderAction != null)) {
       _folderAction = null;
@@ -797,6 +925,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         box.focusField(NewHarnessField.projectMenu);
         _listOpen = true;
       });
+    } else if (widget.desktop && _picking) {
+      _closeDesktopChooser();
     } else if (_picking || (!_hideChoices && _hasChoices)) {
       setState(() {
         _listOpen = false;
@@ -814,6 +944,79 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _focusEditor();
     _revealRow();
   }
+
+  void _runCreationCommand(VoidCallback action) {
+    if (box.locked) return;
+    _runCommand(action);
+  }
+
+  void _openCreationRow(_Row row) {
+    _folderAction = null;
+    // A direct shortcut enters the top-level chooser, even when another
+    // chooser currently owns a nested project or specialized-agent prompt.
+    box.focusField(
+      row == _Row.project
+          ? NewHarnessField.projectMenu
+          : NewHarnessField.harness,
+    );
+    _activateRow(row);
+  }
+
+  void _openMachineChooser() {
+    if (box.locked) return;
+    _folderAction = null;
+    _chooserOrigin = _machineFocus;
+    _chooserAnchor = _machineAnchor;
+    _restoreChoiceFocus = false;
+    _selectRow(_Row.project);
+    box.focusField(NewHarnessField.machine);
+    setState(() => _listOpen = true);
+    _focusEditor();
+  }
+
+  void _creationMachine() {
+    if (_picking && _prompts.contains(box.field)) {
+      _openDoor(
+        const NewHarnessOption(
+          id: NewHarnessController.changeMachineId,
+          title: 'Change Machine',
+          synthetic: true,
+        ),
+      );
+    } else {
+      _openMachineChooser();
+    }
+  }
+
+  void _creationProject(String action) {
+    _openCreationRow(_Row.project);
+    final option = box.options.where((item) => item.id == action).firstOrNull;
+    if (option != null) _openDoor(option);
+  }
+
+  void _creationBrowse() {
+    if (box.field != NewHarnessField.project) {
+      _creationProject(NewHarnessController.existingProjectId);
+    }
+    _openDoor(
+      const NewHarnessOption(
+        id: NewHarnessController.browseId,
+        title: 'Browse Folder',
+        synthetic: true,
+      ),
+    );
+  }
+
+  void _creationTask() {
+    if (_picking) _closeDesktopChooser();
+    _restoreChoiceFocus = false;
+    _chooserTraversal = null;
+    _focusEditor();
+  }
+
+  List<NewHarnessOption> get _recentProjectChoices => box.options
+      .where((option) => !option.synthetic && option.project?.folder != null)
+      .toList();
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
@@ -956,19 +1159,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       : _theme.foreground.withValues(alpha: .54);
 
   // Only the column that owns the keys carries Open Harness's full highlight.
-  Color get _activeFill => widget.desktop
-      ? DesktopChrome.foreground.withValues(alpha: .10)
-      : _theme.selection;
+  Color get _activeFill => _theme.selection;
 
   /// A machine that cannot be picked — unlinked or offline — in dark grey,
   /// darker than the faint of an idle list, so it recedes rather than warns.
-  Color get _unavailableInk => widget.desktop
-      ? DesktopChrome.foreground.withValues(alpha: .38)
-      : _theme.foreground.withValues(alpha: .28);
+  Color get _unavailableInk => _theme.foreground.withValues(alpha: .28);
 
-  Color get _idleFill =>
-      (widget.desktop ? DesktopChrome.foreground : _theme.foreground)
-          .withValues(alpha: .04);
+  Color get _idleFill => _theme.foreground.withValues(alpha: .04);
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
@@ -1070,10 +1267,55 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
     }
     _measureGrid(context);
+    final recentProjects =
+        widget.desktop && box.field == NewHarnessField.projectMenu
+        ? _recentProjectChoices
+        : const <NewHarnessOption>[];
     final form = KeymapRegion(
-      contextKind: KeymapContext.picker,
+      contextKind:
+          widget.desktop &&
+              _picking &&
+              (_projectFields.contains(box.field) ||
+                  box.field == NewHarnessField.machine && _folderAction != null)
+          ? KeymapContext.project
+          : KeymapContext.picker,
       composing: _isComposing,
       actions: {
+        if (widget.desktop) ...{
+          'creation.agent': () =>
+              _runCreationCommand(() => _openCreationRow(_Row.agent)),
+          'creation.project': () =>
+              _runCreationCommand(() => _openCreationRow(_Row.project)),
+          'creation.project_machine': () =>
+              _runCreationCommand(_creationMachine),
+          'creation.task': () => _runCreationCommand(_creationTask),
+          if (box.usesProfile)
+            'creation.options': () =>
+                _runCreationCommand(() => _activateRow(_Row.advanced)),
+          'creation.project_new': () => _runCreationCommand(
+            () => _creationProject(NewHarnessController.newProjectId),
+          ),
+          'creation.project_existing': () => _runCreationCommand(
+            () => _creationProject(NewHarnessController.existingProjectId),
+          ),
+          'creation.project_repository': () => _runCreationCommand(
+            () => _creationProject(NewHarnessController.repositoryId),
+          ),
+          if (widget.onBrowse != null)
+            'creation.project_browse': () =>
+                _runCreationCommand(_creationBrowse),
+          if (box.field == NewHarnessField.projectMenu)
+            for (
+              var index = 0;
+              index < recentProjects.length && index < 9;
+              index++
+            )
+              'creation.project_recent_${index + 1}': () =>
+                  _runCreationCommand(() {
+                    final choices = _recentProjectChoices;
+                    if (index < choices.length) _acceptChoice(choices[index]);
+                  }),
+        },
         if (widget.desktop)
           'picker.add_here': () {
             if (!_isComposing() && !_picking) unawaited(_start());
@@ -1085,7 +1327,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           'picker.previous': () =>
               _runCommand(() => _picking ? _stepMatch(-1) : _moveRow(-1)),
           'picker.complete': () => _runCommand(_switchPane),
-          'picker.complete_back': () => _runCommand(_switchPane),
+          'picker.complete_back': () =>
+              _runCommand(() => _switchPane(reverse: true)),
         },
         'picker.cancel': () => _runCommand(_cancel),
         'picker.more_options': () {
@@ -1176,22 +1419,20 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         selectionColor: _theme.selection,
         selectionHandleColor: _theme.cursor,
       ),
-      child: form,
+      child: widget.desktop
+          ? FocusScope(node: _dialogScope, child: form)
+          : form,
     );
   }
 
   Widget _surface(Key key, Widget child) => Material(
     key: key,
-    elevation: widget.desktop ? 16 : 0,
-    shadowColor: Colors.black.withValues(alpha: .3),
-    color: widget.desktop ? DesktopChrome.surface : _theme.background,
+    color: _theme.background,
     surfaceTintColor: Colors.transparent,
-    shape: widget.desktop
-        ? DesktopChrome.shape()
-        : RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-            side: terminalPaneBorder(focused: true),
-          ),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+      side: terminalPaneBorder(focused: true),
+    ),
     clipBehavior: Clip.antiAlias,
     child: DefaultTextStyle.merge(style: _ink(), child: child),
   );
@@ -1199,345 +1440,1010 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   Widget _desktopComposer() => DesktopChrome(
     child: LayoutBuilder(
       builder: (context, constraints) {
-        final choosing = _picking || _installing != null;
-        final width = constraints.maxWidth.clamp(0.0, 760.0);
-        final shortcut = effectiveCommandHint(
-          context,
-          'picker.add_here',
-          contextKind: KeymapContext.picker,
-        );
+        final choosing = _picking;
+        final width = constraints.maxWidth.clamp(0.0, 720.0);
         final folder = box.project.folder;
         final projectName =
             box.project.name ??
             folder
                 ?.split(RegExp(r'[/\\]'))
-                .where((part) => part.isNotEmpty)
+                .where((p) => p.isNotEmpty)
                 .lastOrNull ??
+            box.project.repository?.name ??
             'Choose project';
-        Widget choice(
-          _Row row,
-          IconData icon, {
-          String? label,
-          bool mono = false,
-        }) => ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: (width - 24).clamp(0.0, 340.0)),
-          child: DesktopPill(
-            key: ValueKey('new-harness-field-${row.name}'),
-            label: label ?? _value(row),
-            semanticLabel: '${_label(row)}, ${label ?? _value(row)}',
-            icon: icon,
-            menu: true,
-            monospace: mono,
-            tooltip: '${_label(row)}: ${_blocked(row) ?? _value(row)}',
-            onPressed: box.locked || _blocked(row) != null
-                ? null
-                : () => _activateRow(row),
-          ),
-        );
-        final canStart =
-            !box.busy &&
-            !box.linkingProfile &&
-            box.requiredChoice == null &&
-            !box.taskTooLong;
-        final start = FilledButton.icon(
-          key: const ValueKey('new-harness-field-start'),
-          onPressed: canStart ? _start : null,
-          icon: box.busy
-              ? const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5),
-                )
-              : const Icon(Icons.arrow_upward_rounded, size: 17),
-          label: Text(
-            box.busy
-                ? 'Starting…'
-                : box.checking
-                ? 'Check status'
-                : 'Start',
-          ),
-          style: FilledButton.styleFrom(
-            backgroundColor: DesktopChrome.foreground,
-            foregroundColor: DesktopChrome.surface,
-            minimumSize: const Size(92, 36),
-            shape: const StadiumBorder(),
-            textStyle: DesktopChrome.text(medium: true),
-          ),
-        );
+        final anchor = _desktopChooserBounds(constraints);
         return Stack(
+          key: _desktopCanvasKey,
           children: [
-            Offstage(
-              offstage: choosing,
-              child: Align(
-                alignment: const Alignment(0, -.1),
-                child: SizedBox(
-                  width: width,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4, bottom: 22),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'New harness',
-                                  style: DesktopChrome.text(
-                                    size: 24,
-                                    medium: true,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'Close',
-                                onPressed: () {
-                                  if (box.requestDismiss()) widget.onClose();
-                                },
-                                icon: const Icon(Icons.close_rounded, size: 19),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            choice(
-                              _Row.project,
-                              Icons.folder_outlined,
-                              label: projectName,
-                            ),
-                            if (box.isGitProject ||
-                                box.checkingGit ||
-                                box.gitError != null)
-                              choice(
-                                _Row.branch,
-                                Icons.account_tree_outlined,
-                                mono: true,
-                              ),
-                            DesktopPill(
-                              key: const ValueKey('new-harness-machine'),
-                              label: box.machineLabel,
-                              icon: Icons.laptop_mac_rounded,
-                              menu: true,
-                              onPressed: box.locked
-                                  ? null
-                                  : () {
-                                      _selectRow(_Row.project);
-                                      box.focusField(NewHarnessField.machine);
-                                      setState(() => _listOpen = true);
-                                      _focusEditor();
-                                    },
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Material(
-                          key: const ValueKey('new-harness-composer'),
-                          color: DesktopChrome.field,
-                          shape: DesktopChrome.shape(radius: 20),
-                          clipBehavior: Clip.antiAlias,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
+            Align(
+              alignment: const Alignment(0, -.12),
+              child: SizedBox(
+                width: width,
+                child: ExcludeFocus(
+                  excluding: choosing,
+                  child: ExcludeSemantics(
+                    excluding: choosing,
+                    child: IgnorePointer(
+                      ignoring: choosing,
+                      child: DesktopDialogSurface(
+                        key: const ValueKey('new-harness-surface'),
+                        child: FocusTraversalGroup(
+                          policy: OrderedTraversalPolicy(),
+                          child: SingleChildScrollView(
+                            controller: _fieldsScroll,
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                TextField(
-                                  key: const ValueKey('new-harness-task'),
-                                  controller: _taskText,
-                                  focusNode: _taskFocus,
-                                  minLines: 3,
-                                  maxLines: 8,
-                                  readOnly: box.locked || !box.takesTask,
-                                  style: DesktopChrome.text(size: 17),
-                                  cursorWidth: 2,
-                                  cursorColor: DesktopChrome.foreground,
-                                  textCapitalization:
-                                      TextCapitalization.sentences,
-                                  onChanged: box.setTask,
-                                  onTapOutside: (_) {},
-                                  decoration: InputDecoration(
-                                    hintText: box.takesTask
-                                        ? 'What would you like to work on?'
-                                        : 'Open a terminal in this project',
-                                    hintStyle: DesktopChrome.text(
-                                      size: 17,
-                                      color: DesktopChrome.muted,
-                                    ),
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    isCollapsed: true,
-                                    filled: false,
-                                  ),
-                                ),
-                                const SizedBox(height: 18),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 10,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: [
-                                    choice(_Row.agent, Icons.code_rounded),
-                                    if (!box.isTerminal)
-                                      choice(
-                                        _Row.model,
-                                        Icons.auto_awesome_outlined,
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 14),
                                 Row(
                                   children: [
                                     Expanded(
                                       child: Text(
-                                        box.taskTooLong
-                                            ? 'Your message is too long.'
-                                            : box.takesTask
-                                            ? 'Add a task, or start with an empty session.'
-                                            : box.task.isNotEmpty
-                                            ? 'Your draft is kept when you switch agents.'
-                                            : 'A shell, ready for your commands.',
+                                        'New harness',
                                         style: DesktopChrome.text(
-                                          size: 12,
-                                          color: DesktopChrome.muted,
+                                          size: 20,
+                                          medium: true,
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(width: 12),
-                                    start,
+                                    FocusTraversalOrder(
+                                      order: const NumericFocusOrder(11),
+                                      child: IconButton(
+                                        key: const ValueKey(
+                                          'new-harness-close',
+                                        ),
+                                        tooltip: 'Close new harness',
+                                        onPressed: () {
+                                          if (box.requestDismiss()) {
+                                            widget.onClose();
+                                          }
+                                        },
+                                        icon: const Icon(
+                                          Icons.close_rounded,
+                                          size: 18,
+                                        ),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ),
                                   ],
                                 ),
+                                const SizedBox(height: 20),
+                                if (_installing case final run?)
+                                  _desktopInstallPane(run)
+                                else ...[
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 12,
+                                    children: [
+                                      _desktopField(
+                                        title: 'Machine',
+                                        order: 1,
+                                        anchor: _machineAnchor,
+                                        child: DesktopPill(
+                                          key: const ValueKey(
+                                            'new-harness-machine',
+                                          ),
+                                          focusNode: _machineFocus,
+                                          label: box.machineLabel,
+                                          semanticLabel:
+                                              'Machine, ${box.machineLabel}',
+                                          icon: Icons.laptop_mac_rounded,
+                                          menu: true,
+                                          onPressed: box.locked
+                                              ? null
+                                              : _openMachineChooser,
+                                        ),
+                                      ),
+                                      _desktopField(
+                                        title: 'Project',
+                                        order: 2,
+                                        anchor: _desktopAnchors[_Row.project]!,
+                                        child: _desktopChoiceButton(
+                                          _Row.project,
+                                          Icons.folder_outlined,
+                                          label: projectName,
+                                        ),
+                                      ),
+                                      if (box.isGitProject ||
+                                          box.checkingGit ||
+                                          box.gitError != null)
+                                        _desktopField(
+                                          title: 'Branch',
+                                          order: 3,
+                                          anchor: _desktopAnchors[_Row.branch]!,
+                                          child: _desktopChoiceButton(
+                                            _Row.branch,
+                                            Icons.account_tree_outlined,
+                                            mono: true,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Material(
+                                    key: const ValueKey('new-harness-composer'),
+                                    color: DesktopChrome.field,
+                                    shape: DesktopChrome.shape(radius: 10),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          FocusTraversalOrder(
+                                            order: const NumericFocusOrder(4),
+                                            child: TextField(
+                                              key: const ValueKey(
+                                                'new-harness-task',
+                                              ),
+                                              controller: _taskText,
+                                              focusNode: _taskFocus,
+                                              minLines: 3,
+                                              maxLines: 7,
+                                              readOnly:
+                                                  box.locked || !box.takesTask,
+                                              style: DesktopChrome.text(
+                                                size: 15,
+                                              ),
+                                              cursorColor: DesktopChrome.accent,
+                                              onChanged: box.setTask,
+                                              onTapOutside: (_) {},
+                                              decoration: InputDecoration(
+                                                hintText: box.takesTask
+                                                    ? 'What would you like to work on?'
+                                                    : 'Open a terminal in this project',
+                                                hintStyle: DesktopChrome.text(
+                                                  size: 15,
+                                                  color: DesktopChrome.muted,
+                                                ),
+                                                border: InputBorder.none,
+                                                enabledBorder: InputBorder.none,
+                                                focusedBorder: InputBorder.none,
+                                                isCollapsed: true,
+                                                filled: false,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              _desktopField(
+                                                order: 5,
+                                                anchor:
+                                                    _desktopAnchors[_Row
+                                                        .agent]!,
+                                                child: _desktopChoiceButton(
+                                                  _Row.agent,
+                                                  Icons.code_rounded,
+                                                ),
+                                              ),
+                                              if (!box.isTerminal)
+                                                _desktopField(
+                                                  order: 6,
+                                                  anchor:
+                                                      _desktopAnchors[_Row
+                                                          .model]!,
+                                                  child: _desktopChoiceButton(
+                                                    _Row.model,
+                                                    Icons.auto_awesome_outlined,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      if (box.hasModes)
+                                        _desktopField(
+                                          order: 7,
+                                          anchor:
+                                              _desktopAnchors[_Row.approvals]!,
+                                          child: _desktopChoiceButton(
+                                            _Row.approvals,
+                                            Icons.verified_user_outlined,
+                                          ),
+                                        ),
+                                      if (box.canUseWorktree)
+                                        FocusTraversalOrder(
+                                          order: const NumericFocusOrder(8),
+                                          child: DesktopPill(
+                                            key: const ValueKey(
+                                              'new-harness-field-worktree',
+                                            ),
+                                            focusNode:
+                                                _desktopFocus[_Row.worktree],
+                                            label: 'New worktree',
+                                            icon: box.worktree
+                                                ? Icons.check_box_rounded
+                                                : Icons
+                                                      .check_box_outline_blank_rounded,
+                                            selected: box.worktree,
+                                            tooltip: 'Keep this task in its own Git worktree',
+                                            onPressed: box.locked
+                                                ? null
+                                                : box.toggleWorktree,
+                                          ),
+                                        ),
+                                      if (box.usesProfile)
+                                        FocusTraversalOrder(
+                                          order: const NumericFocusOrder(9),
+                                          child: DesktopPill(
+                                            key: const ValueKey(
+                                              'new-harness-field-advanced',
+                                            ),
+                                            focusNode:
+                                                _desktopFocus[_Row.advanced],
+                                            label: 'Options',
+                                            icon: Icons.tune_rounded,
+                                            selected: box.advancedOpen,
+                                            onPressed: box.locked
+                                                ? null
+                                                : _toggleAdvanced,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  if (box.advancedOpen && box.usesProfile) ...[
+                                    const SizedBox(height: 12),
+                                    _desktopField(
+                                      order: 9.5,
+                                      title: 'Codex profile',
+                                      anchor: _desktopAnchors[_Row.profile]!,
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: _desktopChoiceButton(
+                                          _Row.profile,
+                                          Icons.person_outline_rounded,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  if (box.requiredChoice
+                                      case final required?) ...[
+                                    const SizedBox(height: 14),
+                                    Semantics(
+                                      liveRegion: true,
+                                      child: Text(
+                                        required.message,
+                                        style: DesktopChrome.text(
+                                          size: 13,
+                                          color: _theme.red,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  if (!choosing &&
+                                      (box.error != null ||
+                                          box.status != null) &&
+                                      box.error !=
+                                          box.requiredChoice?.message) ...[
+                                    const SizedBox(height: 12),
+                                    _status(),
+                                  ],
+                                  const SizedBox(height: 20),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          box.taskTooLong
+                                              ? 'Your message is too long.'
+                                              : !box.takesTask &&
+                                                    box.task.isNotEmpty
+                                              ? 'Your task is kept when you switch agents.'
+                                              : box.task.isEmpty &&
+                                                    box.takesTask
+                                              ? 'A task is optional.'
+                                              : '',
+                                          style: DesktopChrome.text(
+                                            size: 12,
+                                            color: box.taskTooLong
+                                                ? _theme.red
+                                                : DesktopChrome.muted,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      _desktopStartButton(),
+                                    ],
+                                  ),
+                                ],
                               ],
                             ),
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            if (box.hasModes)
-                              choice(
-                                _Row.approvals,
-                                Icons.verified_user_outlined,
-                              ),
-                            if (box.canUseWorktree)
-                              DesktopPill(
-                                key: const ValueKey(
-                                  'new-harness-field-worktree',
-                                ),
-                                label: 'New worktree',
-                                icon: box.worktree
-                                    ? Icons.check_box_outlined
-                                    : Icons.check_box_outline_blank,
-                                selected: box.worktree,
-                                tooltip: 'Start in an isolated Git worktree',
-                                onPressed: box.locked
-                                    ? null
-                                    : box.toggleWorktree,
-                              ),
-                            if (box.usesProfile)
-                              DesktopPill(
-                                key: const ValueKey(
-                                  'new-harness-field-advanced',
-                                ),
-                                label: 'Options',
-                                icon: Icons.tune_rounded,
-                                selected: box.advancedOpen,
-                                onPressed: box.locked ? null : _toggleAdvanced,
-                              ),
-                          ],
-                        ),
-                        if (box.advancedOpen && box.usesProfile) ...[
-                          const SizedBox(height: 10),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: choice(
-                              _Row.profile,
-                              Icons.person_outline_rounded,
-                              label: 'Profile · ${_value(_Row.profile)}',
-                            ),
-                          ),
-                        ],
-                        if (box.requiredChoice case final required?) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            required.message,
-                            style: DesktopChrome.text(color: _theme.red),
-                          ),
-                        ],
-                        if ((box.error != null || box.status != null) &&
-                            box.error != box.requiredChoice?.message) ...[
-                          const SizedBox(height: 12),
-                          _status(),
-                        ],
-                        if (shortcut != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 14, right: 4),
-                            child: Text(
-                              '$shortcut  Start',
-                              textAlign: TextAlign.right,
-                              style: grid.AppType.monoMeta(
-                                color: DesktopChrome.muted,
-                              ),
-                            ),
-                          ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-            if (choosing)
-              Align(
-                alignment: const Alignment(0, -.12),
-                child: SizedBox(
-                  width: width.clamp(0.0, 560.0),
-                  height: constraints.maxHeight.clamp(0.0, 500.0),
-                  child: _surface(
-                    const ValueKey('new-harness-chooser-surface'),
-                    Column(
+            if (choosing) ...[
+              Positioned.fill(
+                child: GestureDetector(
+                  key: const ValueKey('new-harness-chooser-dismiss'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _closeDesktopChooser(),
+                  child: const ColoredBox(color: Colors.transparent),
+                ),
+              ),
+              Positioned.fromRect(
+                rect: anchor,
+                child: DesktopDialogSurface(
+                  key: const ValueKey('new-harness-chooser-surface'),
+                  radius: 12,
+                  child: _desktopChooser(),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    ),
+  );
+
+  Widget _desktopField({
+    required double order,
+    required GlobalKey anchor,
+    required Widget child,
+    String? title,
+  }) => FocusTraversalOrder(
+    order: NumericFocusOrder(order),
+    child: ConstrainedBox(
+      key: anchor,
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title != null) ...[
+            Text(
+              title,
+              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+            ),
+            const SizedBox(height: 5),
+          ],
+          child,
+        ],
+      ),
+    ),
+  );
+
+  Widget _desktopChoiceButton(
+    _Row row,
+    IconData icon, {
+    String? label,
+    bool mono = false,
+  }) => DesktopPill(
+    key: ValueKey('new-harness-field-${row.name}'),
+    focusNode: _desktopFocus[row],
+    label: label ?? _value(row),
+    semanticLabel: '${_label(row)}, ${label ?? _value(row)}',
+    icon: icon,
+    menu: true,
+    monospace: mono,
+    tooltip: '${_label(row)}: ${_blocked(row) ?? _value(row)}',
+    onPressed: box.locked || _blocked(row) != null
+        ? null
+        : () => _activateRow(row),
+  );
+
+  Widget _desktopStartButton() {
+    final shortcut = effectiveCommandHint(
+      context,
+      'picker.add_here',
+      contextKind: KeymapContext.picker,
+    );
+    final label = box.busy
+        ? (_checkingLaunch ? 'Checking…' : 'Starting…')
+        : box.checking
+        ? 'Check status'
+        : 'Start';
+    return FocusTraversalOrder(
+      order: const NumericFocusOrder(10),
+      child: FilledButton(
+        key: const ValueKey('new-harness-field-start'),
+        focusNode: _desktopFocus[_Row.start],
+        onPressed:
+            !box.busy &&
+                !box.linkingProfile &&
+                box.requiredChoice == null &&
+                !box.taskTooLong
+            ? _start
+            : null,
+        style:
+            FilledButton.styleFrom(
+              backgroundColor: grid.AppPalette.accent,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(90, 36),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              textStyle: DesktopChrome.text(size: 13, medium: true),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ).copyWith(
+              side: WidgetStateProperty.resolveWith(
+                (states) => BorderSide(
+                  color: states.contains(WidgetState.focused)
+                      ? DesktopChrome.focusRing
+                      : Colors.transparent,
+                  width: 2,
+                ),
+              ),
+            ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (box.busy) ...[
+              const SizedBox(
+                width: 13,
+                height: 13,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Text(label),
+            if (shortcut != null && !box.busy) ...[
+              const SizedBox(width: 12),
+              ExcludeSemantics(
+                child: Text(
+                  shortcut,
+                  style: grid.AppType.monoMeta(
+                    color: Colors.white.withValues(alpha: .8),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Rect _desktopChooserBounds(BoxConstraints constraints) {
+    final width = (constraints.maxWidth - 24).clamp(0.0, 480.0);
+    final height = (constraints.maxHeight - 24).clamp(0.0, 460.0);
+    final canvas = _desktopCanvasKey.currentContext?.findRenderObject();
+    final target = _chooserAnchor?.currentContext?.findRenderObject();
+    var left = (constraints.maxWidth - width) / 2;
+    var top = (constraints.maxHeight - height) / 2;
+    if (canvas is RenderBox &&
+        target is RenderBox &&
+        target.hasSize &&
+        canvas.hasSize) {
+      final origin = target.localToGlobal(Offset.zero, ancestor: canvas);
+      left = origin.dx.clamp(
+        12.0,
+        (constraints.maxWidth - width - 12).clamp(12.0, double.infinity),
+      );
+      final below = origin.dy + target.size.height + 8;
+      if (below + height <= constraints.maxHeight - 12) {
+        top = below;
+      } else if (origin.dy - height - 8 >= 12) {
+        top = origin.dy - height - 8;
+      }
+    }
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  String get _desktopChooserTitle => switch (box.field) {
+    NewHarnessField.machine => 'Choose machine',
+    NewHarnessField.projectMenu => 'Choose project',
+    NewHarnessField.project => 'Open folder',
+    NewHarnessField.projectName => 'New folder',
+    NewHarnessField.projectRepository => 'Clone repository',
+    NewHarnessField.agent => 'Run ${box.harnessLabel} with',
+    NewHarnessField.harness => 'Choose agent',
+    NewHarnessField.model => 'Choose model',
+    NewHarnessField.mode => 'Approvals',
+    NewHarnessField.profile => 'Codex profile',
+    NewHarnessField.branch => 'Choose branch',
+    _ => 'Choose an option',
+  };
+
+  Widget _desktopChooser() => Semantics(
+    key: const ValueKey('new-harness-choices'),
+    container: true,
+    explicitChildNodes: true,
+    focused: true,
+    label: _desktopChooserTitle,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+          child: Row(
+            children: [
+              ExcludeFocus(
+                child: IconButton(
+                  key: const ValueKey('new-harness-chooser-back'),
+                  tooltip: 'Back',
+                  onPressed: box.locked ? null : () => _runCommand(_cancel),
+                  icon: const Icon(Icons.chevron_left_rounded, size: 20),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  _desktopChooserTitle,
+                  style: DesktopChrome.text(size: 14, medium: true),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              ExcludeFocus(
+                child: IconButton(
+                  key: const ValueKey('new-harness-chooser-close'),
+                  tooltip: 'Close choices',
+                  onPressed: box.locked ? null : () => _closeDesktopChooser(),
+                  icon: const Icon(Icons.close_rounded, size: 17),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
+          child: ListenableBuilder(
+            listenable: _inputFocus,
+            builder: (context, _) => DecoratedBox(
+              decoration: BoxDecoration(
+                color: DesktopChrome.field,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _inputFocus.hasFocus
+                      ? DesktopChrome.focusRing
+                      : DesktopChrome.rim,
+                  width: 1.5,
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                child: _searchBar(),
+              ),
+            ),
+          ),
+        ),
+        if (_prompts.contains(box.field))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Text(
+              'On ${box.machineLabel}',
+              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+            ),
+          ),
+        if (box.choicesStatus case final status?)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                status,
+                style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+              ),
+            ),
+          ),
+        if (_row == _Row.model && box.modelNotice != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              box.modelNotice!,
+              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+            ),
+          ),
+        Divider(height: 1, color: DesktopChrome.rim),
+        Expanded(
+          child: box.options.isEmpty && !box.refreshingChoices
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      _prompts.contains(box.field)
+                          ? 'Enter ${box.field == NewHarnessField.projectRepository
+                                ? 'a repository URL'
+                                : box.field == NewHarnessField.projectName
+                                ? 'a folder name'
+                                : 'a folder path'} above.'
+                          : 'No matches. Try another search.',
+                      style: DesktopChrome.text(
+                        size: 13,
+                        color: DesktopChrome.muted,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : Scrollbar(
+                  controller: _choicesScroll,
+                  child: ListView.builder(
+                    controller: _choicesScroll,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    itemCount: box.options.length,
+                    itemExtentBuilder: (i, _) => _desktopChoiceHeight(i),
+                    itemBuilder: (context, i) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 8, 16, 0),
-                          child: Row(
-                            children: [
-                              IconButton(
-                                tooltip: 'Back to new harness',
-                                onPressed: box.busy
-                                    ? null
-                                    : () => _runCommand(_cancel),
-                                icon: const Icon(
-                                  Icons.arrow_back_rounded,
-                                  size: 18,
+                        if (_headingBefore(i))
+                          SizedBox(
+                            height: _desktopGroupHeight,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  box.options[i].group!,
+                                  style: DesktopChrome.text(
+                                    size: 11,
+                                    medium: true,
+                                    color: DesktopChrome.muted,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              Text(
-                                _installing != null
-                                    ? 'Setting up your harness'
-                                    : _label(_row),
-                                style: DesktopChrome.text(medium: true),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                        Expanded(
-                          child: _installing != null
-                              ? _installPane(_installing!)
-                              : _sidePane(),
-                        ),
+                        Expanded(child: _desktopOption(box.options[i])),
                       ],
                     ),
                   ),
                 ),
+        ),
+        if (box.error != null || box.status != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: _status(),
+          ),
+        Divider(height: 1, color: DesktopChrome.rim),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Wrap(
+            spacing: 18,
+            runSpacing: 5,
+            children: [
+              for (final hint in [
+                ('picker.next', 'Browse'),
+                ('picker.accept', 'Select'),
+                ('picker.cancel', 'Back'),
+              ])
+                if (effectiveCommandHint(
+                      context,
+                      hint.$1,
+                      contextKind: KeymapContext.picker,
+                    )
+                    case final keys?)
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: keys,
+                          style: grid.AppType.monoMeta(
+                            color: DesktopChrome.muted,
+                          ),
+                        ),
+                        TextSpan(text: '  ${hint.$2}'),
+                      ],
+                    ),
+                    style: DesktopChrome.text(
+                      size: 11,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  double _desktopLineHeight(String text, double size) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: DesktopChrome.text(size: size),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final height = painter.height.ceilToDouble();
+    painter.dispose();
+    return height;
+  }
+
+  double get _desktopGroupHeight => _desktopLineHeight('Ag', 11) + 12;
+  double _desktopChoiceHeight(int i) =>
+      16 +
+      _desktopLineHeight(_desktopOptionTitle(box.options[i]), 13) +
+      (_desktopOptionDetail(box.options[i]).isEmpty
+          ? 0
+          : 3 + _desktopLineHeight(_desktopOptionDetail(box.options[i]), 12)) +
+      (_headingBefore(i) ? _desktopGroupHeight : 0);
+
+  String _desktopOptionTitle(NewHarnessOption option) {
+    final folder = option.project?.folder;
+    if (box.field == NewHarnessField.projectMenu && folder != null) {
+      return folder
+              .split(RegExp(r'[/\\]'))
+              .where((part) => part.isNotEmpty)
+              .lastOrNull ??
+          folder;
+    }
+    return option.title;
+  }
+
+  String _desktopOptionDetail(NewHarnessOption option) {
+    final machine = box.app
+        .stateOf(option.machineId ?? box.machineId)
+        ?.machine
+        .displayName;
+    if (machine != null && option.detail.startsWith('$machine:')) {
+      return '$machine · ${option.detail.substring(machine.length + 1)}';
+    }
+    return option.detail;
+  }
+
+  IconData _desktopOptionIcon(NewHarnessOption option) {
+    if (option.id == NewHarnessController.newProjectId) {
+      return Icons.create_new_folder_outlined;
+    }
+    if (option.id == NewHarnessController.repositoryId) {
+      return Icons.cloud_download_outlined;
+    }
+    if (option.id == NewHarnessController.browseId ||
+        option.id == NewHarnessController.existingProjectId) {
+      return Icons.folder_open_rounded;
+    }
+    if (option.id == NewHarnessController.changeMachineId) {
+      return Icons.computer_rounded;
+    }
+    if (option.id == NewHarnessController.refreshProfilesId ||
+        option.id == NewHarnessController.refreshModelsId) {
+      return Icons.refresh_rounded;
+    }
+    if (option.id == NewHarnessController.linkProfileId) {
+      return Icons.add_rounded;
+    }
+    if (option.id == NewHarnessController.storeId) return Icons.apps_rounded;
+    return switch (box.field) {
+      NewHarnessField.machine => Icons.computer_rounded,
+      NewHarnessField.branch => Icons.account_tree_outlined,
+      NewHarnessField.projectMenu ||
+      NewHarnessField.project ||
+      NewHarnessField.projectName => Icons.folder_outlined,
+      NewHarnessField.projectRepository => Icons.cloud_download_outlined,
+      NewHarnessField.model => Icons.auto_awesome_outlined,
+      NewHarnessField.profile => Icons.person_outline_rounded,
+      NewHarnessField.mode => Icons.verified_user_outlined,
+      _ => Icons.code_rounded,
+    };
+  }
+
+  Widget _desktopOption(NewHarnessOption option) {
+    final title = _desktopOptionTitle(option);
+    final detail = _desktopOptionDetail(option);
+    final highlighted = identical(option, box.selected);
+    final current = box.isCurrent(option) && !_isDoor(option);
+    final note = !option.enabled
+        ? option.why
+        : box.field == NewHarnessField.machine
+        ? _machineNote(option.id)
+        : null;
+    return Semantics(
+      key: ValueKey('new-harness-option-${option.id}'),
+      selected: highlighted,
+      enabled: option.enabled && !box.locked,
+      button: true,
+      value: current ? 'Current selection' : null,
+      hint: _unlinked(option) ? 'Link required' : null,
+      child: Tooltip(
+        message: [title, if (detail.isNotEmpty) detail, ?note].join('\n'),
+        child: Material(
+          color: highlighted ? DesktopChrome.selection : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+          child: InkWell(
+            canRequestFocus: false,
+            borderRadius: BorderRadius.circular(7),
+            hoverColor: DesktopChrome.foreground.withValues(alpha: .06),
+            splashFactory: NoSplash.splashFactory,
+            onTap: !box.locked ? () => _acceptChoice(option) : null,
+            child: Padding(
+              key: highlighted ? _choiceKey : null,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    _desktopOptionIcon(option),
+                    size: 18,
+                    color: option.enabled
+                        ? DesktopChrome.muted
+                        : DesktopChrome.muted.withValues(alpha: .6),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          title,
+                          style: DesktopChrome.text(
+                            size: 13,
+                            color: option.enabled
+                                ? DesktopChrome.foreground
+                                : DesktopChrome.muted,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (detail.isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            detail,
+                            style: DesktopChrome.text(
+                              size: 12,
+                              color: DesktopChrome.muted,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (note?.isNotEmpty == true) ...[
+                    const SizedBox(width: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 95),
+                      child: Text(
+                        note!,
+                        style: DesktopChrome.text(
+                          size: 11,
+                          color: DesktopChrome.muted,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 16,
+                    child: current
+                        ? Icon(
+                            Icons.check_rounded,
+                            size: 16,
+                            color: DesktopChrome.accent,
+                          )
+                        : _isDoor(option)
+                        ? Icon(
+                            Icons.chevron_right_rounded,
+                            size: 16,
+                            color: DesktopChrome.muted,
+                          )
+                        : null,
+                  ),
+                ],
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _desktopInstallPane(DshInstallRun run) => Semantics(
+    key: const ValueKey('new-harness-install'),
+    liveRegion: true,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          run.failed
+              ? '${box.harnessLabel} could not be installed'
+              : run.done
+              ? '${box.harnessLabel} is ready'
+              : 'Setting up ${box.harnessLabel}',
+          style: DesktopChrome.text(size: 16, medium: true),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'On ${box.machineLabel}',
+          style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+        ),
+        const SizedBox(height: 20),
+        for (final (phase, label) in [
+          ('clone', 'Download harness'),
+          ('setup', 'Set up tools'),
+          ('doctor', 'Check requirements'),
+        ])
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 7),
+            child: Row(
+              children: [
+                Icon(
+                  run.done || (run.reached(phase) && run.phase != phase)
+                      ? Icons.check_circle_outline_rounded
+                      : run.failed
+                      ? Icons.error_outline_rounded
+                      : Icons.circle_outlined,
+                  size: 18,
+                  color: run.failed ? _theme.red : DesktopChrome.accent,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(label, style: DesktopChrome.text(size: 13)),
+                ),
+                if (run.took(phase) case final duration?)
+                  Text(
+                    _took(duration),
+                    style: DesktopChrome.text(
+                      size: 12,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        if (run.failed) ...[
+          const SizedBox(height: 12),
+          Text(
+            describeInstallFailure(run, box.harnessLabel).title,
+            style: DesktopChrome.text(size: 13, color: _theme.red),
+          ),
+          if (describeInstallFailure(run, box.harnessLabel).body
+              case final body?)
+            Text(
+              body,
+              style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
+            ),
+          if (describeInstallFailure(run, box.harnessLabel).command
+              case final command?)
+            SelectableText(command, style: grid.AppType.mono()),
+          if (describeInstallFailure(run, box.harnessLabel).hint
+              case final hint?)
+            Text(
+              hint,
+              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+            ),
+        ] else if (run.line ?? run.detail case final status?) ...[
+          const SizedBox(height: 12),
+          Text(
+            status,
+            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          ),
+        ],
+        const SizedBox(height: 20),
+        Row(
+          children: [
+            Expanded(
+              child: _Elapsed(
+                run: run,
+                style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+              ),
+            ),
+            _desktopStartButton(),
           ],
-        );
-      },
+        ),
+      ],
     ),
   );
 
@@ -1936,7 +2842,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         textBaseline: TextBaseline.alphabetic,
         children: [
           SizedBox(
-            width: _gutter,
+            width: widget.desktop ? 20 : _gutter,
             child: widget.desktop
                 ? Icon(Icons.search_rounded, size: 18, color: _faint)
                 : Text(
@@ -1946,6 +2852,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     style: _ink(_picking ? _theme.foreground : _faint),
                   ),
           ),
+          if (widget.desktop) const SizedBox(width: 8),
           Expanded(
             child: Actions(
               actions: {
@@ -2097,17 +3004,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             // description with it made the selection two rows tall and the
             // list read as blocks rather than lines.
             Container(
-              color: widget.desktop
-                  ? null
-                  : on && _picking
-                  ? _activeFill
-                  : Colors.transparent,
-              decoration: widget.desktop
-                  ? BoxDecoration(
-                      color: on && _picking ? _activeFill : Colors.transparent,
-                      borderRadius: BorderRadius.circular(8),
-                    )
-                  : null,
+              color: on && _picking ? _activeFill : Colors.transparent,
               padding: EdgeInsets.symmetric(horizontal: _margin),
               height: _rowHeight,
               alignment: Alignment.centerLeft,
@@ -2166,6 +3063,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _activateRow(_Row row) {
+    if (widget.desktop) {
+      _chooserOrigin = _desktopFocus[row];
+      _chooserAnchor = _desktopAnchors[row];
+      _restoreChoiceFocus = false;
+    }
     _selectRow(row);
     if (row == _Row.advanced) {
       _toggleAdvanced();

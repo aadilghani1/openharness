@@ -248,7 +248,10 @@ void main() {
 
         // The mark a History row draws for the store, never the group grid.
         Future<void> expectFlutterRow() async {
-          await chord(tester, LogicalKeyboardKey.keyY);
+          await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+          await tester.enterText(jumpField, '> Show full history');
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           await tester.pump();
           final row = find.ancestor(
             of: find.text(Swarm.storeName),

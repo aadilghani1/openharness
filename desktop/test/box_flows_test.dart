@@ -33,7 +33,7 @@ void main() {
       tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
 
   testWidgets(
-    'canceled edits and tasks do not replace successful launch defaults',
+    'dismissed edits resume without replacing successful launch defaults',
     (tester) async {
       final app = createApp();
       seedMixedAgents(app);
@@ -55,9 +55,11 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       await chord(tester, LogicalKeyboardKey.keyN);
-      expect(box(tester).task, '');
-      expect(box(tester).engine, 'codex');
-      expect(box(tester).project.folder, '/work/openharness');
+      expect(box(tester).task, 'Review this project');
+      expect(box(tester).engine, 'opencode');
+      expect(box(tester).project.folder, '/work/selected-before-task');
+      expect(app.agentPreference.value, 'codex');
+      expect(app.projectHistory.selected('m'), '/work/openharness');
       expect(app.panes, hasLength(1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -221,7 +223,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('changing source panes never changes fresh launch defaults', (
+  testWidgets('each source pane retains its own draft and launch defaults', (
     tester,
   ) async {
     final app = createApp();
@@ -251,7 +253,13 @@ void main() {
     app.focusPane(first.id);
     await tester.pump();
     await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, '/work/openharness');
+    expect(box(tester).project.folder, '/work/first-draft');
+    expect(app.projectHistory.selected('m'), '/work/openharness');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    app.focusPane(other.id);
+    await tester.pump();
+    await chord(tester, LogicalKeyboardKey.keyN);
+    expect(box(tester).project.folder, '/work/second-draft');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

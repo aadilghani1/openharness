@@ -135,6 +135,7 @@ void main() {
               of: find.byWidgetPredicate(
                 (widget) =>
                     widget.key == const ValueKey('workspace-status-bar') ||
+                    widget.key == const ValueKey('workspace-tab-bar') ||
                     widget.key == const ValueKey('terminal-pane-title') ||
                     widget.key == const ValueKey('viewer-pane-title') ||
                     widget is ActivityMark ||
@@ -146,9 +147,14 @@ void main() {
             .isNotEmpty,
       );
     }
-    for (final widget in tester.widgetList<EditableText>(
-      find.byType(EditableText),
-    )) {
+    for (final element in find.byType(EditableText).evaluate()) {
+      final widget = element.widget as EditableText;
+      if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
+          const ValueKey('swarm-search-input')) {
+        expect(widget.style.fontSize, 17);
+        expect(widget.style.fontFamily, grid.AppType.sansFamily);
+        continue;
+      }
       // A field is on the scale, or it types into the terminal and follows it.
       expect({
         ...ramp,
@@ -263,7 +269,7 @@ void main() {
   });
 
   testWidgets(
-    'tabs, welcome, and setup screens follow terminal zoom while general UI keeps its scale',
+    'welcome follows terminal zoom while native setup and workspace chrome keep their scale',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!.localOnly = true;
@@ -296,44 +302,51 @@ void main() {
       final box = checkText(tester, atLeast: 1);
       final start = find.descendant(
         of: find.byKey(const ValueKey('new-harness-field-start')),
-        matching: find.text('New Harness'),
+        matching: find.text('Start'),
       );
-      expect(tester.widget<Text>(start).style!.fontSize, 18);
+      TextStyle startStyle() =>
+          DefaultTextStyle.of(tester.element(start)).style
+              .merge(tester.widget<Text>(start).style);
+      expect(startStyle().fontSize, 13);
+      expect(startStyle().fontFamily, grid.AppType.sansFamily);
       selectFont(22);
       await tester.pumpAndSettle();
       expectSameSizes(box, checkText(tester, atLeast: 1));
-      expect(tester.widget<Text>(start).style!.fontSize, 22);
+      expect(startStyle().fontSize, 13);
+      expect(startStyle().fontFamily, grid.AppType.sansFamily);
       await key(tester, LogicalKeyboardKey.escape);
-      for (final shortcut in [
-        LogicalKeyboardKey.keyP,
-        LogicalKeyboardKey.keyP,
-      ]) {
-        await key(tester, shortcut, cmd: true);
+      for (final terminalSize in [9.0, 18.0]) {
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent');
         await key(tester, LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
         final search = checkText(tester, atLeast: 1);
-        selectFont(
-          shortcut == LogicalKeyboardKey.keyP ? 9 : 18,
-          TerminalFontChoice.monaco,
-        );
+        final resultSizes = {
+          for (final text in tester.widgetList<SearchResultText>(
+            find.byType(SearchResultText),
+          ))
+            text.text: text.style.fontSize,
+        };
+        selectFont(terminalSize, TerminalFontChoice.monaco);
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(input).controller!.text, 'Agent');
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
         expectSameSizes(search, checkText(tester, atLeast: 1));
+        expect(tester.widget<TextField>(input).style!.fontSize, 17);
         expect(
-          tester.widget<TextField>(input).style!.fontSize,
-          terminalFontStore.size,
+          tester.widget<TextField>(input).style!.fontFamily,
+          grid.AppType.sansFamily,
         );
         for (final text in tester.widgetList<SearchResultText>(
           find.byType(SearchResultText),
         )) {
-          expect(text.style.fontFamily, terminalFontStore.value.fontFamily);
-          expect(text.style.fontSize, terminalFontStore.size);
-          expect(text.style.height, terminalFontStore.value.height);
-          expect(text.style.letterSpacing, 0);
+          expect(text.style.fontSize, resultSizes[text.text]);
+          expect([
+            grid.AppType.sansFamily,
+            grid.AppType.monoFamily,
+          ], contains(text.style.fontFamily));
         }
         await key(tester, LogicalKeyboardKey.escape);
       }
