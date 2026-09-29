@@ -11,6 +11,7 @@ import '../state/swarm_catalog.dart';
 import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
 import 'engine_identity.dart';
+import 'desktop_chrome.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
@@ -33,12 +34,17 @@ class WorkspaceWelcome extends StatefulWidget {
     this.app,
     this.projects = const [],
     this.onOpen,
+    this.composerBuilder,
   });
 
   final ValueChanged<String> onCommand;
   final AppNotifier? app;
   final List<SavedSwarmProject> projects;
   final ValueChanged<SwarmDestination>? onOpen;
+
+  /// Embedded creation and the popup supply the exact same form. Welcome
+  /// only contributes its existing recent-session data beneath that form.
+  final Widget Function(Widget? recentSessions)? composerBuilder;
 
   @override
   State<WorkspaceWelcome> createState() => _WorkspaceWelcomeState();
@@ -74,6 +80,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   /// Focus anywhere else (a field, a dialog, Cmd-P) is left alone, and the
   /// app's shortcuts are read before any of this.
   void _claimFocus() {
+    if (widget.composerBuilder != null) return;
     if (!mounted || _focus.hasPrimaryFocus || !_focus.canRequestFocus) return;
     final primary = FocusManager.instance.primaryFocus;
     if (primary != null && !_focus.ancestors.contains(primary)) return;
@@ -162,6 +169,13 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
 
   Widget _buildWelcome(BuildContext context) {
     grid.AppTheme.watch(context);
+    if (widget.composerBuilder case final composer?) {
+      return Material(
+        key: const ValueKey('workspace-welcome'),
+        color: grid.AppPalette.windowBg,
+        child: composer(_desktopSessions()),
+      );
+    }
     final palette = grid.AppTheme.palette.value;
     final background = appearancePrefsStore.value.background;
     final hasArtwork = background != HarnessBackground.plain;
@@ -332,6 +346,62 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget? _desktopSessions() {
+    final sessions = _sessions;
+    if (sessions == null || sessions.rows.isEmpty) return null;
+    return Column(
+      key: const ValueKey('welcome-sessions'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8, left: 10),
+          child: Text(
+            'Recent sessions',
+            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          ),
+        ),
+        for (final (index, row) in sessions.rows.indexed)
+          TextButton(
+            key: ValueKey('welcome-session-${row.id}'),
+            onPressed: () => _open(index),
+            style: TextButton.styleFrom(
+              foregroundColor: DesktopChrome.foreground,
+              backgroundColor: Colors.transparent,
+              side: BorderSide.none,
+              enabledMouseCursor: SystemMouseCursors.click,
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    row.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.text(size: 13),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                if (sessions.lastUsedAt(row) case final at?)
+                  Text(
+                    harnessActivityAge(at, sessions.readAt),
+                    style: DesktopChrome.text(
+                      size: 12,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

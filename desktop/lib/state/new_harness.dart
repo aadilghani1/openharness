@@ -1644,8 +1644,8 @@ class NewHarnessController extends ChangeNotifier {
 
   bool _desktopChoices = false;
 
-  /// Desktop menus scope folders to the selected machine and order agents by
-  /// launch recency followed by the desktop's featured choices.
+  /// Desktop menus scope folders to the selected machine and keep coding
+  /// agents ahead of recent and featured specialized harnesses.
   void useDesktopChoices(bool desktop) {
     if (_desktopChoices == desktop) return;
     _desktopChoices = desktop;
@@ -2661,18 +2661,28 @@ class NewHarnessController extends ChangeNotifier {
       ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
     );
     if (_desktopChoices) {
-      final engines = {
-        for (final engine in allEngines) engine.id,
-        kTerminalEngine,
-      };
+      final engines = {for (final engine in allEngines) engine.id};
       return _ranked([
         for (final id in <String>{
           for (final id in [
-            ...app.agentPreference.recentChoices,
+            // Keep coding agents together in a stable, familiar-first order.
+            // Recency can reorder specialized harnesses, never this group.
             'claude',
             'codex',
-            'grok',
             'cursor',
+            'copilot',
+            'grok',
+            'opencode',
+            'agy',
+            'amp',
+            'kilo',
+            'devin',
+            'pi',
+            'hermes',
+            'commandcode',
+            'muse',
+            ...engines,
+            ...app.agentPreference.recentChoices.where(isHarnessId),
             'autonomous/blender',
             'autonomous/circuitjs',
             'autonomous/godogen',
@@ -2680,10 +2690,12 @@ class NewHarnessController extends ChangeNotifier {
             'autonomous/rdkit',
             'autonomous/strudel',
             'autonomous/typst',
-            ...engines,
             ...harnesses,
+            kTerminalEngine,
           ])
-            if (isHarnessId(id) ? _offered(id) : engines.contains(id))
+            if (isHarnessId(id)
+                ? _offered(id)
+                : engines.contains(id) || id == kTerminalEngine)
               isHarnessId(id) ? operationId(id) : id,
         })
           isHarnessId(id)

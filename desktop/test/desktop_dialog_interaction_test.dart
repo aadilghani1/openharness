@@ -127,7 +127,8 @@ bool _ownsFocus(WidgetTester tester, Finder finder) {
 Future<_Workspace> _mount(
   WidgetTester tester, {
   bool nativeMenus = false,
-  bool withTerminal = false,
+  // Cmd-N above a terminal exercises the popup. Empty tabs now embed it.
+  bool withTerminal = true,
   String? bindings,
 }) async {
   final previousEntry = newHarnessOpensInBox;

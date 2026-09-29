@@ -1,0 +1,375 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/new_harness.dart';
+import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/ws/ws_conn.dart';
+
+import 'box_render_preview_test.dart' show loadPreviewFonts;
+
+import 'keymap_host_test.dart' show MemoryKeymap, key;
+import 'keymap_runtime_test.dart' show mount, nativeChannel;
+import 'support/mixed_agents.dart';
+import 'swarm_screen_test.dart' show terminal;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
+
+class _DelayedPreferences extends MemoryStore {
+  final loaded = Completer<String?>();
+
+  @override
+  Future<String?> read(String key) =>
+      key == 'new_agent_engine' ? loaded.future : super.read(key);
+}
+
+class _Connection extends WsConn {
+  _Connection(String machine)
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: machine,
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+  final starts = <Map<String, dynamic>>[];
+  Completer<Map<String, dynamic>>? pending;
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async => switch (type) {
+    'engines_probe' => {
+      'engines': [
+        {'engine': 'codex', 'installed': true},
+        {'engine': 'claude', 'installed': true},
+      ],
+    },
+    'dsh_list' => {'dsh': []},
+    'fs_list_dir' => {'path': payload['path'] ?? '/work', 'entries': []},
+    'agent_create' => _create(payload),
+    _ => {},
+  };
+  Future<Map<String, dynamic>> _create(Map<String, dynamic> payload) {
+    starts.add(Map.of(payload));
+    pending = Completer<Map<String, dynamic>>();
+    return pending!.future;
+  }
+
+  void complete() => pending!.complete({
+    'creationId': starts.last['creationId'],
+    'state': 'created',
+    'agent': {
+      'id': 'created',
+      'name': 'Created harness',
+      'engine': 'codex',
+      'project': {'cwd': '/work/openharness'},
+    },
+  });
+}
+
+void main() {
+  late AppNotifier app;
+  late MemoryKeymap map;
+  late _Connection connection;
+  final updates = <Map<dynamic, dynamic>>[];
+  final picture = GlobalKey();
+  setUpAll(loadPreviewFonts);
+  final form = find.byType(NewHarnessForm);
+  final task = find.byKey(const ValueKey('new-harness-task'));
+  NewHarnessController box(WidgetTester tester) =>
+      tester.widget<NewHarnessForm>(form).controller;
+
+  Future<void> setup(
+    WidgetTester tester, {
+    bool withPane = false,
+    bool mac = false,
+    MemoryStore? storage,
+  }) async {
+    final old = newHarnessOpensInBox;
+    newHarnessOpensInBox = true;
+    addTearDown(() => newHarnessOpensInBox = old);
+    connection = _Connection('m');
+    app = createApp(store: storage, connectionForTest: (_) => connection);
+    map = MemoryKeymap();
+    seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    if (storage is! _DelayedPreferences) {
+      await app.agentPreference.remember('codex');
+    }
+    await app.projectHistory.select('m', '/work/openharness');
+    if (withPane) app.adoptSessionForTest(terminal('a0', []));
+    if (mac) {
+      updates.clear();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        nativeChannel,
+        (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return null;
+        },
+      );
+    }
+    await mount(tester, app, map, native: mac);
+    await tester.pumpAndSettle();
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      map.dispose();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        nativeChannel,
+        null,
+      );
+    });
+  }
+
+  testWidgets(
+    'empty tab embeds the shared composer and typing keeps its numbers',
+    (tester) async {
+      await setup(tester);
+      expect(tester.widget<NewHarnessForm>(form).embedded, isTrue);
+      expect(find.byKey(const ValueKey('new-harness-close')), findsNothing);
+      expect(find.byKey(const ValueKey('new-harness-dismiss')), findsNothing);
+      expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+      final original = box(tester);
+      await tester.enterText(task, '123 work on this');
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      await tester.pumpAndSettle();
+      expect(box(tester), same(original));
+      expect(box(tester).task, '123 work on this');
+      expect(connection.starts, isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.tapAt(const Offset(50, 180));
+      await tester.pumpAndSettle();
+      expect(form, findsOneWidget);
+      expect(box(tester).task, '123 work on this');
+    },
+  );
+
+  testWidgets('Cmd-P round trip restores the tab draft and chosen options', (
+    tester,
+  ) async {
+    await setup(tester);
+    await tester.enterText(task, 'Keep my page draft');
+    box(tester).setFolder('/work/selected');
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await tester.pumpAndSettle();
+    expect(form, findsNothing);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'different search',
+    );
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    expect(box(tester).task, 'Keep my page draft');
+    expect(box(tester).project.folder, '/work/selected');
+    expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+    expect(connection.starts, isEmpty);
+  });
+
+  testWidgets('each new tab keeps its own draft after switching', (
+    tester,
+  ) async {
+    await setup(tester);
+    final first = app.activeSwarmId;
+    await tester.enterText(task, 'First draft');
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    await tester.pumpAndSettle();
+    final second = app.activeSwarmId;
+    expect(second, isNot(first));
+    expect(box(tester).task, isEmpty);
+    await tester.enterText(task, 'Second draft');
+    app.selectSwarm(first);
+    await tester.pumpAndSettle();
+    expect(box(tester).task, 'First draft');
+    app.selectSwarm(second);
+    await tester.pumpAndSettle();
+    expect(box(tester).task, 'Second draft');
+    expect(connection.starts, isEmpty);
+  });
+
+  testWidgets('switching tabs while defaults load still opens the new page', (
+    tester,
+  ) async {
+    final storage = _DelayedPreferences();
+    await setup(tester, storage: storage);
+    expect(form, findsNothing);
+    app.newSwarm(name: 'Second draft');
+    await tester.pumpAndSettle();
+    final target = app.activeSwarmId;
+    storage.loaded.complete('codex');
+    await tester.pumpAndSettle();
+    expect(form, findsOneWidget);
+    expect(box(tester).swarmId, target);
+    expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+    expect(connection.starts, isEmpty);
+  });
+
+  testWidgets(
+    'page launches once into its own tab and blocks another start while pending',
+    (tester) async {
+      await setup(tester);
+      final tab = app.activeSwarmId;
+      final tabs = app.swarms.length;
+      await tester.enterText(task, 'Build the page');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(connection.starts, hasLength(1));
+      expect(connection.starts.single['prompt'], 'Build the page');
+      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(app.activeSwarmId, tab);
+      expect(connection.starts, hasLength(1));
+      connection.complete();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(app.activeSwarmId, tab);
+      expect(app.swarms, hasLength(tabs));
+      expect(app.panes.single.agentId, 'created');
+      expect(form, findsNothing);
+    },
+  );
+
+  testWidgets('Escape from search restores the embedded draft', (tester) async {
+    await setup(tester);
+    await tester.enterText(task, 'Back from search');
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(box(tester).task, 'Back from search');
+  });
+
+  for (final brightness in Brightness.values) {
+    for (final (size, scale) in [
+      (const Size(1280, 800), 1.0),
+      (const Size(640, 540), 1.6),
+    ]) {
+      testWidgets('welcome with recents fits $brightness at $size and $scale', (
+        tester,
+      ) async {
+        await setup(tester);
+        app.machineStates['m']!.agents = [
+          for (final (index, name) in [
+            'Polish the desktop composer',
+            'Explore the machine picker',
+            'Improve notifications',
+            'Build a shader preview',
+            'Continue the research',
+          ].indexed)
+            Agent(
+              id: 'recent-$index',
+              name: name,
+              engine: 'codex',
+              terminalAvailable: true,
+              lastOpenedAt: DateTime.now().subtract(
+                Duration(minutes: 5 + index * 23),
+              ),
+            ),
+        ];
+        tester.view.physicalSize = size;
+        final previous = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = previous);
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            builder: (context, child) => KeymapProvider(
+              keymap: map,
+              child: MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: RepaintBoundary(key: picture, child: child!),
+              ),
+            ),
+            home: SwarmScreen(
+              key: const ValueKey('welcome-render'),
+              notifier: app,
+              nativeTabs: false,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Recent sessions'), findsOneWidget);
+        final surface = tester.getRect(
+          find.byKey(const ValueKey('new-harness-surface')),
+        );
+        expect(surface.width, lessThanOrEqualTo(680));
+        expect(surface.center.dx, closeTo(size.width / 2, 1));
+        expect(tester.takeException(), isNull);
+        final directory = Platform.environment['WELCOME_COMPOSER_RENDER_DIR'];
+        if (directory != null) {
+          await tester.runAsync(() async {
+            final boundary =
+                picture.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary;
+            final image = await boundary.toImage();
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            await Directory(directory).create(recursive: true);
+            await File(
+              '$directory/welcome-${brightness.name}-${size.width.toInt()}.png',
+            ).writeAsBytes(bytes!.buffer.asUint8List());
+            image.dispose();
+          });
+        }
+        await tester.ensureVisible(find.text('Continue the research'));
+        expect(
+          find.text('Continue the research').hitTestable(),
+          findsOneWidget,
+        );
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('new-harness-field-project')),
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-field-project')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('new-harness-chooser-surface')),
+          findsOneWidget,
+        );
+        await tester.tapAt(Offset(2, size.height / 2));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('new-harness-chooser-surface')),
+          findsNothing,
+        );
+        expect(connection.starts, isEmpty);
+      });
+    }
+  }
+
+  testWidgets('native footer is covered for popup and restored on close', (
+    tester,
+  ) async {
+    await setup(tester, withPane: true, mac: true);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    expect(tester.widget<NewHarnessForm>(form).embedded, isFalse);
+    expect(updates.last['footerCovered'], isTrue);
+    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+    await tester.pumpAndSettle();
+    expect(updates.last['footerCovered'], isFalse);
+    expect(form, findsNothing);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await tester.pumpAndSettle();
+    expect(updates.last['footerCovered'], isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(updates.last['footerCovered'], isFalse);
+  });
+}

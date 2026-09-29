@@ -108,8 +108,8 @@ void main() {
       }
     }
 
-    // The welcome page stands where a terminal will and is set like one, so
-    // it follows the terminal's size instead; see [checkWelcome].
+    // The welcome composer and search use the shared desktop type scale;
+    // their controls are checked separately below.
     final welcome = find.byType(WorkspaceWelcome);
     final setup = find.byWidgetPredicate(
       (widget) =>
@@ -150,6 +150,12 @@ void main() {
     for (final element in find.byType(EditableText).evaluate()) {
       final widget = element.widget as EditableText;
       if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
+          const ValueKey('new-harness-task')) {
+        expect(widget.style.fontSize, 15);
+        expect(widget.style.fontFamily, grid.AppType.sansFamily);
+        continue;
+      }
+      if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
           const ValueKey('swarm-search-input')) {
         expect(widget.style.fontSize, 17);
         expect(widget.style.fontFamily, grid.AppType.sansFamily);
@@ -166,14 +172,21 @@ void main() {
     return sizes;
   }
 
-  /// The welcome page is terminal text: the terminal's face at its size.
+  /// The welcome page uses the same system-font composer at every terminal zoom.
   void checkWelcome(WidgetTester tester) {
-    final tagline = find.byKey(const ValueKey('welcome-tagline'));
-    final line = tester.widget<Text>(tagline);
-    final style = DefaultTextStyle.of(tester.element(tagline)).style
-        .merge(line.style);
-    expect(style.fontSize, terminalFontStore.size);
-    expect(style.fontFamily, terminalFontStore.value.fontFamily);
+    expect(
+      tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).embedded,
+      isTrue,
+    );
+    final task = tester.widget<TextField>(
+      find.byKey(const ValueKey('new-harness-task')),
+    );
+    expect(task.style!.fontSize, 15);
+    expect(task.style!.fontFamily, grid.AppType.sansFamily);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('new-harness-composer'))).width,
+      680,
+    );
   }
 
   /// Zooming the terminal leaves every UI text where it was.
@@ -269,7 +282,7 @@ void main() {
   });
 
   testWidgets(
-    'welcome follows terminal zoom while native setup and workspace chrome keep their scale',
+    'welcome, native setup, and workspace chrome keep their scale during terminal zoom',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!.localOnly = true;
@@ -288,6 +301,7 @@ void main() {
       expectSameSizes(before, checkText(tester));
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pumpAndSettle();
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
       // Only the tab chrome is UI text here; the page itself is checked below.
       checkText(tester, atLeast: 1);
@@ -302,7 +316,7 @@ void main() {
       final box = checkText(tester, atLeast: 1);
       final start = find.descendant(
         of: find.byKey(const ValueKey('new-harness-field-start')),
-        matching: find.text('New harness'),
+        matching: find.text('New Harness'),
       );
       TextStyle startStyle() =>
           DefaultTextStyle.of(tester.element(start)).style

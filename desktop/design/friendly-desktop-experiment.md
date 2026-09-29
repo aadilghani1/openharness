@@ -5,6 +5,21 @@ This experiment follows the user's new direction for the UI around the terminal,
 superseding the flat, fixed-cell dialog presentation for the surfaces below.
 It is not included in Desktop 1.2.27 and must not be merged without review.
 
+- Startup and New Tab embed the same `NewHarnessForm` and
+  `NewHarnessController` used by Cmd-N. The form keeps its 680-point maximum
+  width on the full page, without a modal backdrop or Close button. Recent
+  sessions use the existing `WelcomeSessions` eligibility and visit ordering,
+  rendered as a quiet list below the composer. Both form and list scroll in
+  short windows. Typing numbers edits the message; recent rows remain clickable
+  and keyboard-focusable rather than intercepting plain digit keys.
+- Empty tabs initially focus the message. Cmd-N returns to that tab's existing
+  draft. Each empty tab keeps its own choices and message when switching tabs
+  or opening search. Launching uses that tab, with the same pending-receipt,
+  installation, validation, and duplicate-start guards as the popup. A populated
+  workspace still opens Cmd-N as a popup. No harness starts merely by visiting
+  the page.
+- On macOS the native footer yields to the creation/search backdrop while a
+  popup is open, including its accessibility controls, then restores when it closes.
 - Cmd-N places a centered, 680-point composer directly on a 95% dark backdrop,
   without an outer card, border, or shadow. Light mode uses a 95% white backdrop
   so the unframed labels remain readable. Cmd-P retains its floating frame.
@@ -29,14 +44,15 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   that machine. Fresh launch contexts still default to local; restored drafts
   and explicit Store machine choices retain their destination. The closed Repo
   control includes the machine name for remote destinations.
-- Agent choices show actual launch recency first, interleaving coding agents
-  and specialized harnesses. Defaults follow in this order: Claude Code,
-  Codex, Grok, Cursor, Blender, CircuitJS, Godogen, MuJoCo, RDKit, Strudel,
-  Typst, then the rest of the available catalog. Entries appear once; removed
-  packages and viewers remain excluded. Launching a specialized harness does
-  not promote its backend coding agent as another recent choice. Older history
-  migrates with the last known choice first; only new history has exact mixed
-  recency because older versions kept agents and harnesses in separate lists.
+- Agent choices keep every coding agent above specialized harnesses. A stable,
+  curated order starts with Claude Code, Codex, Cursor, Copilot, Grok, and
+  OpenCode, followed by Antigravity, Amp, Kilo, Devin, Pi, Hermes, Command Code,
+  and Muse. Newly supported coding agents also stay in this first group.
+  Specialized harnesses follow with recent choices first, then Blender,
+  CircuitJS, Godogen, MuJoCo, RDKit, Strudel, Typst, and the remaining catalog.
+  Terminal comes last. Entries appear once; removed packages and viewers remain
+  excluded. Search still ranks matching names by relevance. The saved launch
+  choice remains the default selection without moving it above coding agents.
 - The last explicit approval choice is remembered per agent, including Full
   access when selected. Worktree choices are remembered per machine/project.
   Projects without a saved choice keep Worktree on; agents without a saved
@@ -98,6 +114,25 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
 Review creation and search with keyboard, mouse, input composition, long text,
 light/dark palettes, narrow windows, and unavailable resources. Use synthetic
 fixtures for saved previews; never commit live account screenshots.
+
+Validation of the shared welcome composer on 2026-09-29, after `cc5c4ecf`:
+
+- The full desktop suite passed: **4,522 passed, 12 skipped**. Tests cover
+  independent tab drafts, delayed default loading during tab switches, launch
+  retries and pending receipts, recent-session navigation, search round trips,
+  keyboard focus, and coding-agent ordering. The Repo machine control now
+  handles Right Arrow before the menu anchor consumes it.
+- Fresh full-suite coverage passed the complete New Harness gate:
+  **1,882/1,882 controller lines** and **1,926/1,926 form lines**. This measures
+  executable lines, not exhaustive branch coverage.
+- App/test static analysis, the macOS debug build, and all **996 native
+  titlebar checks** passed. Native checks include hiding and restoring the
+  footer and its accessibility controls around a modal.
+- Synthetic page previews were inspected in light and dark themes at regular
+  and narrow widths with enlarged text. The rebuilt app was reopened for live
+  review of the full-page composer, recent sessions, agent ordering, and popup
+  footer coverage. No real agent was launched for validation. This iteration
+  did not rerun the older 19-journey native Flutter fixture or a Linux build.
 
 Validation of the interaction polish on 2026-09-29, after `67dc29f1`:
 

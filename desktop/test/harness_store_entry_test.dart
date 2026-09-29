@@ -144,6 +144,9 @@ void main() {
         expect(app.swarms, hasLength(count));
         await key(tester, LogicalKeyboardKey.escape);
         expect(app.activeSwarm, same(store));
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+        await tester.pumpAndSettle();
         expect(find.byType(NewHarnessForm), findsNothing);
         await tester.pumpWidget(const SizedBox());
       },

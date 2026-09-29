@@ -34,6 +34,8 @@ class NewHarnessForm extends StatefulWidget {
     this.onNeedsForm,
     this.devicePort,
     this.desktop = false,
+    this.embedded = false,
+    this.footer,
   });
 
   final NewHarnessController controller;
@@ -43,6 +45,10 @@ class NewHarnessForm extends StatefulWidget {
   final VoidCallback? onStore, onLinkProfile, onNeedsForm;
   final DeviceFormPort? devicePort;
   final bool desktop;
+
+  /// The same composer can live in a tab, without a modal route or Close button.
+  final bool embedded;
+  final Widget? footer;
 
   @override
   State<NewHarnessForm> createState() => NewHarnessFormState();
@@ -71,7 +77,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _machineMenu = MenuController();
   final _machineFocus = FocusNode(debugLabel: 'Repo machine');
-  late bool _preferTaskFocus = box.task.isNotEmpty;
+  late bool _preferTaskFocus = widget.embedded || box.task.isNotEmpty;
   bool get _desktopStartEnabled =>
       !box.busy &&
       !box.linkingProfile &&
@@ -262,6 +268,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     } else {
       _runCommand(_cancel);
     }
+  }
+
+  /// Cmd-N on an empty tab returns to its existing draft rather than opening
+  /// a second composer with a second launch receipt.
+  void focusComposer() {
+    _preferTaskFocus = true;
+    _closeDesktopChooser();
+    _restoreChoiceFocus = false;
   }
 
   void _closeDesktopChooser({bool? next}) {
@@ -749,10 +763,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   void _openDoor(NewHarnessOption option) {
     if (box.locked || !option.enabled) return;
     if (option.id == NewHarnessController.changeMachineId) {
-      if (widget.desktop && box.field == NewHarnessField.projectMenu) {
-        _openMachineChooser();
-        return;
-      }
       // focusField(machine) remembers the prompt and its uncommitted query.
       // Clearing first loses a typed name/path when Escape comes back here.
       _chooseFolderMachine(switch (box.field) {
@@ -1580,7 +1590,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             Align(
               alignment: const Alignment(0, -.12),
               child: SizedBox(
-                width: constraints.maxWidth.clamp(0.0, 680.0),
+                width: (constraints.maxWidth - (widget.embedded ? 48 : 0))
+                    .clamp(0.0, 680.0),
                 child: ExcludeFocus(
                   excluding: choosing,
                   child: ExcludeSemantics(
@@ -1592,8 +1603,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                         type: MaterialType.transparency,
                         child: Semantics(
                           label: 'New harness',
-                          scopesRoute: true,
-                          namesRoute: true,
+                          scopesRoute: !widget.embedded,
+                          namesRoute: !widget.embedded,
                           explicitChildNodes: true,
                           child: FocusTraversalGroup(
                             policy: OrderedTraversalPolicy(),
@@ -1649,6 +1660,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                         ),
                                       ),
                                     ],
+                                  ],
+                                  if (widget.footer case final footer?) ...[
+                                    const SizedBox(height: 28),
+                                    footer,
                                   ],
                                 ],
                               ),
@@ -1733,18 +1748,20 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             ],
           ),
         ),
-        const SizedBox(width: 8),
-        FocusTraversalOrder(
-          // Start remains last: Tab wraps to Agent and Shift-Tab reaches Close.
-          order: const NumericFocusOrder(9.9),
-          child: KeyedSubtree(
-            key: _desktopCloseAnchor,
-            child: Opacity(
-              opacity: _picking ? 0 : 1,
-              child: _desktopCloseButton(behindChooser: _picking),
+        if (!widget.embedded) ...[
+          const SizedBox(width: 8),
+          FocusTraversalOrder(
+            // Start remains last: Tab wraps to Agent and Shift-Tab reaches Close.
+            order: const NumericFocusOrder(9.9),
+            child: KeyedSubtree(
+              key: _desktopCloseAnchor,
+              child: Opacity(
+                opacity: _picking ? 0 : 1,
+                child: _desktopCloseButton(behindChooser: _picking),
+              ),
             ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -2256,12 +2273,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           option.id == NewHarnessController.browseId);
 
   String _desktopOptionTitle(NewHarnessOption option) {
-    if (box.field == NewHarnessField.projectMenu &&
-        option.id == NewHarnessController.changeMachineId) {
-      return box.app.stateOf(box.machineId)?.isLocalMachine == true
-          ? 'Local · ${box.machineLabel}'
-          : box.machineLabel;
-    }
     if (option.id == NewHarnessController.existingProjectId &&
         widget.onBrowse != null) {
       return 'Open Folder…';
@@ -3071,26 +3082,31 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           ),
         ),
     ],
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 160),
-      child: DesktopPill(
-        key: const ValueKey('new-harness-repo-machine'),
-        focusNode: _machineFocus,
-        label: _repoMachineLabel(box.machineId),
-        semanticLabel: 'Machine, ${_repoMachineLabel(box.machineId)}',
-        tooltip: 'Machine: ${box.machineLabel}',
-        menu: true,
-        menuIcon: Icons.chevron_right_rounded,
-        compact: true,
-        quiet: true,
-        onPressed: box.locked
-            ? null
-            : () {
-                _machineFocus.requestFocus();
-                _machineMenu.isOpen
-                    ? _machineMenu.close()
-                    : _machineMenu.open();
-              },
+    // Handle traversal before MenuAnchor's menu-bar shortcuts consume arrows.
+    child: Focus(
+      canRequestFocus: false,
+      onKeyEvent: _onKey,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 160),
+        child: DesktopPill(
+          key: const ValueKey('new-harness-repo-machine'),
+          focusNode: _machineFocus,
+          label: _repoMachineLabel(box.machineId),
+          semanticLabel: 'Machine, ${_repoMachineLabel(box.machineId)}',
+          tooltip: 'Machine: ${box.machineLabel}',
+          menu: true,
+          menuIcon: Icons.chevron_right_rounded,
+          compact: true,
+          quiet: true,
+          onPressed: box.locked
+              ? null
+              : () {
+                  _machineFocus.requestFocus();
+                  _machineMenu.isOpen
+                      ? _machineMenu.close()
+                      : _machineMenu.open();
+                },
+        ),
       ),
     ),
   );

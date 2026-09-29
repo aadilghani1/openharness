@@ -1783,7 +1783,12 @@ private final class SwarmTabStrip: NSView {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
-    statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false
+    // The footer is a sibling above Flutter. Let Flutter's modal backdrop
+    // cover this area too, including hit testing and accessibility.
+    statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false || state["footerCovered"] as? Bool == true
+    setAccessibilityChildren(
+      [scroll, newButton, searchButton, notificationsButton, storeButton] +
+      (statusBar.isHidden ? [] : [statusBar]))
     reduceMotion = state["reduceMotion"] as? Bool == true
     if let style = state["barStyle"] as? [String: Any] {
       let size = CGFloat(min(36, max(8, (style["size"] as? NSNumber)?.doubleValue ?? 13)))

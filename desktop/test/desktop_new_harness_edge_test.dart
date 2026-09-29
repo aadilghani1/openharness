@@ -19,6 +19,7 @@ import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 
@@ -349,12 +350,90 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(fixture.app.launches, hasLength(1));
+      await key(tester, LogicalKeyboardKey.enter, cmd: true);
+      await tester.pumpAndSettle();
+      expect(fixture.app.launches, hasLength(2));
       await key(tester, LogicalKeyboardKey.escape);
       expect(fixture.closes, 0);
       await tester.tap(find.byKey(const ValueKey('new-harness-close')));
       expect(fixture.closes, 1);
     },
   );
+
+  for (final withKeymap in [false, true]) {
+    testWidgets(
+      'Repo machine keyboard traversal works with keymap=$withKeymap',
+      (tester) async {
+        final fixture = await _mount(tester, withKeymap: withKeymap);
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-field-project')),
+        );
+        await tester.pumpAndSettle();
+        final machine = find.byKey(const ValueKey('new-harness-repo-machine'));
+        bool queryFocused() =>
+            tester.widget<TextField>(_query).focusNode!.hasFocus;
+        expect(queryFocused(), isTrue);
+        await key(tester, LogicalKeyboardKey.tab);
+        expect(queryFocused(), isFalse);
+        await key(tester, LogicalKeyboardKey.tab, shift: true);
+        expect(queryFocused(), isTrue);
+        await key(tester, LogicalKeyboardKey.tab);
+        expect(tester.widget<DesktopPill>(machine).focusNode!.hasFocus, isTrue);
+        await key(tester, LogicalKeyboardKey.arrowRight);
+        await tester.pumpAndSettle();
+        final choice = find.byKey(
+          const ValueKey('new-harness-machine-option-machine'),
+        );
+        expect(choice, findsOneWidget);
+        tester
+            .state<NewHarnessFormState>(find.byType(NewHarnessForm))
+            .dismissFromOutside();
+        await tester.pumpAndSettle();
+        expect(choice, findsNothing);
+        expect(_query, findsOneWidget);
+        // Repeated activation toggles the cascade without closing Repo.
+        await tester.tap(machine);
+        await tester.pumpAndSettle();
+        expect(choice, findsOneWidget);
+        tester.widget<DesktopPill>(machine).onPressed!();
+        await tester.pumpAndSettle();
+        expect(choice, findsNothing);
+        await key(tester, LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        expect(_query, findsNothing);
+        expect(fixture.closes, 0);
+        expect(fixture.app.launches, isEmpty);
+      },
+    );
+  }
+
+  testWidgets('Repo refuses a machine that vanished before a menu click', (
+    tester,
+  ) async {
+    final fixture = await _mount(tester);
+    fixture.app.machineStates['other'] = MachineState(
+      const Machine(
+        machineId: 'other',
+        name: 'Other Mac',
+        authMode: MachineAuthMode.remote,
+      ),
+    )..nodeOnline = true;
+    fixture.app.notifyListeners();
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
+    await tester.pumpAndSettle();
+    final choice = find.byKey(
+      const ValueKey('new-harness-machine-option-other'),
+    );
+    expect(choice, findsOneWidget);
+    fixture.app.machineStates.remove('other');
+    await tester.tap(choice);
+    await tester.pumpAndSettle();
+    expect(fixture.box.machineId, 'machine');
+    expect(fixture.box.error, 'This machine is no longer available.');
+    expect(fixture.app.launches, isEmpty);
+  });
 
   testWidgets('Escape closes the chooser before the composer close button', (
     tester,

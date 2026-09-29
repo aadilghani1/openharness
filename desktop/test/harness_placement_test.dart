@@ -279,6 +279,9 @@ void main() {
             await tester.tapAt(const Offset(4, 10));
           }
           await tester.pumpAndSettle();
+          expect(find.byType(NewHarnessForm), findsOneWidget);
+          await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+          await tester.pumpAndSettle();
           expect(find.byType(NewHarnessForm), findsNothing);
           await chord(tester, LogicalKeyboardKey.keyN);
           box = tester
@@ -866,7 +869,7 @@ void main() {
   );
 
   testWidgets(
-    'a dismissed pending creation resumes its receipt even without a task',
+    'switching tabs preserves a pending creation receipt even without a task',
     (tester) async {
       newHarnessOpensInBox = true;
       addTearDown(() => newHarnessOpensInBox = false);
@@ -891,12 +894,11 @@ void main() {
       expect(request.payload.containsKey('prompt'), isFalse);
       request.reply.completeError(const WsRequestTimeout('agent_create'));
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      expect(find.byType(NewHarnessForm), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
+      final pendingTab = app.activeSwarmId;
+      app.selectSwarm(original.id);
+      await tester.pumpAndSettle();
       expect(find.byType(NewHarnessForm), findsNothing);
+      app.selectSwarm(pendingTab);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       final box = tester
@@ -905,15 +907,12 @@ void main() {
       expect(box.task, isEmpty);
       expect(box.checking, isTrue);
       expect(find.text('pending harness'), findsNothing);
-      expect(
-        find.textContaining('Check status', findRichText: true),
-        findsOneWidget,
-      );
-      // The restored "Escape again" warning keeps its meaning; it must not
-      // require another invisible acknowledgement before closing.
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
+      expect(find.text('Check status'), findsOneWidget);
+      // Leaving the page again retains the same receipt, even with no task.
+      app.selectSwarm(original.id);
+      await tester.pumpAndSettle();
       expect(find.byType(NewHarnessForm), findsNothing);
+      app.selectSwarm(pendingTab);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       await chord(tester, LogicalKeyboardKey.enter);
@@ -1008,9 +1007,9 @@ void main() {
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         expect(app.swarms, contains(original));
-        // The creation box was opened from a search editor that is now gone.
-        // Returning focus to that detached editor would disable shortcuts.
-        expect(find.byType(NewHarnessForm), findsNothing);
+        // Escape keeps the draft open; search still replaces creation without
+        // restoring focus to its former detached search editor.
+        expect(find.byType(NewHarnessForm), findsOneWidget);
         await chord(tester, LogicalKeyboardKey.keyP);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),

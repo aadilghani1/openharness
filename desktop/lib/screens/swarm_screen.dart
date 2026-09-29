@@ -184,8 +184,8 @@ enum _NewHarnessSource { workspace, product }
 
 /// Drafts belong to the entry's source, before the person edits its defaults.
 /// Product requests also name an agent explicitly: two Store pages must never
-/// resume one another's drafts. Placement remains separate, so Cmd-T and Cmd-O
-/// can resume the same workspace draft in the newly requested destination.
+/// resume one another's drafts. Empty tabs also own their draft individually;
+/// search and Cmd-N return to that tab's reviewed choices.
 typedef _NewHarnessContext = ({
   _NewHarnessSource source,
   String machineId,
@@ -193,6 +193,7 @@ typedef _NewHarnessContext = ({
   String? sourceAgentId,
   String? folder,
   String? projectName,
+  String? welcomeTabId,
 });
 
 class _SwarmScreenState extends State<SwarmScreen> {
@@ -366,6 +367,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// New Harness, open in the box. Never open beside the search: they are two
   /// modes of one surface, and opening either closes the other.
   NewHarnessController? _newHarness;
+  bool _newHarnessEmbedded = false;
+  bool _welcomeEntryScheduled = false;
   DeviceFormPort? _newHarnessDevicePort, _deviceFormPort;
   String? _deviceFormId, _deviceFormMachine;
   String _deviceFormSurface = 'new';
@@ -419,18 +422,85 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}'),
     onCommand: _runShortcut,
+    composerBuilder: newHarnessOpensInBox
+        ? (recent) => _newHarnessEmbedded && _newHarness != null
+              ? _newHarnessContent(footer: recent)
+              : Center(
+                  child: SizedBox(
+                    width: 680,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (app.localMachineState == null)
+                            DesktopPill(
+                              label: 'Choose a machine',
+                              icon: Icons.computer_outlined,
+                              onPressed: () => unawaited(_openMachines()),
+                            ),
+                          if (recent != null) ...[
+                            const SizedBox(height: 28),
+                            recent,
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+        : null,
     // What to pick up, opened into this tab the way Cmd-P opens it: a harness
     // as itself, a conversation Harness did not start as a harness resuming it.
     app: app,
     projects: _projects.projects,
-    onOpen: (row) => unawaited(
-      _activateSearch(
-        SwarmSearchSelection(row),
-        app.activeSwarmId,
-        placement: HarnessPlacement.currentTab,
-      ),
-    ),
+    onOpen: (row) {
+      if (_newHarness?.requestDismiss() == false) return;
+      _closeNewHarness(restoreFocus: false);
+      unawaited(
+        _activateSearch(
+          SwarmSearchSelection(row),
+          app.activeSwarmId,
+          placement: HarnessPlacement.currentTab,
+        ),
+      );
+    },
   );
+
+  bool get _canShowWelcomeComposer =>
+      newHarnessOpensInBox &&
+      mounted &&
+      _shortcutsEnabled &&
+      app.panes.isEmpty &&
+      !app.activeSwarm.isStore &&
+      !app.activeSwarm.isOrchestrator &&
+      _newHarness == null &&
+      _search == null &&
+      !_commandBarOpen &&
+      !_pickingFolder &&
+      app.localMachineState != null;
+
+  void _scheduleWelcomeComposer() {
+    if (_welcomeEntryScheduled || !_canShowWelcomeComposer) return;
+    _welcomeEntryScheduled = true;
+    final tab = app.activeSwarmId;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        await _newAgent(
+          stillCurrent: () =>
+              _canShowWelcomeComposer && app.activeSwarmId == tab,
+        );
+      } finally {
+        _welcomeEntryScheduled = false;
+        // Switching tabs while defaults load must schedule the new page too.
+        if (mounted && app.activeSwarmId != tab) _scheduleWelcomeComposer();
+      }
+    });
+    // Also reached after a search overlay's final frame, when there would
+    // otherwise be no next frame to mount the restored page draft.
+    WidgetsBinding.instance.scheduleFrame();
+  }
 
   void _showKeyboardShortcuts() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -812,7 +882,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _pickerModalDepth > 0 ||
         _commandBarOpen ||
         (finding
-            ? _newHarness != null ||
+            ? (_newHarness != null && !_newHarnessEmbedded) ||
                   _modelsOverlay != null ||
                   _harnessesOverlay != null
             : _search != null ||
@@ -934,6 +1004,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
         (_search!.targetId != app.activeSwarmId ||
             (_lastWorkspace?.$2 == true && app.panes.isNotEmpty))) {
       _closeSearch(restoreFocus: false);
+    }
+    if (_newHarnessEmbedded && _newHarness?.swarmId != app.activeSwarmId) {
+      _closeNewHarness(restoreFocus: false);
+    }
+    // A successful creation removes its form through onCreated. Opening a
+    // recent session or restoring a pane can replace the page independently.
+    if (_newHarnessEmbedded && app.panes.isNotEmpty) {
+      final box = _newHarness;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            _newHarnessEmbedded &&
+            identical(_newHarness, box) &&
+            app.panes.isNotEmpty) {
+          _closeNewHarness(restoreFocus: false);
+        }
+      });
     }
     final workspace = (app.activeSwarmId, app.panes.isEmpty);
     if (_lastWorkspace == workspace) return;
@@ -1590,6 +1676,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'paneId': focused.pane.id,
               'agentId': focused.agentId,
             },
+      'footerCovered':
+          (_newHarnessOverlay != null && !_newHarnessHidden) ||
+          _searchOverlay != null,
       'focusedContext': focused == null
           ? null
           : {
@@ -2479,6 +2568,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
   }) async {
+    if (_newHarnessEmbedded &&
+        _newHarness != null &&
+        source == _NewHarnessSource.workspace &&
+        split == null &&
+        engine == null &&
+        machineId == null &&
+        task == null) {
+      _newHarnessFormKey.currentState?.focusComposer();
+      return;
+    }
     final search = source == _NewHarnessSource.workspace ? _search : null;
     // A pane never lands in the store tab: New Harness from there goes to
     // the empty starter tab (or a fresh one), the way New Tab does.
@@ -2547,6 +2646,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final inherited = agent?.engine;
+    final embedded =
+        source == _NewHarnessSource.workspace &&
+        requestedSplit == null &&
+        app.panes.isEmpty &&
+        !app.activeSwarm.isStore &&
+        !app.activeSwarm.isOrchestrator;
+    final welcomeOrigin = embedded
+        ? _newHarnessDrafts.keys
+              .where((key) => key.welcomeTabId == target)
+              .lastOrNull
+        : null;
     _openNewHarness(
       machineId: id,
       // ⌘⇧T is how a shell is made; New Harness from a shell means an agent.
@@ -2560,14 +2670,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
           source == _NewHarnessSource.product,
       task: task,
       fallbackTask: fallbackTask,
-      draftContext: (
-        source: source,
-        machineId: id,
-        requestedEngine: engine,
-        sourceAgentId: draftSource?.agentId,
-        folder: initialFolder,
-        projectName: projectName,
-      ),
+      embedded: embedded,
+      draftContext:
+          welcomeOrigin ??
+          (
+            source: source,
+            machineId: id,
+            requestedEngine: engine,
+            sourceAgentId: draftSource?.agentId,
+            folder: initialFolder,
+            projectName: projectName,
+            welcomeTabId: embedded ? target : null,
+          ),
       swarmId: target,
       split: requestedSplit,
       placement: placement,
@@ -2624,6 +2738,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         swarmId: swarmId,
         split: split,
         placement: returnedPlacement ?? placement,
+        embedded: draftContext?.welcomeTabId != null && app.panes.isEmpty,
       );
       return;
     }
@@ -2648,6 +2763,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     required String swarmId,
     PaneSplitRequest? split,
     HarnessPlacement? placement,
+    bool embedded = false,
   }) {
     // A dialog's pop future can complete before didChangeDependencies refreshes
     // the cached route flag. Its live route already owns the next prompt.
@@ -2666,6 +2782,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           sourceAgentId: app.focusedPane?.agentId,
           folder: folder,
           projectName: projectName,
+          welcomeTabId: embedded ? swarmId : null,
         );
     bool matchesSelection(NewHarnessDraft candidate) =>
         origin.requestedEngine == null ||
@@ -2699,9 +2816,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_search != null) _closeSearch(restoreFocus: false);
     _closeCommandBar(restoreFocus: false);
     analytics.newAgentOpened(source: 'swarm_box');
-    _searchReturnFocus ??= FocusManager.instance.primaryFocus;
+    if (!embedded) _searchReturnFocus ??= FocusManager.instance.primaryFocus;
     if (_native) _preparePaneFocus();
-    _canvasFocus.descendantsAreFocusable = false;
+    _newHarnessEmbedded = embedded;
+    _canvasFocus.descendantsAreFocusable = embedded;
     _newHarnessContext = origin;
     // Consume once. ⌘N resumes this context's whole draft, even after typing
     // in search. Only an explicit new-task action replaces ordinary edits.
@@ -2732,44 +2850,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       placement: placement,
     );
     _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
-    final content = NewHarnessForm(
-      key: _newHarnessFormKey,
-      controller: box,
-      desktop: true,
-      devicePort: _newHarnessDevicePort = DeviceFormPort(),
-      onCreated: () {
-        _closeNewHarness(restoreFocus: false, keepDraft: false);
-        unawaited(_focusCreatedPane());
-      },
-      onClose: () {
-        final target = box.swarmId ?? app.activeSwarmId;
-        _closeNewHarness();
-        app.cancelSwarmDraft(target);
-      },
-      onBrowse: () => _browseForNewHarness(box),
-      onStore: _openStore,
-      onLinkProfile: () => unawaited(_linkProfileForNewHarness(box)),
-      onNeedsForm: () {
-        if (box.busy || box.checking) {
-          box.warn('Check the pending creation before changing forms.');
-          return;
-        }
-        final draft = box.draft;
-        _closeNewHarness(restoreFocus: false, keepDraft: false);
-        unawaited(
-          _newAgentForm(
-            machineId: draft.machineId,
-            initialDraft: draft,
-            draftContext: origin,
-            returnToPrompt: true,
-            swarmId: swarmId,
-            split: split,
-            placement: box.effectivePlacement,
-            returnedPlacement: box.placement,
-          ),
-        );
-      },
-    );
+    _newHarnessDevicePort = DeviceFormPort();
+    if (embedded) {
+      setState(() {});
+      return;
+    }
+    final content = _newHarnessContent();
     _newHarnessOverlay = OverlayEntry(
       // Hidden, not removed, while a dialog ROUTE is up — see
       // [_withNewHarnessHidden]. The form keeps its State and its draft.
@@ -2810,6 +2896,52 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
     );
     Overlay.of(context).insert(_newHarnessOverlay!);
+    if (_native) _syncNative();
+  }
+
+  Widget _newHarnessContent({Widget? footer}) {
+    final box = _newHarness!;
+    final origin = _newHarnessContext!;
+    return NewHarnessForm(
+      key: _newHarnessFormKey,
+      controller: box,
+      desktop: true,
+      embedded: _newHarnessEmbedded,
+      footer: footer,
+      devicePort: _newHarnessDevicePort,
+      onCreated: () {
+        _closeNewHarness(restoreFocus: false, keepDraft: false);
+        unawaited(_focusCreatedPane());
+      },
+      onClose: () {
+        final target = box.swarmId ?? app.activeSwarmId;
+        _closeNewHarness();
+        app.cancelSwarmDraft(target);
+      },
+      onBrowse: () => _browseForNewHarness(box),
+      onStore: _openStore,
+      onLinkProfile: () => unawaited(_linkProfileForNewHarness(box)),
+      onNeedsForm: () {
+        if (box.busy || box.checking) {
+          box.warn('Check the pending creation before changing forms.');
+          return;
+        }
+        final draft = box.draft;
+        _closeNewHarness(restoreFocus: false, keepDraft: false);
+        unawaited(
+          _newAgentForm(
+            machineId: draft.machineId,
+            initialDraft: draft,
+            draftContext: origin,
+            returnToPrompt: true,
+            swarmId: box.swarmId ?? app.activeSwarmId,
+            split: box.split,
+            placement: box.effectivePlacement,
+            returnedPlacement: box.placement,
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _focusCreatedPane() async {
@@ -2851,6 +2983,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (entry == null) return show();
     _newHarnessHidden = true;
     entry.markNeedsBuild();
+    if (_native) _syncNative();
     try {
       return await show();
     } finally {
@@ -2858,6 +2991,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // The box may have been closed under the dialog; the flag is reset
       // either way so the next one does not open invisible.
       _newHarnessOverlay?.markNeedsBuild();
+      if (_native && mounted) _syncNative();
     }
   }
 
@@ -2965,7 +3099,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _newHarnessOverlay?.remove();
     _newHarnessOverlay?.dispose();
     _newHarnessOverlay = null;
+    if (_native && mounted) _syncNative();
     _newHarness = null;
+    final wasEmbedded = _newHarnessEmbedded;
+    _newHarnessEmbedded = false;
+    if (wasEmbedded && mounted) setState(() {});
     _newHarnessDevicePort?.detach();
     _newHarnessDevicePort = null;
     if (keepDraft && _newHarnessContext != null) {
@@ -4738,6 +4876,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final target = _search?.targetId;
     _closeSearch();
     if (target != null) app.cancelSwarmDraft(target);
+    unawaited(_ensureEmptyEntry());
   }
 
   Future<void> _ensureEmptyEntry() async {
@@ -4745,6 +4884,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     await WidgetsBinding.instance.endOfFrame;
     if (mounted && _shortcutsEnabled && app.panes.isEmpty) {
       _restoreEmptyFocus();
+      _scheduleWelcomeComposer();
     }
   }
 
@@ -5704,6 +5844,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       _maybeLink();
+      _scheduleWelcomeComposer();
       if (app.panes.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => _restoreEmptyFocus(),

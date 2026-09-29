@@ -1054,6 +1054,19 @@ private extension SwarmTabStrip {
     update(state(rows, active: "swarm-11"))
     try checkTitlebar(pullRequestButton.actionURL == nil && pullRequestButton.accessibilityValue() as? String == "",
       "Changing to a pane without a PR clears the old link and state")
+    var covered = state(rows, active: "swarm-11")
+    covered["footerCovered"] = true
+    update(covered)
+    try checkTitlebar(statusBar.isHidden,
+      "Flutter's modal backdrop covers the native footer too")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == false,
+      "The covered footer is removed from the native accessibility tree")
+    covered["footerCovered"] = false
+    update(covered)
+    try checkTitlebar(!statusBar.isHidden,
+      "Closing the modal restores the native footer")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == true,
+      "Closing the modal restores the footer's accessibility controls")
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
     try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
     try tabs[0].checkDoubleClickIsolation()

@@ -537,7 +537,7 @@ void main() {
     },
   );
 
-  testWidgets('⌘N opens the box over live panes, and Escape closes it', (
+  testWidgets('⌘N opens over live panes, and only Close dismisses it', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
@@ -573,6 +573,9 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
+    expect(find.byKey(const ValueKey('new-harness-form')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

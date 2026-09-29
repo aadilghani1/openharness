@@ -9,6 +9,7 @@ import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_history.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/mixed_agents.dart';
@@ -223,56 +224,69 @@ void main() {
     ]);
   });
 
-  test('desktop agents use recency, four defaults, seven tuned harnesses, then the catalog', () async {
-    final fixture = _Fixture();
-    final box = fixture.open();
-    await _settle();
-    const featured = [
-      'autonomous/blender',
-      'autonomous/circuitjs',
-      'autonomous/godogen',
-      'autonomous/mujoco',
-      'autonomous/rdkit',
-      'autonomous/strudel',
-      'autonomous/typst',
-    ];
-    fixture.app.machineStates['m']!.dsh.replace([
-      for (final id in [...featured, 'autonomous/manim'])
-        DshEntry(id: id, name: id, engine: 'codex'),
-    ]);
-    box.useDesktopChoices(true);
-    box.focusField(NewHarnessField.harness);
-    expect(box.options.take(11).map((o) => o.id), [
-      'claude',
-      'codex',
-      'grok',
-      'cursor',
-      ...featured,
-    ]);
-    await fixture.app.agentPreference.remember(
-      'codex',
-      harnessId: 'autonomous/rdkit',
-    );
-    await fixture.app.agentPreference.remember('cursor');
-    await fixture.app.agentPreference.remember(
-      'codex',
-      harnessId: 'removed/tool',
-    );
-    box.focusField(NewHarnessField.launch);
-    box.focusField(NewHarnessField.harness);
-    final ids = box.options.map((o) => o.id).toList();
-    expect(ids.take(11), [
-      'cursor',
-      'autonomous/rdkit',
-      'claude',
-      'codex',
-      'grok',
-      ...featured.where((id) => id != 'autonomous/rdkit'),
-    ]);
-    expect(ids.toSet().length, ids.length);
-    expect(ids, isNot(contains('removed/tool')));
-    expect(ids, contains('autonomous/manim'));
-  });
+  test(
+    'desktop keeps every coding agent above recent specialized harnesses',
+    () async {
+      final fixture = _Fixture();
+      final box = fixture.open();
+      await _settle();
+      const featured = [
+        'autonomous/blender',
+        'autonomous/circuitjs',
+        'autonomous/godogen',
+        'autonomous/mujoco',
+        'autonomous/rdkit',
+        'autonomous/strudel',
+        'autonomous/typst',
+      ];
+      fixture.app.machineStates['m']!.dsh.replace([
+        for (final id in [...featured, 'autonomous/manim'])
+          DshEntry(id: id, name: id, engine: 'codex'),
+      ]);
+      box.useDesktopChoices(true);
+      box.focusField(NewHarnessField.harness);
+      const leading = [
+        'claude',
+        'codex',
+        'cursor',
+        'copilot',
+        'grok',
+        'opencode',
+      ];
+      final engines = allEngines.map((engine) => engine.id).toSet();
+      final initial = box.options.map((option) => option.id).toList();
+      expect(initial.take(leading.length), leading);
+      expect(initial.take(engines.length).toSet(), engines);
+      expect(initial.skip(engines.length).take(featured.length), featured);
+      expect(initial.last, kTerminalEngine);
+      await fixture.app.agentPreference.remember(
+        'codex',
+        harnessId: 'autonomous/rdkit',
+      );
+      await fixture.app.agentPreference.remember('cursor');
+      await fixture.app.agentPreference.remember(
+        'codex',
+        harnessId: 'removed/tool',
+      );
+      box.focusField(NewHarnessField.launch);
+      box.focusField(NewHarnessField.harness);
+      final ids = box.options.map((o) => o.id).toList();
+      expect(ids.take(engines.length), initial.take(engines.length));
+      expect(ids.skip(engines.length).take(featured.length), [
+        'autonomous/rdkit',
+        ...featured.where((id) => id != 'autonomous/rdkit'),
+      ]);
+      expect(ids.toSet().length, ids.length);
+      expect(ids, isNot(contains('removed/tool')));
+      expect(ids, contains('autonomous/manim'));
+      expect(ids.last, kTerminalEngine);
+      // A search for a specialized harness still brings that match to the top.
+      box.setQuery('rdkit');
+      expect(box.options.first.id, 'autonomous/rdkit');
+      box.setQuery('');
+      expect(box.options.map((option) => option.id), ids);
+    },
+  );
 
   group('approval preference storage', () {
     test(
