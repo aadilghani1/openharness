@@ -318,6 +318,8 @@ pub struct Tab {
     pub layout: Value,
     /// Last layout observed on the desk, separate from the local edit awaiting its reply.
     pub desk_layout: Value,
+    /// A named choice awaiting publication, separate from the last observed desk document.
+    desk_preset: Option<(usize, &'static str)>,
 }
 
 impl Tab {
@@ -329,7 +331,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_preset: None }
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -3439,6 +3441,7 @@ impl App {
         tab.root = layout::arrange(named, &ids, body.width, body.height, status, (&mw, &mh), (&ow, &oh));
         tab.zoomed = false;
         tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named);
+        if tab.on_desk { tab.desk_preset = named_to_desk(named, ids.len()).map(|preset| (ids.len(), preset)); }
         self.fit_panes();
         self.layout_changed(index);
     }
@@ -4501,9 +4504,15 @@ impl App {
             let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else { continue };
             let Some(root) = tab.root.as_ref() else { continue };
             if !tab.layout.is_object() { tab.layout = json!({}) }
-            let now = root.to_tmux();
-            if tab.layout.get("tmux").and_then(Value::as_str) == Some(now.as_str()) { continue }
-            tab.layout["tmux"] = json!(now);
+            let before = tab.layout.clone();
+            tab.layout["tmux"] = json!(root.to_tmux());
+            // C-b Space and select-layout use this path too. Keep the desktop's
+            // corresponding shape current, instead of leaving an older preset behind.
+            if let Some((count, preset)) = tab.desk_preset.take() {
+                if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
+                tab.layout["presets"][count.to_string()] = json!(preset);
+            }
+            if tab.layout == before { continue }
             let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
             self.desk_op(op);
         }
@@ -4976,19 +4985,6 @@ impl App {
     /// select-layout -t: that window's panes in that shape.
     pub fn apply_preset_at(&mut self, index: usize, preset: Preset) {
         self.arrange_tab(index, layout::Named::of(preset));
-        let Some(tab) = self.tabs.get_mut(index) else { return };
-        let ids = tab.panes();
-        // The same shape on every window: the desk's layout keys presets by pane count.
-        if tab.on_desk && !ids.is_empty() {
-            if !tab.layout.is_object() { tab.layout = json!({}) }
-            if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
-            tab.layout["presets"][ids.len().to_string()] = json!(preset_to_desk(preset, ids.len()));
-            // (And as tmux lays it out, which the other terminals take over the preset.)
-            if let Some(root) = tab.root.as_ref() { tab.layout["tmux"] = json!(root.to_tmux()) }
-            let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
-            self.desk_op(op);
-        }
-        self.fit_panes();
     }
 
     // ── the desk: tabs shared with every window on the account ─────────────────
@@ -5074,7 +5070,11 @@ impl App {
                     // A reply to our own write is an acknowledgement, not a request to
                     // arrange again. In particular, a legacy desk omits layout.tmux. Also
                     // keep input queued in this event batch until its layout is sent.
-                    let relayout = tab.desk_layout != layout_doc && tab.layout != layout_doc
+                    // Desktop serializes presets/sizes, dropping the tmux-only field.
+                    // That round-trip, or another pane count's settings, is not a new
+                    // arrangement. Compare only the geometry this window consumes.
+                    let relayout = desk_layout_changed(&tab.desk_layout, &layout_doc, panes.len())
+                        && desk_layout_changed(&tab.layout, &layout_doc, panes.len())
                         && acknowledged.get(&id) != Some(&layout_doc)
                         && !self.desk_layouts.contains(&id);
                     tab.desk_layout = layout_doc.clone();
@@ -5543,14 +5543,39 @@ fn preset_from_desk(id: &str, count: usize) -> Preset {
     }
 }
 
-fn preset_to_desk(preset: Preset, count: usize) -> &'static str {
-    match preset {
-        Preset::Columns => match count { 2 => "columns", 3 => "cols3", 4 => "cols4", 5 => "cols5", _ => "columns" },
-        Preset::Rows => "rows",
-        Preset::MainStack => "mainAndStack",
-        Preset::MainRow => "mainOverGrid",
-        Preset::Grid => if count == 4 { "quad" } else { "auto" },
+/// Native layouts take precedence when present. Their omission by a desktop save
+/// is not an instruction to reset the terminal; only a changed current-count preset is.
+fn desk_layout_changed(before: &Value, after: &Value, count: usize) -> bool {
+    if let Some(native) = after.get("tmux").and_then(Value::as_str) {
+        return before.get("tmux").and_then(Value::as_str) != Some(native);
     }
+    let path = format!("/presets/{count}");
+    let preset = |doc: &Value| preset_from_desk(doc.pointer(&path).and_then(Value::as_str).unwrap_or(""), count);
+    preset(before) != preset(after)
+}
+
+/// Desktop presets with the same split topology. Unsupported shapes retain their
+/// exact native layout without publishing an invalid preset for that pane count.
+fn named_to_desk(named: layout::Named, count: usize) -> Option<&'static str> {
+    use layout::Named::*;
+    Some(match (count, named) {
+        (2, EvenHorizontal | MainVertical | MainVerticalMirrored) => "columns",
+        (2, _) => "rows",
+        (3, EvenHorizontal) => "cols3",
+        (4, EvenHorizontal) => "cols4",
+        (5, EvenHorizontal) => "cols5",
+        (3 | 4, EvenVertical) => "rows",
+        (3, MainHorizontal) => "oneOverTwo",
+        (3, MainHorizontalMirrored | Tiled) => "twoOverOne",
+        (3, MainVertical) => "mainLeft",
+        (3, MainVerticalMirrored) => "mainRight",
+        (4, MainHorizontal) => "mainOverGrid",
+        (4, MainVertical) => "mainAndStack",
+        (4, Tiled) => "quad",
+        (5 | 6, Tiled) => "balanced2",
+        (9, Tiled) => "balanced3",
+        _ => return None,
+    })
 }
 
 /// Whether a tab already shows exactly the desk's panes (only the layout changed).
@@ -5761,6 +5786,83 @@ mod desk_layout_tests {
         // An actual subsequent layout choice elsewhere still takes effect.
         app.apply_desk(&desk(3, json!({"presets":{"3":"rows"}})));
         assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn a_desktop_round_trip_keeps_a_two_pane_layout_choice() {
+        let mut app = fixture();
+        app.tabs[0].root = layout::arrange(layout::Named::MainHorizontal, &[1, 2], 120, 35,
+            layout::Status::Top, ("80", "12"), ("0", "0"));
+        app.panes.remove(&3);
+        let chosen = geometry(&app);
+        app.tabs[0].layout = json!({"presets":{"2":"columns"},"tmux":chosen});
+        app.tabs[0].desk_layout = app.tabs[0].layout.clone();
+        let mut update = desk(2, json!({"presets":{"2":"columns"},"sizes":{}}));
+        update["tabs"][0]["panes"].as_array_mut().unwrap().pop();
+        // Desktop knows presets/sizes, but its serializer drops the terminal-only field.
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        // Editing another pane count's preset also leaves this two-pane window alone.
+        update["revision"] = json!(3);
+        update["tabs"][0]["layout"]["presets"]["3"] = json!("rows");
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        // A deliberate remote choice for the current count still applies.
+        update["revision"] = json!(4);
+        update["tabs"][0]["layout"]["presets"]["2"] = json!("rows");
+        app.apply_desk(&update);
+        assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn desktop_metadata_and_preset_aliases_do_not_reset_native_geometry() {
+        let mut app = fixture();
+        let chosen = geometry(&app);
+        app.tabs[0].layout = json!({"presets":{"3":"cols3"},"tmux":chosen});
+        app.tabs[0].desk_layout = app.tabs[0].layout.clone();
+        app.apply_desk(&desk(2, json!({"presets":{"3":"columns","4":"quad"},"sizes":{"4:quad":[]}})));
+        assert_eq!(geometry(&app), chosen);
+        // Another hn's explicit native geometry is still authoritative.
+        let root = layout::arrange(layout::Named::EvenVertical, &[1, 2, 3], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        app.apply_desk(&desk(3, json!({"presets":{"3":"columns"},"tmux":root.to_tmux()})));
+        assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn queued_preset_survives_reconciliation_without_overwriting_later_remote_choices() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read; // Inspect publication without any HTTP task.
+        app.arrange_tab(0, layout::Named::EvenHorizontal);
+        let chosen = geometry(&app);
+        app.apply_desk(&desk(2, json!({"presets":{"3":"rows"}})));
+        app.send_desk_layouts();
+        assert_eq!(geometry(&app), chosen);
+        assert_eq!(app.tabs[0].layout["presets"]["3"], "cols3");
+        let sent = app.tabs[0].layout.clone();
+        app.apply_desk(&desk(3, sent));
+        app.apply_desk(&desk(4, json!({"presets":{"3":"rows"}})));
+        assert_ne!(geometry(&app), chosen);
+        // A divider edit after the remote choice must not revive our old preset.
+        app.layout_changed(0);
+        app.send_desk_layouts();
+        assert_eq!(app.tabs[0].layout["presets"]["3"], "rows");
+    }
+
+    #[test]
+    fn named_layouts_publish_desktop_presets_valid_for_the_pane_count() {
+        use layout::Named::*;
+        for named in layout::Named::ALL {
+            assert_eq!(named_to_desk(named, 1), None);
+            assert!(matches!(named_to_desk(named, 2), Some("columns" | "rows")));
+        }
+        assert_eq!(named_to_desk(MainHorizontal, 3), Some("oneOverTwo"));
+        assert_eq!(named_to_desk(MainHorizontalMirrored, 3), Some("twoOverOne"));
+        assert_eq!(named_to_desk(MainVertical, 3), Some("mainLeft"));
+        assert_eq!(named_to_desk(MainVerticalMirrored, 3), Some("mainRight"));
+        assert_eq!(named_to_desk(MainVertical, 4), Some("mainAndStack"));
+        assert_eq!(named_to_desk(EvenHorizontal, 6), None);
+        assert_eq!(named_to_desk(EvenVertical, 5), None);
     }
 
     #[test]

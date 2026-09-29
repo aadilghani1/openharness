@@ -72,7 +72,10 @@ Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pa
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
 with one-cell gaps, inset terminal content and a highlighted title for the focused pane. The
-surfaces follow the terminal's light/dark theme. Padding
+surfaces follow the terminal's light/dark theme: the focused pane keeps full contrast and
+other panes use softer backgrounds and text. Explicit program colors and user styles stay intact.
+The muted green status bar keeps tmux's familiar anchor, with tabs ordered `number:name status`
+and plain quota warnings with a small amber or red indicator. Padding
 shrinks automatically in small panes. The space between panes remains a resize handle; mouse
 coordinates, copy selection and PTY dimensions follow the inset content. `window_layout` keeps
 the original split structure. Use `set -g @hn-animations off` to keep
@@ -200,8 +203,8 @@ and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lin
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
 `#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
 `#{usage}` (the agent accounts' rate limits on the focused pane's machine: `claude 5h 42% week
-18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80%; the status line shows
-it reversed, so you know before you start more agents),
+18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80%). The status line uses
+`#{usage_high_mark}`: an amber dot at 80% or red at 100%, followed by plain text. Other formats:
 `#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).

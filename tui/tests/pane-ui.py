@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+import unicodedata
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_PANE_UI_PORT', '19783'))
@@ -28,9 +29,9 @@ assert TMUX
 ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
-           HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1')
+           HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "#{fleet}  studio  20:41 "\n')
+CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{fleet}  studio  20:41 "\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -80,6 +81,36 @@ def mouse(code, x, y, release=False):
     tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
 
 
+def background_at(x, y):
+    row = tmux('capture-pane', '-p', '-e', '-t', 'test', '-S', str(y), '-E', str(y)).splitlines()[0]
+    col, bg = 0, 'default'
+    for token in re.findall(r'\x1b\[[0-9;:]*m|.', row):
+        if token.startswith('\x1b['):
+            codes = [int(v or 0) for v in token[2:-1].split(';')]
+            i = 0
+            while i < len(codes):
+                c = codes[i]
+                if c in (0, 49): bg = 'default'
+                elif c in (38, 48) and i + 4 < len(codes) and codes[i + 1] == 2:
+                    if c == 48: bg = '#%02x%02x%02x' % tuple(codes[i + 2:i + 5])
+                    i += 4
+                elif c in (38, 48) and i + 2 < len(codes) and codes[i + 1] == 5:
+                    if c == 48: bg = f'colour{codes[i + 2]}'
+                    i += 2
+                elif 40 <= c <= 47: bg = f'colour{c - 40}'
+                i += 1
+        else:
+            width = 0 if unicodedata.combining(token) else (2 if unicodedata.east_asian_width(token) in ('W', 'F') else 1)
+            if col <= x < col + width: return bg
+            col += width
+    return bg
+
+
+def pane_background(pane):
+    x, y, height = map(int, value('#{pane_left} #{pane_top} #{pane_height}', pane).split())
+    return background_at(x, y + height - 2)
+
+
 def snapshot(name):
     if OUTPUT:
         (OUTPUT / (name + '.ansi')).write_text(tmux('capture-pane', '-p', '-e', '-t', 'test'))
@@ -119,9 +150,24 @@ try:
     time.sleep(.2)
     snapshot('panes-columns')
     original = value('#{window_layout}')
+    active_bg = hn('show', '-gwv', 'window-active-style').split('bg=')[1]
+    inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
+    assert active_bg != inactive_bg
+    wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
+    tab = value(hn('show', '-gwv', 'window-status-current-format'))
+    label = value('#{window_index}:#{window_short_name}')
+    assert tab.startswith(label + ' '), (tab, label)
+    assert value('#{window_agent_icon}') in tab[len(label):]
+    assert 'reverse' not in value('#{fleet}')
+    assert 'reverse' not in value('#{tree_mode_format}')
+    assert 'reverse' not in value('#{pane_agent_mark}', second)
+    assert 'reverse' not in hn('show', '-gv', 'status-right')
+    wait(lambda: 'Claude · 5h 100%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'plain quota warning reaches the status row')
+    print('PASS pane UI: whole-pane focus contrast, name before status, plain status badges', flush=True)
 
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == second, 'C-b Right with insets')
+    wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'keyboard focus moves pane contrast')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == third, 'second C-b Right')
     keys('C-b', 'Right')
@@ -156,6 +202,7 @@ try:
     mouse(0, second_x, 1)
     mouse(0, second_x, 1, release=True)
     wait(lambda: value('#{pane_id}') == second, 'click the pane header')
+    wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'mouse focus moves pane contrast')
     assert len(api()['inputs']) == before, api()['inputs'][before:]
     mouse(0, border, 10)
     mouse(32, border + 3, 10)
@@ -234,16 +281,21 @@ try:
     layout_before_theme = value('#{window_layout}')
     before = len(api()['inputs'])
     background('#f7f7f7')
-    wait(lambda: hn('show', '-gwv', 'window-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
+    wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
+    wait(lambda: pane_background(first) == '#f7f7f7' and pane_background(second) == '#e5e5e5', 'light focus contrast')
+    light_status = hn('show', '-gv', 'status-style')
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
     hn('set', '-gw', 'window-style', 'fg=red,bg=blue')
     background('#101010')
-    wait(lambda: hn('show', '-gv', 'status-style').endswith('bg=#101010'), 'dark theme after a light theme')
+    wait(lambda: hn('show', '-gv', 'status-style') != light_status, 'green status follows the dark theme')
     assert hn('show', '-gwv', 'window-style') == 'fg=red,bg=blue'
+    assert hn('show', '-gwv', 'window-active-style') == 'default'
+    wait(lambda: pane_background(first) == 'colour4' and pane_background(second) == 'colour4', 'custom backgrounds win on active and inactive panes')
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
-    assert hn('show', '-gwv', 'window-style').startswith('fg=#f5f5f5,')
+    assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
+    wait(lambda: pane_background(first) == '#101010' and pane_background(second) == '#393939', 'dark focus contrast')
     print('PASS pane UI: live light/dark themes, reported defaults and custom style preservation', flush=True)
 
     hn('send-keys', '-t', first, '-l', '\x1b[H\x1b[31;44mHN_COLOR\x1b[0m')

@@ -61,7 +61,7 @@ tmux_ send-keys -t t 'Mock\ Claude'
 expect "fuzzy filter narrows" "1/"
 # Enter, as tmux's chooser: the harness in a window of its own (not a split of this one).
 tmux_ send-keys -t t Enter
-expect "C-b s Enter: a window of its own" "1:· Mock Claude*"
+expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude ·*"
 wait_eq "the harness window's one pane" "1" hn display -p '#{window_panes}'
 hn kill-window
 tmux_ send-keys -t t C-b s
@@ -158,7 +158,7 @@ push "{\"type\":\"dial_swarm\",\"payload\":{\"swarmId\":\"$first\"}}"
 wait_eq "picking a window on the dial selects it" 0 hn display -p '#{window_index}'
 tmux_ send-keys -t t C-b 1
 tmux_ send-keys -t t C-b 0
-expect "C-b 0: back to window 0 (its harness idle: ·)" "0:· "
+wait_eq "C-b 0: back to window 0 (its harness idle: ·)" "0 ·" hn display -p '#{window_index} #{window_agent_icon}'
 # A harness at work, then done, as the daemon's events say it: its line, the counts, C-b a.
 claude=$(dial "d.agents.find(a => a.name === 'Mock Claude').id")
 csess=$(dial "d.agents.find(a => a.name === 'Mock Claude').sessionId")

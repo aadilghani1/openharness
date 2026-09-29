@@ -313,7 +313,7 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
     };
     for c in frame.cells() {
         let style = border_style(app, c.paint == crate::borders::Paint::Active);
-        let style = if c.marked { style.add_modifier(Modifier::REVERSED) } else { style };
+        let style = if c.marked { style.add_modifier(if app.options.tmux_look() { Modifier::REVERSED } else { Modifier::BOLD }) } else { style };
         if let Some(cell) = buf.cell_mut((body.x + c.x as u16, body.y + c.y as u16)) { cell.set_symbol(&c.glyph).set_style(style); }
     }
     for t in frame.titles() {
@@ -466,7 +466,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     status_formats(buf, app, rect);
     let line = app.options.get("message-line", "", None).and_then(|n| n.parse::<u16>().ok()).unwrap_or(0).min(rect.height.saturating_sub(1));
     let rect = Rect::new(rect.x, rect.y + line, rect.width, 1);
-    // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
+    // Messages inherit the configured status message colors.
     let yellow = app.message_style();
     // (A prompt's completion menu keeps the prompt on the status line under it.)
     let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
@@ -2162,10 +2162,10 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
         for i in 0..thumb { bar_cells.1[header + start + i] = true }
     }
     if let Some(bar) = &scrollbar { for (row, marked) in bar_cells.1.iter().enumerate() { if *marked { buf.set_string(pb.bar_x, inner.y + row as u16, bar, pal.preview_scrollbar.style()); } } }
-    // Its offset, N/M, at the top right in the info colour reversed (not with noinfo).
+    // The preview offset is a quiet label; exact tmux/fzf appearance keeps its inverse style.
     let mark = format!("{}/{}", offset + 1, total);
     if scrollable && pw.info && (mark.width() as u16) < inner.width {
-        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(Modifier::REVERSED));
+        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(if app.options.tmux_look() { Modifier::REVERSED } else { Modifier::BOLD }));
     }
 }
 
@@ -2499,8 +2499,10 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         let note = &note;
         buf.set_style(area, Style::default().add_modifier(Modifier::DIM));
         let row = Rect::new(area.x, area.y, area.width, 1);
-        buf.set_style(row, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
-        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" {note}"), w = area.width as usize), area.width as usize, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        let notice = Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset))
+            .remove_modifier(Modifier::DIM | Modifier::REVERSED).add_modifier(Modifier::BOLD);
+        buf.set_style(row, notice);
+        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" ! {note}"), w = area.width as usize), area.width as usize, notice);
         return None;
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.

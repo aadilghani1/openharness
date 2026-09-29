@@ -992,15 +992,33 @@ fn tab_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect
 /// tmux's #{pane_title}: what select-pane -T set, or the program (OSC 0/2) when allow-set-title
 /// is on (hn's default is off: a harness's name is its title), else the harness's name.
 /// A harness state's symbol with its style, for a format: its colour (the terminal's own 16),
-/// dim for the quiet ones (idle, paused, offline), reversed and bold when it needs you; no colour
+/// dim for the quiet ones (idle, paused, offline), bold when it needs you; no colour
 /// under NO_COLOR.
 pub fn agent_mark(state: crate::fleet::State, tick: u64) -> String {
     let (glyph, _, colour) = crate::theme::state_mark(state, tick);
     let (mut on, mut off): (Vec<String>, Vec<&str>) = (Vec::new(), Vec::new());
     if colour == crate::theme::MUTED { on.push("dim".into()); off.push("nodim") }
     else if colour != ratatui::style::Color::Reset { on.push(format!("fg={}", crate::tmuxconf::colour_name(colour))); off.push("fg=default") }
-    if state == crate::fleet::State::NeedsInput { on.extend(["reverse".into(), "bold".into()]); off.extend(["noreverse", "nobold"]) }
+    if state == crate::fleet::State::NeedsInput { on.push("bold".into()); off.push("nobold") }
     if on.is_empty() { glyph.to_string() } else { format!("#[{}]{glyph}#[{}]", on.join(","), off.join(",")) }
+}
+
+
+/// Keep warnings readable on the status bar: a colored dot, plain text, no badge background.
+fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, marked: bool) -> String {
+    let mut worst: Option<(&crate::fleet::Usage, &crate::fleet::Window)> = None;
+    for u in readings { for w in &u.windows {
+        if w.used >= 80.0 && worst.map(|(_, old)| w.used > old.used).unwrap_or(true) { worst = Some((u, w)); }
+    } }
+    let Some((u, w)) = worst else { return String::new() };
+    if !marked { return format!("{} {} {:.0}%", u.provider, w.label, w.used) }
+    let provider = match u.provider.as_str() { "claude" => "Claude", "codex" => "Codex", p => p };
+    let light = crate::term_out::terminal_is_light().unwrap_or(false);
+    let color = match (light, w.used >= 100.0) {
+        (false, false) => "#f3cc76", (false, true) => "#ff9b8e",
+        (true, false) => "#875600", (true, true) => "#a53028",
+    };
+    format!("#[fg={color}]●#[fg=default] {provider} · {} {:.0}%", w.label, w.used)
 }
 
 pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
@@ -1173,7 +1191,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "waiting" => app.fleet.waiting().to_string(),
         // The fleet in counts (shells aside): needs you, failed, done and unread, working, idle —
         // and #{fleet}, the status line's: the ones that ask something of you, each with its
-        // symbol (the needs-you count reversed), a state with none left out.
+        // symbol (the needs-you count bold), a state with none left out.
         "fleet_needs" => app.fleet.count(crate::fleet::State::NeedsInput).to_string(),
         "fleet_failed" => app.fleet.count(crate::fleet::State::Failed).to_string(),
         "fleet_done" => app.fleet.count(crate::fleet::State::Done).to_string(),
@@ -1183,7 +1201,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             use crate::fleet::State::*;
             let mut parts = Vec::new();
             let n = app.fleet.count(NeedsInput);
-            if n > 0 { parts.push(format!("#[reverse]?{n}#[noreverse]")) }
+            if n > 0 { parts.push(format!("#[bold]?{n}#[nobold]")) }
             for (state, glyph) in [(Failed, "✗"), (Done, "✓"), (Working, crate::theme::spinner(app.tick))] {
                 let n = app.fleet.count(state);
                 if n > 0 { parts.push(format!("{glyph}{n}")) }
@@ -1200,7 +1218,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_watcher" => pane.and_then(|p| match &p.phase { crate::pane::Phase::Watching(who) => Some(who.clone()), _ => None }).unwrap_or_default(),
         "pane_machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         // The harness's symbol as its title draws it (#{pane_agent_icon}, styled): in its state's
-        // colour, needs you reversed and bold, idle dim.
+        // colour, needs you bold, idle dim.
         "pane_agent_mark" => pane.and_then(|p| app.pane_state(p.id)).map(|s| agent_mark(s, app.tick)).unwrap_or_default(),
         // Where the harness works, as zsh's robbyrussell prompt writes it: `project git:(branch)`,
         // else `git:(branch)`, else the branch — the longest that fits beside the pane's title (a
@@ -1246,13 +1264,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let m = pane.map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone());
             app.usage.get(&m).map(|u| u.iter().map(|x| x.line()).collect::<Vec<_>>().join(" · ")).unwrap_or_default()
         }
-        "usage_high" => {
-            let mut worst: Option<(f64, String)> = None;
-            for u in app.usage.values().flatten() {
-                for w in &u.windows { if w.used >= 80.0 && worst.as_ref().map(|(p, _)| w.used > *p).unwrap_or(true) { worst = Some((w.used, format!("{} {} {:.0}%", u.provider, w.label, w.used))) } }
-            }
-            worst.map(|(_, t)| t).unwrap_or_default()
-        }
+        "usage_high" | "usage_high_mark" => quota_warning(app.usage.values().flatten(), name == "usage_high_mark"),
         "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
         "window_agent_state" => tab.and_then(|_| app.window_state(window)).map(state_word).unwrap_or("").into(),
@@ -1350,7 +1362,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "next_session_id" => format!("${}", crate::ids::peek(crate::ids::Kind::Session)),
         "buffer_mode_format" => "#{t/p:buffer_created}: #{buffer_sample}".into(),
         "client_mode_format" => "#{t/p:client_activity}: session #{session_name}".into(),
-        "tree_mode_format" => "#{?pane_format,#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",},#{?window_format,#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",},#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}}}".into(),
+        "tree_mode_format" => crate::tree::default_format(app.options.tmux_look()),
         "config_files" => app.config_files.join(","),
         // The file whose commands are running (cfg.c's current_file): a sourced file's, as its
         // `source -F "#{d:current_file}/…"` reads it.
@@ -1550,6 +1562,22 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quota_warning_marks_only_high_usage_without_reversing_text() {
+        let mut u = crate::fleet::Usage { provider: "claude".into(), account: None,
+            windows: vec![crate::fleet::Window { label: "week".into(), used: 79.0, resets: None }] };
+        assert_eq!(super::quota_warning(std::iter::once(&u), true), "");
+        u.windows[0].used = 80.0;
+        let warning = super::quota_warning(std::iter::once(&u), true);
+        assert!(warning.contains("●#[fg=default] Claude · week 80%"));
+        assert!(!warning.contains("reverse") && !warning.contains("bg="));
+        u.windows[0].used = 100.0;
+        let full = super::quota_warning(std::iter::once(&u), true);
+        assert_ne!(warning.split(']').next(), full.split(']').next());
+        assert!(full.ends_with("Claude · week 100%"));
+        assert_eq!(super::quota_warning(std::iter::once(&u), false), "claude week 100%");
+    }
+
     #[test]
     fn format_regex_uses_posix_extended_expressions() {
         assert!(super::posix_match("^(foo|bar)[[:digit:]]+$", "foo12", false));
