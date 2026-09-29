@@ -49,9 +49,12 @@ class DeskTabFilterBar extends StatefulWidget {
 
   final ValueChanged<String?> onSelected;
 
-  /// Drawn height: a chip, and the gap under it.
-  static const double height = _chipHeight + 8;
+  /// Drawn height: a chip, with a gap over it that parts it from the field
+  /// and one under it that parts it from the first row.
+  static const double height = _gapAbove + _chipHeight + _gapBelow;
+  static const double _gapAbove = 8;
   static const double _chipHeight = 30;
+  static const double _gapBelow = 8;
 
   @override
   State<DeskTabFilterBar> createState() => _DeskTabFilterBarState();
@@ -170,7 +173,12 @@ class _DeskTabFilterBarState extends State<DeskTabFilterBar> {
               scrollDirection: Axis.horizontal,
               // The rows' own gutter, so the first chip starts where their
               // names do.
-              padding: const EdgeInsets.fromLTRB(Tty.origin, 0, Tty.origin, 8),
+              padding: const EdgeInsets.fromLTRB(
+                Tty.origin,
+                DeskTabFilterBar._gapAbove,
+                Tty.origin,
+                DeskTabFilterBar._gapBelow,
+              ),
               child: Row(
                 children: [
                   for (var i = 0; i < choices.length; i++) ...[
