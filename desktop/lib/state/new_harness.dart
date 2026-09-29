@@ -1642,24 +1642,24 @@ class NewHarnessController extends ChangeNotifier {
     detail: machineLabel,
   );
 
-  bool _projectsOnSelectedMachine = false;
+  bool _desktopChoices = false;
 
-  /// The desktop Repo menu owns machine selection; its recent folders must
-  /// match that location. The terminal menu retains its fleet-wide history.
-  void scopeProjectsToSelectedMachine(bool scoped) {
-    if (_projectsOnSelectedMachine == scoped) return;
-    _projectsOnSelectedMachine = scoped;
+  /// Desktop menus scope folders to the selected machine and order agents by
+  /// launch recency followed by the desktop's featured choices.
+  void useDesktopChoices(bool desktop) {
+    if (_desktopChoices == desktop) return;
+    _desktopChoices = desktop;
     _refresh(resetCursor: true);
   }
 
   List<NewHarnessOption> _projectMenu() => [
-    if (_projectsOnSelectedMachine) _changeMachine,
-    const NewHarnessOption(
-      id: repositoryId,
-      synthetic: true,
-      title: 'Clone Repository',
-      detail: 'Paste a GitHub repository URL',
-    ),
+    if (!_desktopChoices)
+      const NewHarnessOption(
+        id: repositoryId,
+        synthetic: true,
+        title: 'Clone Repository',
+        detail: 'Paste a GitHub repository URL',
+      ),
     const NewHarnessOption(
       id: existingProjectId,
       synthetic: true,
@@ -1672,6 +1672,13 @@ class NewHarnessController extends ChangeNotifier {
       title: 'New Folder',
       detail: 'Name a new folder',
     ),
+    if (_desktopChoices)
+      const NewHarnessOption(
+        id: repositoryId,
+        synthetic: true,
+        title: 'GitHub',
+        detail: 'Clone a GitHub repository',
+      ),
     ..._ranked(_recentProjects()),
   ];
 
@@ -2318,6 +2325,8 @@ class NewHarnessController extends ChangeNotifier {
       null,
       ...app.agentPreference.recentHarnesses,
       null,
+      ...app.agentPreference.recentChoices,
+      null,
       // An install narrates through pushes that change no catalog row.
       if (installRun case final run?) ...[
         run.phase,
@@ -2651,6 +2660,37 @@ class NewHarnessController extends ChangeNotifier {
         if (machine?.dsh[id]?.installed == false) 'installs first',
       ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
     );
+    if (_desktopChoices) {
+      final engines = {
+        for (final engine in allEngines) engine.id,
+        kTerminalEngine,
+      };
+      return _ranked([
+        for (final id in <String>{
+          for (final id in [
+            ...app.agentPreference.recentChoices,
+            'claude',
+            'codex',
+            'grok',
+            'cursor',
+            'autonomous/blender',
+            'autonomous/circuitjs',
+            'autonomous/godogen',
+            'autonomous/mujoco',
+            'autonomous/rdkit',
+            'autonomous/strudel',
+            'autonomous/typst',
+            ...engines,
+            ...harnesses,
+          ])
+            if (isHarnessId(id) ? _offered(id) : engines.contains(id))
+              isHarnessId(id) ? operationId(id) : id,
+        })
+          isHarnessId(id)
+              ? row(id)
+              : NewHarnessOption(id: id, title: labelOf(id), engine: id),
+      ]);
+    }
     return _ranked([
       for (final id in recents) row(id),
       for (final id in <String>{
@@ -2686,7 +2726,11 @@ class NewHarnessController extends ChangeNotifier {
   // local one is the choice most launches want, and an unusable machine in
   // the middle of the usable ones made the list read as a jumble. Within
   // each group the inventory's own order holds.
-  List<NewHarnessOption> _machineOptions() => _ranked([
+  List<NewHarnessOption> _machineOptions() => _ranked(machineChoices);
+
+  /// Unfiltered choices for the Repo menu's separate machine picker. The
+  /// folder search must never filter the machine inventory.
+  List<NewHarnessOption> get machineChoices => [
     for (final machine in [
       ...app.machineStates.values.where((m) => m.isLocalMachine),
       ...app.machineStates.values.where(
@@ -2717,7 +2761,7 @@ class NewHarnessController extends ChangeNotifier {
                     'computer yet. Link it from the Machines menu.'
               : '${machine.machine.displayName} is offline.',
         ),
-  ]);
+  ];
 
   /// Whether what is typed in the project field is a path being completed.
   bool get isPathQuery => field == NewHarnessField.project && _isPath(query);
@@ -2792,7 +2836,7 @@ class NewHarnessController extends ChangeNotifier {
       ...app.machineStates.values.where((m) => !m.isLocalMachine),
     ].where((m) => !m.machine.isShared)) {
       final id = machine.machine.machineId;
-      if (_projectsOnSelectedMachine && id != _machineId) continue;
+      if (_desktopChoices && id != _machineId) continue;
       final folders = _recentProjectFolders(id).toList();
       final names = <String, int>{};
       for (final folder in folders) {
@@ -3094,18 +3138,20 @@ class NewHarnessController extends ChangeNotifier {
   /// A second explicit dismissal acknowledges an unresolved creation.
   bool requestDismiss() {
     if (linkingProfile) {
-      warn('Linking the profile. Escape closes once it is done.');
+      warn('Linking the profile. You can close once it is done.');
       return false;
     }
     if (busy) {
-      warn('Still working on it. Escape closes once it is done.');
+      warn('Still working on it. You can close once it is done.');
       return false;
     }
     if (checking && !_warnedAboutClosing) {
       _warnedAboutClosing = true;
       warn(
-        'The harness may already exist. Return checks on it; Escape again '
-        'closes without knowing.',
+        _desktopChoices
+            ? 'The harness may already exist. Check status to find it, or click Close again to leave this form.'
+            : 'The harness may already exist. Return checks on it; Escape again '
+                  'closes without knowing.',
       );
       return false;
     }

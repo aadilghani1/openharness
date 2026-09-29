@@ -11,19 +11,32 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   Both use system typography and a quiet focused fill without shifting controls.
 - Agent and Repo are compact capsule selectors above the editor, with the
   agent's existing brand mark and Close at the right. The always-visible message
-  editor says “What’s next?”; New harness sits inside its lower-right corner,
+  editor says “What’s next?”; New Harness sits inside its lower-right corner,
   works without a message, and has no visible Return symbol.
   Model, Approvals, and Codex Profile sit below the composer on the left;
   a checked Worktree control and a branch icon/name sit on the right. Git
   controls stay together, moving below the other settings in narrow windows
-  or at larger text sizes. Long branch names truncate; the tooltip and
+  or at larger text sizes. Long branch names truncate at the beginning, keeping
+  their identifying suffix and complete Unicode characters; the tooltip and
   accessibility label retain the complete branch and worktree plan.
-- Machine selection is inside Repo. Its first row shows Local and the computer
-  name, or the selected remote machine. Selecting it opens the machine list;
-  accepting or pressing Escape returns to Repo. Recent folders are scoped to
+- Machine selection sits inside the Repo search row: “Search repos in This Mac”.
+  Selecting the machine opens a separate menu on the right, repositioning to
+  stay onscreen in narrow windows. The folder query never filters machines.
+  Tab reaches the machine selector from search; selecting a machine returns
+  to Repo, and Escape closes only the machine menu. Open Folder, New Folder,
+  and GitHub appear above the recent folders, separated by a thin rule.
+  Recent folders are scoped to
   that machine. Fresh launch contexts still default to local; restored drafts
   and explicit Store machine choices retain their destination. The closed Repo
   control includes the machine name for remote destinations.
+- Agent choices show actual launch recency first, interleaving coding agents
+  and specialized harnesses. Defaults follow in this order: Claude Code,
+  Codex, Grok, Cursor, Blender, CircuitJS, Godogen, MuJoCo, RDKit, Strudel,
+  Typst, then the rest of the available catalog. Entries appear once; removed
+  packages and viewers remain excluded. Launching a specialized harness does
+  not promote its backend coding agent as another recent choice. Older history
+  migrates with the last known choice first; only new history has exact mixed
+  recency because older versions kept agents and harnesses in separate lists.
 - The last explicit approval choice is remembered per agent, including Full
   access when selected. Worktree choices are remembered per machine/project.
   Projects without a saved choice keep Worktree on; agents without a saved
@@ -33,10 +46,12 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   the editor; the former Options shortcut opens Model directly (Repo for
   Terminal). Terminal keeps the editor read-only and outside keyboard
   traversal while preserving a carried message.
-- In the task editor, Enter inserts a newline; Cmd-Enter or New harness launches.
-  The shortcut is remappable. Opening a chooser does not submit the task.
-  Escape backs out one level before closing the composer. Clicking outside an
-  open chooser closes only that chooser; the next outside click closes the dialog.
+- In the task editor, Enter submits; Shift-Enter inserts a newline. Cmd-Enter
+  remains a remappable launch shortcut. Opening a chooser does not submit the task.
+  Only the X closes the composer. Escape and outside clicks back out of a
+  chooser but leave the main form and its draft open. X remains available while
+  a chooser is open. Existing pending-launch checks still protect unresolved
+  creation receipts.
   A choice or cancellation returns focus to the originating control. Tab and
   Shift-Tab dismiss a chooser without applying a value and continue form traversal.
 - Focus stays inside the active dialog. New harness receives initial focus for
@@ -77,11 +92,24 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
 - Header selectors use compact capsules; composer settings use quiet text
   controls with a focused fill. The default action retains its keyboard commands
   without displaying a shortcut symbol.
+  Clickable controls show a hand cursor, while editors retain a text cursor.
   Icon-only toolbar controls and navigation links retain their roles.
 
 Review creation and search with keyboard, mouse, input composition, long text,
 light/dark palettes, narrow windows, and unavailable resources. Use synthetic
 fixtures for saved previews; never commit live account screenshots.
+
+Validation of the interaction polish on 2026-09-29, after `67dc29f1`:
+
+- All 169 tests passed across the seven affected composer, dialog, edge-case,
+  entry-rule, preference, and friendly-desktop suites. The additional agent
+  picker, harness selection, install, and project-context suites also passed.
+- App/test static analysis and the macOS debug build passed. Synthetic previews
+  were inspected in dark and light themes, including enlarged text and narrow
+  windows. The final machine-menu styling also passed both theme layout tests.
+- The normal app was reopened. Live review checked the Repo/machine cascade,
+  agent ordering, and Escape returning to the composer without closing it.
+  This iteration did not rerun the full suite, native fixture, or Linux build.
 
 Validation of the frameless composer iteration on 2026-09-29, after `89aceb38`:
 

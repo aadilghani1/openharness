@@ -218,12 +218,12 @@ void main() {
   });
 
   testWidgets(
-    'plain Enter edits, remapped start submits once, IME never submits',
+    'Shift-Enter edits, remapped start submits once, IME never submits',
     (tester) async {
       final (box, daemon, map) = await composer(tester);
       final field = find.byKey(const ValueKey('new-harness-task'));
       await tester.enterText(field, 'Review the release');
-      await key(tester, LogicalKeyboardKey.enter);
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
       expect(
         daemon.requests.where((request) => request.$1 == 'agent_create'),
         isEmpty,

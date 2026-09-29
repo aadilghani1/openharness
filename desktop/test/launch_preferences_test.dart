@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/agent_preference.dart';
+import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/git_worktree.dart';
 import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_history.dart';
@@ -173,6 +174,106 @@ String _storedWorktrees(Map<String, Map<String, Object?>> machines) =>
     });
 
 void main() {
+  test(
+    'launch recency interleaves harnesses and agents across reloads',
+    () async {
+      final storage = _Store();
+      final preferences = AgentPreference(storage);
+      await preferences.remember('grok');
+      await preferences.remember('codex', harnessId: 'autonomous/blender');
+      await preferences.remember('cursor');
+      await preferences.remember('codex', harnessId: 'autonomous/rdkit');
+      await preferences.remember('grok');
+      final restored = AgentPreference(storage);
+      await restored.load();
+      expect(restored.recentChoices, [
+        'grok',
+        'autonomous/rdkit',
+        'cursor',
+        'autonomous/blender',
+      ]);
+      expect(restored.recentChoices, isNot(contains('codex')));
+      expect(restored.engineFor('autonomous/rdkit'), 'codex');
+    },
+  );
+
+  test('old launch history migrates with the last used choice first', () async {
+    final storage = _Store()
+      ..values[_agentKey] = jsonEncode({
+        'engine': 'cursor',
+        'harness': null,
+        'agents': ['cursor', 'codex'],
+        'harnesses': ['autonomous/blender'],
+      });
+    final preferences = AgentPreference(storage);
+    await preferences.load();
+    expect(preferences.recentChoices, [
+      'cursor',
+      'autonomous/blender',
+      'codex',
+    ]);
+    await preferences.remember('grok');
+    final restored = AgentPreference(storage);
+    await restored.load();
+    expect(restored.recentChoices, [
+      'grok',
+      'cursor',
+      'autonomous/blender',
+      'codex',
+    ]);
+  });
+
+  test('desktop agents use recency, four defaults, seven tuned harnesses, then the catalog', () async {
+    final fixture = _Fixture();
+    final box = fixture.open();
+    await _settle();
+    const featured = [
+      'autonomous/blender',
+      'autonomous/circuitjs',
+      'autonomous/godogen',
+      'autonomous/mujoco',
+      'autonomous/rdkit',
+      'autonomous/strudel',
+      'autonomous/typst',
+    ];
+    fixture.app.machineStates['m']!.dsh.replace([
+      for (final id in [...featured, 'autonomous/manim'])
+        DshEntry(id: id, name: id, engine: 'codex'),
+    ]);
+    box.useDesktopChoices(true);
+    box.focusField(NewHarnessField.harness);
+    expect(box.options.take(11).map((o) => o.id), [
+      'claude',
+      'codex',
+      'grok',
+      'cursor',
+      ...featured,
+    ]);
+    await fixture.app.agentPreference.remember(
+      'codex',
+      harnessId: 'autonomous/rdkit',
+    );
+    await fixture.app.agentPreference.remember('cursor');
+    await fixture.app.agentPreference.remember(
+      'codex',
+      harnessId: 'removed/tool',
+    );
+    box.focusField(NewHarnessField.launch);
+    box.focusField(NewHarnessField.harness);
+    final ids = box.options.map((o) => o.id).toList();
+    expect(ids.take(11), [
+      'cursor',
+      'autonomous/rdkit',
+      'claude',
+      'codex',
+      'grok',
+      ...featured.where((id) => id != 'autonomous/rdkit'),
+    ]);
+    expect(ids.toSet().length, ids.length);
+    expect(ids, isNot(contains('removed/tool')));
+    expect(ids, contains('autonomous/manim'));
+  });
+
   group('approval preference storage', () {
     test(
       'each engine keeps its last explicit supported mode across reloads',

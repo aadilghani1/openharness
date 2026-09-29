@@ -409,6 +409,8 @@ void main({bool nativeSmoke = false}) {
       expect(fixture.closed, 0);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
+      expect(fixture.closed, 0);
+      await tester.tap(_close);
       expect(fixture.closed, 1);
       expect(fixture.app.launches, isEmpty);
     },
@@ -428,6 +430,8 @@ void main({bool nativeSmoke = false}) {
       expect(tester.widget<FilledButton>(_start).onPressed, isNull);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
+      expect(fixture.closed, 0);
+      await tester.tap(_close);
       expect(fixture.closed, 1);
       expect(fixture.app.launches, isEmpty);
     },
@@ -473,32 +477,33 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('visible task owns newlines and Cmd-Return submits the exact task', (
-    tester,
-  ) async {
-    final fixture = await _mount(tester);
-    await tester.enterText(_task, 'Inspect launch');
-    await key(tester, LogicalKeyboardKey.enter);
-    expect(fixture.app.launches, isEmpty);
-    // macOS text insertion follows the platform editing channel after the key.
-    // sendKeyEvent alone does not synthesize that operating-system edit.
-    tester.testTextInput.updateEditingValue(
-      const TextEditingValue(
-        text: 'Inspect launch\n',
-        selection: TextSelection.collapsed(offset: 15),
-      ),
-    );
-    await tester.pump();
-    expect(fixture.box.task, 'Inspect launch\n');
-    await tester.enterText(_task, 'Inspect launch\nPreserve the settings');
-    await key(tester, LogicalKeyboardKey.enter, cmd: true);
-    await tester.pumpAndSettle();
-    expect(fixture.app.launches, hasLength(1));
-    expect(
-      fixture.app.launches.single['prompt'],
-      'Inspect launch\nPreserve the settings',
-    );
-  });
+  journey(
+    'visible task owns Shift-Enter and Cmd-Return submits the exact task',
+    (tester) async {
+      final fixture = await _mount(tester);
+      await tester.enterText(_task, 'Inspect launch');
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      expect(fixture.app.launches, isEmpty);
+      // macOS text insertion follows the platform editing channel after the key.
+      // sendKeyEvent alone does not synthesize that operating-system edit.
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: 'Inspect launch\n',
+          selection: TextSelection.collapsed(offset: 15),
+        ),
+      );
+      await tester.pump();
+      expect(fixture.box.task, 'Inspect launch\n');
+      await tester.enterText(_task, 'Inspect launch\nPreserve the settings');
+      await key(tester, LogicalKeyboardKey.enter, cmd: true);
+      await tester.pumpAndSettle();
+      expect(fixture.app.launches, hasLength(1));
+      expect(
+        fixture.app.launches.single['prompt'],
+        'Inspect launch\nPreserve the settings',
+      );
+    },
+  );
 
   journey(
     'clearing a task keeps the editor visible and preserves keyboard focus',
@@ -574,6 +579,8 @@ void main({bool nativeSmoke = false}) {
       expect(tester.getSize(_surface).width, 680);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
+      expect(fixture.closed, 0);
+      await tester.tap(_close);
       expect(fixture.closed, 1);
     });
   }

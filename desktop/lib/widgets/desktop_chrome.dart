@@ -30,7 +30,7 @@ class DesktopChrome extends InheritedWidget {
     height: 1.45,
   ).copyWith(fontSize: size);
 
-  static ShapeBorder shape({double radius = dialogRadius}) =>
+  static OutlinedBorder shape({double radius = dialogRadius}) =>
       RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius),
         side: BorderSide(color: rim),
@@ -117,6 +117,8 @@ class DesktopPill extends StatelessWidget {
     this.quiet = false,
     this.capsule = false,
     this.textSize = 13,
+    this.truncateFromStart = false,
+    this.menuIcon = Icons.keyboard_arrow_down_rounded,
   });
 
   final String label;
@@ -133,6 +135,8 @@ class DesktopPill extends StatelessWidget {
   final bool compact;
   final bool quiet, capsule;
   final double textSize;
+  final bool truncateFromStart;
+  final IconData menuIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -144,6 +148,8 @@ class DesktopPill extends StatelessWidget {
           TextButton.styleFrom(
             foregroundColor: ink,
             disabledForegroundColor: ink.withValues(alpha: .38),
+            enabledMouseCursor: SystemMouseCursors.click,
+            disabledMouseCursor: SystemMouseCursors.basic,
             backgroundColor: quiet
                 ? Colors.transparent
                 : ink.withValues(alpha: selected == true ? .13 : .055),
@@ -196,18 +202,21 @@ class DesktopPill extends StatelessWidget {
             const SizedBox(width: 7),
           ],
           Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: monospace ? grid.AppType.mono() : null,
-              semanticsLabel: semanticLabel,
-            ),
+            child: truncateFromStart
+                ? DesktopSuffixText(
+                    label,
+                    style: monospace ? grid.AppType.mono() : null,
+                    semanticsLabel: semanticLabel,
+                  )
+                : Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: monospace ? grid.AppType.mono() : null,
+                    semanticsLabel: semanticLabel,
+                  ),
           ),
-          if (menu) ...[
-            const SizedBox(width: 7),
-            const Icon(Icons.keyboard_arrow_down_rounded, size: 16),
-          ],
+          if (menu) ...[const SizedBox(width: 7), Icon(menuIcon, size: 16)],
         ],
       ),
     );
@@ -220,4 +229,59 @@ class DesktopPill extends StatelessWidget {
         ? control
         : Tooltip(message: tooltip!, child: control);
   }
+}
+
+/// Keep the identifying end of a branch name without reversing its text
+/// direction. Full labels remain available to accessibility and tooltips.
+class DesktopSuffixText extends StatelessWidget {
+  const DesktopSuffixText(
+    this.text, {
+    super.key,
+    this.style,
+    this.semanticsLabel,
+  });
+
+  final String text;
+  final TextStyle? style;
+  final String? semanticsLabel;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final painter = TextPainter(
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: 1,
+      );
+      final resolved = DefaultTextStyle.of(context).style.merge(style);
+      bool fits(String value) {
+        painter.text = TextSpan(text: value, style: resolved);
+        painter.layout();
+        return painter.width <= constraints.maxWidth;
+      }
+
+      var visible = text;
+      if (!fits(text)) {
+        final characters = text.characters.toList(growable: false);
+        var low = 0, high = characters.length;
+        while (low < high) {
+          final count = (low + high + 1) ~/ 2;
+          if (fits('…${characters.skip(characters.length - count).join()}')) {
+            low = count;
+          } else {
+            high = count - 1;
+          }
+        }
+        visible = '…${characters.skip(characters.length - low).join()}';
+      }
+      painter.dispose();
+      return Text(
+        visible,
+        style: style,
+        maxLines: 1,
+        overflow: TextOverflow.clip,
+        semanticsLabel: semanticsLabel ?? text,
+      );
+    },
+  );
 }

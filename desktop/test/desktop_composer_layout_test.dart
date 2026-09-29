@@ -152,9 +152,7 @@ Finder _field(String name) => find.byKey(ValueKey('new-harness-field-$name'));
 final _surface = find.byKey(const ValueKey('new-harness-surface'));
 final _composer = find.byKey(const ValueKey('new-harness-composer'));
 final _task = find.byKey(const ValueKey('new-harness-task'));
-final _machine = find.byKey(
-  const ValueKey('new-harness-option-project:machine'),
-);
+final _machine = find.byKey(const ValueKey('new-harness-repo-machine'));
 final _close = find.byKey(const ValueKey('new-harness-close'));
 final _chooser = find.byKey(const ValueKey('new-harness-chooser-surface'));
 final _query = find.byKey(const ValueKey('new-harness-query'));
@@ -233,10 +231,13 @@ Future<_ReviewFixture> _mount(
       theme: grid
           .buildAppTheme(brightness: brightness)
           .copyWith(platform: TargetPlatform.macOS),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: TextScaler.linear(scale)),
-        child: child!,
+      builder: (context, child) => RepaintBoundary(
+        key: fixture.image,
+        child: MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(scale)),
+          child: child!,
+        ),
       ),
       home: KeymapProvider(
         keymap: fixture.map,
@@ -245,7 +246,6 @@ Future<_ReviewFixture> _mount(
           enabled: () => true,
           actions: const {},
           child: RepaintBoundary(
-            key: fixture.image,
             child: Scaffold(
               backgroundColor: grid.AppPalette.windowBg,
               body: Stack(
@@ -372,7 +372,7 @@ void main() {
         expect(worktree.right, lessThanOrEqualTo(branch.left));
         expect(worktree.center.dy, closeTo(branch.center.dy, 1));
         expect(branch.right, greaterThan(surface.center.dx));
-        expect(find.text('New harness'), findsOneWidget);
+        expect(find.text('New Harness'), findsOneWidget);
         expect(
           tester.widget<TextField>(_task).decoration!.hintText,
           'What’s next?',
@@ -467,86 +467,122 @@ void main() {
     await capture(tester, fixture, 'composer-claude-dark');
   });
 
-  for (final brightness in Brightness.values) {
-    testWidgets(
-      'machine and repo menus fit their ${brightness.name} contents',
-      (tester) async {
-        final fixture = await _mount(
-          tester,
-          brightness: brightness,
-          onBrowse: (_) {},
-        );
-        for (final (trigger, field, name, maximumHeight) in [
-          (_machine, NewHarnessField.machine, 'machine', 160.0),
-          (_field('project'), NewHarnessField.projectMenu, 'repo', 280.0),
-        ]) {
-          if (field == NewHarnessField.machine) {
-            await tester.tap(_field('project'));
-            await tester.pumpAndSettle();
-          }
-          await tester.tap(trigger);
-          await tester.pumpAndSettle();
-          expect(fixture.box.field, field);
-          expect(_chooser, findsOneWidget);
-          expect(_query.hitTestable(), findsOneWidget);
-          expect(
-            find.descendant(of: _chooser, matching: find.byType(IconButton)),
-            field == NewHarnessField.machine ? findsOneWidget : findsNothing,
-          );
-          expect(find.text('Choose machine'), findsNothing);
-          expect(find.text('Choose repo'), findsNothing);
-          expect(
-            find.descendant(of: _chooser, matching: find.textContaining('Esc')),
-            findsNothing,
-          );
-          final menu = tester.getRect(_chooser);
-          expect(menu.width, 380);
-          expect(menu.height, lessThan(maximumHeight));
-          final rows = find.descendant(
-            of: _chooser,
-            matching: find.byWidgetPredicate((widget) {
-              final key = widget.key;
-              return widget is Semantics &&
-                  key is ValueKey<String> &&
-                  key.value.startsWith('new-harness-option-');
-            }),
-          );
-          final lastBottom = rows
-              .evaluate()
-              .map((element) {
-                return tester.getRect(find.byWidget(element.widget)).bottom;
-              })
-              .reduce((a, b) => a > b ? a : b);
-          expect(menu.bottom - lastBottom, inInclusiveRange(0, 12));
-          if (field == NewHarnessField.machine) {
-            final row = find.byKey(const ValueKey('new-harness-option-review'));
-            expect(
-              find.descendant(of: row, matching: find.text('office')),
-              findsOneWidget,
-            );
-            expect(
-              find.descendant(
-                of: row,
-                matching: find.byIcon(Icons.laptop_mac_rounded),
-              ),
-              findsNothing,
-            );
-          }
-          await capture(tester, fixture, '$name-menu-${brightness.name}');
-          await key(tester, LogicalKeyboardKey.escape);
-          await tester.pumpAndSettle();
-          if (field == NewHarnessField.machine) {
-            expect(fixture.box.field, NewHarnessField.projectMenu);
-            await key(tester, LogicalKeyboardKey.escape);
-            await tester.pumpAndSettle();
-          }
-          expect(_chooser, findsNothing);
-          expect(_focused(tester, _field('project')), isTrue);
-        }
-        expect(fixture.closes, 0);
-        expect(fixture.app.launches, isEmpty);
-      },
+  testWidgets('clickable controls use a hand; the prompt keeps a text cursor', (
+    tester,
+  ) async {
+    await _mount(tester);
+    final pointer = await tester.createGesture(
+      kind: ui.PointerDeviceKind.mouse,
+      pointer: 7,
     );
+    await pointer.addPointer(location: Offset.zero);
+    addTearDown(pointer.removePointer);
+    for (final control in [
+      _field('agent'),
+      _field('project'),
+      _field('branch'),
+      _field('worktree'),
+      _field('start'),
+      _close,
+    ]) {
+      await pointer.moveTo(tester.getCenter(control));
+      await tester.pump();
+      expect(
+        RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+        SystemMouseCursors.click,
+        reason: '$control should invite clicking',
+      );
+    }
+    await pointer.moveTo(tester.getCenter(_task));
+    await tester.pump();
+    expect(
+      RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+      SystemMouseCursors.text,
+    );
+  });
+
+  testWidgets('X closes immediately even with a chooser open', (tester) async {
+    final fixture = await _mount(tester);
+    await tester.enterText(_task, 'Keep this draft');
+    await tester.tap(_field('agent'));
+    await tester.pumpAndSettle();
+    await tester.tap(_close);
+    await tester.pump();
+    expect(fixture.closes, 1);
+    expect(fixture.box.task, 'Keep this draft');
+    expect(fixture.app.launches, isEmpty);
+  });
+
+  testWidgets('the platform send action submits the exact prompt once', (
+    tester,
+  ) async {
+    final fixture = await _mount(tester);
+    await tester.enterText(_task, 'First line\nSecond line');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pumpAndSettle();
+    expect(fixture.app.launches, hasLength(1));
+    expect(fixture.app.launches.single['prompt'], 'First line\nSecond line');
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('Repo and side-by-side machine menus fit ${brightness.name}', (
+      tester,
+    ) async {
+      final fixture = await _mount(
+        tester,
+        brightness: brightness,
+        onBrowse: (_) {},
+      );
+      await tester.tap(_field('project'));
+      await tester.pumpAndSettle();
+      expect(fixture.box.field, NewHarnessField.projectMenu);
+      expect(_query.hitTestable(), findsOneWidget);
+      final menu = tester.getRect(_chooser);
+      expect(menu.width, 380);
+      expect(menu.height, lessThan(280));
+      expect(fixture.box.options.take(3).map((o) => o.title), [
+        'Open Folder',
+        'New Folder',
+        'GitHub',
+      ]);
+      expect(
+        tester.getRect(_query).center.dy,
+        closeTo(tester.getRect(_machine).center.dy, 1),
+      );
+      expect(
+        tester.getRect(_query).right,
+        lessThan(tester.getRect(_machine).left),
+      );
+      await capture(tester, fixture, 'repo-menu-${brightness.name}');
+      await tester.tap(_machine);
+      await tester.pumpAndSettle();
+      final local = find.byKey(
+        const ValueKey('new-harness-machine-option-review'),
+      );
+      expect(local, findsOneWidget);
+      expect(fixture.box.field, NewHarnessField.projectMenu);
+      expect(tester.getRect(local).left, greaterThan(menu.right));
+      expect(
+        tester.getRect(local).top,
+        closeTo(tester.getRect(_machine).top + 6, 2),
+      );
+      expect(
+        find.descendant(of: local, matching: find.text('office')),
+        findsOneWidget,
+      );
+      await capture(tester, fixture, 'machine-menu-${brightness.name}');
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(local, findsNothing);
+      expect(_chooser, findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(_chooser, findsNothing);
+      expect(_focused(tester, _field('project')), isTrue);
+      expect(fixture.closes, 0);
+      expect(fixture.app.launches, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('Repo scopes folders to its machine and preserves the draft', (
@@ -568,7 +604,7 @@ void main() {
     await tester.enterText(_task, 'Keep my unsent task across machines');
     await tester.tap(_field('project'));
     await tester.pumpAndSettle();
-    expect(find.text('Local · office'), findsOneWidget);
+    expect(find.text('This Mac'), findsOneWidget);
     expect(
       fixture.box.options
           .where((o) => !o.synthetic)
@@ -576,20 +612,17 @@ void main() {
       isTrue,
     );
 
-    // Machine selection is reachable through the same arrow/Enter navigation
-    // as folders, without adding a Tab stop to the main composer.
-    for (
-      var i = 0;
-      i < 6 && fixture.box.selected?.id != NewHarnessController.changeMachineId;
-      i++
-    ) {
-      await key(tester, LogicalKeyboardKey.arrowUp);
-    }
-    expect(fixture.box.selected?.id, NewHarnessController.changeMachineId);
+    // Tab reaches the machine control from search; arrows stay in its menu.
+    await key(tester, LogicalKeyboardKey.tab);
+    expect(_focused(tester, _machine), isTrue);
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(fixture.box.field, NewHarnessField.machine);
-    await tester.enterText(_query, 'Build server');
+    expect(fixture.box.field, NewHarnessField.projectMenu);
+    expect(
+      find.byKey(const ValueKey('new-harness-machine-option-remote')),
+      findsOneWidget,
+    );
+    await key(tester, LogicalKeyboardKey.arrowDown);
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(fixture.box.field, NewHarnessField.projectMenu);
@@ -624,8 +657,9 @@ void main() {
     expect(fixture.box.machineId, 'remote');
     await tester.tap(_machine);
     await tester.pumpAndSettle();
-    await tester.enterText(_query, 'office');
-    await key(tester, LogicalKeyboardKey.enter);
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-machine-option-review')),
+    );
     await tester.pumpAndSettle();
     expect(fixture.box.machineId, 'review');
     expect(fixture.box.project.folder, '/work/autonomous-harness');
@@ -665,7 +699,8 @@ void main() {
           find.descendant(of: _field('branch'), matching: find.byType(Text)),
         );
         expect(branchText.maxLines, 1);
-        expect(branchText.overflow, TextOverflow.ellipsis);
+        expect(branchText.data, startsWith('…'));
+        expect(branch.endsWith(branchText.data!.substring(1)), isTrue);
         expect(branchText.semanticsLabel, contains(branch));
         await tester.tap(_field('worktree'));
         await tester.pumpAndSettle();
@@ -767,13 +802,13 @@ void main() {
   );
 
   testWidgets(
-    'editor Enter stays multiline and Cmd-Return sends the exact draft',
+    'editor Shift-Enter stays multiline and Return sends the exact draft',
     (tester) async {
       final fixture = await _mount(tester);
       const task =
           'Explore the current flow.\nThen discuss a plan — no changes yet.';
       await tester.enterText(_task, task);
-      await key(tester, LogicalKeyboardKey.enter);
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
       expect(fixture.app.launches, isEmpty);
       expect(_focused(tester, _task), isTrue);
       // Native text insertion is owned by the editing channel, not sendKeyEvent.
@@ -787,7 +822,7 @@ void main() {
       expect(fixture.box.task, '$task\n');
       const completeTask = '$task\nCompare the alternatives.';
       await tester.enterText(_task, completeTask);
-      await key(tester, LogicalKeyboardKey.enter, cmd: true);
+      await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(fixture.app.launches, hasLength(1));
       expect(fixture.app.launches.single['prompt'], completeTask);
@@ -805,7 +840,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(hint('↵'), findsNothing);
     expect(hint('⌘↵'), findsNothing);
-    await key(tester, LogicalKeyboardKey.enter);
+    await key(tester, LogicalKeyboardKey.enter, shift: true);
     expect(fixture.app.launches, isEmpty);
 
     fixture.map.apply(
@@ -855,6 +890,10 @@ void main() {
       }
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
+      expect(fixture.closes, 0);
+      await key(tester, LogicalKeyboardKey.escape);
+      expect(fixture.closes, 0);
+      await tester.tap(_close);
       expect(fixture.closes, 1);
       expect(fixture.box.draft.task, draft);
     },
@@ -1181,6 +1220,24 @@ void main() {
             expect(tester.takeException(), isNull);
           }
           await capture(tester, fixture, 'narrow-${brightness.name}-$scale');
+          await tester.tap(_field('project'));
+          await tester.pumpAndSettle();
+          await tester.tap(_machine);
+          await tester.pumpAndSettle();
+          final local = find.byKey(
+            const ValueKey('new-harness-machine-option-review'),
+          );
+          final bounds = tester.getRect(local);
+          expect(bounds.left, greaterThanOrEqualTo(0));
+          expect(bounds.right, lessThanOrEqualTo(600));
+          expect(bounds.bottom, lessThanOrEqualTo(520));
+          expect(local.hitTestable(), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await capture(
+            tester,
+            fixture,
+            'narrow-machine-${brightness.name}-$scale',
+          );
           expect(fixture.app.launches, isEmpty);
         },
       );

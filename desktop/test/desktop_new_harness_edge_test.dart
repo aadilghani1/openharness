@@ -342,16 +342,16 @@ void main() {
   );
 
   testWidgets(
-    'standalone desktop composer keeps default Start and Escape keys',
+    'standalone desktop composer submits on Return and closes only with X',
     (tester) async {
       final fixture = await _mount(tester, withKeymap: false);
       await tester.enterText(_task, 'A fallback keyboard task');
       await key(tester, LogicalKeyboardKey.enter);
-      expect(fixture.app.launches, isEmpty);
-      await key(tester, LogicalKeyboardKey.enter, cmd: true);
       await tester.pumpAndSettle();
       expect(fixture.app.launches, hasLength(1));
       await key(tester, LogicalKeyboardKey.escape);
+      expect(fixture.closes, 0);
+      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
       expect(fixture.closes, 1);
     },
   );
@@ -362,21 +362,13 @@ void main() {
     final fixture = await _mount(tester);
     await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey('new-harness-option-project:machine')),
-    );
+    await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
     await tester.pumpAndSettle();
-    await tester.enterText(_query, 'no such agent exists');
-    await tester.pumpAndSettle();
-    expect(find.text('No matches'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('new-harness-chooser-close')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const ValueKey('new-harness-chooser-back')),
+      find.byKey(const ValueKey('new-harness-machine-option-machine')),
       findsOneWidget,
     );
+    expect(fixture.box.field, NewHarnessField.projectMenu);
     fixture.box.warn('Choose an installed agent to continue.');
     await tester.pumpAndSettle();
     expect(find.text('Choose an installed agent to continue.'), findsWidgets);
@@ -448,11 +440,8 @@ void main() {
       await tester.enterText(_task, 'Keep my review notes');
       await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('new-harness-option-project:machine')),
-      );
+      await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
       await tester.pumpAndSettle();
-      await tester.enterText(_query, 'Studio');
       final surface = tester.getRect(
         find.byKey(const ValueKey('new-harness-surface')),
       );
@@ -461,6 +450,9 @@ void main() {
       );
       final outside = surface.topLeft + const Offset(12, 12);
       expect(chooser.contains(outside), isFalse);
+      await tester.tapAt(outside);
+      await tester.pumpAndSettle();
+      expect(_query, findsOneWidget);
       await tester.tapAt(outside);
       await tester.pumpAndSettle();
       expect(_query, findsNothing);

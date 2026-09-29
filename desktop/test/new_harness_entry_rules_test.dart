@@ -160,12 +160,13 @@ void main() {
   }
 
   Future<void> dismiss(WidgetTester tester) async {
-    for (
-      var i = 0;
-      i < 4 && find.byType(NewHarnessForm).evaluate().isNotEmpty;
-      i++
-    ) {
-      await key(tester, LogicalKeyboardKey.escape);
+    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+    await tester.pumpAndSettle();
+    if (find.byType(NewHarnessForm).evaluate().isNotEmpty &&
+        box(tester).checking) {
+      expect(box(tester).error, contains('Close again'));
+      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+      await tester.pumpAndSettle();
     }
     expect(find.byType(NewHarnessForm), findsNothing);
   }
@@ -208,7 +209,7 @@ void main() {
         expect(
           find.descendant(
             of: find.byKey(const ValueKey('new-harness-field-start')),
-            matching: find.text('New harness'),
+            matching: find.text('New Harness'),
           ),
           findsOneWidget,
         );

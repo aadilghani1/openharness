@@ -29,6 +29,20 @@ class AgentPreference {
   /// Harness lists before anything is typed.
   List<String> recent = const [];
 
+  List<String>? _recentChoices;
+
+  /// Actual launch choices, interleaving coding agents and specialized
+  /// harnesses. A harness's backend is not a second launch by the user.
+  /// Older preferences recorded the two lists separately; preserve their last
+  /// known choice first when migrating that history.
+  List<String> get recentChoices =>
+      _recentChoices ??
+      <String>{
+        ?harness ?? value,
+        ...recentHarnesses,
+        ...recent,
+      }.take(recentCapacity).toList(growable: false);
+
   Future<void>? _loading;
   Future<void> _writes = Future.value();
   int _revision = 0;
@@ -93,6 +107,14 @@ class AgentPreference {
           : null;
       recent = ids(data['agents'], false);
       recentHarnesses = ids(data['harnesses'], true);
+      if (data['choices'] case final List choices) {
+        _recentChoices = choices
+            .whereType<String>()
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .take(recentCapacity)
+            .toList(growable: false);
+      }
       advancedOpen = data['advancedOpen'] == true;
       if (data['permissionsByEngine'] case final Map permissions) {
         for (final engine in kEnginePermissionModes.keys) {
@@ -136,6 +158,11 @@ class AgentPreference {
       harnessId = agent;
       agent = value ?? '';
     }
+    final choice = harnessId ?? agent;
+    _recentChoices = <String>{
+      if (choice.isNotEmpty) choice,
+      ...recentChoices,
+    }.take(recentCapacity).toList(growable: false);
     harness = harnessId;
     if (agent.isNotEmpty) {
       value = agent;
@@ -175,6 +202,7 @@ class AgentPreference {
       'harness': harness,
       'agents': recent,
       'harnesses': recentHarnesses,
+      'choices': recentChoices,
       'enginesByHarness': _enginesByHarness,
       'advancedOpen': advancedOpen,
       'permissionsByEngine': _permissionsByEngine,
