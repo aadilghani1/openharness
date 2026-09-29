@@ -1,6 +1,8 @@
 #include "terminal.h"
+#include <stdio.h>
 #include <string.h>
 #include "arc_geometry.inc"
+#include "display_fallbacks.inc"
 
 static int imin(int a, int b) { return a < b ? a : b; }
 static int imax(int a, int b) { return a > b ? a : b; }
@@ -73,17 +75,143 @@ uint32_t ht_utf8_next(const char **p)
         uint32_t v = c & ((1u << (6 - n)) - 1);
         for (int i = 0; i < n; i++) {
             if ((s[i] & 0xc0) != 0x80) {
-                *p = (const char *)s;
-                return '?';
+                *p = (const char *)(s + i);
+                return 0xfffd;
             }
             v = (v << 6) | (s[i] & 63);
         }
         s += n;
         c = v;
+        if (c < (n == 1 ? 0x80u : n == 2 ? 0x800u : 0x10000u) ||
+            c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) c = 0xfffd;
     } else if (c >= 128)
-        c = '?';
+        c = 0xfffd;
     *p = (const char *)s;
     return c;
+}
+
+static bool native_glyph(const ht_font_t *font, uint32_t cp)
+{
+    if (cp < 32 || (cp >= 127 && cp < 160)) return false;
+    const ht_font_t *face = glyph_font(font, cp);
+    cp = punctuation_alias(cp);
+    return cp >= face->first && cp <= face->last;
+}
+static const char *display_fallback(uint32_t cp, char scratch[12])
+{
+    // Styling/joining controls carry no ink. Unknown text itself is never lost.
+    if ((cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xe0100 && cp <= 0xe01ef)) return "";
+    size_t lo = 0, hi = sizeof display_ranges / sizeof display_ranges[0];
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (cp < display_ranges[mid].first) hi = mid;
+        else if (cp > display_ranges[mid].last) lo = mid + 1;
+        else {
+            scratch[0] = (char)((int32_t)cp + display_ranges[mid].delta);
+            scratch[1] = 0;
+            return scratch;
+        }
+    }
+    lo = 0; hi = sizeof display_entries / sizeof display_entries[0];
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        uint32_t key = display_entries[mid] >> DISPLAY_OFFSET_BITS;
+        if (cp < key) hi = mid;
+        else if (cp > key) lo = mid + 1;
+        else return display_pool + (display_entries[mid] & DISPLAY_OFFSET_MASK);
+    }
+    // An explicit, lossless identifier is preferable to inventing a meaning or
+    // showing '?' (which could be part of the author's actual message).
+    snprintf(scratch, 12, "[U+%04lX]", (unsigned long)cp);
+    return scratch;
+}
+typedef struct {
+    const char *text;
+    size_t bytes;
+    unsigned cells;
+    bool fraction, digit, space;
+    char scratch[12];
+} display_token_t;
+static void display_token(const char **cursor, const ht_font_t *font, display_token_t *t)
+{
+    const char *start = *cursor;
+    uint32_t cp = (unsigned char)*start;
+    if (cp < 128) (*cursor)++; // Keep ordinary terminal text on the cheap path.
+    else cp = ht_utf8_next(cursor);
+    *t = (display_token_t){.text=start,.bytes=(size_t)(*cursor-start),.cells=1};
+    if (font->first > 32 || font->last < 126 || (cp >= 32 && cp < 127)) {
+        // Compact artwork/icon atlases retain their one-cell contract. They
+        // cannot render fallback words. ASCII prose needs no Unicode lookup.
+        t->digit = cp >= '0' && cp <= '9'; t->space = cp == ' ';
+        return;
+    }
+    t->fraction = (cp >= 0xbc && cp <= 0xbe) || (cp >= 0x2150 && cp < 0x215f) || cp == 0x2189;
+    if (cp >= 9 && cp <= 13) { t->text=" "; t->bytes=1; }
+    else if (cp == 0xa0 || cp == 0xad || t->fraction || !native_glyph(font,cp)) {
+        t->text = display_fallback(cp,t->scratch);
+        t->bytes = t->cells = (unsigned)strlen(t->text); // fallback pool is ASCII only
+    }
+    t->digit = t->bytes && t->text[t->bytes-1] >= '0' && t->text[t->bytes-1] <= '9';
+    t->space = t->bytes == 1 && t->text[0] == ' ';
+}
+static bool token_gap(const display_token_t *t, bool digit, bool fraction)
+{
+    // Mixed/adjacent fractions must read '1 1/3', never '11/3' or '1/32/3'.
+    return t->bytes && ((t->fraction && digit) ||
+        (fraction && t->text[0] >= '0' && t->text[0] <= '9'));
+}
+static bool display_copy(char *dst, size_t cap, const char *src, const char *end,
+                         const ht_font_t *font, int columns)
+{
+    if (!cap || !font) return false;
+    const char *p = src ? src : "";
+    size_t used = 0;
+    bool digit = false, fraction = false, complete = true;
+    while (*p && (!end || p < end)) {
+        bool newline = *p == '\n';
+        display_token_t t; display_token(&p,font,&t);
+        bool gap = token_gap(&t,digit,fraction);
+        if (t.cells + gap > (unsigned)columns || t.bytes + gap >= cap - used) {
+            complete = false; break;
+        }
+        if (gap) dst[used++] = ' ';
+        if (newline) dst[used++] = '\n';
+        else { memcpy(dst+used,t.text,t.bytes); used += t.bytes; }
+        columns -= t.cells + gap;
+        if (t.bytes) { digit=t.digit; fraction=t.fraction; }
+    }
+    dst[used] = 0;
+    return complete;
+}
+bool ht_display_text(char *dst, size_t cap, const char *src, const ht_font_t *font)
+{
+    // Byte capacity also bounds cell count, avoiding unbounded size_t -> int.
+    return display_copy(dst,cap,src,NULL,font,(int)(cap < 32768 ? cap : 32768));
+}
+const char *ht_take_display_line(const char **cursor, int cols, const ht_font_t *font)
+{
+    const char *p = *cursor, *start = p, *space = NULL, *after_space = NULL, *end = p;
+    unsigned used = 0;
+    bool digit = false, fraction = false;
+    while (*p && *p != '\n') {
+        const char *before = p;
+        display_token_t t; display_token(&p,font,&t);
+        unsigned cells = t.cells + token_gap(&t,digit,fraction);
+        if (used + cells > (unsigned)(cols > 0 ? cols : 0)) {
+            // A single replacement larger than the entire viewport still has
+            // to make progress. ht_text will safely omit that indivisible token.
+            if (before == start) end = p;
+            else p = before;
+            break;
+        }
+        if (t.space) { space=before; after_space=p; }
+        used += cells; end = p;
+        if (t.bytes) { digit=t.digit; fraction=t.fraction; }
+    }
+    if (*p && *p != '\n' && space && space > start) { end=space; p=after_space; }
+    else if (*p == '\n') p++;
+    *cursor = p;
+    return end;
 }
 uint8_t ht_shimmer_phase(uint32_t now)
 {
@@ -103,7 +231,7 @@ void ht_scene_clear(ht_scene_t *s, uint16_t bg)
 bool ht_text(ht_scene_t *s, int x, int y, int w, const ht_font_t *font, uint16_t fg, uint16_t bg,
              const char *text)
 {
-    if (s->count >= HT_RUNS || !font || w <= 0)
+    if (s->count >= HT_RUNS || !font || !font->width || w <= 0)
         return false;
     ht_run_t *r = &s->runs[s->count++];
     memset(r, 0, sizeof(*r));
@@ -113,19 +241,9 @@ bool ht_text(ht_scene_t *s, int x, int y, int w, const ht_font_t *font, uint16_t
     r->font = font;
     r->fg = fg;
     r->bg = bg;
-    const char *p = text ? text : "";
-    size_t n = 0;
-    int cells = w / font->width;
-    while (*p && cells-- > 0) {
-        const char *start = p;
-        ht_utf8_next(&p);
-        size_t len = (size_t)(p - start);
-        if (n + len >= sizeof(r->text))
-            break;
-        memcpy(r->text + n, start, len);
-        n += len;
-    }
-    r->text[n] = 0;
+    display_copy(r->text,sizeof r->text,text,NULL,font,w / font->width);
+    // A run is one line. Multi-line callers split before constructing runs.
+    for (char *p=r->text; *p; p++) if (*p=='\n') *p=' ';
     return true;
 }
 bool ht_ascii_text(ht_scene_t *s, int x, int y, int w, const ht_font_t *font,
@@ -143,23 +261,27 @@ bool ht_ascii_text(ht_scene_t *s, int x, int y, int w, const ht_font_t *font,
 }
 void ht_center(ht_scene_t *s, int y, const ht_font_t *font, uint16_t fg, const char *text)
 {
-    const char *p = text;
+    char visible[HT_TEXT_BYTES];
+    ht_display_text(visible,sizeof visible,text,font);
+    const char *p = visible;
     int n = 0;
     while (*p) {
         ht_utf8_next(&p);
         n++;
     }
     int w = imin(n * font->width, HT_WIDTH - 80);
-    ht_text(s, (HT_WIDTH - w) / 2, y, w, font, fg, s->background, text);
+    ht_text(s, (HT_WIDTH - w) / 2, y, w, font, fg, s->background, visible);
 }
 static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom)
 {
     if (!text || !*text) return;
+    char visible[HT_TEXT_BYTES];
+    bool complete = ht_display_text(visible,sizeof visible,text,&ht_mono_20);
     if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_COLS * ht_mono_20.width,
-                 &ht_mono_20, fg, s->background, text)) return;
+                 &ht_mono_20, fg, s->background, visible)) return;
     ht_run_t *r = &s->runs[s->count - 1];
     // A long name ends at a word boundary; the pane list retains its full name.
-    if (strlen(text ? text : "") > strlen(r->text)) {
+    if (!complete || strlen(visible) > strlen(r->text)) {
         char *last = strrchr(r->text, ' ');
         if (last && last - r->text >= HT_ARC_COLS / 2) *last = 0;
     }
@@ -193,7 +315,7 @@ int ht_text_rows(const char *text, const ht_font_t *font, int width)
     if (!font || !font->width || width < font->width) return 0;
     const char *p = text ? text : "";
     int rows = 0;
-    while (*p) { ht_take_line(&p, width / font->width); rows++; }
+    while (*p) { ht_take_display_line(&p, width / font->width, font); rows++; }
     return rows;
 }
 bool ht_can_display(const char *text, const ht_font_t *font, int width, int lines)
@@ -202,18 +324,24 @@ bool ht_can_display(const char *text, const ht_font_t *font, int width, int line
         return false;
     const char *p = text ? text : "";
     while (*p) {
+        const char *start = p;
         uint32_t cp = ht_utf8_next(&p);
         const ht_font_t *glyph = glyph_font(font, cp);
         if (cp < glyph->first || cp > glyph->last) cp = punctuation_alias(cp);
         if (cp != '\n' && cp != ' ' && (cp < glyph->first || cp > glyph->last || (cp >= 127 && cp < 160)))
             return false;
+        // Even native fractions expand to several cells. Never approve text
+        // whose indivisible display equivalent cannot fit in the viewport.
+        display_token_t token;
+        display_token(&start,font,&token);
+        if (token.cells > (unsigned)(width / font->width)) return false;
     }
     p = text ? text : "";
     int rows = 0;
     while (*p) {
         if (++rows > lines)
             return false;
-        ht_take_line(&p, width / font->width);
+        ht_take_display_line(&p, width / font->width, font);
     }
     return true;
 }
@@ -226,15 +354,11 @@ int ht_wrap(ht_scene_t *s, int x, int y, int w, int lines, int skip, const ht_fo
     int row = 0, shown = 0, cols = w / f->width;
     while (*p && shown < lines) {
         const char *start = p;
-        const char *end = ht_take_line(&p, cols);
+        const char *end = ht_take_display_line(&p, cols, f);
         if (row++ < skip)
             continue;
         char line[HT_TEXT_BYTES];
-        size_t len = (size_t)(end - start);
-        if (len >= sizeof(line))
-            len = sizeof(line) - 1;
-        memcpy(line, start, len);
-        line[len] = 0;
+        display_copy(line,sizeof line,start,end,f,cols);
         ht_text(s, x, y + shown * f->height, w, f, fg, s->background, line);
         shown++;
     }

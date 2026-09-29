@@ -615,7 +615,9 @@ static void notice_checks(const char *dir) {
         "“Yes” means “go”; “no” means “stop”. Keep “A”, “B”, “C”, “D”, “E”, “F”.",
         "All three dials are working now: Tim, Tux seed 1363, and the production UI.",
         "Harness Pro board support: committed by 0xdiego25, commit",
-        "Fixed and merged into main: PR #436. All 62 relevant tests and static analysis passed."
+        "Fixed and merged into main: PR #436. All 62 relevant tests and static analysis passed.",
+        "Swipes need about ⅓ the previous travel.",
+        "Fixed: 1⅓ seconds → ½ second; x ≠ y. Tests ✅"
     };
     for(unsigned i=0;i<sizeof recaps/sizeof recaps[0];i++) {
         reset();
@@ -632,6 +634,18 @@ static void notice_checks(const char *dir) {
         if(i==8) {
             strcpy(active()->name,"Investigate firmware harness");
             scene_take(); portrait(dir,"photo-summary-spacing");
+        }
+        if(i>=9) {
+            bool fraction=false;
+            assert(!strcmp(active()->preview,recaps[i])); // wire/source stays original UTF-8
+            for(int j=0;j<scene.count;j++) {
+                const ht_run_t *r=&scene.runs[j];
+                if(r->font!=&ht_mono_28) continue;
+                assert(!strchr(r->text,'?'));
+                if(strstr(r->text,"1/3")) fraction=true;
+            }
+            assert(fraction);
+            portrait(dir,i==9?"summary-fraction":"summary-symbols");
         }
         // Notifications may name a pane outside the device's current tab.
         ui_notify_task_done("off-tab","Other pane","Another Mac",recaps[i]);
@@ -655,6 +669,16 @@ static void notice_checks(const char *dir) {
         if(i==1) portrait(dir,"notification-short");
         if(i==3) portrait(dir,"notification-clipped");
         if(i==5) { assert(strlen(recaps[i])>100); portrait(dir,"notification-punctuation"); }
+        if(i>=9) {
+            bool fraction=false;
+            for(int j=0;j<scene.count;j++) {
+                const ht_run_t *r=&scene.runs[j];
+                assert(!strchr(r->text,'?'));
+                if(strstr(r->text,"1/3")) fraction=true;
+            }
+            assert(fraction);
+            portrait(dir,i==9?"notification-fraction":"notification-symbols");
+        }
         tap(1000,233,340);
         assert(desktop_opens==1 && !strcmp(opened_agent,"off-tab") && !starts);
         assert(s.notice_count==1); // Opening is reconciled by the host's seen event.

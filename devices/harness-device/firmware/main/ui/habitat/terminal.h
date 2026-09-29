@@ -97,6 +97,10 @@ uint32_t ht_glyph_cache_builds(void);
 size_t ht_glyph_cache_bytes(void);
 // Consume one word-wrapped UTF-8 line; shared by rectangular and round reading areas.
 const char *ht_take_line(const char **cursor, int cells);
+// Display-only normalization, before measuring/wrapping. Bounded, no allocation;
+// false means the destination was truncated. Source and destination must differ.
+bool ht_display_text(char *dst, size_t capacity, const char *src, const ht_font_t *font);
+const char *ht_take_display_line(const char **cursor, int cells, const ht_font_t *font);
 int ht_wrap(ht_scene_t *scene, int x, int y, int width, int lines, int skip, const ht_font_t *font,
             uint16_t fg, const char *text);
 void ht_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out);

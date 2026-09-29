@@ -449,3 +449,35 @@ added. The exact example `Egg → developing cracks → hatch → baby Tim → g
 Tim → adult Tim.` is part of the native rendering fixtures.
 
 ![Short swipes, neighboring names and text arrows](assets/tabs-peek-arrows-20260928.png)
+
+
+## Readable Unicode fallbacks — 2026-09-28
+
+Orange revision `.orange.10` normalizes display text before measuring, wrapping
+and centering it. Existing supported glyphs keep their pixels; fractions use
+readable ASCII, so `⅓` becomes `1/3` and `1⅓` becomes `1 1/3`. Unsupported
+compatibility letters, ligatures, math operators, arrows and common emoji get
+text equivalents. Negation is preserved: `≠` becomes `!=`, never `=`.
+
+A scalar without an equivalent displays its explicit `[U+XXXX]` identifier
+instead of a misleading question mark. Malformed UTF-8 uses `[U+FFFD]`. This
+is a bounded display fallback, not a full Unicode font or language renderer.
+The source message, pane IDs and notification receipts stay untouched. Approval
+labels retain strict native-glyph and complete-fit checks; a transliteration
+does not make an unsupported question safe to answer from the dial.
+
+The shared path covers summaries, inbox cards, ordinary labels and curved text.
+The existing 90-character recap budget applies after expansion. The table holds
+2,080 equivalents in 49 ranges, 1,152 packed entries and 1,718 string bytes
+(about 6.8 KiB of flash data). It adds no heap allocation, framebuffer or runtime
+Unicode library. Creature artwork keeps its direct ASCII path. Regenerate with
+Python 3.14 / Unicode 16.0.0 using
+`firmware/scripts/gen_display_fallbacks.py`; `--check` verifies the committed table.
+Ordinary builds do not require that Python version.
+
+Validation covers every valid Unicode scalar, 3,000 randomized byte strings,
+bounded copies, mixed fractions, math meaning, raw-versus-normalized wrap/arc
+pixels, incremental redraws and unmodified notification text. The exact `⅓`
+report is exercised in both home and inbox layouts for both characters.
+
+![Readable fraction and symbol fallbacks](assets/unicode-fallbacks-20260928.png)
