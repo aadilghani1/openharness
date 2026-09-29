@@ -17,6 +17,10 @@ M2 > openharness > branch-name > #439                          GPT-6 Astra · Ma
 
 ![Top navigation and bottom context, rendered with synthetic data](images/workspace-bottom-bar.png)
 
+The optional Experimental creature sits after Store in a fixed 44pt slot.
+Tim and eggs use bundled bitmap art; hovering opens a full-size preview without
+changing focus. The slot reserves no space when disabled. See [daemons](daemons.md).
+
 ## Swarms on the left
 
 Each swarm shows its number and a compact name. A user-entered name always wins:

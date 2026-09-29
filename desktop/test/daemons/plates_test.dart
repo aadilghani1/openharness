@@ -21,6 +21,7 @@ import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/widgets/daemon_panel.dart';
 import 'package:harness/widgets/daemon_portrait.dart';
 import 'package:harness/widgets/daemon_slot.dart';
+import 'package:harness/widgets/daemon_illustration.dart';
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -411,16 +412,11 @@ void main() {
       expect(find.byKey(const ValueKey('daemon-zoo-tmux')), findsNothing);
       expect(find.text('[ ? ]'), findsNWidgets(8));
       expect(find.text('[ ! ]'), findsOneWidget);
-      // The portrait is tim 2.0's plate, frame 0 under Reduce Motion.
-      final portrait = tester.widget<Text>(
+      final portrait = tester.widget<DaemonIllustration>(
         find.byKey(const ValueKey('daemon-portrait')),
       );
-      expect(
-        portrait.textSpan!.toPlainText(),
-        daemonPlates
-            .frame('tim', PlateSize.portrait, '2.0', DaemonMood.idle)
-            .join('\n'),
-      );
+      expect(portrait.art.stem, 'tim_adult_idle');
+      expect(portrait.frame, 0);
       // The card shows the same plate, as card.mjs draws it.
       await tester.tap(find.byKey(const ValueKey('daemon-card')));
       await tester.pump();
@@ -430,15 +426,14 @@ void main() {
           matching: find.byType(SelectableText),
         ),
       );
+      expect(card.data, contains('tim 2.0'));
+      expect(card.data, contains('hatched 2026-09-27'));
       expect(
-        card.textSpan!.toPlainText().split('\n'),
-        zooCardLines(
-          roster,
-          roster.byId('tim')!,
-          version: '2.0',
-          hatched: '2026-09-27T09:00:00Z',
-          egg: 'first',
+        find.descendant(
+          of: find.byKey(const ValueKey('daemon-card-text')),
+          matching: find.byType(DaemonIllustration),
         ),
+        findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(minutes: 3));
@@ -449,11 +444,11 @@ void main() {
     ) async {
       await panel(tester, DateTime.utc(2026, 9, 20, 12));
       expect(find.text('zoo · drop 1 init  out 2026-09-27'), findsOneWidget);
-      final tim = roster.byId('tim')!;
-      expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-zoo-tim'))).data,
-        silhouette(renderSprite(roster, tim, 0, DaemonMood.idle)),
+      final tim = tester.widget<DaemonIllustration>(
+        find.byKey(const ValueKey('daemon-zoo-tim')),
       );
+      expect(tim.art.stem, 'tim_baby_idle');
+      expect(tim.silhouette, isNotNull);
       expect(find.text('[ ! ]'), findsOneWidget, reason: 'the secret');
       expect(find.text('[ ? ]'), findsNothing);
       expect(find.textContaining('unix'), findsNothing);
@@ -506,15 +501,15 @@ void main() {
 
     testWidgets('loops the mood, a frame every frameMs, and starts a new '
         "mood's loop at its beginning", (tester) async {
-      await tester.pumpWidget(host(portrait('tim')));
-      final idle = loop('tim', DaemonMood.idle);
+      await tester.pumpWidget(host(portrait('gnu')));
+      final idle = loop('gnu', DaemonMood.idle);
       expect(shown(tester, 'p'), idle[0]);
       await tester.pump(const Duration(milliseconds: 170));
       expect(shown(tester, 'p'), idle[1]);
       await tester.pump(const Duration(milliseconds: 170 * 7));
       expect(shown(tester, 'p'), idle[0], reason: 'eight frames, then again');
-      await tester.pumpWidget(host(portrait('tim', mood: DaemonMood.work)));
-      final work = loop('tim', DaemonMood.work);
+      await tester.pumpWidget(host(portrait('gnu', mood: DaemonMood.work)));
+      final work = loop('gnu', DaemonMood.work);
       expect(shown(tester, 'p'), work[0]);
       await tester.pump(const Duration(milliseconds: 170 * 5));
       expect(shown(tester, 'p'), work[1], reason: 'four frames');
@@ -545,7 +540,7 @@ void main() {
         await tester.pumpWidget(
           host(
             portrait(
-              'tim',
+              'gnu',
               size: PlateSize.reveal,
               animate: false,
               shiny: shiny,
@@ -554,12 +549,12 @@ void main() {
         );
         final text = tester.widget<Text>(find.byKey(const ValueKey('p')));
         final rows = daemonPlates.frame(
-          'tim',
+          'gnu',
           PlateSize.reveal,
           '2.0',
           DaemonMood.idle,
         );
-        final tim = roster.byId('tim')!;
+        final tim = roster.byId('gnu')!;
         final gradient = plateGradient(tim, shiny: shiny)!;
         var r = 0, c = 0, glyphs = 0;
         for (final span in (text.textSpan! as TextSpan).children!) {

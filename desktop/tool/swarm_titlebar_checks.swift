@@ -36,6 +36,35 @@ private extension NSView {
     let bitmap = renderedBitmap()
     return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
   }
+
+  func renderedTree(background: NSColor) -> NSBitmapImageRep {
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+      pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    let scale = NSAffineTransform(); scale.scale(by: 2); scale.concat()
+    background.setFill(); bounds.fill()
+    func paint(_ view: NSView) {
+      guard !view.isHidden else { return }
+      NSGraphicsContext.saveGraphicsState()
+      defer { NSGraphicsContext.restoreGraphicsState() }
+      view.bounds.clip()
+      view.draw(view.bounds)
+      for child in view.subviews {
+        NSGraphicsContext.saveGraphicsState()
+        let move = NSAffineTransform()
+        move.translateX(by: child.frame.minX - view.bounds.minX, yBy: child.frame.minY - view.bounds.minY)
+        move.concat()
+        paint(child)
+        NSGraphicsContext.restoreGraphicsState()
+      }
+    }
+    paint(self)
+    return bitmap
+  }
 }
 
 private extension SwarmTabStrip {
@@ -386,7 +415,8 @@ private extension SwarmTabStrip {
   /// Every frame the bar lays out, apart from the daemon's own.
   func barFrames() -> [NSRect] {
     [scroll.frame, document.frame, newButton.frame, contextButton.frame, focusedModelButton.frame,
-     pullRequestButton.frame] + tabs.map { $0.frame }
+     pullRequestButton.frame, searchButton.frame, notificationsButton.frame, storeButton.frame,
+     shareButton.frame, voiceLabel.frame] + tabs.map { $0.frame }
   }
 
   /// Daemons off: no key, or `visible: false`, lays out exactly the bar from
@@ -446,6 +476,165 @@ private extension SwarmTabStrip {
       "A slot withdrawn before it appeared never appears")
   }
 
+  func checkDaemonArtwork() throws {
+    let originalArt = daemonArt, originalEmit = emit
+    defer { daemonArt = originalArt; emit = originalEmit; daemonMayAppear = nil; update([:]) }
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("daemon-art-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // A large source verifies eager thumbnail decoding, aspect ratio and cache
+    // behavior independently of the exact shape of the generated illustration.
+    for (name, color) in [("fixture_egg-00", NSColor.systemYellow), ("fixture_tim-00", NSColor.systemPurple)] {
+      let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 256, pixelsHigh: 128,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+      color.setFill()
+      NSRect(x: 0, y: 0, width: 256, height: 128).fill()
+      NSGraphicsContext.restoreGraphicsState()
+      try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
+    }
+    var reads = 0
+    daemonArt = SwarmDaemonArt(assetURL: { asset in
+      reads += 1
+      return directory.appendingPathComponent((asset as NSString).lastPathComponent)
+    })
+    let egg = "assets/daemon-art/slot/fixture_egg-00.png"
+    let tim = "assets/daemon-art/slot/fixture_tim-00.png"
+    guard let eggImage = daemonArt.image(asset: egg) else {
+      throw TitlebarCheckFailure(message: "The bundled PNG fixture must load")
+    }
+    try checkTitlebar(eggImage.size == NSSize(width: 32, height: 16) &&
+      eggImage.representations.allSatisfy { $0.pixelsWide <= 64 && $0.pixelsHigh <= 64 },
+      "Native creature artwork preserves aspect ratio in an eagerly decoded 64px maximum thumbnail")
+    try checkTitlebar(daemonArt.image(asset: egg) === eggImage && reads == 1,
+      "Repeated animation frames reuse the same decoded native image")
+    let invalid = ["https://example.org/tim.png", "/tmp/tim.png", "assets/daemon-art/slot/../tim.png",
+      "assets/daemon-art/slot/sub/tim.png", "assets/daemon-art/slot/.png",
+      "assets/daemon-art/slot/tim.svg", "assets/daemon-art/slot/tim 0.png", "assets/daemon-art/slot/tím.png",
+      "assets/daemon-art/slot/%2e%2e.png", "assets/daemon-art/slot/tim.png?x=1",
+      "assets/daemon-art/portrait/tim.png", "assets/daemon-art/slot/" + String(repeating: "a", count: 160) + ".png"]
+    for asset in invalid {
+      try checkTitlebar(!SwarmDaemonArt.opens(asset) && daemonArt.image(asset: asset) == nil,
+        "Untrusted or non-slot artwork is rejected before a file lookup: \(asset)")
+    }
+    try checkTitlebar(reads == 1, "Invalid artwork paths never touch the file resolver")
+    let missing = "assets/daemon-art/slot/not_bundled.png"
+    try checkTitlebar(daemonArt.image(asset: missing) == nil && daemonArt.image(asset: missing) == nil && reads == 2,
+      "Missing bundled frames are cached as misses")
+    daemonMayAppear = { true }
+    var state: [String: Any] = ["enabled": true, "tabs": [["id": "art", "name": "Art"]], "activeId": "art"]
+    var daemon: [String: Any] = ["visible": true, "glyph": "[oo]", "art": egg]
+    state["daemon"] = daemon
+    update(state)
+    let geometry = barFrames(), frame = daemonButton.frame
+    let eggPixels = daemonButton.renderedPixels()
+    try checkTitlebar(daemonButton.art === eggImage && daemonButton.frame.width == 44,
+      "The daemon payload selects cached artwork in the fixed native slot")
+    daemon["art"] = tim
+    updateDaemon(daemon)
+    let timPixels = daemonButton.renderedPixels()
+    try checkTitlebar(timPixels != eggPixels && barFrames() == geometry && daemonButton.frame == frame,
+      "Egg, hatch and growth frames repaint without moving a native control")
+    daemon["art"] = invalid[0]
+    updateDaemon(daemon)
+    try checkTitlebar(daemonButton.art == nil && daemonButton.glyph == "[oo]" &&
+      daemonButton.renderedPixels() != timPixels && barFrames() == geometry,
+      "Missing or invalid art falls back to the existing safe ASCII face")
+    daemon["art"] = tim
+    updateDaemon(daemon)
+    var messages: [(String, Bool?)] = []
+    emit = { method, args in messages.append((method, (args as? [String: Bool])?["hovered"])) }
+    let pointer = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    daemonButton.mouseEntered(with: pointer)
+    try checkTitlebar(messages.map(\.0) == ["daemonLook", "daemonHover"] && messages.last?.1 == true,
+      "Native hover sends look before asking Flutter to show the full-size portrait")
+    daemonButton.performClick(nil)
+    try checkTitlebar(messages.suffix(2).map(\.0) == ["daemonHover", "daemon"] && messages.dropLast().last?.1 == false,
+      "A click dismisses the hover preview before opening the existing daemon action")
+    daemonButton.mouseExited(with: pointer)
+    let afterClick = messages.count
+    daemonButton.mouseExited(with: pointer)
+    try checkTitlebar(messages.count == afterClick, "Repeated exits do not send duplicate hover closures")
+    daemonButton.mouseEntered(with: pointer)
+    updateDaemon([:])
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false && daemonButton.art == nil,
+      "Hiding the creature closes the Flutter preview and releases the selected image")
+    updateDaemon(daemon)
+    daemonButton.mouseEntered(with: pointer)
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false,
+      "Application deactivation closes the creature preview")
+    daemonButton.mouseEntered(with: pointer)
+    state["enabled"] = false
+    state["daemon"] = daemon
+    update(state)
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false && !daemonButton.isEnabled,
+      "Opening a modal disables the slot and closes its preview")
+  }
+
+  func checkBundledDaemonArtwork() throws {
+    guard let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] else {
+      throw TitlebarCheckFailure(message: "Native artwork checks require the bundled asset directory")
+    }
+    let assets = URL(fileURLWithPath: root)
+    let slotDirectory = assets.appendingPathComponent("daemon-art/slot")
+    let files = try FileManager.default.contentsOfDirectory(at: slotDirectory,
+      includingPropertiesForKeys: nil).filter { $0.pathExtension == "png" }
+    try checkTitlebar(!files.isEmpty, "The illustrated daemon's slot frames are bundled")
+    let art = SwarmDaemonArt(assetURL: { asset in
+      assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    })
+    for file in files {
+      let path = "assets/daemon-art/slot/" + file.lastPathComponent
+      guard let image = art.image(asset: path) else {
+        throw TitlebarCheckFailure(message: "Bundled daemon frame failed native decoding: \(file.lastPathComponent)")
+      }
+      try checkTitlebar(image.size.width <= 32 && image.size.height <= 32 &&
+        image.representations.allSatisfy { $0.pixelsWide <= 64 && $0.pixelsHigh <= 64 },
+        "Native PNG decoding bounds \(file.lastPathComponent) to its slot-sized bitmap")
+    }
+    let stages = ["egg_first_p0_0", "egg_first_p4_0", "egg_first_burst_0", "egg_first_open_0",
+      "tim_baby_idle_0", "tim_young_idle_0", "tim_adult_idle_0"]
+    let bar = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
+    bar.daemonMayAppear = { true }
+    bar.daemonArt = art
+    bar.storeButton.image = SwarmHistoryIcons(assetURL: { asset in
+      assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    }).image(engine: "store", asset: "assets/store/polymath.png")
+    let previousAppearance = NSApp.appearance
+    defer { NSApp.appearance = previousAppearance }
+    for light in [false, true] {
+      let foreground: Int64 = light ? 0xff242424 : 0xffe8e8e8
+      let background: Int64 = light ? 0xfff4f4f4 : 0xff222222
+      var state: [String: Any] = ["enabled": true,
+        "tabs": [["id": "design", "label": "1:design", "name": "Design"],
+                 ["id": "firmware", "label": "2:firmware", "name": "Firmware"]],
+        "activeId": "design", "barStyle": ["size": 13, "foreground": foreground],
+        "palette": ["tabBar": background, "workspace": background, "foreground": foreground,
+                    "dark": light ? 0 : 1]]
+      var pictures: Set<Data> = []
+      for stage in stages {
+        state["daemon"] = ["visible": true, "glyph": "[oo]", "art": "assets/daemon-art/slot/\(stage).png"]
+        bar.update(state)
+        try checkTitlebar(bar.daemonButton.art != nil && bar.daemonButton.frame.width == 44 &&
+          bar.daemonButton.frame.minX == bar.storeButton.frame.maxX,
+          "\(stage) is illustrated after Store on the \(light ? "light" : "dark") native bar")
+        pictures.insert(bar.daemonButton.renderedPixels())
+        if let capture = ProcessInfo.processInfo.environment["HARNESS_DAEMON_NATIVE_CAPTURE_DIR"] {
+          let directory = URL(fileURLWithPath: capture)
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          let bitmap = bar.renderedTree(background: bar.palette.tabBar)
+          try bitmap.representation(using: .png, properties: [:])!.write(to:
+            directory.appendingPathComponent("native-\(light ? "light" : "dark")-\(stage).png"))
+        }
+      }
+      try checkTitlebar(pictures.count == stages.count, "Native egg, hatch and three growth stages are visually distinct")
+    }
+  }
+
   func checkDaemon() throws {
     let originalSize = frame.size
     let originalEmit = emit
@@ -485,21 +674,28 @@ private extension SwarmTabStrip {
           try checkTitlebar(daemonButton.font == tabs[0].labelFont,
             "The daemon shares the workspace bar font at \(size)pt")
           try checkTitlebar(daemonButton.frame.maxX <= bounds.width &&
-            daemonButton.frame.minX >= pullRequestButton.frame.maxX &&
+            daemonButton.frame.minX == storeButton.frame.maxX &&
             contextButton.frame.maxX <= pullRequestButton.frame.minX &&
-            contextButton.superview === statusBar && newButton.frame.maxX < searchButton.frame.minX,
+            contextButton.superview === statusBar && daemonButton.superview === self &&
+            newButton.frame.maxX < searchButton.frame.minX,
             "Footer controls and top navigation do not overlap at \(width)px / \(size)pt")
-          try checkTitlebar(abs(daemonButton.frame.width - ceil(workspaceBarTextWidth("m", font: daemonButton.font!)) * 10) < 0.5,
-            "Eight cells plus a one-cell gutter each side at \(size)pt")
+          try checkTitlebar(daemonButton.frame.width == 44,
+            "Every growth stage keeps a 44pt top slot at \(size)pt")
           try checkActiveVisible()
         }
       }
     }
     let tab = tabs[0]
-    try checkTitlebar(pullRequestButton.frame.maxX <= daemonButton.frame.minX &&
-      daemonButton.frame.height == focusedModelButton.frame.height &&
-      daemonButton.frame.midY == focusedModelButton.frame.midY,
-      "The daemon follows the focused context and shares the controls' height and inner gutters")
+    try checkTitlebar(storeButton.frame.maxX == daemonButton.frame.minX &&
+      daemonButton.frame.midY == bounds.midY &&
+      daemonButton.frame.maxX == bounds.width - ceil(workspaceBarTextWidth("m", font: daemonButton.font!)),
+      "The daemon is last after Store, centered in the top bar with its outer gutter")
+    let footerFrames = [contextButton.frame, pullRequestButton.frame, focusedModelButton.frame,
+      shareButton.frame, voiceLabel.frame]
+    updateDaemon([:])
+    try checkTitlebar(footerFrames == [contextButton.frame, pullRequestButton.frame, focusedModelButton.frame,
+      shareButton.frame, voiceLabel.frame], "Showing or hiding the top creature cannot change footer geometry")
+    updateDaemon(daemon)
     scroll.contentView.scroll(to: .zero)
     let scrollFrame = scroll.frame, visible = scroll.documentVisibleRect
     let documentFrame = document.frame, daemonFrame = daemonButton.frame
@@ -514,7 +710,7 @@ private extension SwarmTabStrip {
     for glyph in eggs + sprites + ["\\[=|=]/", "|[=|=]|", "/[=|=]\\", "-[=|=]-", "[==] |"] {
       daemon["glyph"] = glyph
       updateDaemon(daemon)
-      try checkTitlebar(unmoved(), "Moods and work frames keep the same eight-cell slot and move nothing else")
+      try checkTitlebar(unmoved(), "Moods and work frames keep the same 44pt slot and move nothing else")
     }
     // Anything that is not at most eight printable ASCII cells draws nothing, never a stand-in.
     daemon["glyph"] = "[oo]"
@@ -563,7 +759,8 @@ private extension SwarmTabStrip {
     daemonButton.mouseEntered(with: pointer)
     daemonButton.mouseExited(with: pointer)
     daemonButton.mouseEntered(with: pointer)
-    try checkTitlebar(events == ["daemonLook", "daemonLook"], "Each hover entry emits one look")
+    try checkTitlebar(events == ["daemonLook", "daemonHover", "daemonHover", "daemonLook", "daemonHover"],
+      "Each hover entry looks first, then opens the Flutter preview; exit closes it")
     daemonButton.mouseExited(with: pointer)
     // Voice: tmux's message line replaces the status, and nothing moves.
     daemon["voice"] = "pip: two agents idle. nothing needs you."
@@ -576,9 +773,9 @@ private extension SwarmTabStrip {
     try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden,
       "Its line replaces the left context while the model stays available on the right")
     try checkTitlebar(unmoved(), "Speaking moves no tab, status control or the slot")
-    try checkTitlebar(voiceLabel.frame.maxX < daemonButton.frame.minX &&
+    try checkTitlebar(voiceLabel.frame.maxX < focusedModelButton.frame.minX &&
       voiceLabel.frame.minX == ceil(("m" as NSString).size(withAttributes: [.font: daemonButton.font!]).width),
-      "The line spans the status area up to the slot")
+      "The line keeps the footer's context area while the daemon lives in the top bar")
     let voicePixels = voiceLabel.renderedPixels()
     daemon["voice"] = String(repeating: "a very long line ", count: 40)
     updateDaemon(daemon)
@@ -665,12 +862,11 @@ private extension SwarmTabStrip {
       !focusedModelButton.isHidden && unmoved(),
       "Silence restores the status exactly where it was")
     // The ten cells as Flutter drew them and the grue's patch. No count labels.
-    let cellWidth = ceil(workspaceBarTextWidth("m", font: daemonButton.font!))
     daemon["glyph"] = "[o o]"
     daemon["cell"] = "  [o o]   "
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.cells == "  [o o]   " && unmoved(),
-      "The slot draws the ten cells it is sent, in the same eight-cell slot")
+      "The slot fits the ten legacy ASCII cells into its fixed footprint")
     let plainCell = daemonButton.renderedPixels()
     daemon["cell"] = "  [= =] / "
     updateDaemon(daemon)
@@ -685,9 +881,9 @@ private extension SwarmTabStrip {
     daemon["tallyCells"] = 13
     daemon["tallyColor"] = 0xff808080
     updateDaemon(daemon)
-    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * 10) < 0.5 && unmoved() &&
+    try checkTitlebar(daemonButton.frame.width == 44 && unmoved() &&
       daemonButton.renderedPixels() == spriteOnly,
-      "Only the creature occupies the native focus bar, without count labels or reserved space")
+      "Only the creature occupies the native top slot, without count labels or extra reserved space")
     daemon["tally"] = nil
     daemon["tallyCells"] = nil
     daemon["tallyColor"] = nil
@@ -1062,7 +1258,7 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search, bell and Store controls")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Overflow tabs keep a readable minimum width and their numbered names")
-    try checkTitlebar(subviews.count == 5 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(subviews.count == 6 && statusBar.subviews.count == 5 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for (control, symbol) in zip(controls, ["+"]) {
@@ -1208,9 +1404,11 @@ private extension SwarmTabStrip {
     let beforeLook = messenger.calls.count, pendingReplies = messenger.replies.count
     daemonButton.mouseEntered(with: hover)
     daemonButton.mouseExited(with: hover)
-    try checkTitlebar(messenger.calls.count == beforeLook + 1 && messenger.calls.last?.method == "daemonLook" &&
+    let expectedHoverCalls = NSApp.isActive ? 3 : 0
+    try checkTitlebar(messenger.calls.count == beforeLook + expectedHoverCalls &&
+      (!NSApp.isActive || messenger.calls.suffix(3).map(\.method) == ["daemonLook", "daemonHover", "daemonHover"]) &&
       messenger.replies.count == pendingReplies && window.firstResponder === window.contentInput,
-      "Hovering the daemon sends one look and never moves keyboard focus")
+      "Hovering an active native window toggles preview without focus; inactive windows stay quiet")
     updateDaemon([:])
     let current = tabs[0].accessibilityChildren()!.first as! NSButton
     window.makeFirstResponder(current)
@@ -1293,7 +1491,8 @@ private extension SwarmTabStrip {
     emit = { method, args in if method == "reorder", let args = args as? [String: Any] { moves.append(args) } }
     let info = TitlebarCheckDrag()
     info.draggingSource = tabs[0]
-    info.draggingPasteboard.setString("drag-0", forType: swarmPasteboardType)
+    try checkTitlebar(info.draggingPasteboard.setString("drag-0", forType: swarmPasteboardType),
+      "The native fixture can write its isolated drag pasteboard")
     info.draggingLocation = document.convert(NSPoint(x: tabs[2].frame.midX + 1, y: 20), to: nil)
     try checkTitlebar(draggingEntered(info) == .move && draggingUpdated(info) == .move,
       "An owned tab can move within the visible tab area")
@@ -1977,6 +2176,8 @@ do {
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
   try strip.checkDaemonOff()
+  try strip.checkDaemonArtwork()
+  try strip.checkBundledDaemonArtwork()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

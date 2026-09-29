@@ -12,6 +12,7 @@ import '../daemons/daemon_lines.dart';
 import '../daemons/daemon_settings.dart';
 import '../daemons/pair_rules_file.dart';
 import '../daemons/individuals.dart';
+import '../daemons/illustrated_art.dart';
 import '../daemons/plates.dart';
 import '../daemons/render.dart';
 import '../daemons/roster.dart';
@@ -22,6 +23,7 @@ import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'daemon_consent.dart';
 import 'daemon_portrait.dart';
+import 'daemon_illustration.dart';
 import 'daemon_slot.dart';
 
 part 'daemon_panel_pair.dart';
@@ -323,9 +325,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       style: _buttonStyle,
       child: Text(
         label,
-        style: _ink(
-          onPressed == null ? _muted : color ?? _theme.cursor,
-        ),
+        style: _ink(onPressed == null ? _muted : color ?? _theme.cursor),
       ),
     );
     return tooltip == null ? button : Tooltip(message: tooltip, child: button);
@@ -549,7 +549,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           SizedBox(
             width: _cell.width * 10,
             child: Text(
-              face.glyph,
+              egg != null ? 'Ready' : 'Growing',
               key: const ValueKey('daemon-panel-nest'),
               semanticsLabel: egg != null ? 'Ready to hatch' : 'An egg',
               style: _ink(_nestInk),
@@ -729,8 +729,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           Text(
             face.glyph,
             semanticsLabel: '$name, ${DaemonFace.moodWords[mood]}',
-            style: _ink(daemonColor(def, _theme, shiny: face.daemon?.shiny ?? false))
-                .copyWith(backgroundColor: daemonBackdrop(def)),
+            style: _ink(
+              daemonColor(def, _theme, shiny: face.daemon?.shiny ?? false),
+            ).copyWith(backgroundColor: daemonBackdrop(def)),
           ),
           SizedBox(width: _cell.width * 2),
           Expanded(
@@ -804,12 +805,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final plates = face.plates;
     // Its own plates, once harnessd has drawn them; the species plate in its
     // colour family until then.
-    final art = plates?.art(
-      viewing,
-      PlateSize.portrait,
-      viewing.version,
-      mood,
-    );
+    final art = plates?.art(viewing, PlateSize.portrait, viewing.version, mood);
     final cardArt = plates?.art(
       viewing,
       PlateSize.portrait,
@@ -859,6 +855,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             child: DaemonCardText(
               key: const ValueKey('daemon-card-text'),
               lines: card,
+              illustration: def.id == 'tim'
+                  ? IllustratedArt.tim(version: viewing.version)
+                  : null,
               portraitRows: portraitRows,
               style: _ink(),
               colour: colour,
@@ -978,7 +977,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               _action('pair', '[ pair ]', () {
                 face.zoo.pair(viewing.uid);
                 setState(() => _viewing = null);
-              }, tooltip: 'Put $name in your status line'),
+              }, tooltip: 'Put $name in your tab bar'),
             _action('rename', '[ rename ]', () => _beginRename(viewing)),
             _action(
               'card',
@@ -987,14 +986,21 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                 _showCard = !_showCard;
                 _copyNote = null;
               }),
-              tooltip: 'The card people share, as a code block',
+              tooltip: def.id == 'tim'
+                  ? 'Show Tim’s card'
+                  : 'The card people share, as a code block',
             ),
             if (_showCard)
               _action(
                 'copy',
                 '[ copy ]',
-                () => _copy(card),
-                tooltip: 'Copy the card as a fenced code block',
+                () => _copy(
+                  card,
+                  illustratedRows: def.id == 'tim' ? portraitRows : null,
+                ),
+                tooltip: def.id == 'tim'
+                    ? 'Copy Tim’s details'
+                    : 'Copy the card as a fenced code block',
               ),
           ],
         ),
@@ -1081,10 +1087,14 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       t.colours.map((c) => c.name),
     );
     final marks = seen(rolled.map((r) => r.marks), t.marks.map((m) => m.$1));
-    final extras = seen(rolled.map((r) => r.extra), t.extras.map((e) => e.name));
+    final extras = seen(
+      rolled.map((r) => r.extra),
+      t.extras.map((e) => e.name),
+    );
     String line(String label, List<String> names, int of) =>
         '  ${label.padRight(8)}${'${names.length}/$of'.padRight(5)} '
-        '${names.join(' ')}'.trimRight();
+                '${names.join(' ')}'
+            .trimRight();
     return [
       line('colours', colours, t.colours.length),
       line('marks', marks, t.marks.where((m) => m.$1 != null).length),
@@ -1136,30 +1146,29 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     ];
     final earning = face.zoo.eggsBeingEarned;
     if (waiting.isEmpty && earning.isEmpty) return const [];
-    Widget plate(String kind, String stage, String label, {Key? key}) =>
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: _cell.width * 9,
-              height: _cell.height * 3.4,
-              child: FittedBox(
-                fit: BoxFit.contain,
-                child: DaemonEggPlate(
-                  roster: roster,
-                  kind: kind,
-                  stage: stage,
-                  style: _ink().copyWith(height: 1.0),
-                  theme: _theme,
-                  animate: face.motionEnabled,
-                  textKey: key,
-                  semanticsLabel: '${eggName(kind)}, $label',
-                ),
-              ),
+    Widget plate(String kind, String stage, String label, {Key? key}) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: _cell.width * 9,
+          height: _cell.height * 3.4,
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: DaemonEggPlate(
+              roster: roster,
+              kind: kind,
+              stage: stage,
+              style: _ink().copyWith(height: 1.0),
+              theme: _theme,
+              animate: face.motionEnabled,
+              textKey: key,
+              semanticsLabel: '${eggName(kind)}, $label',
             ),
-            Text(label, style: _ink(_muted), maxLines: 1),
-          ],
-        );
+          ),
+        ),
+        Text(label, style: _ink(_muted), maxLines: 1),
+      ],
+    );
     return [
       Text(
         'eggs',
@@ -1175,8 +1184,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             () {
               order.add('egg:$kind');
               return Tooltip(
-                message:
-                    'Open a ${eggName(kind)} (${eggs.length} waiting)',
+                message: 'Open a ${eggName(kind)} (${eggs.length} waiting)',
                 child: TextButton(
                   key: ValueKey('daemon-egg:$kind'),
                   focusNode: _node('egg:$kind'),
@@ -1252,10 +1260,22 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   bool _showCard = false;
   String? _copyNote;
 
-  Future<void> _copy(List<String> card) async {
+  Future<void> _copy(List<String> card, {int? illustratedRows}) async {
     try {
-      await Clipboard.setData(ClipboardData(text: cardCodeBlock(card)));
-      if (mounted) setState(() => _copyNote = 'Copied as a code block.');
+      await Clipboard.setData(
+        ClipboardData(
+          text: illustratedRows == null
+              ? cardCodeBlock(card)
+              : illustratedCardDetails(card, illustratedRows),
+        ),
+      );
+      if (mounted) {
+        setState(
+          () => _copyNote = illustratedRows == null
+              ? 'Copied as a code block.'
+              : 'Details copied.',
+        );
+      }
     } catch (_) {
       if (mounted) setState(() => _copyNote = 'Could not copy.');
     }
@@ -1355,16 +1375,31 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(cardNumber(roster, d).split('/').first, style: _ink(faint)),
-          Text(
-            d.secret
-                ? '[ ! ]'
-                : silhouette(
-                    renderSprite(roster, d, 0, DaemonMood.idle, motion: false),
-                  ),
-            key: ValueKey('daemon-zoo-${d.id}'),
-            semanticsLabel: d.secret ? 'A secret' : 'Not out yet',
-            style: _ink(faint),
-          ),
+          if (d.id == 'tim' && !d.secret)
+            DaemonIllustration(
+              key: const ValueKey('daemon-zoo-tim'),
+              art: IllustratedArt.tim(),
+              size: _cell.height,
+              silhouette: faint,
+              semanticsLabel: 'Not out yet',
+            )
+          else
+            Text(
+              d.secret
+                  ? '[ ! ]'
+                  : silhouette(
+                      renderSprite(
+                        roster,
+                        d,
+                        0,
+                        DaemonMood.idle,
+                        motion: false,
+                      ),
+                    ),
+              key: ValueKey('daemon-zoo-${d.id}'),
+              semanticsLabel: d.secret ? 'A secret' : 'Not out yet',
+              style: _ink(faint),
+            ),
           Text('', style: _ink()),
         ],
       ),
@@ -1399,8 +1434,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       );
     }
     // The paired one of this species when it is, else the first hatched.
-    final first = owned.where((z) => z.uid == zoo.pair).firstOrNull ??
-        owned.first;
+    final first =
+        owned.where((z) => z.uid == zoo.pair).firstOrNull ?? owned.first;
     final count = owned.length;
     final selected = d.id == viewing;
     final sprite = renderSprite(
@@ -1425,7 +1460,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           onPressed: () => setState(() => _viewing = first.uid),
           style: _buttonStyle.copyWith(
             fixedSize: WidgetStatePropertyAll(
-              Size(_cell.width * (_slotCells - 1), _cell.height * 3),
+              Size(_cell.width * (_slotCells - 1), _cell.height * 4),
             ),
             backgroundColor: WidgetStatePropertyAll(
               selected ? _theme.selection.withValues(alpha: .35) : null,
@@ -1436,13 +1471,19 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('$number ${d.id}', style: _ink(_muted)),
-              Text(
-                '${first.shiny ? '*' : ''}$sprite',
-                semanticsLabel: '${d.id} ${first.version}',
-                style: _ink(
-                  daemonColor(d, _theme, shiny: first.shiny),
-                ).copyWith(backgroundColor: backdrop),
-              ),
+              if (d.id == 'tim')
+                DaemonIllustration(
+                  art: IllustratedArt.tim(version: first.version),
+                  size: _cell.height * 2,
+                  semanticsLabel: 'Tim ${first.version}',
+                )
+              else
+                Text(
+                  '${first.shiny ? '*' : ''}$sprite',
+                  semanticsLabel: '${d.id} ${first.version}',
+                  style: _ink(daemonColor(d, _theme, shiny: first.shiny))
+                      .copyWith(backgroundColor: backdrop),
+                ),
               Text(
                 '${first.version}${count > 1 ? ' x$count' : ''}',
                 style: _ink(_muted),
@@ -1493,9 +1534,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
 
   List<String> get _eggKinds => [
     for (final egg in zoo.eggs)
-      if (!zoo.eggs
-          .takeWhile((e) => e != egg)
-          .any((e) => e.kind == egg.kind))
+      if (!zoo.eggs.takeWhile((e) => e != egg).any((e) => e.kind == egg.kind))
         egg.kind,
   ];
 
@@ -1503,7 +1542,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final eggs = zoo.eggs.where((e) => e.kind == kind).toList();
     return _action(
       'egg:$kind',
-      '${face.eggLineFor(eggs.first)} x${eggs.length}',
+      '${eggName(kind)} ×${eggs.length}',
       () => widget.onHatch(eggs.first),
       color: _theme.foreground,
       tooltip: 'Open a ${eggName(kind)} (${eggs.length} waiting)',

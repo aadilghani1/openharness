@@ -118,6 +118,10 @@ import '../state/workspace_chrome.dart';
 import '../widgets/key_hints.dart';
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/illustrated_art.dart';
+import '../widgets/daemon_illustration.dart';
+import '../widgets/daemon_portrait.dart';
+import '../daemons/plates.dart';
 import '../daemons/daemon_plate_client.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/daemon_settings.dart';
@@ -329,8 +333,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   OverlayEntry? _daemonOverlay;
   OverlayEntry? _hatchOverlay;
   OverlayEntry? _daemonHintOverlay;
+  OverlayEntry? _daemonPreview;
+  Timer? _daemonPreviewTimer;
   Timer? _daemonHintTimer;
   bool _daemonHintPending = false;
+  VoidCallback? _unregisterDaemonPreview;
   VoidCallback? _unregisterDaemon;
   VoidCallback? _unregisterHatch;
   bool _reduceMotion = false;
@@ -637,10 +644,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             _commandBarOpen ||
             _daemonOverlay != null ||
             _hatchOverlay != null ||
+            _daemonPreview != null ||
+            _daemonPreviewTimer != null ||
             _harnessesVisible ||
             _modelsVisible)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_routeIsCurrent && _pickerModalDepth == 0) {
+        if (!mounted || _routeIsCurrent) return;
+        _closeDaemonPreview();
+        if (_pickerModalDepth == 0) {
           _closeSearch(restoreFocus: false);
           _closeCommandBar(restoreFocus: false);
           _closeModelsControls(restoreFocus: false);
@@ -690,6 +701,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterDaemon?.call();
     _daemonOverlay?.remove();
     _daemonOverlay?.dispose();
+    _closeDaemonPreview();
     _unregisterHatch?.call();
     _hatchOverlay?.remove();
     _hatchOverlay?.dispose();
@@ -1960,6 +1972,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (call.method == 'daemon') {
       if (_zoo.loaded) _activateDaemon();
       await WidgetsBinding.instance.endOfFrame;
+      return;
+    }
+    if (call.method == 'daemonHover') {
+      _hoverDaemon(args['hovered'] == true);
       return;
     }
     if (call.method == 'daemonLook') {
@@ -3298,6 +3314,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return {
       'visible': _slotShown,
       'glyph': _face.glyph,
+      'art': IllustratedArt.forFace(_face)
+          ?.asset(IllustratedArt.frameForFace(_face), slot: true),
       // The ten cells as drawn (centred on the base sprite, a shiny `*` in
       // the gutter). Counts and progress stay out of the focus bar.
       'cell': _face.cell,
@@ -3599,8 +3617,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
           !_native &&
           event is! PointerRemovedEvent &&
           workspace is RenderBox &&
-          workspace.globalToLocal(event.position).dy >=
-              workspace.size.height - _statusBarHeight;
+          workspace.globalToLocal(event.position).dy >= 0 &&
+          workspace.globalToLocal(event.position).dy <= _tabBarHeight;
       _noteWindowInput();
     }
     if (!_zoo.loaded) return;
@@ -3666,6 +3684,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _slotTimer?.cancel();
       _slotTimer = null;
       _slotShown = false;
+      _closeDaemonPreview();
       _pointerHeld = false;
       _pointerOverBar = false;
       _lastWindowInput = null;
@@ -3884,12 +3903,112 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_sendPresence(away: away));
       }
     } else {
+      _closeDaemonPreview();
       _closeDaemonHint();
       if (wasForeground) {
         _awaySince = (widget.daemonClock ?? DateTime.now)();
         unawaited(_sendPresence());
       }
     }
+  }
+
+  void _closeDaemonPreview() {
+    _unregisterDaemonPreview?.call();
+    _unregisterDaemonPreview = null;
+    _daemonPreviewTimer?.cancel();
+    _daemonPreviewTimer = null;
+    _daemonPreview?.remove();
+    _daemonPreview?.dispose();
+    _daemonPreview = null;
+  }
+
+  void _hoverDaemon(bool hovered) {
+    _closeDaemonPreview();
+    if (!hovered || !_slotShown || !_daemonNoticeAllowed || !app.inForeground) {
+      return;
+    }
+    // Register the delay as well as the visible preview: opening and closing
+    // a picker before the delay finishes must not bring the portrait back.
+    _unregisterDaemonPreview = registerTransientMenu(_closeDaemonPreview);
+    _daemonPreviewTimer = Timer(const Duration(milliseconds: 220), () {
+      _daemonPreviewTimer = null;
+      if (!mounted ||
+          !_slotShown ||
+          !_daemonNoticeAllowed ||
+          !app.inForeground) {
+        _closeDaemonPreview();
+        return;
+      }
+      _daemonPreview = OverlayEntry(
+        builder: (context) {
+          final width = math.min(
+            350.0,
+            math.max(0.0, MediaQuery.sizeOf(context).width - 32),
+          );
+          return Positioned(
+            top: (_native ? 0.0 : _tabBarHeight) + 8,
+            right: 12,
+            child: IgnorePointer(
+              child: ListenableBuilder(
+                listenable: _face,
+                builder: (context, _) {
+                  final theme = terminalThemeFor(
+                    grid.AppTheme.palette.value,
+                    terminalThemeStore.value,
+                  );
+                  final art = IllustratedArt.forFace(_face);
+                  return Material(
+                    key: const ValueKey('daemon-hover-preview'),
+                    color: theme.background,
+                    child: SizedBox(
+                      width: width,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (art != null)
+                            DaemonIllustration(
+                              art: art,
+                              size: width,
+                              animate: _face.motionEnabled,
+                              semanticsLabel: _face.label,
+                            )
+                          else if (_face.def case final def?)
+                            FittedBox(
+                              child: DaemonPortrait(
+                                roster: _face.roster,
+                                def: def,
+                                version: _face.daemon!.version,
+                                style: workspaceBarTextStyle(
+                                  color: theme.foreground,
+                                ),
+                                theme: theme,
+                                size: PlateSize.reveal,
+                                mood: _face.mood,
+                                animate: _face.motionEnabled,
+                              ),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            child: Text(
+                              _face.label,
+                              textAlign: TextAlign.center,
+                              style: workspaceBarTextStyle(
+                                color: theme.foreground,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        },
+      );
+      Overlay.of(context).insert(_daemonPreview!);
+    });
   }
 
   void _closeDaemonHint() {
@@ -3953,6 +4072,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted || !_daemonNoticeAllowed) return false;
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return false;
+    _closeDaemonPreview();
     _closeDaemonHint();
     _daemonHintOverlay = OverlayEntry(
       builder: (context) {
@@ -3983,6 +4103,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// A click on the status slot: a ready egg hatches; otherwise the daemon is
   /// booped and its panel opens (or closes).
   void _activateDaemon() {
+    _closeDaemonPreview();
     _closeDaemonHint();
     if (!_shortcutsEnabled ||
         _hatchOverlay != null ||
@@ -4000,6 +4121,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _toggleDaemon({bool talk = false}) {
+    _closeDaemonPreview();
     _closeDaemonHint();
     if (_daemonOverlay != null) {
       _closeDaemon();
@@ -6422,12 +6544,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
               segmentOffset: parts.segments.length,
             ).single.background;
       final available = math.max(0.0, constraints.maxWidth - cell.width * 2);
-      final daemonWidth = _slotShown
-          ? math.min(
-              cell.width * (_face.roster.rules.statusCells + 2),
-              available * .5,
-            )
-          : 0.0;
       final shareWidth = _showShareButton
           ? math.min(WorkspaceShareButton.widthOf(context), available * .3)
           : 0.0;
@@ -6436,11 +6552,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final modelWidth =
           math.max(
             0.0,
-            available -
-                daemonWidth -
-                shareWidth -
-                downloadWidth -
-                cell.width * 5,
+            available - shareWidth - downloadWidth - cell.width * 5,
           ) *
           .4;
       final paneContext = Row(
@@ -6505,16 +6617,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     child: const WebDownloadButton(),
                   ),
                 ],
-                if (_slotShown)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: daemonWidth),
-                    child: DaemonSlotButton(
-                      face: _face,
-                      tooltip: () => _daemonTooltip,
-                      selected: _daemonOverlay != null,
-                      onPressed: _activateDaemon,
-                    ),
-                  ),
                 if (_showShareButton) ...[
                   SizedBox(width: cell.width),
                   ConstrainedBox(
@@ -6574,6 +6676,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         constraints.maxWidth -
             cell.width * 6 -
             storeWidth -
+            (_slotShown ? 44 : 0) -
             cell.width * 8 -
             leadingWidth,
       );
@@ -6774,12 +6877,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 tooltip: 'Harness Store ${_keymap.hint('app.store') ?? ''}',
                 onPressed: _shortcutsEnabled ? _openStore : null,
               ),
+              if (_slotShown) _daemonTabButton(),
               SizedBox(width: cell.width),
             ],
           ),
         ),
       );
     },
+  );
+
+  Widget _daemonTabButton() => DaemonSlotButton(
+    face: _face,
+    enabled: _shortcutsEnabled,
+    selected: _daemonOverlay != null,
+    onPressed: _activateDaemon,
+    onHover: _hoverDaemon,
+    tooltip: () => _daemonTooltip,
   );
 
   /// A host's narrow layout (the web on a phone): one harness at a time, a tab
@@ -6843,6 +6956,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ),
                   _searchButton(theme),
                   _notificationsButton(theme),
+                  if (_slotShown) _daemonTabButton(),
                   SizedBox(width: cell.width),
                 ],
               ),

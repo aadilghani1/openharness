@@ -392,6 +392,16 @@ class DaemonFace extends ChangeNotifier {
   /// The slot shows the daemon itself (not a new egg's moment in the nest).
   bool get showsDaemon => def != null && !_showsArrival;
 
+  /// The same egg already chosen by the face, as an art-independent state.
+  /// The hatchling's identity remains withheld until the reveal completes.
+  (String, String)? get eggArtwork {
+    if (!visible || showsDaemon) return null;
+    if (_revealing) return (_revealKind, _revealStage ?? 'p4');
+    if (_showsArrival) return (_arriving!.kind, 'p4');
+    final egg = nearestEgg;
+    return egg == null ? null : (egg.kind, egg.stage);
+  }
+
   bool get _showsArrival =>
       _arriving != null &&
       mood != DaemonMood.need &&

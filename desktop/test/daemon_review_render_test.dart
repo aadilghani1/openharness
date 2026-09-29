@@ -18,8 +18,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/daemons/daemon_brain.dart';
 import 'package:harness/daemons/daemon_face.dart';
-import 'package:harness/daemons/plates.dart';
-import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
@@ -40,6 +38,7 @@ import 'package:harness/terminal/terminal_typography.dart';
 import 'package:harness/widgets/daemon_hatch.dart';
 import 'package:harness/widgets/daemon_panel.dart';
 import 'package:harness/widgets/daemon_slot.dart';
+import 'package:harness/widgets/daemon_illustration.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
@@ -575,38 +574,20 @@ void main() {
       if (frame.stage == HatchStage.card) {
         expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
       }
-      // Drop init hatches plates: at the reveal size, still in a capture.
       if (frame.stage == HatchStage.colour ||
           frame.stage == HatchStage.silhouette) {
-        final plate = daemonPlates.frame(
-          id,
-          PlateSize.reveal,
-          '0.1',
-          DaemonMood.idle,
-        );
-        final shown = tester.widget<Text>(
-          find.byKey(
-            ValueKey(
-              frame.stage == HatchStage.silhouette
-                  ? 'daemon-hatch-silhouette'
-                  : 'daemon-hatch-portrait',
-            ),
+        final stage = find.byKey(
+          ValueKey(
+            frame.stage == HatchStage.silhouette
+                ? 'daemon-hatch-silhouette'
+                : 'daemon-hatch-colour',
           ),
         );
-        final text = shown.textSpan?.toPlainText() ?? shown.data!;
-        // The hatchling stands inside the open shell; the shell hides its
-        // bottom rows, while its upper rows keep the baked portrait.
-        final visible = plate.where((r) => r.trim().isNotEmpty).take(5);
-        for (final row in visible) {
-          expect(
-            text,
-            contains(
-              frame.stage == HatchStage.silhouette
-                  ? silhouette(row).trim()
-                  : row.trim(),
-            ),
-          );
-        }
+        expect(stage, findsOneWidget);
+        expect(
+          find.descendant(of: stage, matching: find.byType(DaemonIllustration)),
+          isNot(findsNothing),
+        );
       }
       await tester.pumpWidget(const SizedBox());
     });
@@ -845,16 +826,10 @@ void main() {
         expect(find.textContaining('unix'), findsNothing);
         expect(find.textContaining('tty'), findsNothing);
         expect(find.byKey(const ValueKey('daemon-zoo-tmux')), findsNothing);
-        // tim 2.0's portrait plate, frame 0 (a capture has Reduce Motion).
-        final shown = tester.widget<Text>(
+        final shown = tester.widget<DaemonIllustration>(
           find.byKey(const ValueKey('daemon-portrait')),
         );
-        expect(
-          shown.textSpan!.toPlainText(),
-          daemonPlates
-              .frame('tim', PlateSize.portrait, '2.0', DaemonMood.idle)
-              .join('\n'),
-        );
+        expect(shown.art.stem, 'tim_adult_idle');
       }
       if (name == 'panel-away-calm') {
         expect(face.mood, DaemonMood.idle, reason: 'asleep is not a failure');
@@ -1864,21 +1839,10 @@ void main() {
           ),
           findsOneWidget,
         );
-        // The held frame is tim 2.0's reveal plate (done), on the morph's
-        // canvas.
-        final shown = tester.widget<Text>(
+        final shown = tester.widget<DaemonIllustration>(
           find.byKey(const ValueKey('daemon-hatch-portrait')),
         );
-        final plate = daemonPlates.frame(
-          'tim',
-          PlateSize.reveal,
-          '2.0',
-          DaemonMood.done,
-        );
-        expect(
-          shown.textSpan!.toPlainText().split('\n').map((r) => r.trim()),
-          plate.map((r) => r.trim()),
-        );
+        expect(shown.art.stem, 'tim_adult_done');
       }
       await tester.pumpWidget(const SizedBox());
     });
@@ -2114,12 +2078,16 @@ void main() {
         }
       } else {
         final slot = find.byKey(const ValueKey('daemon-slot'));
-        final cell = workspaceBarCellSizeOf(tester.element(slot));
         expect(
-          find.descendant(of: slot, matching: find.byType(Text)),
+          find.descendant(
+            of: slot,
+            matching: find.byWidgetPredicate(
+              (w) => w is DaemonIllustration || w is Text,
+            ),
+          ),
           findsOneWidget,
         );
-        expect(tester.getRect(slot).width, cell.width * 10);
+        expect(tester.getRect(slot).width, 44);
         expect(tester.getRect(slot).right, lessThanOrEqualTo(width));
       }
       await tester.pumpWidget(const SizedBox());
