@@ -31,11 +31,11 @@ static void compare(const char *text, int edge)
 }
 int main(void)
 {
-    // The 31- and 32-cell labels cover all 32 rotation-table entries in both
-    // directions. Every Latin-1 glyph and the authored arrow occupies each one.
-    for(unsigned glyph=32;glyph<=257;glyph++) {
-        unsigned cp=glyph==257 ? 0xe000 : glyph==256 ? 0x2197 : glyph;
-        for(int length=31;length<=32;length++) for(int edge=0;edge<2;edge++) {
+    // The two longest labels cover every rotation-table entry in both
+    // directions. Every Latin-1 glyph, arrow and bell occupies each one.
+    for(unsigned glyph=32;glyph<=258;glyph++) {
+        unsigned cp=glyph==258 ? 0x2192 : glyph==257 ? 0xe000 : glyph==256 ? 0x2197 : glyph;
+        for(int length=HT_ARC_COLS-1;length<=HT_ARC_COLS;length++) for(int edge=0;edge<2;edge++) {
             char text[HT_TEXT_BYTES];size_t n=0;
             for(int i=0;i<length;i++)n+=encode(text+n,cp);
             text[n]=0;compare(text,edge);
@@ -44,10 +44,10 @@ int main(void)
     for(int trial=0;trial<2000;trial++) {
         char text[HT_TEXT_BYTES];size_t n=0;unsigned length=1+next()%HT_ARC_COLS;
         for(unsigned i=0;i<length;i++) {
-            unsigned cp=32+next()%227;
-            n+=encode(text+n,cp==256 ? 0x2197 : cp==257 ? 0xe000 : cp==258 ? 0x2014 : cp);
+            unsigned cp=32+next()%228;
+            n+=encode(text+n,cp==256 ? 0x2197 : cp==257 ? 0xe000 : cp==258 ? 0x2192 : cp==259 ? 0x2014 : cp);
         }
         text[n]=0;compare(text,trial&1);
     }
-    puts("arc bounds: 226 glyphs at every upper/lower rotation + 2000 mixed labels match original pixels PASS");
+    puts("arc bounds: 227 glyphs at every upper/lower rotation + 2000 mixed labels match full-cell pixels PASS");
 }

@@ -187,9 +187,14 @@ class _SettingsBody extends StatelessWidget {
         store: experimentalFeatures ?? notifier.experimentalFeatures,
         controller: notifier.swarmSettings,
       ),
-      SettingsSection.devices => DevicesSection(
-        dial: notifier.dial,
-        onDeviceSettings: notifier.setDeviceSettings,
+      SettingsSection.devices => ListenableBuilder(
+        listenable: experimentalFeatures ?? notifier.experimentalFeatures,
+        builder: (context, _) => DevicesSection(
+          dial: notifier.dial,
+          onDeviceSettings: notifier.setDeviceSettings,
+          showCompanion: (experimentalFeatures ?? notifier.experimentalFeatures)
+              .enabled(ExperimentalFeature.focusBarCreature),
+        ),
       ),
       SettingsSection.shortcuts => const ShortcutsSection(),
       SettingsSection.debug => const DebugSection(),

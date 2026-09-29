@@ -335,6 +335,8 @@ typedef struct {
     uint8_t character;    // ht_character_id_t
     uint16_t face;        // the glass, in pixels across — named so a support line can read it
     bool muted, quiet, straight_title, focus_face, scroll_reversed, round;
+    bool follow_companion;
+    char companion[16];   // active desktop species, empty while using the saved skin; never persisted
     char voicelang[CFG_VLANG_MAX];
 } ui_settings_t;
 
@@ -346,6 +348,7 @@ enum {
     UI_SETTING_QUIET      = 1u << 4, UI_SETTING_STRAIGHT_TITLE = 1u << 5,
     UI_SETTING_FOCUS_FACE = 1u << 6, UI_SETTING_SCROLL         = 1u << 7,
     UI_SETTING_VOICELANG  = 1u << 8,
+    UI_SETTING_FOLLOW_COMPANION = 1u << 9,
 };
 
 // The settings as they stand. Takes the display lock.
@@ -355,6 +358,8 @@ void ui_settings_read(ui_settings_t *out);
  * the caller answers with the settings read back either way, so a refusal still corrects the app.
  */
 bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, size_t cap);
+// NULL restores the saved skin. Unknown species are refused without changing it.
+bool ui_set_companion(const char *species);
 // A local change the app has not heard about yet (a factory reset, a pattern just drawn). Wakes the
 // cable's reporter; safe from any task.
 void ui_settings_changed(void);

@@ -44,6 +44,8 @@ typedef struct {
     uint8_t character;
     uint16_t face;
     bool muted, quiet, straight_title, focus_face, scroll_reversed, round;
+    bool follow_companion;
+    char companion[16];
     char voicelang[CFG_VLANG_MAX];
 } ui_settings_t;
 enum {
@@ -51,7 +53,7 @@ enum {
     UI_SETTING_CHARACTER  = 1u << 2,
     UI_SETTING_QUIET      = 1u << 4, UI_SETTING_STRAIGHT_TITLE = 1u << 5,
     UI_SETTING_FOCUS_FACE = 1u << 6, UI_SETTING_SCROLL         = 1u << 7,
-    UI_SETTING_VOICELANG  = 1u << 8,
+    UI_SETTING_VOICELANG  = 1u << 8, UI_SETTING_FOLLOW_COMPANION = 1u << 9,
 };
 typedef enum { A_NONE, A_SETTINGS_SAVE } action_kind_t;
 typedef struct { action_kind_t kind; } action_t;
@@ -63,6 +65,10 @@ static struct {
 } s;
 static bool scroll_reversed;
 static ht_character_t character;
+static ht_character_id_t device_skin, desktop_companion = HT_CHARACTER_COUNT;
+static bool follow_companion = true;
+#define ESP_LOGI(...) ((void)0)
+static void display_set_brightness(uint8_t value) { (void)value; }
 static bool congestion, changed;
 static unsigned queued;
 
@@ -88,6 +94,8 @@ static bool audio_notify_set_muted(bool v) { writes++; if (fail_mute) return fal
 static void cable_client_report_settings(void);
 '''
 code += pending + '\n'
+code += function('select_companion') + '\n'
+code += function('ui_set_companion') + '\n'
 code += function('ui_settings_read') + '\n'
 code += function('ui_settings_apply') + '\n'
 code += function('ui_settings_changed') + '\n'
@@ -164,6 +172,23 @@ int main(void)
     assert(toasts == toasted + 1 && nvs_character == HT_CHARACTER_TUX);
     fail_character = false;
 
+    // Companion changes are runtime-only and retain the chosen skin and all other preferences.
+    unsigned before_pair = writes;
+    assert(ui_set_companion("gnu") && character.id == HT_CHARACTER_GNU);
+    assert(now().character == HT_CHARACTER_TIM && !strcmp(now().companion, "gnu"));
+    assert(!ui_set_companion("unknown") && character.id == HT_CHARACTER_GNU);
+    assert(ui_set_companion(NULL) && character.id == HT_CHARACTER_TIM && !now().companion[0]);
+    assert(writes == before_pair);
+    assert(ui_set_companion("beastie"));
+    want = now(); want.follow_companion = false;
+    assert(ui_settings_apply(&want, UI_SETTING_FOLLOW_COMPANION, error, sizeof error));
+    assert(character.id == HT_CHARACTER_TIM && !now().companion[0]);
+    worker_once(); assert(nvs_options & 16);
+    want = now(); want.follow_companion = true;
+    assert(ui_settings_apply(&want, UI_SETTING_FOLLOW_COMPANION, error, sizeof error));
+    assert(character.id == HT_CHARACTER_BEASTIE);
+    worker_once(); assert(!(nvs_options & 16));
+
     // A full action queue is a refusal the app can act on, not a silent loss.
     congestion = true;
     want = now(); want.quiet = true;
@@ -179,7 +204,7 @@ int main(void)
 with tempfile.TemporaryDirectory(prefix='harness-device-settings-') as directory:
     out = Path(directory)
     (out / 'test.c').write_text(code)
-    sources = ['character.c', 'character_motion.c', 'character_layout.c', 'tux.c', 'focus.c',
+    sources = ['character.c', 'illustrated.c', 'character_motion.c', 'character_layout.c', 'tux.c', 'focus.c',
                'octopus.c', 'octopus_font.c', 'ascii_clip.c', 'terminal.c', 'fonts.c']
     subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
         '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),

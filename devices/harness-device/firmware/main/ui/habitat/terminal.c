@@ -51,6 +51,11 @@ static uint32_t cell_alias(uint32_t cp)
 }
 static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
 {
+    if (font == &ht_mono_24) {
+        if (cp == 0x2197) return &ht_open_24;
+        if (cp == 0x2192) return &ht_right_24;
+        if (cp == 0xe000) return &ht_bell_24;
+    }
     if (font == &ht_mono_28) {
         if (cp == 0x2713) return &ht_done_28;
         if (cp == 0x2717) return &ht_failed_28;
@@ -297,9 +302,9 @@ static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom)
 {
     if (!text || !*text) return;
     char visible[HT_TEXT_BYTES];
-    bool complete = ht_display_text(visible,sizeof visible,text,&ht_mono_20);
-    if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_COLS * ht_mono_20.width,
-                 &ht_mono_20, fg, s->background, visible)) return;
+    bool complete = ht_display_text(visible,sizeof visible,text,&ht_mono_24);
+    if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_COLS * ht_mono_24.width,
+                 &ht_mono_24, fg, s->background, visible)) return;
     ht_run_t *r = &s->runs[s->count - 1];
     // A long name ends at a word boundary; the pane list retains its full name.
     if (!complete || strlen(visible) > strlen(r->text)) {
@@ -393,6 +398,7 @@ int ht_wrap(ht_scene_t *s, int x, int y, int w, int lines, int skip, const ht_fo
 }
 ht_rect_t ht_run_bounds(const ht_run_t *r)
 {
+    if (r->sprite.width) return (ht_rect_t){r->x,r->y,r->sprite.width,r->sprite.height};
     if (r->arc) {
         const char *p = r->text; int count = 0;
         while (*p && count < HT_ARC_COLS) { ht_utf8_next(&p); count++; }
@@ -400,8 +406,8 @@ ht_rect_t ht_run_bounds(const ht_run_t *r)
         int sn = arc_trig[count - 1][0], cs = arc_trig[count - 1][1];
         // Tight, conservative ink bounds. The arc canvas remains 416x128, but
         // a short name must not dirty that whole rectangle on every pane switch.
-        int half_w = ((13 * cs + 29 * sn) >> 15) + 2;
-        int half_h = ((29 * cs + 13 * sn) >> 15) + 2;
+        int half_w = (((HT_ARC_CELL_WIDTH + 1) * cs + (HT_ARC_CELL_HEIGHT + 1) * sn) >> 15) + 2;
+        int half_h = (((HT_ARC_CELL_HEIGHT + 1) * cs + (HT_ARC_CELL_WIDTH + 1) * sn) >> 15) + 2;
         int left = 233 - (205 * sn >> 14) - half_w - 1;
         int bottom = 233 - (205 * cs >> 14) + half_h + 1;
         return (ht_rect_t){left, r->arc == 2 ? HT_HEIGHT - bottom : HT_ARC_Y,
@@ -555,7 +561,7 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                     damage_add(d, shimmer_band(next), rows);
                     continue;
                 }
-                if (!old->arc && !next->arc && old->x == next->x && old->y == next->y && old->w == next->w &&
+                if (!old->sprite.width && !next->sprite.width && !old->arc && !next->arc && old->x == next->x && old->y == next->y && old->w == next->w &&
                     old->font == next->font && old->fg == next->fg && old->bg == next->bg) {
                     const char *p = old->text, *q = next->text;
                     int cell = 0, first = -1, last = -1;
@@ -684,10 +690,10 @@ static const uint16_t *glyph_cached(uint32_t c, const uint8_t *glyph,
 
 // Each row of an arc has two narrow bands, separated by transparent space.
 // Pack those bands independently instead of retaining a mostly empty rectangle.
-// All 64 count/edge geometries fit in 3968 bytes; 4096 leaves a little headroom.
+// All 52 count/edge geometries fit in 4538 bytes; 4608 leaves a little headroom.
 // Upper/lower text have independent keys, so they never evict each other.
 // Scenes retain immutable text, allowing old scenes to rasterize correctly.
-enum { ARC_HALF = HT_ARC_WIDTH / 2, ARC_MASK_BYTES = 4096 };
+enum { ARC_HALF = HT_ARC_WIDTH / 2, ARC_MASK_BYTES = 4608 };
 typedef struct {
     uint16_t offset;
     uint8_t first, last;
@@ -719,21 +725,21 @@ void ht_arc_fast_sampling(bool enabled)
 }
 static unsigned glyph_alpha_reference(const uint8_t *glyph, int x, int y)
 {
-    if (x < 0 || x >= 12 || y < 0 || y >= 28) return 0;
-    unsigned k = (unsigned)y * 12 + (unsigned)x;
+    if (x < 0 || x >= HT_ARC_CELL_WIDTH || y < 0 || y >= HT_ARC_CELL_HEIGHT) return 0;
+    unsigned k = (unsigned)y * HT_ARC_CELL_WIDTH + (unsigned)x;
     return (glyph[k >> 2] >> ((3 - (k & 3)) * 2)) & 3;
 }
 #endif
 
-static void glyph_coverage(const uint8_t *glyph, uint8_t padded[14 * 30])
+static void glyph_coverage(const uint8_t *glyph, uint8_t padded[(HT_ARC_CELL_WIDTH + 2) * (HT_ARC_CELL_HEIGHT + 2)])
 {
     // One glyph plus a transparent one-pixel border. Bilinear sampling below
     // then needs four byte loads instead of four checked packed-bit lookups.
-    // This 420-byte scratch lives only while a changed curved label is built.
-    memset(padded, 0, 14 * 30);
-    for (unsigned y = 0; y < 28; y++) for (unsigned x = 0; x < 12; x++) {
-        unsigned k = y * 12 + x;
-        padded[(y + 1) * 14 + x + 1] = (glyph[k >> 2] >> ((3 - (k & 3)) * 2)) & 3;
+    // This 578-byte scratch lives only while a changed curved label is built.
+    memset(padded, 0, (HT_ARC_CELL_WIDTH + 2) * (HT_ARC_CELL_HEIGHT + 2));
+    for (unsigned y = 0; y < HT_ARC_CELL_HEIGHT; y++) for (unsigned x = 0; x < HT_ARC_CELL_WIDTH; x++) {
+        unsigned k = y * HT_ARC_CELL_WIDTH + x;
+        padded[(y + 1) * (HT_ARC_CELL_WIDTH + 2) + x + 1] = (glyph[k >> 2] >> ((3 - (k & 3)) * 2)) & 3;
     }
 }
 static bool arc_pack_geometry(const ht_run_t *r, arc_cache_t *cache, int count)
@@ -750,8 +756,8 @@ static bool arc_pack_geometry(const ht_run_t *r, arc_cache_t *cache, int count)
         int cx = (233 - HT_ARC_X) * 256 + (205 * sn * 256 >> 14);
         int cy = (233 - r->y) * 256 + (r->arc == 2 ? 1 : -1) * (205 * cs * 256 >> 14);
         int sin_abs = sn < 0 ? -sn : sn;
-        int half_w = ((13 * cs + 29 * sin_abs) >> 15) + 2;
-        int half_h = ((29 * cs + 13 * sin_abs) >> 15) + 2;
+        int half_w = (((HT_ARC_CELL_WIDTH + 1) * cs + (HT_ARC_CELL_HEIGHT + 1) * sin_abs) >> 15) + 2;
+        int half_h = (((HT_ARC_CELL_HEIGHT + 1) * cs + (HT_ARC_CELL_WIDTH + 1) * sin_abs) >> 15) + 2;
         int x0 = imax(0, (cx >> 8) - half_w), x1 = imin(HT_ARC_WIDTH, (cx >> 8) + half_w + 1);
         int y0 = imax(0, (cy >> 8) - half_h), y1 = imin(HT_ARC_HEIGHT, (cy >> 8) + half_h + 1);
         for (int y = y0; y < y1; y++) for (int h = 0; h < 2; h++) {
@@ -787,12 +793,12 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
         cache->spans[y][h].ink_first = ARC_HALF;
         cache->spans[y][h].ink_last = 0;
     }
-    uint8_t coverage[14 * 30];
+    uint8_t coverage[(HT_ARC_CELL_WIDTH + 2) * (HT_ARC_CELL_HEIGHT + 2)];
     for (int i = 0; i < count; i++) {
-        uint32_t c = font_codepoint(&ht_mono_20, cp[i]);
+        uint32_t c = font_codepoint(&ht_mono_24, cp[i]);
         if (c == ' ') continue;
-        const ht_font_t *f = glyph_font(&ht_mono_20, c);
-        const uint8_t *glyph = f->pixels + (c - f->first) * 84;
+        const ht_font_t *f = glyph_font(&ht_mono_24, c);
+        const uint8_t *glyph = f->pixels + (c - f->first) * ((HT_ARC_CELL_WIDTH * HT_ARC_CELL_HEIGHT + 3) / 4);
 #ifdef DEVICE_LAYOUT_BENCH
         if (arc_fast)
 #endif
@@ -807,18 +813,19 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
         int box_x = cx, box_y = cy;
 #ifdef DEVICE_LAYOUT_BENCH
         if (!arc_tight) {
-            half_w = ((13 * cs + 29 * sin_abs) >> 15) + 2;
-            half_h = ((29 * cs + 13 * sin_abs) >> 15) + 2;
+            half_w = (((HT_ARC_CELL_WIDTH + 1) * cs + (HT_ARC_CELL_HEIGHT + 1) * sin_abs) >> 15) + 2;
+            half_h = (((HT_ARC_CELL_HEIGHT + 1) * cs + (HT_ARC_CELL_WIDTH + 1) * sin_abs) >> 15) + 2;
         } else
 #endif
         {
-            const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] :
-                f == &ht_right_20 ? ht_right_20_ink[0] :
-                f == &ht_bell_20 ? ht_bell_20_ink[0] : ht_mono_20_ink[c - f->first];
+            const uint8_t full_ink[] = {0, 0, HT_ARC_CELL_WIDTH, HT_ARC_CELL_HEIGHT};
+            const uint8_t *ink = f == &ht_viet_24 ? full_ink : f == &ht_open_24 ? ht_open_24_ink[0] :
+                f == &ht_right_24 ? ht_right_24_ink[0] :
+                f == &ht_bell_24 ? ht_bell_24_ink[0] : ht_mono_24_ink[c - f->first];
             // Source pixels outside this box are transparent. Include a full
             // bilinear halo and two destination pixels for fixed-point rounding.
-            int ox = (ink[0] + ink[2]) * 128 - (6 * 256 - 128);
-            int oy = (ink[1] + ink[3]) * 128 - (14 * 256 - 128);
+            int ox = (ink[0] + ink[2]) * 128 - (HT_ARC_CELL_WIDTH * 128 - 128);
+            int oy = (ink[1] + ink[3]) * 128 - (HT_ARC_CELL_HEIGHT * 128 - 128);
             box_x += (ox * cs - oy * sn) >> 14;
             box_y += (ox * sn + oy * cs) >> 14;
             int w = ink[2] - ink[0] + 2, h = ink[3] - ink[1] + 2;
@@ -829,9 +836,9 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
         int y0 = imax(0, (box_y >> 8) - half_h), y1 = imin(HT_ARC_HEIGHT, (box_y >> 8) + half_h + 1);
         for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
             int dx = x * 256 + 128 - cx, dy = y * 256 + 128 - cy;
-            int sx = ((dx * cs + dy * sn) >> 14) + 6 * 256 - 128;
-            int sy = ((-dx * sn + dy * cs) >> 14) + 14 * 256 - 128;
-            if (sx < -256 || sx >= 12 * 256 || sy < -256 || sy >= 28 * 256) continue;
+            int sx = ((dx * cs + dy * sn) >> 14) + HT_ARC_CELL_WIDTH * 128 - 128;
+            int sy = ((-dx * sn + dy * cs) >> 14) + HT_ARC_CELL_HEIGHT * 128 - 128;
+            if (sx < -256 || sx >= HT_ARC_CELL_WIDTH * 256 || sy < -256 || sy >= HT_ARC_CELL_HEIGHT * 256) continue;
             int gx = sx >> 8, gy = sy >> 8;
             unsigned fx = sx & 255, fy = sy & 255;
             // Fixed-point bilinear coverage preserves the existing font's soft
@@ -846,9 +853,9 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
             } else
 #endif
             {
-                const uint8_t *alpha = coverage + (gy + 1) * 14 + gx + 1;
+                const uint8_t *alpha = coverage + (gy + 1) * (HT_ARC_CELL_WIDTH + 2) + gx + 1;
                 unsigned upper = alpha[0]*(256-fx) + alpha[1]*fx;
-                unsigned lower = alpha[14]*(256-fx) + alpha[15]*fx;
+                unsigned lower = alpha[HT_ARC_CELL_WIDTH + 2]*(256-fx) + alpha[HT_ARC_CELL_WIDTH + 3]*fx;
                 a = (upper*(256-fy) + lower*fy + 32768) >> 16;
             }
             if (!a) continue;
@@ -914,6 +921,32 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
     }
 }
+static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    const ht_sprite_t *s=&r->sprite;
+    if(!s->pixels)return;
+    int left=imax(clip.x,r->x),right=imin(clip.x+clip.w,r->x+s->width);
+    int top=imax(clip.y,r->y),bottom=imin(clip.y+clip.h,r->y+s->height);
+    for(int y=top;y<bottom;y++){
+        size_t at=(size_t)(y-r->y)*s->width+left-r->x;
+        uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
+        int x=left;
+        while(x<right){
+            unsigned a=s->alpha?s->alpha[at]:255;
+            if(!a){at++;dst++;x++;continue;}
+            if(a==255){
+                size_t first=at;
+                do{at++;x++;}while(x<right && (!s->alpha || s->alpha[at]==255));
+                size_t n=at-first;memcpy(dst,s->pixels+first,n*2);dst+=n;continue;
+            }
+            uint16_t fg=panel16(s->pixels[at]),bg=panel16(*dst);
+            unsigned red=((fg>>11)*a+(bg>>11)*(255-a)+127)/255;
+            unsigned green=(((fg>>5)&63)*a+((bg>>5)&63)*(255-a)+127)/255;
+            unsigned blue=((fg&31)*a+(bg&31)*(255-a)+127)/255;
+            *dst++=panel16((red<<11)|(green<<5)|blue);at++;x++;
+        }
+    }
+}
 void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
 {
     fill(out, (size_t)clip.w * clip.h, panel16(s->background));
@@ -923,6 +956,7 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
         ht_rect_t box = ht_run_bounds(r);
         if (!intersect(box, clip))
             continue;
+        if (r->sprite.width) { sprite_raster(r, clip, out); continue; }
         if (r->arc) { arc_raster(r, clip, out); continue; }
         int y1 = imax(clip.y, r->y), y2 = imin(clip.y + clip.h, r->y + f->height),
             x1 = imax(clip.x, r->x), x2 = imin(clip.x + clip.w, r->x + r->w);

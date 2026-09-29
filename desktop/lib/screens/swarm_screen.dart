@@ -118,6 +118,7 @@ import '../state/workspace_chrome.dart';
 import '../widgets/key_hints.dart';
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/daemon_lines.dart';
 import '../daemons/illustrated_art.dart';
 import '../widgets/daemon_illustration.dart';
 import '../widgets/daemon_portrait.dart';
@@ -3997,6 +3998,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                             ),
                           ),
+                          if (daemonAutonomyAboveSuggest(_face.autonomy))
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              child: Text(
+                                'Autonomy: ${daemonAutonomyLabel(_face.autonomy!)}',
+                                style: workspaceBarTextStyle(
+                                  color: theme.foreground,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),

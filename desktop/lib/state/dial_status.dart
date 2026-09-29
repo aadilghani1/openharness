@@ -27,6 +27,8 @@ class DeviceSettings {
     required this.scrollReversed,
     required this.round,
     required this.voiceLang,
+    this.followCompanion,
+    this.companion,
   });
 
   final int brightness;
@@ -36,6 +38,8 @@ class DeviceSettings {
   final int face;
   final bool muted, quiet, straightTitle, focusFace, scrollReversed, round;
   final String voiceLang;
+  final bool? followCompanion;
+  final String? companion;
 
   /// Read with `is`, never `as`, and refused whole when a field is missing: a default here is a value
   /// this window invented, and the pane would then offer a setting the device does not have.
@@ -46,23 +50,40 @@ class DeviceSettings {
     final character = value['character'];
     final face = value['face'];
     final lang = value['voiceLang'];
-    if (brightness is! num || character is! num || face is! num || lang is! String) {
+    if (brightness is! num ||
+        character is! num ||
+        face is! num ||
+        lang is! String) {
       return null;
     }
     final muted = flag('muted'), quiet = flag('quiet');
     final straight = flag('straightTitle'), focus = flag('focusFace');
     final scroll = flag('scrollReversed'), round = flag('round');
-    if (muted == null || quiet == null || straight == null ||
-        focus == null || scroll == null || round == null) {
+    if (muted == null ||
+        quiet == null ||
+        straight == null ||
+        focus == null ||
+        scroll == null ||
+        round == null) {
       return null;
     }
     return DeviceSettings(
       brightness: brightness.round().clamp(0, 100),
       character: character.round(),
       face: face.round(),
-      muted: muted, quiet: quiet, straightTitle: straight,
-      focusFace: focus, scrollReversed: scroll, round: round,
+      muted: muted,
+      quiet: quiet,
+      straightTitle: straight,
+      focusFace: focus,
+      scrollReversed: scroll,
+      round: round,
       voiceLang: lang,
+      followCompanion: value['followCompanion'] is bool
+          ? value['followCompanion'] as bool
+          : null,
+      companion: value['companion'] is String
+          ? value['companion'] as String
+          : null,
     );
   }
 }
@@ -122,8 +143,12 @@ class DialStatus {
   /// Read with `is`, never `as`: this crosses a socket, so its shape belongs to the other end.
   static DialStatus fromJson(Map<String, dynamic> json) => DialStatus(
     attached: json['attached'] == true,
-    id: json['id'] is String && (json['id'] as String).isNotEmpty ? json['id'] as String : null,
-    mac: json['mac'] is String && (json['mac'] as String).isNotEmpty ? json['mac'] as String : null,
+    id: json['id'] is String && (json['id'] as String).isNotEmpty
+        ? json['id'] as String
+        : null,
+    mac: json['mac'] is String && (json['mac'] as String).isNotEmpty
+        ? json['mac'] as String
+        : null,
     settings: DeviceSettings.fromJson(json['settings']),
     devices: [
       if (json['devices'] is List)

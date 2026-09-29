@@ -3,7 +3,11 @@
 
 // IDs are stored in NVS. Append new characters; never renumber existing IDs.
 typedef enum {
-    HT_CHARACTER_TIM = 0, HT_CHARACTER_TUX = 1, HT_CHARACTER_FOCUS = 2, HT_CHARACTER_COUNT
+    HT_CHARACTER_TIM = 0, HT_CHARACTER_TUX = 1, HT_CHARACTER_FOCUS = 2,
+    HT_CHARACTER_ILLUSTRATED_TIM, HT_CHARACTER_GNU, HT_CHARACTER_LYNX,
+    HT_CHARACTER_MUTT, HT_CHARACTER_YAK, HT_CHARACTER_GOPHER, HT_CHARACTER_BUG,
+    HT_CHARACTER_ILLUSTRATED_TUX, HT_CHARACTER_AUK, HT_CHARACTER_BEASTIE,
+    HT_CHARACTER_COUNT
 } ht_character_id_t;
 typedef struct {
     ht_character_id_t id;
@@ -17,6 +21,9 @@ typedef struct {
 
 ht_character_id_t ht_character_default(void);
 const char *ht_character_name(ht_character_id_t id);
+// Stable desktop species keys. NULL/unknown returns COUNT, never a default companion.
+ht_character_id_t ht_character_companion(const char *species);
+const char *ht_character_species(ht_character_id_t id);
 bool ht_character_select(ht_character_t *character, ht_character_id_t id);
 bool ht_character_tick(ht_character_t *character, uint32_t now, ht_character_mood_t mood,
                        bool quiet, bool visible, bool down, int x, unsigned level, uint32_t activity);

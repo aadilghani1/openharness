@@ -59,6 +59,7 @@ static int nvs_commit(nvs_handle_t h) {
 }
 static void nvs_close(nvs_handle_t h) { assert(h == 123); closes++; }
 static ht_character_t character;
+static ht_character_id_t device_skin, desktop_companion;
 static ht_character_caption_t home_caption;
 static void ui_cable_toast(const char *message) {
     assert(!strcmp(message, "Character changed; saving failed.")); errors++;
@@ -83,7 +84,7 @@ int main(void) {
     assert(!writes && !commits); // Boot cannot overwrite a previous preference.
     for (unsigned id = 0; id <= 255; id++) {
         save(id); assert(stored == id && !errors);
-        boot(); assert(character.id == (id < HT_CHARACTER_COUNT ? id : ht_character_default()));
+        boot(); assert(character.id == (id <= HT_CHARACTER_FOCUS ? id : ht_character_default()));
     }
     save(HT_CHARACTER_TUX); boot(); assert(character.id == HT_CHARACTER_TUX);
     save(HT_CHARACTER_TIM); boot(); assert(character.id == HT_CHARACTER_TIM);
@@ -103,7 +104,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='harness-character-pref-') as directory:
     out = Path(directory)
     (out / 'test.c').write_text(code)
-    sources = ['character.c', 'character_motion.c', 'character_layout.c', 'tux.c', 'focus.c',
+    sources = ['character.c', 'illustrated.c', 'character_motion.c', 'character_layout.c', 'tux.c', 'focus.c',
                'octopus.c', 'octopus_font.c', 'ascii_clip.c', 'terminal.c', 'fonts.c']
     for flags in ([], ['-DDEVICE_DEFAULT_CHARACTER_TUX=1']):
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',

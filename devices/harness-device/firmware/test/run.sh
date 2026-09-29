@@ -19,7 +19,7 @@ python3 "$here/../scripts/gen_tux_moods.py" --check
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_character" "$here/test_character.c" \
-   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
    "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
    "$here/../main/ui/habitat/focus.c" \
    "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
@@ -212,3 +212,5 @@ if [[ -n "${IDF_PATH:-}" ]]; then
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"
 fi
+
+python3 "$here/test_companions.py"

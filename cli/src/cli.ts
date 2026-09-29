@@ -6715,6 +6715,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
+    // Zoo selection is visual identity; it does not require consent to watch terminal activity.
+    // Guest identity is only a fallback while signed out, never another account's cached choice.
+    companion: () => daemons.on() ? (zooPair.known ? zooPair.pair : readAuthSession() ? null : guestPair) : null,
     activityText: async (agentId) => {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null

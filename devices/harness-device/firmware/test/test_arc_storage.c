@@ -1,5 +1,5 @@
 // Exercise the actual packed cache, its hard capacity bound, and exact pixels
-// against the independently archived dense-cache renderer from habitat.79.
+// against the habitat.79 dense-cache algorithm, adapted to the 24 px metrics.
 #include "../main/ui/habitat/terminal.c"
 #include "reference79/reference.h"
 #include <assert.h>
@@ -38,6 +38,7 @@ static void compare(const char *text, int edge, bool partial)
 }
 int main(void)
 {
+    assert(ht_mono_24.width==HT_ARC_CELL_WIDTH && ht_mono_24.height==HT_ARC_CELL_HEIGHT);
     unsigned peak=0;
     for(int count=1;count<=HT_ARC_COLS;count++) for(int edge=0;edge<2;edge++) {
         arc_cache_t cache={0};
@@ -53,11 +54,11 @@ int main(void)
         compare(text,edge,false);
         memset(text,' ',count);compare(text,edge,false);
     }
-    assert(peak==3968);
-    assert(sizeof arc_caches==11528);
-    for(unsigned glyph=32;glyph<=256;glyph++) {
-        unsigned cp=glyph==256 ? 0x2197 : glyph;
-        for(int length=31;length<=32;length++) for(int edge=0;edge<2;edge++) {
+    assert(peak==4538);
+    assert(sizeof arc_caches==12552);
+    for(unsigned glyph=32;glyph<=258;glyph++) {
+        unsigned cp=glyph==258 ? 0x2192 : glyph==257 ? 0xe000 : glyph==256 ? 0x2197 : glyph;
+        for(int length=HT_ARC_COLS-1;length<=HT_ARC_COLS;length++) for(int edge=0;edge<2;edge++) {
             char text[HT_TEXT_BYTES];size_t n=0;
             for(int i=0;i<length;i++) n+=encode(text+n,cp);
             text[n]=0;compare(text,edge,false);
@@ -66,10 +67,10 @@ int main(void)
     for(int trial=0;trial<4000;trial++) {
         char text[HT_TEXT_BYTES];size_t n=0;unsigned length=1+next()%HT_ARC_COLS;
         for(unsigned i=0;i<length;i++) {
-            unsigned cp=32+next()%226;
-            n+=encode(text+n,cp==256 ? 0x2197 : cp==257 ? 0x2014 : cp);
+            unsigned cp=32+next()%228;
+            n+=encode(text+n,cp==256 ? 0x2197 : cp==257 ? 0xe000 : cp==258 ? 0x2192 : cp==259 ? 0x2014 : cp);
         }
         text[n]=0;compare(text,trial&1,trial%3!=0);
     }
-    printf("Packed arcs: all 64 geometries <=%u/4096B; 225 glyphs at every angle, 4000 mixed/clipped labels match dense pixels; caches=%zuB PASS\n",peak,sizeof arc_caches);
+    printf("Packed arcs: all %u geometries <=%u/%uB; 227 glyphs at every angle, 4000 mixed/clipped labels match dense pixels; caches=%zuB PASS\n",2*HT_ARC_COLS,peak,ARC_MASK_BYTES,sizeof arc_caches);
 }

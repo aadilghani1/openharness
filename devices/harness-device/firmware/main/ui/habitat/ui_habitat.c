@@ -250,6 +250,13 @@ static ht_draft_t draft;
 static bool selection_emit(const ht_select_command_t *command, void *ctx);
 static ht_gesture_t gesture;
 static ht_character_t character;
+static ht_character_id_t device_skin, desktop_companion = HT_CHARACTER_COUNT;
+static bool follow_companion = true;
+static void select_companion(void)
+{
+    ht_character_select(&character, follow_companion && desktop_companion < HT_CHARACTER_COUNT
+        ? desktop_companion : device_skin);
+}
 static ht_character_caption_t home_caption;
 static action_t pressed_action;
 static bool queue(action_t a);
@@ -565,7 +572,8 @@ static bool is_question(const char *id)
 }
 static uint16_t color(unsigned rgb)
 {
-    unsigned b = s.brightness < 8 ? 8 : s.brightness;
+    // Hardware brightness dims text and illustrated pixels equally.
+    unsigned b = 100;
     if (rgb == HT_THEME_CANVAS || rgb == HT_THEME_CARD) {
         // RGB565 has an extra green bit. Independently truncating a dim gray
         // makes it green; the neutral range has exact steps of 8, and both the canvas and the card
@@ -2165,11 +2173,12 @@ static void worker(void *unused)
                 config_save_brightness((uint8_t)((want.brightness * 255 + 50) / 100));
             if (fields & UI_SETTING_CHARACTER && !config_save_habitat_character(want.character))
                 ui_cable_toast("Character changed; saving failed.");
-            if (fields & (UI_SETTING_QUIET | UI_SETTING_STRAIGHT_TITLE | UI_SETTING_FOCUS_FACE)) {
+            if (fields & (UI_SETTING_QUIET | UI_SETTING_STRAIGHT_TITLE | UI_SETTING_FOCUS_FACE | UI_SETTING_FOLLOW_COMPANION)) {
                 // Bit 1 was rim scrolling and is RETIRED, not reused: devices in the field still
                 // hold it set, and a new preference on that bit would inherit their answer.
                 uint8_t options = (uint8_t)((want.focus_face ? 1 : 0) |
-                                            (want.quiet ? 4 : 0) | (want.straight_title ? 8 : 0));
+                                            (want.quiet ? 4 : 0) | (want.straight_title ? 8 : 0) |
+                                            (want.follow_companion ? 0 : 16));
                 if (!config_save_habitat_options(options))
                     ui_cable_toast("Preference changed; saving failed.");
             }
@@ -2591,8 +2600,12 @@ void ui_init(void)
     uint8_t saved_character = config_load_habitat_character((uint8_t)ht_character_default());
     if (!ht_character_select(&character, (ht_character_id_t)saved_character))
         ht_character_select(&character, ht_character_default());
+    device_skin = character.id <= HT_CHARACTER_FOCUS ? character.id : ht_character_default();
+    desktop_companion = HT_CHARACTER_COUNT;
+    ht_character_select(&character, device_skin);
     ESP_LOGI("habitat", "character %s; shared moods and controls", ht_character_name(character.id));
     uint8_t options = config_load_habitat_options();
+    follow_companion = !(options & 16);
     s.focus_face = (options & 1) != 0;
     s.quiet = (options & 4) != 0;
     s.straight_title = (options & 8) != 0;
@@ -2627,7 +2640,10 @@ void ui_settings_read(ui_settings_t *out)
     display_lock();
     out->brightness = (uint8_t)s.brightness;
     out->muted = s.muted;
-    out->character = (uint8_t)character.id;
+    out->character = (uint8_t)device_skin;
+    out->follow_companion = follow_companion;
+    const char *species = ht_character_species(character.id);
+    if (species) snprintf(out->companion, sizeof out->companion, "%s", species);
     out->quiet = s.quiet;
     out->straight_title = s.straight_title;
     out->focus_face = s.focus_face;
@@ -2652,7 +2668,7 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
     if (fields & UI_SETTING_CHARACTER) {
         ht_character_t probe;
         memset(&probe, 0, sizeof probe);
-        if (!ht_character_select(&probe, (ht_character_id_t)want->character)) {
+        if (want->character > HT_CHARACTER_FOCUS || !ht_character_select(&probe, (ht_character_id_t)want->character)) {
             if (error) snprintf(error, cap, "This device has no such character.");
             return false;
         }
@@ -2663,8 +2679,13 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
     }
     display_lock();
     // The live state moves now, so the next frame is already right; the flash write is the worker's.
-    if (fields & UI_SETTING_BRIGHTNESS) s.brightness = want->brightness;
-    if (fields & UI_SETTING_CHARACTER) ht_character_select(&character, (ht_character_id_t)want->character);
+    if (fields & UI_SETTING_BRIGHTNESS) {
+        s.brightness = want->brightness;
+        display_set_brightness((uint8_t)((want->brightness * 255 + 50) / 100));
+    }
+    if (fields & UI_SETTING_CHARACTER) device_skin = (ht_character_id_t)want->character;
+    if (fields & UI_SETTING_FOLLOW_COMPANION) follow_companion = want->follow_companion;
+    select_companion();
     if (fields & UI_SETTING_FOCUS_FACE) s.focus_face = want->focus_face;
     if (fields & UI_SETTING_QUIET) s.quiet = want->quiet;
     if (fields & UI_SETTING_STRAIGHT_TITLE) s.straight_title = want->straight_title;
@@ -2683,10 +2704,23 @@ void ui_settings_changed(void)
 {
     cable_client_report_settings();
 }
+bool ui_set_companion(const char *species)
+{
+    ht_character_id_t id = ht_character_companion(species);
+    if (species && id == HT_CHARACTER_COUNT) return false;
+    display_lock();
+    desktop_companion = id;
+    select_companion();
+    change();
+    display_unlock();
+    ESP_LOGI("companion", "desktop=%s active=%s", species ? species : "none", ht_character_name(character.id));
+    return true;
+}
 void ui_set_brightness(uint8_t level)
 {
     display_lock();
     s.brightness = (level * 100 + 127) / 255;
+    display_set_brightness(level);
     change();
     display_unlock();
 }
@@ -2696,6 +2730,8 @@ void ui_set_connected(bool value)
 {
     display_lock();
     if (!value) {
+        desktop_companion = HT_CHARACTER_COUNT;
+        select_companion();
         input_cancel();
         s.voice_retry_until = 0;
         s.pending_machine[0] = 0;

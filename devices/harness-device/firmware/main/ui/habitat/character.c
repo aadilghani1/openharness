@@ -2,6 +2,7 @@
 #include "octopus.h"
 #include "tux.h"
 #include "focus.h"
+#include "illustrated.h"
 #include <string.h>
 
 typedef struct {
@@ -21,6 +22,22 @@ typedef struct {
                  const char *recap);
 } character_definition_t;
 
+#define PORTRAIT(name, species) \
+    static void name(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, \
+        uint16_t ink, ht_character_size_t size, int y) \
+    { ht_illustrated_draw(s, species, f, frame, ink, size, y); }
+PORTRAIT(illustrated_tim, 0)
+PORTRAIT(gnu, 1)
+PORTRAIT(lynx, 2)
+PORTRAIT(mutt, 3)
+PORTRAIT(yak, 4)
+PORTRAIT(gopher, 5)
+PORTRAIT(bug, 6)
+PORTRAIT(illustrated_tux, 7)
+PORTRAIT(auk, 8)
+PORTRAIT(beastie, 9)
+#undef PORTRAIT
+
 // Adding artwork changes this registry and its adapter, never the action layer.
 static const character_definition_t characters[HT_CHARACTER_COUNT] = {
     [HT_CHARACTER_TIM] = {"Tim", ht_octopus_motion_tick, ht_octopus_draw, NULL},
@@ -28,7 +45,29 @@ static const character_definition_t characters[HT_CHARACTER_COUNT] = {
     // Nothing of Focus moves, so its tick is the shared motion step with a one-frame animation; the
     // only thing that animates on it is the status shimmer, which the compositor already owns.
     [HT_CHARACTER_FOCUS] = {"Focus", ht_focus_motion_tick, ht_focus_portrait, ht_focus_face},
+    [HT_CHARACTER_ILLUSTRATED_TIM] = {"Tim", ht_illustrated_tick, illustrated_tim, NULL},
+    [HT_CHARACTER_GNU] = {"GNU", ht_illustrated_tick, gnu, NULL},
+    [HT_CHARACTER_LYNX] = {"Lynx", ht_illustrated_tick, lynx, NULL},
+    [HT_CHARACTER_MUTT] = {"Mutt", ht_illustrated_tick, mutt, NULL},
+    [HT_CHARACTER_YAK] = {"Yak", ht_illustrated_tick, yak, NULL},
+    [HT_CHARACTER_GOPHER] = {"Gopher", ht_illustrated_tick, gopher, NULL},
+    [HT_CHARACTER_BUG] = {"Bug", ht_illustrated_tick, bug, NULL},
+    [HT_CHARACTER_ILLUSTRATED_TUX] = {"Tux", ht_illustrated_tick, illustrated_tux, NULL},
+    [HT_CHARACTER_AUK] = {"Auk", ht_illustrated_tick, auk, NULL},
+    [HT_CHARACTER_BEASTIE] = {"Beastie", ht_illustrated_tick, beastie, NULL},
 };
+static const char *species[] = {"tim", "gnu", "lynx", "mutt", "yak", "gopher", "bug", "tux", "auk", "beastie"};
+ht_character_id_t ht_character_companion(const char *key)
+{
+    if (key) for (unsigned i = 0; i < sizeof species / sizeof species[0]; i++)
+        if (!strcmp(key, species[i])) return (ht_character_id_t)(HT_CHARACTER_ILLUSTRATED_TIM + i);
+    return HT_CHARACTER_COUNT;
+}
+const char *ht_character_species(ht_character_id_t id)
+{
+    return id >= HT_CHARACTER_ILLUSTRATED_TIM && id < HT_CHARACTER_COUNT
+        ? species[id - HT_CHARACTER_ILLUSTRATED_TIM] : NULL;
+}
 static const character_definition_t *definition(ht_character_id_t id)
 {
     return &characters[(unsigned)id < HT_CHARACTER_COUNT ? id : HT_CHARACTER_TIM];

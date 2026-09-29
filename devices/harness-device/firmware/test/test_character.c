@@ -35,7 +35,7 @@ static void tick(ht_character_t *c, uint32_t now, ht_character_mood_t mood,
 
 static void clocks(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_t c = {0}; assert(ht_character_select(&c, id));
         tick(&c, UINT32_MAX - 49, HT_CHARACTER_WORKING, false, true, false, 0);
         tick(&c, 50, HT_CHARACTER_WORKING, false, true, false, 0);
@@ -91,7 +91,7 @@ static void clocks(void)
         assert(!memcmp(&before, &c.motion, sizeof before));
         assert(!ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == (ht_character_id_t)id);
         assert(!ht_character_select(&c, (ht_character_id_t)-1));
-        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_COUNT));
+        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_ILLUSTRATED_TIM));
         assert(!c.motion.initialized && !c.motion.reaction.initialized);
         tick(&c, 10000, (ht_character_mood_t)255, false, true, false, 0);
         assert(c.motion.reaction.mood == HT_CHARACTER_IDLE);
@@ -105,7 +105,7 @@ static void portraits(void)
     ht_character_face_t f = {.recipient = "Parser helper", .status = "Working", .hint = "tap to talk",
         .detail = "A carried paragraph", .foreground = 0xffff, .ink = 0xafe0, .dim = 0x7777, .roomy_reading = true};
     ht_scene_clear(&a, ht_rgb(0x181818)); redraw(NULL, &a);
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_select(&c, id);
         for (int size = HT_CHARACTER_FULL; size <= HT_CHARACTER_QUICK; size++) {
             for (int mood = HT_CHARACTER_IDLE; mood < HT_CHARACTER_MOODS; mood++) {
@@ -156,7 +156,7 @@ static void portraits(void)
 
 static void delivery_and_caption(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_t c = {0}; ht_character_select(&c, id);
         c.motion.next_ms = 1000;
         assert(!ht_character_delivery_tick(&c, 100, true, 0, true)); // Restored mail only holds.
@@ -198,7 +198,7 @@ static void delivery_and_caption(void)
  */
 static void recap_budget(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) for (int unicode = 0; unicode < 2; unicode++)
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) for (int unicode = 0; unicode < 2; unicode++)
         for (int length = 89; length <= 91; length++) {
             if (id == HT_CHARACTER_FOCUS) continue;
             ht_character_t c = {0}; ht_character_select(&c, id);

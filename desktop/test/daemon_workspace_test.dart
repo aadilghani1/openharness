@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/daemons/daemon_brain.dart';
 import 'package:harness/daemons/roster.dart';
+import 'package:harness/widgets/daemon_slot.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
 import 'package:harness/screens/swarm_screen.dart';
@@ -103,10 +104,11 @@ void main() {
 
   final slot = find.byKey(const ValueKey('daemon-slot'));
 
-  /// What the slot's ten cells draw, without the gutters.
+  /// The semantic pose driving the illustrated slot. Pixel assets have their own render tests.
   String glyph(WidgetTester tester) => tester
-      .widget<Text>(find.byKey(const ValueKey('daemon-slot-glyph')))
-      .data!
+      .widget<DaemonSlotButton>(find.byType(DaemonSlotButton))
+      .face
+      .cell
       .trim();
 
   testWidgets('nothing shows until the profile and the zoo have loaded', (
@@ -233,9 +235,10 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-copy')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-copy')));
     await tester.pump();
-    expect(copied, startsWith('```\n.---'));
+    expect(copied, startsWith('#01/09'));
+    expect(copied, isNot(contains('```')));
     expect(copied, contains('${def.id} 0.1'));
-    expect(copied, endsWith("'\n```"));
+    expect(copied, contains("first egg"));
     await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
@@ -506,21 +509,24 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
     // Four tabs, tmux's window list; now is first. 2 is the zoo.
-    expect(find.text('1:now*'), findsOneWidget);
-    expect(find.text('2:zoo '), findsOneWidget);
+    expect(find.text('1 Now'), findsOneWidget);
+    expect(find.text('2 Zoo'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-panel-line')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-portrait')), findsNothing);
     await key(tester, LogicalKeyboardKey.digit2);
     await tester.pump();
-    expect(find.text('2:zoo*'), findsOneWidget);
+    expect(find.text('2 Zoo'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-portrait')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-details')));
+    await tester.tap(find.byKey(const ValueKey('daemon-details')));
+    await tester.pump();
     expect(find.textContaining('screen -> tmux -> tim'), findsOneWidget);
     expect(find.textContaining('Named the way vim was'), findsOneWidget);
     // The zoo's box back: two owned, the rest numbered and unknown, the
     // secret marked.
     expect(find.text('[ ? ]'), findsNWidgets(7));
     expect(find.text('[ ! ]'), findsOneWidget);
-    expect(find.text('#08 tux'), findsOneWidget);
+    expect(find.text('#08 Tux'), findsOneWidget);
     // Move to tux and pair it.
     await key(tester, LogicalKeyboardKey.keyJ);
     await tester.pump();
@@ -549,8 +555,13 @@ void main() {
     expect(remote.zoo.daemons.last.name, 'Scout');
     expect(find.text('Scout the tux'), findsOneWidget);
     // Nap is a setting, then Escape closes and the slot shows the nap.
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-tab-settings')),
+    );
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('daemon-tab-settings')));
     await tester.pump();
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-nap')));
     await tester.tap(find.byKey(const ValueKey('daemon-nap')));
     // The click that opened the panel was a boop; it wins for 900 ms.
     await tester.pump(const Duration(seconds: 1));
@@ -562,7 +573,7 @@ void main() {
     // It opens again where it was left.
     await tester.tap(slot);
     await tester.pump();
-    expect(find.text('4:settings*'), findsOneWidget);
+    expect(find.text('4 Settings'), findsOneWidget);
     await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
@@ -807,12 +818,15 @@ void main() {
       reason: 'finished turns do not take more focus-bar space',
     );
     expect(
-      find.descendant(of: slot, matching: find.byType(Text)),
+      find.descendant(
+        of: slot,
+        matching: find.byKey(const ValueKey('daemon-slot-art')),
+      ),
       findsOneWidget,
       reason: 'only the creature is drawn, without labels or counts',
     );
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
-    final glyphTarget = find.byKey(const ValueKey('daemon-slot-glyph'));
+    final glyphTarget = find.byKey(const ValueKey('daemon-slot-art'));
     final beforeHover = tester.getRect(glyphTarget);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
@@ -838,7 +852,7 @@ void main() {
     // The switches are on the settings tab: 4.
     await key(tester, LogicalKeyboardKey.digit4);
     await tester.pump();
-    expect(find.text('4:settings*'), findsOneWidget);
+    expect(find.text('4 Settings'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('daemon-quiet')));
     await tester.pump();
     expect(find.text('[ quiet: on ]'), findsOneWidget);
@@ -918,7 +932,10 @@ void main() {
     );
     await tester.pump();
     expect(
-      find.descendant(of: slot, matching: find.byType(Text)),
+      find.descendant(
+        of: slot,
+        matching: find.byKey(const ValueKey('daemon-slot-art')),
+      ),
       findsOneWidget,
       reason: 'additional eggs wait in the panel, without a bar count',
     );
@@ -1272,7 +1289,10 @@ void main() {
         ),
       );
       expect(
-        find.descendant(of: slot, matching: find.byType(Text)),
+        find.descendant(
+          of: slot,
+          matching: find.byKey(const ValueKey('daemon-slot-art')),
+        ),
         findsOneWidget,
         reason: 'remote completions do not add a focus-bar count',
       );
@@ -1406,7 +1426,7 @@ void main() {
         ...state(),
         'autonomy': 'act-on-key',
       });
-      // Above suggest: a badge in the panel and the slot's tooltip.
+      // Above suggest: a badge in the panel and the illustrated hover preview.
       expect(
         find.byKey(const ValueKey('daemon-panel-autonomy-badge')),
         findsOneWidget,
@@ -1415,11 +1435,12 @@ void main() {
       await skipName(tester);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
-      final tooltip = tester
-          .widgetList<Tooltip>(find.byType(Tooltip))
-          .map((t) => t.message ?? '')
-          .where((m) => m.contains('autonomy: act on key'));
-      expect(tooltip, isNotEmpty);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(slot));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Autonomy: act on key'), findsOneWidget);
       await tester.pump(const Duration(minutes: 3));
       await unmount(tester);
     });
@@ -1517,7 +1538,7 @@ void main() {
       await tester.pump();
       await key(tester, LogicalKeyboardKey.digit3);
       await tester.pump();
-      expect(find.text('3:lessons*'), findsOneWidget);
+      expect(find.text('3 Lessons'), findsOneWidget);
       expect(find.text('pending "run-migrations-safely"'), findsOneWidget);
       expect(find.text('learned note for api · 2026-09-25'), findsOneWidget);
       // No approve here: a window's own say-so is never the person's yes.

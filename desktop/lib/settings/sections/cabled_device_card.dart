@@ -32,10 +32,12 @@ class CabledDeviceCard extends StatefulWidget {
     super.key,
     required this.devices,
     required this.onChanged,
+    this.showCompanion = false,
   });
 
   /// Every robot on this desk, plugged in or lately seen.
   final List<DialStatus> devices;
+  final bool showCompanion;
 
   /// Send a patch to one robot. Only the named field travels.
   final void Function(String id, Map<String, Object?> patch) onChanged;
@@ -91,7 +93,11 @@ class _CabledDeviceCardState extends State<CabledDeviceCard> {
           const SizedBox(height: 8),
         ],
         const SizedBox(height: 6),
-        _Rows(device: device, onChanged: widget.onChanged),
+        _Rows(
+          device: device,
+          onChanged: widget.onChanged,
+          showCompanion: widget.showCompanion,
+        ),
       ],
     );
   }
@@ -115,7 +121,8 @@ class _DeviceChip extends StatelessWidget {
     final theme = Theme.of(context);
     final settings = device.settings;
     final detail = [
-      if (settings != null) '${settings.face} ${settings.round ? 'round' : 'square'}',
+      if (settings != null)
+        '${settings.face} ${settings.round ? 'round' : 'square'}',
       if (device.fw case final fw?) 'habitat $fw',
       ?device.mac,
     ].join(' · ');
@@ -176,9 +183,14 @@ class _DeviceChip extends StatelessWidget {
 /// The settings themselves, grouped the way a person looks for them rather than the way the device
 /// stores them: what it looks like, how it answers a finger, and what it says out loud.
 class _Rows extends StatelessWidget {
-  const _Rows({required this.device, required this.onChanged});
+  const _Rows({
+    required this.device,
+    required this.onChanged,
+    required this.showCompanion,
+  });
 
   final DialStatus device;
+  final bool showCompanion;
   final void Function(String id, Map<String, Object?> patch) onChanged;
 
   /// The characters this firmware ships. Ids are the device's own, from character.h.
@@ -209,7 +221,12 @@ class _Rows extends StatelessWidget {
       if (live) onChanged(id, patch);
     }
 
-    Widget toggle(String key, bool value, String label, {bool invert = false}) => Semantics(
+    Widget toggle(
+      String key,
+      bool value,
+      String label, {
+      bool invert = false,
+    }) => Semantics(
       label: label,
       child: Align(
         alignment: Alignment.centerLeft,
@@ -221,7 +238,11 @@ class _Rows extends StatelessWidget {
       ),
     );
 
-    Widget field<T>(T value, List<SelectOption<T>> options, void Function(T) apply) => SizedBox(
+    Widget field<T>(
+      T value,
+      List<SelectOption<T>> options,
+      void Function(T) apply,
+    ) => SizedBox(
       width: SettingRow.controlWidth,
       child: AppSelectField<T>(
         value: value,
@@ -241,76 +262,120 @@ class _Rows extends StatelessWidget {
           ),
           const SizedBox(height: 10),
         ],
-        _Group(title: 'Appearance', children: [
-          SettingRow(
-            title: 'Skin',
-            detail: 'Who lives on the screen.',
-            control: field(settings.character, _skins, (v) => set({'character': v})),
-          ),
-          SettingRow(
-            title: 'Brightness',
-            detail: '${settings.brightness}%',
-            control: SizedBox(
-              width: SettingRow.controlWidth,
-              child: Slider(
-                key: ValueKey('device-brightness-${device.id ?? ''}'),
-                value: settings.brightness.toDouble(),
-                min: 0,
-                max: 100,
-                divisions: 20,
-                // On change END, not on every frame: each one is a frame over the cable and a write to
-                // the device's flash, and a dragged slider would spend a thousand of both.
-                onChanged: live ? (_) {} : null,
-                onChangeEnd: live ? (v) => set({'brightness': v.round()}) : null,
+        _Group(
+          title: 'Appearance',
+          children: [
+            if (showCompanion && settings.followCompanion != null)
+              SettingRow(
+                title: 'Follow desktop companion',
+                detail: settings.companion == null
+                    ? 'Show the companion paired in your Zoo.'
+                    : 'Showing ${settings.companion == 'gnu' ? 'GNU' : settings.companion!} from your Zoo.',
+                control: toggle(
+                  'followCompanion',
+                  settings.followCompanion!,
+                  'Follow desktop companion',
+                ),
+              ),
+            SettingRow(
+              title: 'Skin',
+              detail: settings.companion == null
+                  ? 'Who lives on the screen.'
+                  : 'Used when you stop following the desktop companion.',
+              control: field(
+                settings.character,
+                _skins,
+                (v) => set({'character': v}),
               ),
             ),
-          ),
-          SettingRow(
-            title: 'Still companion',
-            detail: 'Stops the artwork animating. Nothing else changes.',
-            control: toggle('quiet', settings.quiet, 'Still companion'),
-          ),
-          // Round only. A square face has no arc to bend a title along, so the row is not drawn at
-          // all — a greyed control still claims the setting is there. It is the last of these: rim
-          // scrolling was the other, and it was removed from the device entirely.
-          if (settings.round)
             SettingRow(
-              title: 'Edge text',
-              detail: "Names and status on the rim's curve, or straight across.",
-              control: field(settings.straightTitle, const [
-                SelectOption(value: false, label: 'Curved'),
-                SelectOption(value: true, label: 'Straight'),
-              ], (v) => set({'straightTitle': v})),
+              title: 'Brightness',
+              detail: '${settings.brightness}%',
+              control: SizedBox(
+                width: SettingRow.controlWidth,
+                child: Slider(
+                  key: ValueKey('device-brightness-${device.id ?? ''}'),
+                  value: settings.brightness.toDouble(),
+                  min: 0,
+                  max: 100,
+                  divisions: 20,
+                  // On change END, not on every frame: each one is a frame over the cable and a write to
+                  // the device's flash, and a dragged slider would spend a thousand of both.
+                  onChanged: live ? (_) {} : null,
+                  onChangeEnd: live
+                      ? (v) => set({'brightness': v.round()})
+                      : null,
+                ),
+              ),
             ),
-        ]),
-        _Group(title: 'Gestures', children: [
-          SettingRow(
-            title: 'Reverse scrolling',
-            detail: 'Which way a drag moves the text under it.',
-            control: field(settings.scrollReversed, const [
-              SelectOption(value: false, label: 'Natural', note: 'The text follows your finger'),
-              SelectOption(value: true, label: 'Reversed', note: 'The view follows your finger'),
-            ], (v) => set({'scrollReversed': v})),
-          ),
-        ]),
-        _Group(title: 'Sound & voice', children: [
-          SettingRow(
-            title: 'Notification sound',
-            detail: 'The chime when a turn finishes or a question arrives.',
-            // Stated as "sound on", which is what the switch position means to a person; the wire
-            // field is its opposite, and the flip belongs here rather than in anyone's head.
-            control: toggle('muted', settings.muted, 'Notification sound', invert: true),
-          ),
-          SettingRow(
-            title: 'Voice language',
-            detail: 'What the microphone is transcribed as. The robot’s own choice, not this '
-                'computer’s.',
-            control: field(settings.voiceLang == 'vi' ? 'vi' : 'en', const [
-              SelectOption(value: 'en', label: 'English'),
-              SelectOption(value: 'vi', label: 'Tiếng Việt'),
-            ], (v) => set({'voiceLang': v})),
-          ),
-        ]),
+            SettingRow(
+              title: 'Still companion',
+              detail: 'Stops the artwork animating. Nothing else changes.',
+              control: toggle('quiet', settings.quiet, 'Still companion'),
+            ),
+            // Round only. A square face has no arc to bend a title along, so the row is not drawn at
+            // all — a greyed control still claims the setting is there. It is the last of these: rim
+            // scrolling was the other, and it was removed from the device entirely.
+            if (settings.round)
+              SettingRow(
+                title: 'Edge text',
+                detail:
+                    "Names and status on the rim's curve, or straight across.",
+                control: field(settings.straightTitle, const [
+                  SelectOption(value: false, label: 'Curved'),
+                  SelectOption(value: true, label: 'Straight'),
+                ], (v) => set({'straightTitle': v})),
+              ),
+          ],
+        ),
+        _Group(
+          title: 'Gestures',
+          children: [
+            SettingRow(
+              title: 'Reverse scrolling',
+              detail: 'Which way a drag moves the text under it.',
+              control: field(settings.scrollReversed, const [
+                SelectOption(
+                  value: false,
+                  label: 'Natural',
+                  note: 'The text follows your finger',
+                ),
+                SelectOption(
+                  value: true,
+                  label: 'Reversed',
+                  note: 'The view follows your finger',
+                ),
+              ], (v) => set({'scrollReversed': v})),
+            ),
+          ],
+        ),
+        _Group(
+          title: 'Sound & voice',
+          children: [
+            SettingRow(
+              title: 'Notification sound',
+              detail: 'The chime when a turn finishes or a question arrives.',
+              // Stated as "sound on", which is what the switch position means to a person; the wire
+              // field is its opposite, and the flip belongs here rather than in anyone's head.
+              control: toggle(
+                'muted',
+                settings.muted,
+                'Notification sound',
+                invert: true,
+              ),
+            ),
+            SettingRow(
+              title: 'Voice language',
+              detail:
+                  'What the microphone is transcribed as. The robot’s own choice, not this '
+                  'computer’s.',
+              control: field(settings.voiceLang == 'vi' ? 'vi' : 'en', const [
+                SelectOption(value: 'en', label: 'English'),
+                SelectOption(value: 'vi', label: 'Tiếng Việt'),
+              ], (v) => set({'voiceLang': v})),
+            ),
+          ],
+        ),
       ],
     );
   }

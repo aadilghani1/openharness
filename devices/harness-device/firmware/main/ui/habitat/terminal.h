@@ -23,6 +23,8 @@ typedef struct {
 extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_40;
 // Precomputed curved-label and larger inbox navigation glyphs.
 extern const ht_font_t ht_open_20, ht_nav_32;
+extern const ht_font_t ht_open_24, ht_right_24, ht_bell_24;
+extern const uint8_t ht_mono_24_ink[224][4], ht_open_24_ink[1][4], ht_right_24_ink[1][4], ht_bell_24_ink[1][4];
 extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
 extern const ht_font_t ht_right_20, ht_right_28, ht_open_28;
 extern const uint8_t ht_right_20_ink[1][4];
@@ -61,6 +63,13 @@ typedef struct {
     int16_t x, y, w, h;
 } ht_rect_t;
 typedef struct {
+    const uint16_t *pixels;
+    const uint8_t *alpha;
+    const void *asset;
+    uint32_t revision;
+    uint16_t width, height;
+} ht_sprite_t;
+typedef struct {
     int16_t x, y, w;
     uint8_t arc; // 0 = straight, 1 = upper arc, 2 = lower arc
     uint8_t shimmer; // 0 = steady ink, 1..21 = cached-mask highlight sweep
@@ -70,13 +79,14 @@ typedef struct {
     // Optional immutable RGB565 foreground per text cell (straight runs only).
     // At least as many entries as text cells; storage outlives both scenes.
     const uint16_t *colors;
+    ht_sprite_t sprite;
 } ht_run_t;
 typedef struct {
     uint16_t background;
     uint8_t count;
     ht_run_t runs[HT_RUNS];
 } ht_scene_t;
-enum { HT_ARC_COLS = 32, HT_ARC_X = 25, HT_ARC_Y = 12,
+enum { HT_ARC_COLS = 26, HT_ARC_CELL_WIDTH = 15, HT_ARC_CELL_HEIGHT = 32, HT_ARC_X = 25, HT_ARC_Y = 12,
        HT_ARC_WIDTH = 416, HT_ARC_HEIGHT = 128 };
 typedef struct {
     uint8_t count;
@@ -92,7 +102,7 @@ bool ht_text(ht_scene_t *scene, int x, int y, int width, const ht_font_t *font, 
 bool ht_ascii_text(ht_scene_t *scene, int x, int y, int width, const ht_font_t *font,
                    uint16_t fg, uint16_t bg, const char *text, size_t cells);
 void ht_center(ht_scene_t *scene, int y, const ht_font_t *font, uint16_t fg, const char *text);
-// Fixed 20 px upper/lower arcs. Text stays in the scene; each mask is cached on
+// Fixed 24 px upper/lower arcs. Text stays in the scene; each mask is cached on
 // first rasterization and reused across strips, animation and color changes.
 void ht_arc_title(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);

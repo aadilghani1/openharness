@@ -36,6 +36,7 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
+  companion?: () => string | null
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
@@ -314,6 +315,8 @@ export class DaemonCableHost implements CableHost {
     const locale = process.env.LANG ?? ''
     return locale.startsWith('vi') ? 'vi' : 'en'
   }
+
+  companion(): string | null { return this.wiring.companion?.() ?? null }
 
   /** This computer's own agents, in the order every other surface reads them in. */
   private localAgents(): CableAgent[] {

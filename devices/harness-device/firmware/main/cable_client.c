@@ -180,6 +180,9 @@ static void msg_settings(cJSON **root)
               cJSON_AddBoolToObject(held, "focusFace", now.focus_face) &&
               cJSON_AddBoolToObject(held, "scrollReversed", now.scroll_reversed) &&
               cJSON_AddBoolToObject(held, "round", now.round) &&
+              cJSON_AddBoolToObject(held, "followCompanion", now.follow_companion) &&
+              (now.companion[0] ? cJSON_AddStringToObject(held, "companion", now.companion)
+                                : cJSON_AddNullToObject(held, "companion")) &&
               cJSON_AddStringToObject(held, "voiceLang", now.voicelang);
     msg_check(root, ok);
 }
@@ -207,6 +210,7 @@ static void handle_settings_set(const cJSON *p)
         {"straightTitle", UI_SETTING_STRAIGHT_TITLE, &want.straight_title},
         {"focusFace", UI_SETTING_FOCUS_FACE, &want.focus_face},
         {"scrollReversed", UI_SETTING_SCROLL, &want.scroll_reversed},
+        {"followCompanion", UI_SETTING_FOLLOW_COMPANION, &want.follow_companion},
     };
     for (unsigned i = 0; i < sizeof flags / sizeof flags[0]; i++) {
         item = cJSON_GetObjectItemCaseSensitive(p, flags[i].key);
@@ -237,6 +241,18 @@ static void handle_settings_set(const cJSON *p)
     msg_bool(&root, "ok", ok);
     if (!ok) msg_string(&root, "error", error);
     msg_settings(&root);   // always the values read back, never the ones asked for
+    send_json(root);
+}
+static void handle_companion_set(const cJSON *p)
+{
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(p, "id");
+    bool valid = cJSON_IsNull(id) || (cJSON_IsString(id) && id->valuestring);
+    bool ok = valid && ui_set_companion(cJSON_IsNull(id) ? NULL : id->valuestring);
+    cJSON *root = msg("settings.state");
+    if (!root) return;
+    msg_bool(&root, "ok", ok);
+    if (!ok) msg_string(&root, "error", "Unknown companion.");
+    msg_settings(&root);
     send_json(root);
 }
 static void send_hello(void)
@@ -1063,6 +1079,7 @@ static void handle_message(const cJSON *root)
         ui_machine_select_error(str_of(p, "machineId"), str_of(p, "code"), str_of(p, "message"));
         return;
     }
+    if (strcmp(t, "companion.set") == 0) { handle_companion_set(p); return; }
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
