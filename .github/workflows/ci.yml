@@ -149,6 +149,11 @@ jobs:
           E2E_PORT: 19297
           HN_SOCKET_NAME: hn-ci-e2e
         run: bash tests/e2e.sh
+      - name: Terminal lease expiry and stalled-open recovery
+        env:
+          HN_RECONNECT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          HN_RECONNECT_TEST_PORT: 19781
+        run: python3 -u tests/reconnect.py
       - name: Browser viewer commands and SSH handoff
         env:
           HN_VIEWER_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui

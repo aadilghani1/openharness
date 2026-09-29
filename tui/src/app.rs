@@ -1185,7 +1185,7 @@ impl App {
 
     fn schedule_reconnect(&mut self, machine_id: &str) {
         let Some(state) = self.links.get_mut(machine_id) else { return };
-        state.link = None;
+        if let Some(link) = state.link.take() { link.close(); }
         state.attempts += 1;
         let wait = Duration::from_millis((500 * 2u64.pow(state.attempts.min(5))).min(15_000));
         state.retry_at = Some(Instant::now() + wait);
@@ -1194,7 +1194,9 @@ impl App {
     // ── machine events ───────────────────────────────────────────────────────
 
     pub fn on_machine(&mut self, machine_id: String, generation: u64, event: MachineEvent) {
-        let current = self.links.get(&machine_id).map(|s| s.generation) == Some(generation);
+        // A cancelled link can already have queued events. Ignore them during backoff too,
+        // before the replacement connection has a new generation.
+        let current = self.links.get(&machine_id).is_some_and(|s| s.generation == generation && s.link.is_some());
         if !current { return }
         match event {
             MachineEvent::Connected => {
@@ -1243,7 +1245,7 @@ impl App {
                     }
                     pane.dirty = true;
                 }
-                if needs_link { if let Some(state) = self.links.get_mut(&machine_id) { state.link = None } }
+                if needs_link { if let Some(state) = self.links.get_mut(&machine_id) { if let Some(link) = state.link.take() { link.close(); } state.retry_at = None; } }
                 else { self.schedule_reconnect(&machine_id) }
             }
             MachineEvent::Terminal(frame) => self.on_terminal(frame),
@@ -1507,7 +1509,15 @@ impl App {
                     self.open_stream(id, false);
                 } else {
                     let id = pane.id;
-                    self.after_end(id, payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed").to_string());
+                    let reason = payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed");
+                    if matches!(reason, "heartbeat timeout" | "backend disconnected") {
+                        // A lease expiry says nothing about the process. Renew the machine route
+                        // and all its panes, including hidden windows and split shells, without
+                        // restarting anything or taking the keyboard from another client.
+                        self.recover_streams(machine_id, reason);
+                    } else {
+                        self.after_end(id, reason.to_string());
+                    }
                 }
             }
             "terminal_error" => {
@@ -1607,6 +1617,13 @@ impl App {
 
     // ── streams ─────────────────────────────────────────────────────────────
 
+    fn recover_streams(&mut self, machine_id: &str, detail: &str) {
+        if let Some(state) = self.links.get(machine_id) {
+            self.on_machine(machine_id.to_string(), state.generation,
+                MachineEvent::Closed(RpcError::new("TERMINAL_CONNECTION_LOST", detail)));
+        }
+    }
+
     /// Open (or re-open) a pane's terminal. [takeover]: take the keyboard from any other window.
     pub fn open_stream(&mut self, pane_id: u64, takeover: bool) {
         let content = self.content_size(pane_id);
@@ -1624,7 +1641,10 @@ impl App {
         }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         if pane.opening { return }
-        let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else {
+        // Do not send an open before machine_select has succeeded: its reply could otherwise
+        // be discarded by the selecting link, leaving this pane waiting for 45 seconds.
+        let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone())
+            .filter(|_| self.fleet.machine(&pane.machine_id).is_some_and(Machine::usable)) else {
             pane.phase = Phase::Connecting("Connecting…".into());
             return;
         };
@@ -1712,6 +1732,11 @@ impl App {
                 } else {
                     pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: code, keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
                 }
+            }
+            Err(error) if matches!(error.code.as_str(), "TIMEOUT" | "DISCONNECTED") => {
+                // A local WebSocket pong cannot establish that the remote terminal route is
+                // healthy. Drop that route so retrying cannot wait on the same stuck request.
+                self.recover_streams(machine_id, &error.to_string());
             }
             Err(error) => {
                 pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: error.to_string(), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
@@ -5519,4 +5544,90 @@ pub fn hostname() -> String {
         let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         if raw.is_empty() { "this computer".into() } else { raw }
     }).clone()
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    // Current-thread tests never yield to this link: it is cancelled before it can connect.
+    // No daemon, disk cache, real pane or server socket is used.
+    fn fixture() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.fleet.machines.push(Machine { id: "test-peer".into(), name: "Peer".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        let link = Link::spawn(app.port, "test-peer", 1, app.sink.clone());
+        app.links.insert("test-peer".into(), LinkState { link: Some(link), generation: 1, attempts: 0, retry_at: None });
+        for id in 1..=4 {
+            let mut pane = Pane::new(id, if id == 4 { "other-peer" } else { "test-peer" }, &format!("agent-{id}"), 80, 24);
+            pane.phase = Phase::Live;
+            pane.stream = Some(Uuid::new_v4());
+            pane.open_token = 7;
+            app.panes.insert(id, pane);
+        }
+        app.panes.get_mut(&3).unwrap().phase = Phase::Card { title: "Paused".into(), detail: String::new(), keys: Vec::new() };
+        app.panes.get_mut(&3).unwrap().stream = None;
+        app.shells.insert(("test-peer".into(), "agent-2".into()));
+        app
+    }
+
+    #[tokio::test]
+    async fn expired_lease_recovers_hidden_shells_and_ignores_cancelled_events() {
+        let mut app = fixture();
+        let other = app.panes[&4].stream;
+        let expired = app.panes[&2].stream.unwrap();
+        app.on_machine("test-peer".into(), 1, MachineEvent::Frame { ty: "terminal_closed".into(), payload: json!({"streamId":expired.to_string(),"reason":"heartbeat timeout"}) });
+        assert_eq!(app.panes.len(), 4);
+        assert!(app.shells.contains(&("test-peer".into(), "agent-2".into())));
+        for id in [1, 2] {
+            assert!(matches!(app.panes[&id].phase, Phase::Connecting(_)));
+            assert!(app.panes[&id].stream.is_none());
+            assert_eq!(app.panes[&id].open_token, 8);
+        }
+        assert!(matches!(app.panes[&3].phase, Phase::Card { .. }));
+        assert_eq!(app.panes[&4].stream, other);
+        assert!(app.links["test-peer"].link.is_none());
+        let retry = app.links["test-peer"].retry_at;
+        assert!(retry.is_some());
+        // Events already queued by the cancelled task cannot resurrect it or delay the retry.
+        app.on_machine("test-peer".into(), 1, MachineEvent::Connected);
+        app.on_machine("test-peer".into(), 1, MachineEvent::Closed(RpcError::new("DISCONNECTED", "")));
+        assert_eq!(app.links["test-peer"].retry_at, retry);
+        assert!(matches!(app.fleet.machines[0].reach, Reach::Error(_)));
+        let late = Uuid::new_v4();
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":late.to_string()}))));
+        assert!(app.panes[&1].stream.is_none());
+        assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+    }
+
+    #[tokio::test]
+    async fn open_timeout_and_disconnect_recover_but_protocol_refusals_do_not() {
+        for code in ["TIMEOUT", "DISCONNECTED", "TERMINAL_PROTOCOL_UNSUPPORTED"] {
+            let mut app = fixture();
+            app.panes.get_mut(&1).unwrap().phase = Phase::Connecting("Opening…".into());
+            app.panes.get_mut(&1).unwrap().opening = true;
+            app.opened(1, "test-peer", 7, (80, 24), Err(RpcError::new(code, "test failure")));
+            assert!(!app.panes[&1].opening);
+            if code == "TERMINAL_PROTOCOL_UNSUPPORTED" {
+                assert!(matches!(app.panes[&1].phase, Phase::Card { .. }));
+                assert!(app.links["test-peer"].retry_at.is_none());
+                app.links["test-peer"].link.as_ref().unwrap().close();
+            } else {
+                assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+                assert!(app.links["test-peer"].retry_at.is_some());
+                assert!(app.links["test-peer"].link.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_waits_for_machine_selection_before_opening() {
+        let mut app = fixture();
+        app.fleet.machines[0].reach = Reach::Connecting;
+        app.panes.get_mut(&1).unwrap().stream = None;
+        app.open_stream(1, false);
+        assert!(!app.panes[&1].opening);
+        assert_eq!(app.panes[&1].open_token, 7);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
 }
