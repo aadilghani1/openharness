@@ -121,3 +121,39 @@ export function acceptVouches(local: Roster, selfPub: string, entries: Vouch[], 
   }
   return { members, removed }
 }
+
+const MAX_LABEL = 60
+const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * What this device knows that the board does not yet carry in its own words: each member of its roster
+ * (itself aside) that no vouch it signed states at that stamp or later, and each removal of a key the
+ * board still vouches for. Posting it is how a group formed before the board existed — or grown by the
+ * relay swap alone — reaches devices that share no machine with it. The same rule as the apps'
+ * `group_sync.dart` `boardNews`.
+ */
+export function boardNews(roster: Roster, selfPub: string, entries: Vouch[], now = Date.now()): VouchSubject[] {
+  const stated = new Map<string, number>(), mentioned = new Map<string, number>()
+  for (const v of entries) {
+    if (!v.subject.removed) mentioned.set(v.subject.pub, Math.max(mentioned.get(v.subject.pub) ?? -1, v.subject.at))
+    if (v.signer === selfPub) stated.set(v.subject.pub, Math.max(stated.get(v.subject.pub) ?? -1, v.subject.at))
+  }
+  const latest = now + MAX_CLOCK_SKEW_MS
+  const removedAt = new Map(roster.removed.map((t) => [t.pub, t.at]))
+  const news: VouchSubject[] = []
+  for (const m of roster.members) {
+    if (m.pub === selfPub || (m.kind === 'machine' && !m.machineId)) continue
+    if (m.at <= 0 || m.at > latest) continue
+    if ((removedAt.get(m.pub) ?? -1) >= m.at) continue
+    if ((stated.get(m.pub) ?? -1) >= m.at) continue
+    news.push(memberSubject({ ...m, label: m.label.slice(0, MAX_LABEL) }))
+  }
+  for (const t of roster.removed) {
+    if (t.pub === selfPub || t.at <= 0 || t.at > latest) continue
+    const vouched = mentioned.get(t.pub) // only a key someone still vouches for needs taking back
+    if (vouched === undefined || vouched > t.at) continue
+    if ((stated.get(t.pub) ?? -1) >= t.at) continue
+    news.push({ pub: t.pub, at: t.at, removed: true })
+  }
+  return news
+}

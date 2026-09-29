@@ -112,8 +112,31 @@ describe('the group board', () => {
     // Removing a member puts a signed tombstone on the board.
     syncer.remove(b64(web.pub))
     await new Promise((r) => setTimeout(r, 0))
-    expect(posted).toHaveLength(1)
-    expect((posted[0] as { subject: { removed?: boolean } }).subject.removed).toBe(true)
+    // What it knew before the board (the phone) and what the board taught it (web1) it states in its
+    // own words once; the removal after.
+    const subjects = (posted as Array<{ subject: { pub: string; removed?: boolean } }>).map((v) => v.subject)
+    expect(subjects.filter((x) => !x.removed).map((x) => x.pub).sort()).toEqual([b64(phone.pub), b64(web.pub)].sort())
+    expect(subjects.filter((x) => x.removed).map((x) => x.pub)).toEqual([b64(web.pub)])
     syncer.stop()
+  })
+})
+
+describe('boardNews', () => {
+  it('states each member once, and a removal only for a key the board still vouches for', async () => {
+    const me = identity(), a = identity(), gone = identity(), never = identity()
+    const roster = {
+      members: [
+        { pub: b64(me.pub), kind: 'machine' as const, machineId: 'a'.repeat(32), label: 'me', at: 1 },
+        { pub: b64(a.pub), kind: 'viewer' as const, label: 'x'.repeat(80), at: 10 },
+      ],
+      removed: [{ pub: b64(gone.pub), at: 20 }, { pub: b64(never.pub), at: 20 }],
+    }
+    const other = identity()
+    const board = [B.signVouch(other, { pub: b64(gone.pub), kind: 'viewer', label: 'g', at: 15 })]
+    const news = B.boardNews(roster, b64(me.pub), board)
+    expect(news.map((s) => [s.pub, s.removed ?? false])).toEqual([[b64(a.pub), false], [b64(gone.pub), true]])
+    expect(news[0].label).toHaveLength(60)
+    const signed = news.map((s) => B.signVouch(me, s))
+    expect(B.boardNews(roster, b64(me.pub), [...board, ...signed])).toEqual([])
   })
 })

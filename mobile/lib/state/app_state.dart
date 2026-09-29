@@ -2162,6 +2162,14 @@ class AppNotifier extends ChangeNotifier {
         if (board.entries case final entries?) {
           news = true;
           await _afterGroupSync(await adoptBoard(viewer.keys, entries));
+          // And what this device knows that the board lacks in its words — a group from before the
+          // board, or one grown by the relay swap alone. The board takes 32 at a time.
+          final mine = await boardNews(viewer.keys, entries);
+          for (var i = 0; i < mine.length; i += 32) {
+            await _vouch(
+              mine.sublist(i, i + 32 > mine.length ? mine.length : i + 32),
+            );
+          }
         }
       }
       final online = [

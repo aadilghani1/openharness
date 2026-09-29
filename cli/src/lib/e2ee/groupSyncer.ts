@@ -15,7 +15,7 @@ import type { MachinePeerStore } from './machinePeers.js'
 import type { LinkedPeer } from './manager.js'
 import type { PairedClient } from './store.js'
 import { parseMember, parseRoster, rosterDigest, type GroupMember, type MergeResult, type Roster, type TrustGroupStore } from './trustGroup.js'
-import { acceptVouches, memberSubject, parseBoardEntries, type Vouch, type VouchSubject } from './groupBoard.js'
+import { acceptVouches, boardNews, memberSubject, parseBoardEntries, type Vouch, type VouchSubject } from './groupBoard.js'
 
 export const GROUP_SYNC = 'group_sync'
 /** The stamp a device's description of ITSELF carries: older than anything, so any removal beats it and
@@ -128,11 +128,16 @@ export class GroupSyncer {
     this.boardRevision = got.revision
     if (got.entries === undefined) return false
     const local = this.deps.store.read()
-    const incoming = acceptVouches(local, this.selfPub(), parseBoardEntries(got.entries), this.now())
-    if (!incoming.members.length && !incoming.removed.length) return false
+    const entries = parseBoardEntries(got.entries)
+    const incoming = acceptVouches(local, this.selfPub(), entries, this.now())
+    // What this machine knows that the board lacks in its words (a group from before the board), after
+    // taking in what the board adds.
+    const stateNews = (): void => this.vouch(boardNews(this.deps.store.read(), this.selfPub(), entries, this.now()))
+    if (!incoming.members.length && !incoming.removed.length) { stateNews(); return false }
     const before = rosterDigest(local)
     const result = this.deps.store.merge(incoming, this.selfPub())
     this.apply(result)
+    stateNews()
     if (rosterDigest(result.roster) === before) return false
     this.deps.log?.(`[group] board r${got.revision}: +${result.upserted.length} −${result.dropped.length}`)
     this.scheduleFanOut(1_000)
@@ -150,7 +155,8 @@ export class GroupSyncer {
   private vouch(subjects: VouchSubject[]): void {
     const { board, sign } = this.deps
     if (!board || !sign || !subjects.length) return
-    void board.post(subjects.map((s) => sign(s))).catch(() => false)
+    // The board takes 32 at a time.
+    for (let i = 0; i < subjects.length; i += 32) void board.post(subjects.slice(i, i + 32).map((s) => sign(s))).catch(() => false)
   }
 
   /** A device just linked to or from this machine over the remote password: it joins the group, and the
