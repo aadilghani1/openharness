@@ -1017,7 +1017,7 @@ void main() {
         expect(tester.widget<TextField>(field).controller!.text, isEmpty);
         expect(tester.widget<TextField>(field).cursorWidth, 2);
         expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
-        final hints = find.byKey(const ValueKey('search-category-All'));
+        final hints = find.byKey(const ValueKey('search-category-Harnesses'));
         expect(hints, findsOneWidget);
         expect(search(tester).selected, isNull);
         await key(tester, LogicalKeyboardKey.enter);
@@ -1073,14 +1073,14 @@ void main() {
       });
       await mount(tester, app);
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-      final all = find.byKey(const ValueKey('search-category-All'));
+      final harnesses = find.byKey(const ValueKey('search-category-Harnesses'));
       final input = tester.widget<TextField>(field);
       final inputPosition = tester.getTopLeft(field);
       final listPosition = tester.getTopLeft(
         find.byKey(const ValueKey('swarm-search-result-list')),
       );
       for (final category in [
-        'All',
+        'Harnesses',
         'Machines',
         'Projects',
         'Models',
@@ -1096,7 +1096,7 @@ void main() {
       expect(controller.selected, isNull);
       expect(controller.rows.any((row) => row.isCreate), isFalse);
       expect(find.byType(SwarmResourcePreview), findsNothing);
-      expect(tester.getBottomLeft(all).dy, lessThan(listPosition.dy));
+      expect(tester.getBottomLeft(harnesses).dy, lessThan(listPosition.dy));
       for (final row in controller.rows) {
         final line = find.byKey(ValueKey('swarm-search-line:${row.id}'));
         if (line.evaluate().isNotEmpty) {
@@ -1168,9 +1168,12 @@ void main() {
       );
       tester.view.physicalSize = const Size(480, 600);
       await tester.pumpAndSettle();
-      final compact = find.descendant(of: all, matching: find.byType(Text));
+      final compact = find.descendant(
+        of: harnesses,
+        matching: find.byType(Text),
+      );
       final text = tester.widget<Text>(compact);
-      expect(text.data, 'All');
+      expect(text.data, 'Harnesses');
       expect(text.style!.fontSize, 12);
       expect(text.style!.fontFamily, grid.AppType.sansFamily);
       expect(text.style!.color, DesktopChrome.foreground);
@@ -1516,7 +1519,10 @@ void main() {
       controller.setQuery('');
       await tester.pump();
       expect(controller.selected, isNull);
-      expect(find.byKey(const ValueKey('search-category-All')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('search-category-Harnesses')),
+        findsOneWidget,
+      );
       controller.setQuery('*blender');
       controller.scrollPreview(1);
       await tester.pumpWidget(const SizedBox());

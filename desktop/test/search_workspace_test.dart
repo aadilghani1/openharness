@@ -69,7 +69,7 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const ValueKey('search-category-All')),
+          find.byKey(const ValueKey('search-category-Harnesses')),
           findsOneWidget,
         );
         await key(tester, LogicalKeyboardKey.escape);

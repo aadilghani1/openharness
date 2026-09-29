@@ -54,6 +54,18 @@ class _SharingConnection extends WsConn {
 
 void main() {
   final button = find.byKey(const ValueKey('workspace-share-button'));
+  void expectSharedHarness(String name) {
+    final dialog = find.byType(ShareHarnessDialog);
+    expect(
+      find.descendant(of: dialog, matching: find.text('Share harness')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text(name)),
+      findsOneWidget,
+    );
+  }
+
   late AppNotifier app;
   late MemoryKeymap keymap;
   late MemoryStore preferences;
@@ -208,7 +220,7 @@ void main() {
       );
       await tester.tap(button);
       await tester.pumpAndSettle();
-      expect(find.text('Share Agent 0'), findsOneWidget);
+      expectSharedHarness('Agent 0');
       expect(connection.shares, [('harness_share_list', 'a0')]);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -217,7 +229,7 @@ void main() {
       await tester.pump();
       await shareKey(tester);
       await tester.pumpAndSettle();
-      expect(find.text('Share Agent 1'), findsOneWidget);
+      expectSharedHarness('Agent 1');
       await shareKey(tester);
       await tester.pump();
       expect(find.byType(ShareHarnessDialog), findsOneWidget);
@@ -282,7 +294,7 @@ void main() {
     await tester.tap(button);
     await tester.pumpAndSettle();
     expect(connection.shares.single, ('harness_share_list', 'a0'));
-    expect(find.text('Share Agent 0'), findsOneWidget);
+    expectSharedHarness('Agent 0');
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -317,7 +329,7 @@ void main() {
       expect(connection.shares, isEmpty);
       await key(tester, LogicalKeyboardKey.f8);
       await tester.pumpAndSettle();
-      expect(find.text('Share Agent 0'), findsOneWidget);
+      expectSharedHarness('Agent 0');
       await tester.pumpWidget(const SizedBox());
     },
   );

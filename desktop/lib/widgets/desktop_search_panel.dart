@@ -34,7 +34,7 @@ class DesktopSearchPanel extends StatelessWidget {
   final Widget Function() previewBuilder;
 
   static const categories = [
-    ('All', ''),
+    ('Harnesses', ''),
     ('Machines', '@'),
     ('Projects', '#'),
     ('Models', ':'),

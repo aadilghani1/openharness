@@ -5,9 +5,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/app_theme.dart';
 
-/// A row names a choice, so it is set in [AppType.mono] like every other
-/// label; its detail line is prose, in [AppType.caption]. Compact and roomy variants only change padding and icon
-/// spacing.
+/// Menu choices use the system UI face; technical values can supply their own
+/// style. Compact and roomy variants change padding and icon spacing.
 @immutable
 class AppMenuRowMetrics {
   const AppMenuRowMetrics({required this.iconSize, required this.padding});
@@ -226,7 +225,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         widget.label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: AppType.mono(
+                        style: (widget.textStyle ?? AppType.body()).copyWith(
                           color: widget.danger ? error : AppPalette.textPrimary,
                           height: 1.2,
                           fontWeight: widget.selected
@@ -256,7 +255,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
                       widget.note!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppType.mono(
+                      style: AppType.body(
                         color: AppPalette.textFaint,
                         height: 1.2,
                       ),

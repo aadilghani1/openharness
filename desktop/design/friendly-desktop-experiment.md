@@ -1,9 +1,12 @@
 # Friendly desktop experiment
 
 Requested on 2026-09-28. Local review branch: `experiment/friendly-desktop`.
-This experiment follows the user's new direction for the UI around the terminal,
-superseding the flat, fixed-cell dialog presentation for the surfaces below.
-It is not included in Desktop 1.2.27 and must not be merged without review.
+This experiment follows the user's new direction for the UI around the terminal.
+The [desktop design system](desktop-design-system.md) now governs all UI outside
+the terminal panes, superseding fixed-cell geometry, bracket buttons, and
+all-monospace app controls. Track the full scope in the
+[migration ledger](desktop-ui-migration.md). This experiment was not included in
+Desktop 1.2.27 and must not be merged without the user's approval.
 
 - Startup and New Tab embed the same `NewHarnessForm` and
   `NewHarnessController` used by Cmd-N. The form keeps its 680-point maximum
@@ -18,12 +21,12 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   installation, validation, and duplicate-start guards as the popup. A populated
   workspace still opens Cmd-N as a popup. No harness starts merely by visiting
   the page.
-- On macOS the native footer yields to the creation/search backdrop while a
-  popup is open, including its accessibility controls, then restores when it closes.
+- On macOS the native footer yields to a modal route or creation/search backdrop,
+  including its accessibility controls, then restores when it closes.
 - Cmd-N places a centered, 680-point composer directly on a 95% dark backdrop,
   without an outer card, border, or shadow. Light mode uses a 95% white backdrop
   so the unframed labels remain readable. Cmd-P retains its floating frame.
-  Both use system typography and a quiet focused fill without shifting controls.
+  Both use system typography and visible focus boundaries without shifting controls.
 - Agent and Repo are compact capsule selectors above the editor, with the
   agent's existing brand mark and Close at the right. The always-visible message
   editor says “What’s next?”; New Harness sits inside its lower-right corner,
@@ -96,17 +99,18 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   recovery retain their existing behavior. Task text survives configuration
   changes and narrow layouts.
 - Cmd-P uses a rounded, compact palette, a native-sized search editor, and
-  visible All / Machines / Projects / Models / Store / Commands filters.
+  visible Harnesses / Machines / Projects / Models / Store / Commands filters.
   Filters edit the existing searchable prefixes; typing prefixes still works.
   Sessions show their context in the second line. A visible preview toggle
   keeps session history and resource management available, with their existing
   keyboard controls and safety checks. Tab traverses the toolbar, segmented
   scopes, and preview actions; Up/Down navigates results. Escape returns from
   management controls to search before dismissing the dialog.
-- System UI typography is used for controls, selected branches, and task text; paths,
-  shortcut hints, workspace bars, and terminal content retain monospace.
+- System UI typography is used for app headings, controls, fields, shortcut
+  browsing, and task text. Explicit code, paths, workspace bars, and terminal
+  content retain their appropriate monospace styles.
 - Header selectors use compact capsules; composer settings use quiet text
-  controls with a focused fill. The default action retains its keyboard commands
+  controls with a focus ring. The default action retains its keyboard commands
   without displaying a shortcut symbol.
   Clickable controls show a hand cursor, while editors retain a text cursor.
   Icon-only toolbar controls and navigation links retain their roles.

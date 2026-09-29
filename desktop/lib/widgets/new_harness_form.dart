@@ -1979,7 +1979,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     focusNode: _desktopFocus[row],
     label: label ?? _value(row),
     semanticLabel: '${_label(row)}, ${_value(row)}',
-    icon: (capsule && row != _Row.agent) || row == _Row.branch ? icon : null,
+    icon: row == _Row.agent ? null : icon,
     leading: row == _Row.agent
         ? EngineMark(engine: box.harnessId ?? box.engine, size: 16)
         : null,
@@ -1990,11 +1990,22 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     textSize: capsule ? 13 : 12,
     truncateFromStart: row == _Row.branch,
     foregroundColor: capsule ? null : DesktopChrome.muted,
-    tooltip: '${_label(row)}: ${_blocked(row) ?? _value(row)}',
+    tooltip: _desktopChoiceTooltip(row),
     onPressed: box.locked || _blocked(row) != null
         ? null
         : () => _activateRow(row),
   );
+
+  String _desktopChoiceTooltip(_Row row) {
+    if (_blocked(row) case final reason?) return '${_label(row)}: $reason';
+    final action = switch (row) {
+      _Row.model => 'Choose model',
+      _Row.approvals => 'Choose approval mode',
+      _Row.profile => 'Choose Codex profile',
+      _ => _label(row),
+    };
+    return '$action: ${_value(row)}';
+  }
 
   Widget _desktopStartButton() => ListenableBuilder(
     listenable: _desktopFocus[_Row.start]!,
@@ -2289,9 +2300,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   String _desktopOptionDetail(NewHarnessOption option) {
-    if (box.field == NewHarnessField.machine ||
-        box.field == NewHarnessField.mode ||
-        _isDoor(option)) {
+    if (box.field == NewHarnessField.machine || _isDoor(option)) {
       return '';
     }
     final machine = box.app

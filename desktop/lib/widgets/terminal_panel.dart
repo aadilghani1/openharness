@@ -3102,7 +3102,7 @@ class _ControlBanner extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: grid.AppType.label(
+                      style: grid.AppType.mono(
                         color: AppColors.text,
                         fontWeight: FontWeight.w600,
                       ),
@@ -3191,10 +3191,17 @@ class _ControlBannerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final onAccent = Theme.of(context).colorScheme.onPrimary;
+    final scheme = Theme.of(context).colorScheme;
+    final onAccent = scheme.onSurface;
     return FilledButton(
       onPressed: onPressed,
       style: FilledButton.styleFrom(
+        backgroundColor: Color.alphaBlend(
+          scheme.onSurface.withValues(alpha: .10),
+          scheme.surface,
+        ),
+        foregroundColor: scheme.onSurface,
+        side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
         minimumSize: const Size(0, 28),
         padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -3203,7 +3210,12 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(child: Text(label, style: grid.AppType.label())),
+          Flexible(
+            child: Text(
+              label,
+              style: grid.AppType.mono(fontWeight: FontWeight.w500),
+            ),
+          ),
           if (showReturnKey) ...[
             const SizedBox(width: 8),
             Container(
@@ -3258,7 +3270,10 @@ class _TransferProgressBadge extends StatelessWidget {
                 child: Text(
                   '$label$percentLabel',
                   overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.label(color: AppColors.textSoft),
+                  style: grid.AppType.mono(
+                    color: AppColors.textSoft,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -3266,7 +3281,10 @@ class _TransferProgressBadge extends StatelessWidget {
                 onTap: onCancel,
                 child: Text(
                   'CANCEL',
-                  style: grid.AppType.label(color: AppColors.textSoft),
+                  style: grid.AppType.mono(
+                    color: AppColors.textSoft,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],

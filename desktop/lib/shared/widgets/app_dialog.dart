@@ -1,5 +1,5 @@
-/// Shared instant dialogs. An opaque-enough tint separates terminal text from
-/// the dialog without filtering live terminal pixels on every frame.
+/// Shared desktop dialogs keep the surrounding workspace recognizable without
+/// filtering live terminal pixels on every frame.
 library;
 
 import 'dart:ui' show ImageFilter;
@@ -10,9 +10,14 @@ import 'package:flutter/services.dart';
 /// Dialogs do not blur the live workspace by default.
 const double kDialogVeilBlur = 0;
 
-/// Shared dark backdrop for dialogs and centered pickers. Terminal output
-/// stays in the background while the active surface has the user's attention.
-const Color kDialogVeilTint = Color(0xE6000000);
+/// Default dark backdrop; the framed desktop dialog uses a lighter veil in
+/// light appearance. Cmd-N retains its separately approved 95% backdrop.
+const Color kDialogVeilTint = Color(0x85000000);
+
+Color dialogVeilTintOf(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? kDialogVeilTint
+    : const Color(0x33000000);
 
 /// The app's dialog barrier: a flat tint and the active surface.
 ///
@@ -31,7 +36,7 @@ Future<T?> showAppDialog<T>({
   required WidgetBuilder builder,
   bool barrierDismissible = true,
   String barrierLabel = 'Dismiss',
-  Color veilTint = kDialogVeilTint,
+  Color? veilTint,
   double veilBlur = kDialogVeilBlur,
   Duration transitionDuration = Duration.zero,
 }) => showGeneralDialog<T>(
@@ -68,7 +73,7 @@ class _AppDialogVeil extends StatelessWidget {
     required this.child,
   });
 
-  final Color tint;
+  final Color? tint;
   final double blur;
   final bool dismissible;
   final Widget child;
@@ -86,10 +91,10 @@ class _AppDialogVeil extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: dismissible ? () => Navigator.of(context).maybePop() : null,
             child: blur == 0
-                ? ColoredBox(color: tint)
+                ? ColoredBox(color: tint ?? dialogVeilTintOf(context))
                 : BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                    child: ColoredBox(color: tint),
+                    child: ColoredBox(color: tint ?? dialogVeilTintOf(context)),
                   ),
           ),
         ),

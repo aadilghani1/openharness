@@ -342,20 +342,20 @@ void main() {
       await tester.pump();
       expect(find.byKey(const ValueKey('add-phone-devices')), findsOneWidget);
       expect(find.text("Dee's iPhone"), findsOneWidget);
-      expect(find.text('online'), findsOneWidget);
+      expect(find.text('Online'), findsOneWidget);
       // A pairing that never said who it is says so in plain words.
       expect(find.text('Linked device'), findsOneWidget);
       expect(find.text('2d'), findsNWidgets(2));
       // Three, then the rest on request: the list must not outweigh the QR.
       expect(find.text('Older phone'), findsNothing);
-      await tester.tap(find.widgetWithText(TextButton, '+ 2 more'));
+      await tester.tap(find.widgetWithText(TextButton, 'Show 2 more'));
       await tester.pump();
       expect(find.text('Oldest phone'), findsOneWidget);
 
       await tester.tap(
         find.descendant(
           of: find.byKey(const ValueKey('add-phone-device-BBBB')),
-          matching: find.widgetWithText(TextButton, 'remove'),
+          matching: find.widgetWithText(TextButton, 'Remove'),
         ),
       );
       await tester.pump();
@@ -381,7 +381,7 @@ void main() {
         removeDevice: (_) async => false,
       );
       await tester.pump();
-      await tester.tap(find.widgetWithText(TextButton, 'remove'));
+      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
       await tester.pump();
       await tester.pump();
       expect(find.text("Dee's iPhone"), findsOneWidget);

@@ -1,10 +1,12 @@
 # Friendly desktop validation
 
 Validation on `experiment/friendly-desktop`, against `a26237c9`. This remains
-an unmerged experiment for local review. The earlier checkpoints are recorded
-below; the latest iteration uses the agreed VS Code-style composer.
+an unmerged experiment for local review. The checkpoints below are historical, not the current visual specification.
+Current behavior and later validation are recorded in
+[friendly-desktop-experiment.md](friendly-desktop-experiment.md); the broader
+redesign follows [desktop-design-system.md](desktop-design-system.md).
 
-## Minimal composer iteration
+## Historical minimal composer iteration (after a26237c9)
 
 The form is 860 points wide, with Agent, Machine, and Repo across the top and
 the existing agent brand marks. The optional message editor says “What’s next?”

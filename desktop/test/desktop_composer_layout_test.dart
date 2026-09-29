@@ -389,7 +389,7 @@ void main() {
   }
 
   testWidgets(
-    'footer controls keep a stable focus fill and explicit Git symbols',
+    'footer controls show their purpose and keep stable focus geometry',
     (tester) async {
       final fixture = await _mount(tester);
       Material buttonMaterial(Finder control) => tester.widget<Material>(
@@ -405,20 +405,32 @@ void main() {
         final control = _field(name);
         expect(
           find.descendant(of: control, matching: find.byType(Icon)),
-          name == 'worktree' || name == 'branch'
-              ? findsOneWidget
-              : findsNothing,
+          findsOneWidget,
         );
         final before = tester.getRect(control);
         final resting = buttonMaterial(control);
         await _focus(tester, control);
         final focused = buttonMaterial(control);
-        expect(focused.color, isNot(resting.color));
         expect(tester.getRect(control), before);
         final restingShape = resting.shape! as OutlinedBorder;
         final focusedShape = focused.shape! as OutlinedBorder;
-        expect(focusedShape.side, restingShape.side);
-        expect(focusedShape.side.width, lessThanOrEqualTo(1));
+        expect(focusedShape.runtimeType, restingShape.runtimeType);
+        expect(focusedShape.side.width, restingShape.side.width);
+        expect(
+          focused.color != resting.color ||
+              focusedShape.side.color != restingShape.side.color,
+          isTrue,
+        );
+      }
+      for (final (name, message) in [
+        ('model', 'Choose model: OpenAI'),
+        ('approvals', 'Choose approval mode: Auto-approve'),
+        ('profile', 'Choose Codex profile: Default'),
+      ]) {
+        final tooltip = tester.widget<Tooltip>(
+          find.descendant(of: _field(name), matching: find.byType(Tooltip)),
+        );
+        expect(tooltip.message, message);
       }
       expect(find.text('Worktree'), findsOneWidget);
       expect(fixture.app.launches, isEmpty);
@@ -906,6 +918,12 @@ void main() {
       await _focus(tester, _field('approvals'));
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
+      expect(
+        find.text('Approves routine actions in the sandbox'),
+        findsOneWidget,
+      );
+      expect(find.text('No approvals and no sandbox. Risky'), findsOneWidget);
+      await capture(tester, fixture, 'approval-options-dark');
       await tester.enterText(_query, 'Full access');
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
@@ -1220,6 +1238,14 @@ void main() {
             expect(tester.takeException(), isNull);
           }
           await capture(tester, fixture, 'narrow-${brightness.name}-$scale');
+          await tester.ensureVisible(_field('project'));
+          await tester.pumpAndSettle();
+          expect(_field('project').hitTestable(), findsOneWidget);
+          await capture(
+            tester,
+            fixture,
+            'narrow-project-${brightness.name}-$scale',
+          );
           await tester.tap(_field('project'));
           await tester.pumpAndSettle();
           await tester.tap(_machine);

@@ -1213,9 +1213,7 @@ class _PaneCell extends StatelessWidget {
         // decoration present even when clear: inserting/removing it would
         // reparent the terminal and lose its input, scroll and selection state.
         foregroundDecoration: BoxDecoration(
-          color: dimmed
-              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
-              : null,
+          color: dimmed ? const Color(0xFF9D9D9D).withValues(alpha: .30) : null,
           border: blocked
               ? Border.all(color: grid.AppPalette.warn, width: 2)
               : null,
@@ -1711,7 +1709,10 @@ class _FileDropZoneState extends State<_FileDropZone> {
                       ),
                       child: Text(
                         'Drop to attach',
-                        style: grid.AppType.label(color: AppColors.text),
+                        style: grid.AppType.mono(
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.text,
+                        ),
                       ),
                     ),
                   ),
@@ -1944,7 +1945,8 @@ class _SwapZone extends StatelessWidget {
                               ),
                               child: Text(
                                 'Swap with this pane',
-                                style: grid.AppType.label(
+                                style: grid.AppType.mono(
+                                  fontWeight: FontWeight.w500,
                                   color: AppColors.text,
                                 ),
                               ),
@@ -2193,7 +2195,10 @@ class _DropZone extends StatelessWidget {
                             paneId == null
                                 ? 'Open ${candidate.first?.name ?? 'agent'} here'
                                 : 'Show ${candidate.first?.name ?? 'agent'} in this pane',
-                            style: grid.AppType.label(color: AppColors.text),
+                            style: grid.AppType.mono(
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.text,
+                            ),
                           ),
                         ),
                       ),

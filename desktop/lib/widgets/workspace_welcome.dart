@@ -359,34 +359,66 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       children: [
         Padding(
           padding: const EdgeInsets.only(bottom: 8, left: 10),
-          child: Text(
-            'Recent sessions',
-            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          child: Semantics(
+            header: true,
+            child: Text('Recent sessions', style: DesktopChrome.metadata()),
           ),
         ),
         for (final (index, row) in sessions.rows.indexed)
           TextButton(
             key: ValueKey('welcome-session-${row.id}'),
             onPressed: () => _open(index),
-            style: TextButton.styleFrom(
-              foregroundColor: DesktopChrome.foreground,
-              backgroundColor: Colors.transparent,
-              side: BorderSide.none,
-              enabledMouseCursor: SystemMouseCursors.click,
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            style:
+                TextButton.styleFrom(
+                  foregroundColor: DesktopChrome.foreground,
+                  backgroundColor: Colors.transparent,
+                  enabledMouseCursor: SystemMouseCursors.click,
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 9,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ).copyWith(
+                  side: WidgetStateProperty.resolveWith(
+                    (states) => BorderSide(
+                      width: 1.5,
+                      color: states.contains(WidgetState.focused)
+                          ? (MediaQuery.highContrastOf(context)
+                                ? DesktopChrome.accent
+                                : DesktopChrome.focusRing)
+                          : Colors.transparent,
+                    ),
+                  ),
+                ),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    row.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.text(size: 13),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        row.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.control(),
+                      ),
+                      if (_recentContext(row) case final context?
+                          when context.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Tooltip(
+                          message: context,
+                          child: Text(
+                            context,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -403,6 +435,16 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           ),
       ],
     );
+  }
+
+  String? _recentContext(SwarmDestination row) {
+    final context = row.promptContext;
+    if (context == null) return row.detail.isEmpty ? null : row.detail;
+    return [
+      context.machine,
+      context.project,
+      context.branch,
+    ].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
   }
 
   /// The commands, each with its shortcut: the whole page before there is

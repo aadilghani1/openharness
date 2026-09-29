@@ -388,7 +388,7 @@ void main() {
       expect(search.isProjectMode, isTrue);
       expect(editing.text, '# login');
       expect(chosen, isEmpty);
-      await tester.tap(find.byKey(const ValueKey('search-category-All')));
+      await tester.tap(find.byKey(const ValueKey('search-category-Harnesses')));
       await tester.pumpAndSettle();
       expect(editing.text, 'login');
       await key(tester, LogicalKeyboardKey.arrowDown);

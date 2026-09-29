@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 
-/// Experimental desktop presentation around the terminal. The same controllers
-/// and keyboard actions still own creation, search, and resource management.
+/// Desktop presentation around the terminal. The same controllers and keyboard
+/// actions own creation, search, and resource management on every platform.
 class DesktopChrome extends InheritedWidget {
   const DesktopChrome({super.key, required super.child});
 
@@ -20,15 +20,29 @@ class DesktopChrome extends InheritedWidget {
   static Color get selection => accent.withValues(alpha: .16);
   static Color get focusRing => accent.withValues(alpha: .75);
   static const dialogRadius = 16.0;
+  static const controlRadius = 8.0;
+  static const panelPadding = 24.0;
+  static const groupGap = 16.0;
+  static const controlGap = 8.0;
+  static const controlHeight = 32.0;
+  static const compactControlHeight = 28.0;
   static TextStyle text({
     Color? color,
     double size = 14,
     bool medium = false,
+    double height = 1.45,
   }) => grid.AppType.body(
     color: color ?? foreground,
     fontWeight: medium ? FontWeight.w500 : FontWeight.w400,
-    height: 1.45,
+    height: height,
   ).copyWith(fontSize: size);
+
+  static TextStyle control({Color? color, bool medium = false}) =>
+      text(color: color, size: 13, medium: medium, height: 1.25);
+  static TextStyle metadata({Color? color}) =>
+      text(color: color ?? muted, size: 12, height: 1.35);
+  static TextStyle heading({Color? color}) =>
+      text(color: color, size: 17, medium: true, height: 1.3);
 
   static OutlinedBorder shape({double radius = dialogRadius}) =>
       RoundedRectangleBorder(
@@ -140,7 +154,9 @@ class DesktopPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
     final ink = foregroundColor ?? DesktopChrome.foreground;
+    final highContrast = MediaQuery.highContrastOf(context);
     final button = TextButton(
       focusNode: focusNode,
       onPressed: onPressed,
@@ -156,9 +172,9 @@ class DesktopPill extends StatelessWidget {
             minimumSize: Size(
               0,
               compact
-                  ? 28
+                  ? DesktopChrome.compactControlHeight
                   : capsule
-                  ? 32
+                  ? DesktopChrome.controlHeight
                   : 34,
             ),
             padding: EdgeInsets.symmetric(
@@ -170,27 +186,48 @@ class DesktopPill extends StatelessWidget {
               vertical: compact || capsule ? 4 : 7,
             ),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(capsule ? 20 : 8),
+              borderRadius: BorderRadius.circular(
+                capsule ? 20 : DesktopChrome.controlRadius,
+              ),
             ),
             textStyle: DesktopChrome.text(size: textSize),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             splashFactory: NoSplash.splashFactory,
           ).copyWith(
-            side: WidgetStatePropertyAll(
-              BorderSide(color: quiet ? Colors.transparent : DesktopChrome.rim),
+            side: WidgetStateProperty.resolveWith(
+              (states) => BorderSide(
+                // Reserve the same rim in every state; focus never moves text.
+                width: 1.5,
+                color: states.contains(WidgetState.disabled)
+                    ? Colors.transparent
+                    : states.contains(WidgetState.focused)
+                    ? (highContrast
+                          ? DesktopChrome.accent
+                          : DesktopChrome.focusRing)
+                    : quiet
+                    ? Colors.transparent
+                    : highContrast
+                    ? ink.withValues(alpha: .45)
+                    : DesktopChrome.rim,
+              ),
             ),
             backgroundColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.focused)
+              (states) => selected == true
+                  ? ink.withValues(alpha: .13)
+                  : states.contains(WidgetState.focused) &&
+                        !states.contains(WidgetState.disabled)
                   ? ink.withValues(alpha: .10)
                   : quiet
                   ? Colors.transparent
                   : ink.withValues(alpha: selected == true ? .13 : .055),
             ),
             overlayColor: WidgetStateProperty.resolveWith(
-              (states) =>
-                  states.contains(WidgetState.hovered) ||
-                      states.contains(WidgetState.pressed)
-                  ? ink.withValues(alpha: .05)
+              (states) => states.contains(WidgetState.disabled)
+                  ? Colors.transparent
+                  : states.contains(WidgetState.pressed)
+                  ? ink.withValues(alpha: .12)
+                  : states.contains(WidgetState.hovered)
+                  ? ink.withValues(alpha: highContrast ? .10 : .05)
                   : Colors.transparent,
             ),
           ),

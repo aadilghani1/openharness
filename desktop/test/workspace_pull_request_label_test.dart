@@ -32,6 +32,31 @@ void main() {
         }
         expect(colors.length, 4);
       }
+      for (final brightness in Brightness.values) {
+        final surface = grid.AppTheme.as(
+          brightness,
+          () => grid.AppPalette.cardBg,
+        );
+        for (final state in ['Open', 'Merged', 'Closed', 'Draft']) {
+          final color = pullRequestIconColor(
+            state,
+            null,
+            brightness: brightness,
+          );
+          expect(
+            pullRequestIconColor(
+              state,
+              tangoTerminalTheme,
+              brightness: brightness,
+            ),
+            color,
+          );
+          final a = color.computeLuminance();
+          final b = surface.computeLuminance();
+          final ratio = a > b ? (a + .05) / (b + .05) : (b + .05) / (a + .05);
+          expect(ratio, greaterThanOrEqualTo(4.5));
+        }
+      }
     },
   );
 

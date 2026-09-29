@@ -1677,6 +1677,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'agentId': focused.agentId,
             },
       'footerCovered':
+          !_routeIsCurrent ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
       'focusedContext': focused == null

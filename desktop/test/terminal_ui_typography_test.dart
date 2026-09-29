@@ -12,6 +12,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
@@ -63,6 +64,8 @@ void main() {
     grid.AppType.bodySize,
     grid.AppType.monoLabelSize,
     grid.AppType.captionSize,
+    DesktopChrome.heading().fontSize!,
+    DesktopChrome.text().fontSize!,
   };
 
   /// General UI and workspace bars keep their fixed scales during terminal zoom.
@@ -237,22 +240,22 @@ void main() {
       selectFont(size);
       final theme = grid.buildAppTheme(brightness: Brightness.dark);
       final t = theme.textTheme;
-      final mono = grid.AppType.monoFamily;
       final sans = grid.AppType.sansFamily;
-      // Headings, labels and what the user types are mono; prose is sans.
+      // App headings, controls and fields use the system face. Terminal and
+      // explicit code styles remain independent and are checked below.
       final expected = {
-        t.displayLarge: (grid.AppType.displaySize, mono),
-        t.headlineSmall: (grid.AppType.titleSize, mono),
-        t.titleLarge: (grid.AppType.titleSize, mono),
-        t.titleMedium: (grid.AppType.headingSize, mono),
-        t.titleSmall: (grid.AppType.bodySize, mono),
-        t.labelLarge: (grid.AppType.bodySize, mono),
-        t.labelSmall: (grid.AppType.monoMetaSize, mono),
+        t.displayLarge: (grid.AppType.displaySize, sans),
+        t.headlineSmall: (grid.AppType.titleSize, sans),
+        t.titleLarge: (grid.AppType.titleSize, sans),
+        t.titleMedium: (grid.AppType.headingSize, sans),
+        t.titleSmall: (grid.AppType.bodySize, sans),
+        t.labelLarge: (grid.AppType.bodySize, sans),
+        t.labelSmall: (grid.AppType.captionSize, sans),
         t.bodyLarge: (grid.AppType.bodySize, sans),
         t.bodyMedium: (grid.AppType.bodySize, sans),
         t.bodySmall: (grid.AppType.bodySize, sans),
-        grid.kFieldTextStyle: (grid.AppType.monoSize, mono),
-        theme.dialogTheme.titleTextStyle: (grid.AppType.headingSize, mono),
+        grid.kFieldTextStyle: (grid.AppType.bodySize, sans),
+        theme.dialogTheme.titleTextStyle: (grid.AppType.headingSize, sans),
         theme.dialogTheme.contentTextStyle: (grid.AppType.bodySize, sans),
         theme.tooltipTheme.textStyle: (grid.AppType.captionSize, sans),
       };
@@ -268,8 +271,6 @@ void main() {
   test('mono takes the terminal face but not its size', () {
     selectFont(22);
     for (final (style, size) in [
-      (grid.AppType.heading(), grid.AppType.headingSize),
-      (grid.AppType.label(), grid.AppType.bodySize),
       (grid.AppType.mono(), grid.AppType.monoSize),
       (grid.AppType.monoLabel(), grid.AppType.monoLabelSize),
       (grid.AppType.monoMeta(), grid.AppType.monoMetaSize),

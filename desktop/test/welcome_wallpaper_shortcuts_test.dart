@@ -161,6 +161,27 @@ void main() {
     expect(tester.takeException(), isNull);
   }
 
+  void expectShortcutTypography(WidgetTester tester) {
+    final browser = find.byType(ShortcutsBrowser);
+    for (final text in tester.widgetList<Text>(
+      find.descendant(of: browser, matching: find.byType(Text)),
+    )) {
+      if (text.style?.fontFamily != null) {
+        expect(
+          text.style!.fontFamily,
+          grid.AppType.sansFamily,
+          reason: text.data,
+        );
+      }
+    }
+    final input = tester.widget<TextField>(
+      find.byKey(const ValueKey('shortcuts-search')),
+    );
+    expect(input.style!.fontFamily, grid.AppType.sansFamily);
+    expect(input.style!.fontSize, 13);
+    expect(tester.takeException(), isNull);
+  }
+
   testWidgets(
     'wallpapers keep a centered welcome and the selected terminal type',
     (tester) async {
@@ -276,7 +297,7 @@ void main() {
       );
       final search = find.byKey(const ValueKey('shortcuts-search'));
       await capture(tester, 'shortcuts-dark');
-      expectUniformText(tester);
+      expectShortcutTypography(tester);
       await tester.enterText(search, 'clone');
       await tester.pump();
       expect(find.text('Clone Harness'), findsOneWidget);
@@ -297,7 +318,7 @@ void main() {
       expect(find.byType(KeyboardPractice), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyY, cmd: true);
       await tester.pumpAndSettle();
-      expect(find.text('[x] New Tab'), findsOneWidget);
+      expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -307,7 +328,7 @@ void main() {
       font(22);
       tester.view.physicalSize = const Size(420, 740);
       await tester.pumpAndSettle();
-      expectUniformText(tester);
+      expectShortcutTypography(tester);
       await capture(tester, 'shortcuts-narrow-large');
       await tester.pumpWidget(const SizedBox());
     },
@@ -329,7 +350,7 @@ void main() {
     showShortcutsSheet(host);
     await tester.pumpAndSettle();
     expect(find.byType(ShortcutsBrowser), findsOneWidget);
-    expectUniformText(tester);
+    expectShortcutTypography(tester);
     // Dialog lives above the page's boundary; capture it directly when requested.
     final output = Platform.environment['HARNESS_REFINEMENT_CAPTURE_DIR'];
     if (output != null) {

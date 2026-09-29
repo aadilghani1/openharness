@@ -207,6 +207,11 @@ void main() {
         find.byType(CupertinoSlidingSegmentedControl<String>),
       );
       expect(segmented.children.keys, ['', '@', '#', ':', '*', '>']);
+      expect(
+        find.byKey(const ValueKey('search-category-Harnesses')),
+        findsOneWidget,
+      );
+      expect(palette.search.hint, 'Search harnesses');
       await tester.enterText(input, 'login');
       for (final (label, prefix) in DesktopSearchPanel.categories) {
         await tester.tap(find.byKey(ValueKey('search-category-$label')));

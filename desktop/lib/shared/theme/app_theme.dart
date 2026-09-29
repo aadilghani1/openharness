@@ -1402,14 +1402,14 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
 TextStyle get _buttonTextStyle =>
     AppType.body(fontWeight: AppControl.fontWeight);
 
-/// A text field's own text: [AppType.mono] — what the user types is set the
-/// way a terminal sets it, at the scale of the button beside it.
+/// Ordinary form fields use the system UI face. Code, paths, credentials,
+/// and terminal editors opt into their explicit monospace styles.
 /// `InputDecorationTheme` has no `style` slot (it themes the *decoration*, not
 /// the editable text), so a field must be handed this explicitly:
 /// `TextField(style: kFieldTextStyle, ...)`.
 TextStyle get kFieldTextStyle => _fieldTextStyle(AppPalette.textPrimary);
 
-TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
+TextStyle _fieldTextStyle(Color color) => AppType.body(color: color);
 
 /// A field's leading glyph — the magnifier on a search box, and its kind.
 ///
@@ -1440,12 +1440,10 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
 );
 
 ButtonStyle _filledButtonStyle(ColorScheme scheme) => FilledButton.styleFrom(
-  backgroundColor: Color.alphaBlend(
-    scheme.onSurface.withValues(alpha: .10),
-    scheme.surface,
-  ),
-  foregroundColor: scheme.onSurface,
-  side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
+  backgroundColor: scheme.primary,
+  foregroundColor: scheme.onPrimary,
+  disabledBackgroundColor: scheme.onSurface.withValues(alpha: .08),
+  disabledForegroundColor: scheme.onSurface.withValues(alpha: .38),
   animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingScaled,
@@ -1462,7 +1460,7 @@ ButtonStyle _filledButtonStyle(ColorScheme scheme) => FilledButton.styleFrom(
   // second colour. See [_textButtonStyle] for why any of these are needed at
   // all — `NoSplash` took the ripple away and left nothing behind it.
   overlayColor: const Color(0x1FFFFFFF),
-);
+).copyWith(side: _controlRim(scheme, filled: true));
 
 /// The secondary action: a hairline rim, no fill — Apple's "bordered" button.
 ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
@@ -1477,7 +1475,7 @@ ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
       foregroundColor: scheme.onSurface,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.standard,
-    );
+    ).copyWith(side: _controlRim(scheme));
 
 /// A quiet capsule for secondary dialog and workspace actions.
 ButtonStyle _textButtonStyle(ColorScheme scheme) => TextButton.styleFrom(
@@ -1504,12 +1502,33 @@ ButtonStyle _textButtonStyle(ColorScheme scheme) => TextButton.styleFrom(
   // [AppSurface.hoverFill] is the same wash the rows and menu items already
   // use, so a button now answers the pointer the way everything around it does.
   overlayColor: AppSurface.hoverFill,
-);
+).copyWith(side: _controlRim(scheme));
+
+/// Keep a real focus boundary without changing the control's layout. A filled
+/// primary uses its contrasting label color; neutral controls use the accent.
+WidgetStateProperty<BorderSide> _controlRim(
+  ColorScheme scheme, {
+  bool filled = false,
+}) => WidgetStateProperty.resolveWith((states) {
+  final disabled = states.contains(WidgetState.disabled);
+  final focused = states.contains(WidgetState.focused) && !disabled;
+  return BorderSide(
+    width: 1.5,
+    color: focused
+        ? filled
+              ? scheme.onPrimary
+              : scheme.brightness == Brightness.dark
+              ? const Color(0xFF6E8BFF)
+              : scheme.primary
+        : filled
+        ? Colors.transparent
+        : scheme.onSurface.withValues(alpha: disabled ? .06 : .14),
+  );
+});
 
 TextTheme _appTextTheme(Color primary, Color secondary) {
-  // Material's fifteen roles folded onto [AppType]'s steps: headings and
-  // labels in mono, body in sans. A heading keeps semibold; a role that names a
-  // control drops to medium.
+  // App controls share the system type hierarchy. Monospace is requested
+  // explicitly by terminal content, code, and identifiers.
   final display = AppType.display(color: primary);
   final title = AppType.title(color: primary);
   final heading = AppType.heading(color: primary);
@@ -1530,6 +1549,6 @@ TextTheme _appTextTheme(Color primary, Color secondary) {
     bodySmall: body.copyWith(color: secondary),
     labelLarge: label,
     labelMedium: label,
-    labelSmall: AppType.monoMeta(color: primary, fontWeight: AppFont.medium),
+    labelSmall: AppType.caption(color: primary, fontWeight: AppFont.medium),
   );
 }
