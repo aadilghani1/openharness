@@ -208,6 +208,17 @@ class _FirstCreationApp extends AppNotifier {
 }
 
 class _WorkspaceLinks implements PeerLinkClient {
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(
+    error: 'Code linking is not used by this fixture.',
+  );
+
   final requests = <String>[];
   final replies = <Completer<CliLinkConnectResult>>[];
 

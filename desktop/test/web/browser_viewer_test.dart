@@ -52,6 +52,38 @@ class _App extends AppNotifier {
 }
 
 void main() {
+  testWidgets('a damaged viewer link remains an error page after sign-in', (
+    tester,
+  ) async {
+    final previous = web.window.location.href;
+    web.window.history.replaceState(
+      null,
+      '',
+      '/?viewer=1&machine=%FF&agent=model',
+    );
+    addTearDown(() => web.window.history.replaceState(null, '', previous));
+    final app = _App()..status = AppStatus.authenticated;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: HarnessApp(
+          authenticatedScreen: (_) => const Text('Workspace must stay closed'),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.text('This viewer link is incomplete. Run hn view again.'),
+      findsOneWidget,
+    );
+    expect(find.text('Workspace must stay closed'), findsNothing);
+    expect(find.byType(ViewerPage), findsNothing);
+    expect(app.requests, isEmpty);
+    expect(app.allPanes, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
     'hn browser link gates sign-in, drives only its viewer and closes only its surface',
     (tester) async {

@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
     log = home / 'browser.jsonl'
     for name in ('open', 'xdg-open'):
         opener = bin_dir / name
-        opener.write_text('#!' + sys.executable + '\nimport json,os,sys\nwith open(os.environ["HN_VIEWER_OPENER_LOG"],"a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\nsys.exit(int(os.environ.get("HN_VIEWER_OPENER_EXIT","0")))\n')
+        opener.write_text('#!' + sys.executable + '\nimport json,os,sys,time\nwith open(os.environ["HN_VIEWER_OPENER_LOG"],"a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\ntime.sleep(float(os.environ.get("HN_VIEWER_OPENER_DELAY","0")))\nsys.exit(int(os.environ.get("HN_VIEWER_OPENER_EXIT","0")))\n')
         opener.chmod(0o700)
     env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE', 'HN_SOCKET', 'SSH_TTY', 'SSH_CONNECTION', 'SSH_CLIENT')}
     env.update(HOME=tmp, PORT=str(port), HN_SOCKET_NAME=prefix, HN_TMPDIR=tmp,
@@ -74,6 +74,16 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
         assert hn('view', '--unknown', ok=False).returncode == 2
         assert hn('view', '-t', ok=False).returncode == 2
         assert hn('view', '-t', 'Mock Blender', extra={'HN_VIEWER_OPENER_EXIT': '1'}).stdout.strip() == local
+        assert hn('view', '-t', 'Mock Blender', extra={'PATH': ''}).stdout.strip() == local
+        started = time.monotonic()
+        assert hn('view', '-t', 'Mock Blender', extra={'HN_VIEWER_OPENER_DELAY': '12'}).stdout.strip() == local
+        assert time.monotonic() - started < 10, 'a stuck browser opener must not hold the terminal'
+        if sys.platform.startswith('linux'):
+            count = len(opened())
+            assert hn('view', '-t', 'Mock Blender', extra={'DISPLAY': '', 'WAYLAND_DISPLAY': ''}).stdout.strip() == local
+            assert len(opened()) == count
+            hn('view', '-t', 'Mock Blender', extra={'DISPLAY': '', 'WAYLAND_DISPLAY': 'fixture'})
+            assert len(opened()) == count + 1
         assert 'usage: hn view' in hn('view', '--help').stdout
         assert hn('view', ok=False).returncode == 1
         assert hn('view', '-t', '', ok=False).returncode == 2

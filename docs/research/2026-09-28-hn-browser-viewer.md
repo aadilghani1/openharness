@@ -41,21 +41,83 @@ or change creature behavior.
 
 ## Validation
 
-All interactive CLI tests use a disposable HOME, a frozen binary, explicit socket prefix,
-matching `PORT`/`--port`, unset tmux/socket variables, and guarded ports in 19000–19999.
-The browser opener is a recording stub. Chrome tests use an isolated headless test profile
-and synthetic machine/viewer data. Nothing controls a real harness.
+All hn tests use a disposable HOME, a frozen binary, an explicit socket prefix, matching
+`PORT`/`--port`, unset tmux/socket variables, and guarded test ports. Test processes,
+harnesses and named tmux servers are cleaned up after success or failure.
 
-- Rust release unit tests, including URL escaping, invalid schemes, no-viewer and waiting states.
-- `tui/tests/viewer.py`: public CLI commands, direct local viewer, exact opener argv, failed
-  opener fallback, SSH, peer viewers, current pane through IPC, caller environment, and errors.
-- Existing `tui/tests/e2e.sh`: tmux/fzf and terminal lifecycle regression checks.
-- Flutter viewer location, OAuth return, viewer page, desk isolation, interactive viewer and
-  auth lifecycle regressions.
-- Chrome browser test: sign-in gate, viewer-only route, rendered input area, mouse and keyboard
-  input, recovery, and closing without removing the harness.
-- Flutter analyzer and production web compilation.
+- 124 Rust release unit tests and the existing terminal end-to-end suite pass.
+- `tui/tests/viewer.py` exercises standalone, IPC and real TUI command-prompt paths: local
+  opening, every SSH environment variable, peers, print/copy, exact opener arguments,
+  missing/failed/hung openers, ambiguous names, waiting/error/unsafe viewers and damaged IPC
+  replies. Linux also checks a headless shell and Wayland. Both Linux CI architecture jobs
+  run this suite.
+- 157 Flutter regressions cover routing, OAuth, QR sign-in integration, account transitions,
+  machine linking, desk isolation and existing workspace behavior. Another 23 headless Chrome
+  checks exercise browser routing and input.
+- `tui/tests/viewer-live.mjs` passes on a physical Apple Silicon Mac with the actual hn,
+  daemon, backend, MongoDB replica set, Redis, Blender DSH package, model viewer and Chrome.
+  It renders a glTF fixture, completes browser OAuth and encrypted password linking, sends
+  mouse/Unicode/special-key input, checks pointer mapping above the renderer resolution cap,
+  reloads, stops and restarts the backend, and checks malformed UTF-8 links.
+  Closing the browser leaves the harnesses running. No browser input reaches their terminals,
+  and the browser never reads or overwrites the shared desk.
+- The live test substitutes only the OAuth provider and model CLI with deterministic local
+  fixtures. This is a real local stack test, not a production-account or two-computer test.
+  Its browser blocks HTTP requests outside loopback. The installed hn and production daemons
+  are never used.
 
-The new CLI integration test is included in both Linux architecture jobs in the on-demand
-CI workflow. Tests and source are the verification record; no production browser account or
-remote machine was used as a test fixture.
+Coverage is **100% of executable lines** in the three new modules: `tui/src/viewer.rs`
+(120/120 production lines, excluding its unit tests), `viewer_location.dart` (29/29) and
+`viewer_page.dart` (76/76). Rust coverage combines unit tests with instrumented public CLI
+and TUI runs; Flutter coverage comes from routing and page tests. The existing renderer
+and input transport also reach 195/195 lines in their 34 tests, with 95.37% branch coverage.
+These figures do not claim repository-wide coverage or prove every possible edge case is
+covered. Coverage artifacts and screenshots stay outside the repository.
+
+### Failures caught before merge
+
+- Invalid UTF-8 in viewer queries threw before validation. The route now recognizes its flag
+  without decoding broken values and shows an error without restoring the workspace.
+- A configured browser base with a non-root path produced a link the app could not route.
+  hn now rejects it with a useful error.
+- RPC failures hid renderer guidance behind a generic disconnect message. The browser now
+  displays the daemon's error detail, including renderer and viewer-limit guidance.
+- On this Mac, the private Chrome renderer's first navigation timed out even on a plain local
+  page. The same process with `--use-mock-keychain` navigated in 23–93 ms and rendered the
+  Blender model. Its temporary, credential-free profile now bypasses OS credential stores
+  (`--use-mock-keychain`, `--password-store=basic`), avoiding an invisible unlock prompt.
+  The user's regular browser profile is untouched. See
+  [Chromium's Mac instructions](https://github.com/chromium/chromium/blob/main/docs/mac_build_instructions.md).
+
+### Reproduce the physical-machine check
+
+Install repository CLI/backend dependencies and `store/viewers/model-viewer` dependencies,
+then build hn. The opt-in runner requires Chrome/Chromium, tmux, MongoDB and Redis executables,
+plus a separate test-tools directory containing `playwright@1.63.0`,
+`mongodb-memory-server@11.2.0` and `redis-memory-server@0.17.1`. It installs nothing and
+changes no real Harness installation. Its fixed ports are 19680–19686.
+
+Build the browser entrypoint from `desktop/`:
+
+```sh
+flutter build web --release --no-pub --no-wasm-dry-run --no-web-resources-cdn \
+  --dart-define=HARNESS_TEST=true --dart-define=HARNESS_API_URL=http://127.0.0.1:19680 \
+  --output=/tmp/hn-viewer-web
+```
+
+Then run from the repository root, substituting paths to your test dependencies:
+
+```sh
+HN_VIEWER_LIVE_TEST=1 \
+HN_VIEWER_SERVICES_DIR=/path/to/test-tools \
+HN_VIEWER_TOOLS_DIR=/path/to/test-tools \
+HN_VIEWER_WEB_DIR=/tmp/hn-viewer-web \
+HN_VIEWER_BINARY="$PWD/tui/target/release/harness-tui" \
+HN_VIEWER_MONGOD=/path/to/mongod \
+HN_VIEWER_REDIS=/path/to/redis-server \
+node tui/tests/viewer-live.mjs
+```
+
+Set `HN_VIEWER_CHROME` and `HN_VIEWER_TMUX` if executables are elsewhere. The runner prints
+its private temporary directory containing results, screenshots and logs. It has only been
+run on macOS; Linux native behavior is covered separately by CI.
