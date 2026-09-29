@@ -356,6 +356,32 @@ void main() {
     });
 
     test(
+      'a group from before the board reaches it: the phone states what it already knew',
+      () async {
+        // The phone approved this browser with no machine, then the Mac — all before the board.
+        final phoneKeys = ViewerKeyStore(storage: _Memory());
+        final web = ViewerKeyStore(storage: _Memory());
+        final phone = await phoneKeys.identity();
+        final mac = await E2eeIdentity.generate();
+        await phoneKeys.pin('d' * 32, mac.pub, label: 'MacbookPro.local');
+        await admitGroupMember(
+          web,
+          GroupMember(pub: b64e(phone.pub), kind: 'viewer', label: 'phone', at: 5),
+        );
+        expect(await web.peer('d' * 32), isNull);
+
+        final news = await boardNews(phoneKeys, const []);
+        expect(news.map((s) => s['machineId']), ['d' * 32]);
+        final board = [for (final s in news) await signVouch(phone, s)];
+        final outcome = await adoptBoard(web, board);
+        expect(outcome.pinned, ['d' * 32]);
+        expect((await web.peer('d' * 32))!.pub, mac.pub);
+        // Stated once: the next read of the same board has nothing new to say.
+        expect(await boardNews(phoneKeys, board), isEmpty);
+      },
+    );
+
+    test(
       'a browser the phone approved learns a machine the phone approved later',
       () async {
         final web = ViewerKeyStore(storage: _Memory());

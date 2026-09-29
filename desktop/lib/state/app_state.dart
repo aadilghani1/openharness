@@ -29,6 +29,7 @@ import '../viewer/group_sync.dart'
         GroupRoster,
         GroupSyncOutcome,
         adoptBoard,
+        boardNews,
         adoptHandedRoster,
         admitGroupMember,
         handoffRoster,
@@ -5708,6 +5709,14 @@ class AppNotifier extends ChangeNotifier {
         if (board.entries case final entries?) {
           news = true;
           await _afterGroupSync(await adoptBoard(keys, entries));
+          // And what this device knows that the board lacks in its words — a group from before the
+          // board, or one grown by the relay swap alone. The board takes 32 at a time.
+          final mine = await boardNews(keys, entries);
+          for (var i = 0; i < mine.length; i += 32) {
+            await _vouch(
+              mine.sublist(i, i + 32 > mine.length ? mine.length : i + 32),
+            );
+          }
         }
       }
       final online = [
@@ -7743,8 +7752,11 @@ class AppNotifier extends ChangeNotifier {
     systemNotifications.withdraw(machineId, agentId);
     agentAlerts.dismiss(
       AgentAlert(
-        machineId: machineId, agentId: agentId,
-        title: '', kind: AlertKind.done, at: DateTime.now(),
+        machineId: machineId,
+        agentId: agentId,
+        title: '',
+        kind: AlertKind.done,
+        at: DateTime.now(),
       ),
     );
     _announceAgentSeen(machineId, agentId, readToken);
@@ -7752,7 +7764,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// Reading is not answering. A device receipt clears only the exact message
   /// it displayed; the pending question and all pane/focus state remain intact.
-  void readAgentNotification(String machineId, String agentId, {String? readToken}) {
+  void readAgentNotification(
+    String machineId,
+    String agentId, {
+    String? readToken,
+  }) {
     if (readToken != null &&
         agentUnread.readTokenFor(machineId, agentId) != readToken) {
       return;
@@ -7764,7 +7780,9 @@ class AppNotifier extends ChangeNotifier {
         ..remove(key)
         ..[key] = question.requestId;
       while (_readQuestionNotifications.length > AgentUnread.capacity) {
-        _readQuestionNotifications.remove(_readQuestionNotifications.keys.first);
+        _readQuestionNotifications.remove(
+          _readQuestionNotifications.keys.first,
+        );
       }
     }
     _forgetUnread(machineId, agentId);
@@ -7799,7 +7817,8 @@ class AppNotifier extends ChangeNotifier {
       unawaited(
         _conn(machineId)
             .sendTerminalFrame('agent_seen', {
-              'agentId': agentId, 'readToken': ?readToken,
+              'agentId': agentId,
+              'readToken': ?readToken,
             })
             .catchError((_) => false),
       );
@@ -13269,8 +13288,10 @@ class AppNotifier extends ChangeNotifier {
         final readId = payload['agentId'];
         final readMachine = payload['machineId'];
         final readToken = payload['readToken'];
-        if (readId is String && readMachine is String &&
-            readToken is String && readToken.isNotEmpty) {
+        if (readId is String &&
+            readMachine is String &&
+            readToken is String &&
+            readToken.isNotEmpty) {
           readAgentNotification(readMachine, readId, readToken: readToken);
         }
         break;
@@ -13387,7 +13408,9 @@ class AppNotifier extends ChangeNotifier {
         final goneId = _eventAgentId(machine, event, payload);
         if (goneId != null) {
           agentUnread.forget(machineId, goneId);
-          _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, goneId));
+          _readQuestionNotifications.remove(
+            AgentUnread.keyFor(machineId, goneId),
+          );
         }
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -13434,7 +13457,9 @@ class AppNotifier extends ChangeNotifier {
             // reconnect and when attaching to a turn that was already mid-dialog, and a window
             // that beeped at those would sound an alarm every time the network hiccuped.
             if (!repeat && !questionNotificationRead(machineId, agentId)) {
-              _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, agentId));
+              _readQuestionNotifications.remove(
+                AgentUnread.keyFor(machineId, agentId),
+              );
               _raiseAlert(machine, agentId, AlertKind.needsYou);
             }
           }
@@ -13450,7 +13475,9 @@ class AppNotifier extends ChangeNotifier {
           final open = machine.blockedAgents[agentId];
           if (open != null && open.requestId == requestId) {
             machine.blockedAgents.remove(agentId);
-            _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, agentId));
+            _readQuestionNotifications.remove(
+              AgentUnread.keyFor(machineId, agentId),
+            );
             // An old question close cannot erase a newer completed result.
             if (agentUnread.kindFor(machineId, agentId) == AlertKind.needsYou) {
               _forgetUnread(machineId, agentId);

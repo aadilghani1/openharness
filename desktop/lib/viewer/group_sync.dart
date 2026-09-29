@@ -608,3 +608,66 @@ Future<GroupSyncOutcome> adoptBoard(
   });
   return _apply(keys, merged);
 }
+
+/// What this device knows that the board does not yet carry in its own words: each member of its
+/// roster (itself aside) that no vouch it signed states at that stamp or later, and each removal of a
+/// key the board still vouches for. Posting it is how a group formed before the board existed — or
+/// grown by the relay swap alone — reaches devices that share no machine with it.
+///
+/// [entries] is the board as read. Labels are cut to the board's 60 characters; a machine with no id
+/// and a stamp the board would refuse are left out.
+Future<List<Map<String, Object>>> boardNews(
+  ViewerKeyStore keys,
+  Object? entries, {
+  DateTime? now,
+}) async {
+  final selfPub = b64e((await keys.identity()).pub);
+  final roster = await _seeded(keys, selfPub);
+  final stated = <String, int>{};
+  final mentioned = <String, int>{};
+  if (entries is List) {
+    for (final e in entries) {
+      if (e is! Map || e['subject'] is! Map) continue;
+      final subject = e['subject'] as Map;
+      final pub = subject['pub'], at = subject['at'];
+      if (pub is! String || at is! int) continue;
+      if (subject['removed'] != true) {
+        mentioned[pub] = at > (mentioned[pub] ?? -1) ? at : mentioned[pub]!;
+      }
+      if (e['signer'] == selfPub) {
+        stated[pub] = at > (stated[pub] ?? -1) ? at : stated[pub]!;
+      }
+    }
+  }
+  final latest = (now ?? DateTime.now())
+      .add(_maxClockSkew)
+      .millisecondsSinceEpoch;
+  final removedAt = {for (final t in roster.removed) t.pub: t.at};
+  final news = <Map<String, Object>>[];
+  for (final m in roster.members) {
+    if (m.pub == selfPub || (m.isMachine && m.machineId == null)) continue;
+    if (m.at <= 0 || m.at > latest) continue;
+    if ((removedAt[m.pub] ?? -1) >= m.at) continue;
+    if ((stated[m.pub] ?? -1) >= m.at) continue;
+    news.add(
+      memberSubject(
+        GroupMember(
+          pub: m.pub,
+          kind: m.kind,
+          label: m.label.length > 60 ? m.label.substring(0, 60) : m.label,
+          at: m.at,
+          machineId: m.machineId,
+        ),
+      ),
+    );
+  }
+  for (final t in roster.removed) {
+    if (t.pub == selfPub || t.at <= 0 || t.at > latest) continue;
+    // Only a key someone still vouches for needs taking back.
+    final vouched = mentioned[t.pub];
+    if (vouched == null || vouched > t.at) continue;
+    if ((stated[t.pub] ?? -1) >= t.at) continue;
+    news.add({'pub': t.pub, 'at': t.at, 'removed': true});
+  }
+  return news;
+}
