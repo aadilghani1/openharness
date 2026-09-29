@@ -16,9 +16,9 @@ import '../../terminal/terminal_font_store.dart';
 ///   title      sans  20  semibold   a settings pane, a hero card, a figure
 ///   heading    sans  15  semibold   a section, a dialog title, a card title
 ///   label      sans  13  medium     buttons, rows, sidebar items, links
-///   mono       mono  13  regular    field text, typed commands, paths
-///   monoLabel  mono  12  medium     tabs, pane headers, command-box rows
-///   monoMeta   mono  11  regular    shortcuts, counts, eyebrows, timestamps
+///   mono       mono  13  regular    commands, source text, paths
+///   monoLabel  mono  12  medium     terminal labels, compact code
+///   monoMeta   mono  11  regular    shortcut keys, identifiers, code metadata
 ///   body       sans  13  regular    prose: descriptions, explanations
 ///   caption    sans  11  regular    tooltips, footnotes
 /// ```

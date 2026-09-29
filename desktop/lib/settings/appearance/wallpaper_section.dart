@@ -50,59 +50,82 @@ class WallpaperSection extends StatelessWidget {
                         button: true,
                         selected: value.background == choice,
                         label: '${choice.label} wallpaper',
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            key: ValueKey('wallpaper-${choice.name}'),
-                            onTap: () => prefs.setBackground(choice),
-                            borderRadius: BorderRadius.circular(8),
-                            child: Padding(
-                              padding: const EdgeInsets.all(3),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    clipBehavior: Clip.antiAlias,
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: value.background == choice
-                                            ? grid.AppPalette.swarmAccent
-                                            : grid.AppPalette.divider,
-                                        width: 2,
+                        onTap: () => prefs.setBackground(choice),
+                        child: ExcludeSemantics(
+                          child: Material(
+                            color: Colors.transparent,
+                            child: TextButton(
+                              key: ValueKey('wallpaper-${choice.name}'),
+                              onPressed: () => prefs.setBackground(choice),
+                              style:
+                                  TextButton.styleFrom(
+                                    padding: EdgeInsets.zero,
+                                    backgroundColor: Colors.transparent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ).copyWith(
+                                    side: WidgetStateProperty.resolveWith(
+                                      (states) => BorderSide(
+                                        width:
+                                            MediaQuery.highContrastOf(context)
+                                            ? 2
+                                            : 1.5,
+                                        color:
+                                            states.contains(WidgetState.focused)
+                                            ? grid.AppPalette.accentOnSurface
+                                            : Colors.transparent,
                                       ),
                                     ),
-                                    child: AspectRatio(
-                                      aspectRatio: 16 / 9,
-                                      child: Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          SwarmWallpaper(
-                                            background: choice,
-                                            thumbnail: true,
-                                          ),
-                                          if (value.background == choice)
-                                            const Positioned(
-                                              right: 8,
-                                              bottom: 8,
-                                              child: Icon(
-                                                Icons.check_circle,
-                                                color: Colors.white,
-                                                size: 20,
-                                              ),
+                                  ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(3),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      clipBehavior: Clip.antiAlias,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: value.background == choice
+                                              ? grid.AppPalette.swarmAccent
+                                              : grid.AppPalette.divider,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: AspectRatio(
+                                        aspectRatio: 16 / 9,
+                                        child: Stack(
+                                          fit: StackFit.expand,
+                                          children: [
+                                            SwarmWallpaper(
+                                              background: choice,
+                                              thumbnail: true,
                                             ),
-                                        ],
+                                            if (value.background == choice)
+                                              const Positioned(
+                                                right: 8,
+                                                bottom: 8,
+                                                child: Icon(
+                                                  Icons.check_circle,
+                                                  color: Colors.white,
+                                                  size: 20,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    choice.label,
-                                    style: grid.AppType.label(
-                                      color: grid.AppPalette.textPrimary,
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      choice.label,
+                                      style: grid.AppType.label(
+                                        color: grid.AppPalette.textPrimary,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),

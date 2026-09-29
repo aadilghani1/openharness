@@ -19,10 +19,10 @@ import '../daemons/zoo.dart';
 import '../shared/theme/app_theme.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme_store.dart';
-import 'box_chrome.dart';
 import 'daemon_consent.dart';
 import 'daemon_portrait.dart';
 import 'daemon_slot.dart';
+import 'desktop_chrome.dart';
 
 part 'daemon_panel_pair.dart';
 
@@ -119,7 +119,6 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   String? _viewing;
   bool _renaming = false;
   String? _nameError;
-  @override
   late Size _cell;
 
   @override
@@ -276,35 +275,46 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
 
   @override
   TerminalTheme get _theme => currentTerminalTheme();
+  TextStyle _artInk([Color? color]) => terminalContentStyle(
+    color: color ?? _theme.foreground,
+  ).copyWith(fontFeatures: daemonTextFeatures, fontWeight: FontWeight.normal);
   @override
   TextStyle _ink([Color? color]) =>
-      terminalContentStyle(color: color ?? _theme.foreground)
-          .copyWith(fontFeatures: daemonTextFeatures);
+      DesktopChrome.text(color: color ?? DesktopChrome.foreground, size: 13);
   @override
-  Color get _muted => _theme.foreground.withValues(alpha: .58);
+  Color get _muted => DesktopChrome.muted;
 
+  @override
   ButtonStyle get _buttonStyle =>
       TextButton.styleFrom(
-        minimumSize: Size.zero,
-        fixedSize: Size.fromHeight(_cell.height),
-        padding: EdgeInsets.zero,
+        minimumSize: const Size(0, DesktopChrome.controlHeight),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        foregroundColor: _theme.foreground,
-        shape: const RoundedRectangleBorder(),
+        foregroundColor: DesktopChrome.foreground,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        ),
         splashFactory: NoSplash.splashFactory,
         alignment: Alignment.centerLeft,
       ).copyWith(
+        side: WidgetStateProperty.resolveWith(
+          (states) => BorderSide(
+            width: 1.5,
+            color: states.contains(WidgetState.focused)
+                ? DesktopChrome.accent
+                : Colors.transparent,
+          ),
+        ),
         overlayColor: WidgetStateProperty.resolveWith(
-          (states) =>
-              states.any(
-                {
-                  WidgetState.hovered,
-                  WidgetState.focused,
-                  WidgetState.pressed,
-                }.contains,
-              )
-              ? _theme.selection.withValues(alpha: .5)
-              : Colors.transparent,
+          (states) => DesktopChrome.foreground.withValues(
+            alpha: states.contains(WidgetState.disabled)
+                ? 0
+                : states.contains(WidgetState.pressed)
+                ? .12
+                : states.contains(WidgetState.hovered)
+                ? .05
+                : 0,
+          ),
         ),
       );
 
@@ -313,7 +323,6 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     String key,
     String label,
     VoidCallback? onPressed, {
-    Color? color,
     String? tooltip,
   }) {
     final button = TextButton(
@@ -321,12 +330,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       focusNode: _node(key),
       onPressed: onPressed,
       style: _buttonStyle,
-      child: Text(
-        label,
-        style: _ink(
-          onPressed == null ? _muted : color ?? _theme.cursor,
-        ),
-      ),
+      child: Text(label, style: _ink(onPressed == null ? _muted : null)),
     );
     return tooltip == null ? button : Tooltip(message: tooltip, child: button);
   }
@@ -375,24 +379,27 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             autofocus: true,
             child: TextSelectionTheme(
               data: TextSelectionThemeData(
-                selectionColor: _theme.selection,
-                cursorColor: _theme.cursor,
+                selectionColor: DesktopChrome.selection,
+                cursorColor: DesktopChrome.accent,
               ),
               child: Material(
                 key: const ValueKey('daemon-panel'),
-                color: _theme.background,
+                color: DesktopChrome.surface,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-                  side: terminalPaneBorder(focused: true),
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.dialogRadius,
+                  ),
+                  side: BorderSide(
+                    color: MediaQuery.highContrastOf(context)
+                        ? DesktopChrome.foreground.withValues(alpha: .6)
+                        : DesktopChrome.rim,
+                  ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: SingleChildScrollView(
                   key: _viewport,
                   controller: _scroll,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: _cell.width * 2,
-                    vertical: _cell.height,
-                  ),
+                  padding: const EdgeInsets.all(24),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -403,7 +410,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                           key: const ValueKey('daemon-preview-label'),
                           style: _ink(_muted),
                         ),
-                        SizedBox(height: _cell.height),
+                        const SizedBox(height: 16),
                       ],
                       ...body,
                     ],
@@ -430,33 +437,34 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         child: Text(
           title,
           key: const ValueKey('daemon-panel-title'),
-          style: _ink(),
+          style: DesktopChrome.heading(),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
       ),
       ?badge,
-      SizedBox(width: _cell.width),
+      const SizedBox(width: 8),
       Tooltip(
         message: 'Close',
-        child: TextButton(
+        child: IconButton(
           key: const ValueKey('daemon-close'),
           onPressed: widget.onClose,
+          tooltip: 'Close daemon',
           style: _buttonStyle,
-          child: Text('[x]', style: _ink(_theme.cursor)),
+          icon: const Icon(Icons.close, size: 18),
         ),
       ),
     ],
   );
 
-  /// tmux's window list: `1:now*  2:zoo  3:lessons  4:settings`, the one
-  /// showing starred and highlighted. A click or 1–4 switches.
+  /// Tabs retain the same click and 1–4 keyboard navigation.
   Widget _tabBar() => Padding(
-    padding: EdgeInsets.only(top: _cell.height / 2),
+    padding: const EdgeInsets.only(top: 8),
     child: Wrap(
-      spacing: _cell.width * 2,
+      spacing: 8,
+      runSpacing: 8,
       children: [
-        for (final (i, tab) in DaemonSettings.tabs.indexed)
+        for (final tab in DaemonSettings.tabs)
           Semantics(
             selected: tab == _tab,
             button: true,
@@ -465,12 +473,15 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               onPressed: () => _switchTab(tab),
               style: _buttonStyle.copyWith(
                 backgroundColor: WidgetStatePropertyAll(
-                  tab == _tab ? _theme.selection.withValues(alpha: .55) : null,
+                  tab == _tab ? DesktopChrome.selection : null,
                 ),
               ),
               child: Text(
-                '${i + 1}:$tab${tab == _tab ? '*' : ' '}',
-                style: _ink(tab == _tab ? _theme.foreground : _muted),
+                '${tab[0].toUpperCase()}${tab.substring(1)}',
+                style: DesktopChrome.control(
+                  color: tab == _tab ? DesktopChrome.foreground : _muted,
+                  medium: tab == _tab,
+                ),
               ),
             ),
           ),
@@ -519,7 +530,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         .length;
     return [
       _title(egg != null ? 'Your egg is ready' : 'Your first egg'),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       // The egg itself, filled, at its stage: it cracks as habits count.
       if (shown != null && daemonPlates.hasEgg(shown.kind))
         Center(
@@ -527,22 +538,25 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             width: _cell.width * 20,
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: DaemonEggPlate(
-                roster: roster,
-                kind: shown.kind,
-                stage: shown.stage,
-                style: _ink().copyWith(height: 1.0),
-                theme: _theme,
-                animate: face.motionEnabled,
-                textKey: const ValueKey('daemon-panel-egg-plate'),
-                semanticsLabel: egg != null
-                    ? 'Your egg, ready to hatch'
-                    : 'Your egg, ${_stageWords(shown.stage)}',
+              child: ColoredBox(
+                color: _theme.background,
+                child: DaemonEggPlate(
+                  roster: roster,
+                  kind: shown.kind,
+                  stage: shown.stage,
+                  style: _artInk().copyWith(height: 1.0),
+                  theme: _theme,
+                  animate: face.motionEnabled,
+                  textKey: const ValueKey('daemon-panel-egg-plate'),
+                  semanticsLabel: egg != null
+                      ? 'Your egg, ready to hatch'
+                      : 'Your egg, ${_stageWords(shown.stage)}',
+                ),
               ),
             ),
           ),
         ),
-      if (shown != null) SizedBox(height: _cell.height / 2),
+      if (shown != null) const SizedBox(height: 8),
       Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -552,7 +566,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               face.glyph,
               key: const ValueKey('daemon-panel-nest'),
               semanticsLabel: egg != null ? 'Ready to hatch' : 'An egg',
-              style: _ink(_nestInk),
+              style: _artInk(_nestInk)
+                  .copyWith(backgroundColor: _theme.background),
             ),
           ),
           Expanded(
@@ -570,18 +585,18 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         ],
       ),
       if (egg == null && here >= need) ...[
-        SizedBox(height: _cell.height / 2),
+        const SizedBox(height: 8),
         Text(
           'all of it can happen on this computer.',
           key: const ValueKey('daemon-panel-here'),
           style: _ink(_muted),
         ),
       ],
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       for (final habit in habits)
         if (!daemonHabitsElsewhere.contains(habit.key)) _habitRow(habit, done),
       Padding(
-        padding: EdgeInsets.only(top: _cell.height / 2),
+        padding: const EdgeInsets.only(top: 8),
         child: Text(
           'with another computer or device (never needed):',
           key: const ValueKey('daemon-panel-elsewhere'),
@@ -590,7 +605,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       ),
       for (final habit in habits)
         if (daemonHabitsElsewhere.contains(habit.key)) _habitRow(habit, done),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       Row(
         children: [
           Expanded(
@@ -599,8 +614,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               style: _ink(_muted),
             ),
           ),
-          if (egg != null)
-            _action('hatch', '[ hatch ]', () => widget.onHatch(egg)),
+          if (egg != null) _action('hatch', 'Hatch', () => widget.onHatch(egg)),
         ],
       ),
     ];
@@ -619,11 +633,12 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final row = LayoutBuilder(
       builder: (context, constraints) => Row(
         children: [
-          Text(
-            complete ? '[x]' : '[ ]',
-            style: _ink(complete ? _theme.green : _muted),
+          Icon(
+            complete ? Icons.check_circle_rounded : Icons.circle_outlined,
+            size: 18,
+            color: complete ? DesktopChrome.accent : _muted,
           ),
-          SizedBox(width: _cell.width),
+          const SizedBox(width: 8),
           Expanded(
             child: Text.rich(
               TextSpan(
@@ -635,24 +650,24 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                     TextSpan(text: '  needed', style: _ink(_muted)),
                 ],
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: _ink(complete || elsewhere ? _muted : null),
             ),
           ),
           if (hint != null &&
               !complete &&
               constraints.maxWidth >= _cell.width * 36) ...[
-            SizedBox(width: _cell.width),
+            const SizedBox(width: 8),
             Text(hint, style: _ink(_muted)),
           ],
         ],
       ),
     );
     if (complete || command == null) {
-      return SizedBox(
+      return ConstrainedBox(
         key: ValueKey('daemon-habit-${habit.key}'),
-        height: _cell.height,
+        constraints: const BoxConstraints(
+          minHeight: DesktopChrome.controlHeight,
+        ),
         child: row,
       );
     }
@@ -685,7 +700,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         badge: _autonomyBadge(),
       ),
       _tabBar(),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       ...switch (tab) {
         'zoo' => _zooTab(order, viewing, def),
         'lessons' => _lessonsTab(order, pairedName),
@@ -703,9 +718,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     return Tooltip(
       message: 'It acts on its own at this level. The floor still holds.',
       child: Text(
-        '[${daemonAutonomyLabel(level!)}]',
+        daemonAutonomyLabel(level!),
         key: const ValueKey('daemon-panel-autonomy-badge'),
-        style: _ink(_theme.yellow),
+        style: _ink(),
       ),
     );
   }
@@ -715,7 +730,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   List<Widget> _lineRows(DaemonDef def, String name) {
     final mood = face.mood;
     final spoken = face.voice;
-    final nick = face.voiceFromPair ? daemonPairNick(name) : '';
+    final nick = face.voiceFromPair ? '$name: ' : '';
     final line = spoken != null
         ? '$nick$spoken'
         : '$name: ${face.currentLine(mood)}';
@@ -729,17 +744,21 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           Text(
             face.glyph,
             semanticsLabel: '$name, ${DaemonFace.moodWords[mood]}',
-            style: _ink(daemonColor(def, _theme, shiny: face.daemon?.shiny ?? false))
-                .copyWith(backgroundColor: daemonBackdrop(def)),
+            style:
+                _artInk(
+                  daemonColor(def, _theme, shiny: face.daemon?.shiny ?? false),
+                ).copyWith(
+                  backgroundColor: daemonBackdrop(def) ?? _theme.background,
+                ),
           ),
-          SizedBox(width: _cell.width * 2),
+          const SizedBox(width: 16),
           Expanded(
             child: Semantics(
               liveRegion: true,
               child: Text(
                 line,
                 key: const ValueKey('daemon-panel-line'),
-                style: _ink(alert ? _theme.yellow : _muted),
+                style: _ink(alert ? DesktopChrome.foreground : _muted),
               ),
             ),
           ),
@@ -747,7 +766,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       ),
       // Asleep or out of reach is not a failure: said calmly, once.
       if (face.away.isNotEmpty) ...[
-        SizedBox(height: _cell.height / 2),
+        const SizedBox(height: 8),
         Text(
           [
             for (final machine in face.away)
@@ -771,9 +790,10 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   List<Widget> _nowTab(List<String> order, DaemonDef def, String name) => [
     ..._lineRows(def, name),
     if (_eggKinds.isNotEmpty) ...[
-      SizedBox(height: _cell.height / 2),
+      const SizedBox(height: 8),
       Wrap(
-        spacing: _cell.width * 2,
+        spacing: 8,
+        runSpacing: 8,
         children: [
           for (final kind in _eggKinds)
             () {
@@ -804,12 +824,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final plates = face.plates;
     // Its own plates, once harnessd has drawn them; the species plate in its
     // colour family until then.
-    final art = plates?.art(
-      viewing,
-      PlateSize.portrait,
-      viewing.version,
-      mood,
-    );
+    final art = plates?.art(viewing, PlateSize.portrait, viewing.version, mood);
     final cardArt = plates?.art(
       viewing,
       PlateSize.portrait,
@@ -860,7 +875,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               key: const ValueKey('daemon-card-text'),
               lines: card,
               portraitRows: portraitRows,
-              style: _ink(),
+              style: _artInk(),
               colour: colour,
               backdrop: backdrop,
               mats: cardArt?.frames.first.mats,
@@ -897,7 +912,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               roster: roster,
               def: def,
               version: viewing.version,
-              style: _ink().copyWith(height: 1.15),
+              style: _artInk().copyWith(height: 1.15),
               theme: _theme,
               mood: mood,
               shiny: viewing.shiny,
@@ -916,7 +931,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             ),
           ),
         ),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       Text(
         '${cardNumber(roster, def)} ${def.id} ${viewing.version}'
         ' · ${viewing.shiny ? '* shiny ' : ''}${def.rarity}'
@@ -942,9 +957,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         key: const ValueKey('daemon-panel-family'),
         style: _ink(_muted),
       ),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       Text(def.lore, key: const ValueKey('daemon-panel-lore'), style: _ink()),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       if (_renaming) ...[
         TextField(
           key: const ValueKey('daemon-name-input'),
@@ -952,37 +967,30 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           focusNode: _nameFocus,
           maxLength: 24,
           style: _ink(),
-          cursorWidth: _cell.width,
-          cursorHeight: _cell.height,
-          cursorColor: _theme.cursor,
+          cursorColor: DesktopChrome.accent,
           decoration: InputDecoration(
-            prefixText: 'name > ',
-            prefixStyle: _ink(_muted),
+            labelText: 'Name',
             counterText: '',
             errorText: _nameError,
-            errorStyle: _ink(_theme.red),
-            isDense: true,
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            contentPadding: EdgeInsets.zero,
+            errorStyle: _ink(Theme.of(context).colorScheme.error),
           ),
           onSubmitted: (_) => _rename(viewing),
         ),
         Text('enter saves · empty clears · esc cancels', style: _ink(_muted)),
       ] else
         Wrap(
-          spacing: _cell.width * 2,
+          spacing: 8,
+          runSpacing: 8,
           children: [
             if (!isPair)
-              _action('pair', '[ pair ]', () {
+              _action('pair', 'Pair', () {
                 face.zoo.pair(viewing.uid);
                 setState(() => _viewing = null);
               }, tooltip: 'Put $name in your status line'),
-            _action('rename', '[ rename ]', () => _beginRename(viewing)),
+            _action('rename', 'Rename', () => _beginRename(viewing)),
             _action(
               'card',
-              _showCard ? '[ portrait ]' : '[ card ]',
+              _showCard ? 'Portrait' : 'Card',
               () => setState(() {
                 _showCard = !_showCard;
                 _copyNote = null;
@@ -992,20 +1000,20 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             if (_showCard)
               _action(
                 'copy',
-                '[ copy ]',
+                'Copy',
                 () => _copy(card),
                 tooltip: 'Copy the card as a fenced code block',
               ),
           ],
         ),
       if (_copyNote != null) Text(_copyNote!, style: _ink(_muted)),
-      SizedBox(height: _cell.height),
+      const SizedBox(height: 16),
       ..._shelf(viewing.id),
-      SizedBox(height: _cell.height / 2),
+      const SizedBox(height: 8),
       ...individuals,
-      SizedBox(height: _cell.height / 2),
+      const SizedBox(height: 8),
       ...eggs,
-      SizedBox(height: _cell.height / 2),
+      const SizedBox(height: 8),
       ..._meters(),
     ];
   }
@@ -1035,13 +1043,13 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     for (final def in species) {
       final all = zoo.ofSpecies(def.id);
       out
-        ..add(SizedBox(height: _cell.height / 2))
+        ..add(const SizedBox(height: 8))
         ..add(
           Text(
             '${cardNumber(roster, def).split('/').first} ${def.id}'
             '  x${all.length}',
             key: ValueKey('daemon-species-${def.id}'),
-            style: _ink(daemonColor(def, _theme)),
+            style: DesktopChrome.control(medium: true),
           ),
         );
       final log = _traitLog(def, all);
@@ -1081,10 +1089,14 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       t.colours.map((c) => c.name),
     );
     final marks = seen(rolled.map((r) => r.marks), t.marks.map((m) => m.$1));
-    final extras = seen(rolled.map((r) => r.extra), t.extras.map((e) => e.name));
+    final extras = seen(
+      rolled.map((r) => r.extra),
+      t.extras.map((e) => e.name),
+    );
     String line(String label, List<String> names, int of) =>
         '  ${label.padRight(8)}${'${names.length}/$of'.padRight(5)} '
-        '${names.join(' ')}'.trimRight();
+                '${names.join(' ')}'
+            .trimRight();
     return [
       line('colours', colours, t.colours.length),
       line('marks', marks, t.marks.where((m) => m.$1 != null).length),
@@ -1111,7 +1123,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       style: _buttonStyle.copyWith(
         fixedSize: const WidgetStatePropertyAll(null),
         backgroundColor: WidgetStatePropertyAll(
-          selected ? _theme.selection.withValues(alpha: .35) : null,
+          selected ? DesktopChrome.selection : null,
         ),
       ),
       child: Text(
@@ -1119,7 +1131,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         '${individualName(def.id, name: d.name, serial: d.serial)} '
         '${d.version}${paired ? ' · paired' : ''}'
         '${rest == null ? '' : '\n$rest'}',
-        style: _ink(selected ? _theme.foreground : null),
+        style: _ink(),
       ),
     );
   }
@@ -1136,47 +1148,48 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     ];
     final earning = face.zoo.eggsBeingEarned;
     if (waiting.isEmpty && earning.isEmpty) return const [];
-    Widget plate(String kind, String stage, String label, {Key? key}) =>
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: _cell.width * 9,
-              height: _cell.height * 3.4,
-              child: FittedBox(
-                fit: BoxFit.contain,
-                child: DaemonEggPlate(
-                  roster: roster,
-                  kind: kind,
-                  stage: stage,
-                  style: _ink().copyWith(height: 1.0),
-                  theme: _theme,
-                  animate: face.motionEnabled,
-                  textKey: key,
-                  semanticsLabel: '${eggName(kind)}, $label',
-                ),
+    Widget plate(String kind, String stage, String label, {Key? key}) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: _cell.width * 9,
+          height: _cell.height * 3.4,
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: ColoredBox(
+              color: _theme.background,
+              child: DaemonEggPlate(
+                roster: roster,
+                kind: kind,
+                stage: stage,
+                style: _artInk().copyWith(height: 1.0),
+                theme: _theme,
+                animate: face.motionEnabled,
+                textKey: key,
+                semanticsLabel: '${eggName(kind)}, $label',
               ),
             ),
-            Text(label, style: _ink(_muted), maxLines: 1),
-          ],
-        );
+          ),
+        ),
+        Text(label, style: _ink(_muted), maxLines: 1),
+      ],
+    );
     return [
       Text(
         'eggs',
         key: const ValueKey('daemon-panel-eggs'),
         style: _ink(_muted),
       ),
-      SizedBox(height: _cell.height / 4),
+      const SizedBox(height: 4),
       Wrap(
-        spacing: _cell.width * 2,
-        runSpacing: _cell.height / 2,
+        spacing: 8,
+        runSpacing: 8,
         children: [
           for (final (kind, eggs) in waiting)
             () {
               order.add('egg:$kind');
               return Tooltip(
-                message:
-                    'Open a ${eggName(kind)} (${eggs.length} waiting)',
+                message: 'Open a ${eggName(kind)} (${eggs.length} waiting)',
                 child: TextButton(
                   key: ValueKey('daemon-egg:$kind'),
                   focusNode: _node('egg:$kind'),
@@ -1214,11 +1227,12 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       ..add('nap');
     return [
       Wrap(
-        spacing: _cell.width * 2,
+        spacing: 8,
+        runSpacing: 8,
         children: [
           _action(
             'quiet',
-            face.quiet ? '[ quiet: on ]' : '[ quiet: off ]',
+            face.quiet ? 'Quiet on' : 'Quiet off',
             () => face.settings.quiet = !face.quiet,
             tooltip: face.quiet
                 ? 'It says nothing until you turn this off.'
@@ -1226,7 +1240,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           ),
           _action(
             'motion',
-            face.settings.motion ? '[ motion: on ]' : '[ motion: off ]',
+            face.settings.motion ? 'Motion on' : 'Motion off',
             () => face.settings.motion = !face.settings.motion,
             tooltip: face.settings.motion
                 ? 'Work frames step with agent events; blinks answer you.'
@@ -1234,7 +1248,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           ),
           _action(
             'nap',
-            face.napping ? '[ wake ]' : '[ nap ]',
+            face.napping ? 'Wake' : 'Nap',
             face.napping ? face.wake : face.nap,
             tooltip: face.napping
                 ? 'Wake $name'
@@ -1294,7 +1308,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       if (drop.releasedAt(_now)) ..._dropOrder(drop.id),
   ];
 
-  static const _slotCells = 10, _perRow = 4;
+  double get _shelfWidth =>
+      max(120 * appTextScaleOf(context), _cell.width * 10);
 
   /// Like the back of a blind box: `#01`…`#09` and `#S`, each owned one as
   /// its sprite at its version in its colour (`x2` for a duplicate), each
@@ -1304,7 +1319,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final now = _now;
     return [
       for (final (n, drop) in _shelfDrops.indexed) ...[
-        if (n > 0) SizedBox(height: _cell.height / 2),
+        if (n > 0) const SizedBox(height: 8),
         ..._dropShelf(drop, viewing, announced: !drop.releasedAt(now)),
       ],
     ];
@@ -1330,26 +1345,23 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         ),
         style: _ink(_muted),
       ),
-      SizedBox(height: _cell.height / 2),
-      for (var i = 0; i < order.length; i += _perRow)
-        Padding(
-          padding: EdgeInsets.only(bottom: _cell.height / 2),
-          child: Row(
-            children: [
-              for (final d in order.skip(i).take(_perRow))
-                announced ? _teaser(d) : _slot(d, viewing),
-            ],
-          ),
-        ),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final d in order) announced ? _teaser(d) : _slot(d, viewing),
+        ],
+      ),
     ];
   }
 
   /// A daemon of a drop announced but not out: its 0.1 sprite as `#`, faint
   /// (a secret stays `[ ! ]`).
   Widget _teaser(DaemonDef d) {
-    final faint = _theme.foreground.withValues(alpha: .35);
+    final faint = _muted;
     return SizedBox(
-      width: _cell.width * _slotCells,
+      width: _shelfWidth,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1363,7 +1375,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                   ),
             key: ValueKey('daemon-zoo-${d.id}'),
             semanticsLabel: d.secret ? 'A secret' : 'Not out yet',
-            style: _ink(faint),
+            style: _artInk(_theme.foreground.withValues(alpha: .35))
+                .copyWith(backgroundColor: _theme.background),
           ),
           Text('', style: _ink()),
         ],
@@ -1374,9 +1387,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   Widget _slot(DaemonDef d, String viewing) {
     final owned = zoo.daemons.where((z) => z.id == d.id).toList();
     final number = cardNumber(roster, d).split('/').first;
-    final faint = _theme.foreground.withValues(alpha: .35);
+    final faint = _muted;
     Widget cell(List<Widget> rows) => SizedBox(
-      width: _cell.width * _slotCells,
+      width: _shelfWidth,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1392,15 +1405,16 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
             d.secret ? '[ ! ]' : '[ ? ]',
             key: ValueKey('daemon-zoo-${d.id}'),
             semanticsLabel: d.secret ? 'A secret' : 'Not yet hatched',
-            style: _ink(faint),
+            style: _artInk(_theme.foreground.withValues(alpha: .35))
+                .copyWith(backgroundColor: _theme.background),
           ),
           Text('', style: _ink()),
         ]),
       );
     }
     // The paired one of this species when it is, else the first hatched.
-    final first = owned.where((z) => z.uid == zoo.pair).firstOrNull ??
-        owned.first;
+    final first =
+        owned.where((z) => z.uid == zoo.pair).firstOrNull ?? owned.first;
     final count = owned.length;
     final selected = d.id == viewing;
     final sprite = renderSprite(
@@ -1418,17 +1432,14 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           '${count > 1 ? ' · x$count' : ''}'
           '${first.uid == zoo.pair ? ' · paired' : ''}',
       child: SizedBox(
-        width: _cell.width * _slotCells,
+        width: _shelfWidth,
         child: TextButton(
           key: ValueKey('daemon-zoo-${d.id}'),
           focusNode: _node('zoo:${d.id}'),
           onPressed: () => setState(() => _viewing = first.uid),
           style: _buttonStyle.copyWith(
-            fixedSize: WidgetStatePropertyAll(
-              Size(_cell.width * (_slotCells - 1), _cell.height * 3),
-            ),
             backgroundColor: WidgetStatePropertyAll(
-              selected ? _theme.selection.withValues(alpha: .35) : null,
+              selected ? DesktopChrome.selection : null,
             ),
           ),
           child: Column(
@@ -1439,9 +1450,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               Text(
                 '${first.shiny ? '*' : ''}$sprite',
                 semanticsLabel: '${d.id} ${first.version}',
-                style: _ink(
-                  daemonColor(d, _theme, shiny: first.shiny),
-                ).copyWith(backgroundColor: backdrop),
+                style: _artInk(daemonColor(d, _theme, shiny: first.shiny))
+                    .copyWith(backgroundColor: backdrop ?? _theme.background),
               ),
               Text(
                 '${first.version}${count > 1 ? ' x$count' : ''}',
@@ -1461,30 +1471,47 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final progress = zoo.progress;
     final into = progress.turns % earn.turnEvery;
     final today = progress.days[localDayOf(DateTime.now())] ?? 0;
-    String bar(int value, int of) {
-      const width = 20;
-      final filled = of <= 0 ? 0 : (value * width / of).floor().clamp(0, width);
-      return '[${'#' * filled}${'-' * (width - filled)}]';
-    }
-
-    String row(String label, int value, int of) =>
-        '${label.padRight(10)}${bar(value, of)}  '
-        '${'$value/$of'.padLeft(5)}';
+    Widget meter(String label, int value, int of) => Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('$label · $value/$of', style: _ink(_muted)),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: of <= 0 ? 0 : (value / of).clamp(0.0, 1.0),
+            minHeight: 4,
+            borderRadius: BorderRadius.circular(2),
+            color: DesktopChrome.accent,
+            backgroundColor: DesktopChrome.rim,
+            semanticsLabel: '$label, $value of $of',
+          ),
+        ],
+      ),
+    );
     // The setup egg: habits toward it, until it has come.
     final setup = zoo.firstEgg ? face.zoo.setupProgress : null;
     return [
-      Text(
-        [
-          row('today', today.clamp(0, earn.dailyCap), earn.dailyCap),
-          if (setup != null) row('setup egg', setup.$1, setup.$2),
-          if (today >= earn.dailyCap)
-            "today's turns are counted. more tomorrow.",
-        ].join('\n'),
+      Semantics(
         key: const ValueKey('daemon-panel-progress'),
-        semanticsLabel:
+        label:
             '${earn.turnEvery - into} counted turns to the next egg. '
             '$today of ${earn.dailyCap} turns counted today.',
-        style: _ink(_muted),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            meter('Today', today.clamp(0, earn.dailyCap), earn.dailyCap),
+            if (setup != null) meter('Setup egg', setup.$1, setup.$2),
+            if (today >= earn.dailyCap)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  "Today's turns are counted. More tomorrow.",
+                  style: _ink(_muted),
+                ),
+              ),
+          ],
+        ),
       ),
     ];
   }
@@ -1493,9 +1520,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
 
   List<String> get _eggKinds => [
     for (final egg in zoo.eggs)
-      if (!zoo.eggs
-          .takeWhile((e) => e != egg)
-          .any((e) => e.kind == egg.kind))
+      if (!zoo.eggs.takeWhile((e) => e != egg).any((e) => e.kind == egg.kind))
         egg.kind,
   ];
 
@@ -1503,9 +1528,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final eggs = zoo.eggs.where((e) => e.kind == kind).toList();
     return _action(
       'egg:$kind',
-      '${face.eggLineFor(eggs.first)} x${eggs.length}',
+      'Hatch ${eggName(kind)} · ${eggs.length} waiting',
       () => widget.onHatch(eggs.first),
-      color: _theme.foreground,
       tooltip: 'Open a ${eggName(kind)} (${eggs.length} waiting)',
     );
   }

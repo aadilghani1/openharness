@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_type.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_search.dart';
 import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 import 'pane_menu.dart';
 
 class TerminalFindBar extends StatefulWidget {
@@ -166,31 +168,63 @@ class TerminalFindBarState extends State<TerminalFindBar> {
         Widget option(
           String label,
           String hint,
-          VoidCallback action,
-        ) => paneMenuItem(
+          VoidCallback action, {
+          bool? checked,
+        }) => paneMenuItem(
           onTap: () => close(action),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(label, style: AppType.body(color: Colors.white)),
-                ),
-                const SizedBox(width: 16),
-                Text(hint, style: kBoxFaintStyle),
-              ],
+          child: Semantics(
+            toggled: checked,
+            child: Builder(
+              builder: (context) {
+                grid.AppTheme.watch(context);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        child: checked == true
+                            ? Icon(
+                                Icons.check,
+                                size: 16,
+                                color: DesktopChrome.foreground,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(label, style: DesktopChrome.control()),
+                      ),
+                      const SizedBox(width: 16),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 140),
+                        child: Text(
+                          hint,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
         );
         return [
           option(
             'Match case',
-            _activeSearch?.caseSensitive == true ? 'on' : 'off',
+            _activeSearch?.caseSensitive == true ? 'On' : 'Off',
             _toggleCase,
+            checked: _activeSearch?.caseSensitive == true,
           ),
           if ((_activeSearch?.count ?? 0) > 0) ...[
-            option('Next match', 'enter', () => widget.onStep(1)),
-            option('Previous match', 'shift-enter', () => widget.onStep(-1)),
+            option('Next match', 'Enter', () => widget.onStep(1)),
+            option('Previous match', 'Shift+Enter', () => widget.onStep(-1)),
           ],
         ];
       },
@@ -204,9 +238,13 @@ class TerminalFindBarState extends State<TerminalFindBar> {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => _buildBar(context),
+    // Find is part of the terminal's fixed-grid chrome. Its desktop options are
+    // inserted in the root Overlay and retain that overlay's platform text size.
+    return MediaQuery.withNoTextScaling(
+      child: ListenableBuilder(
+        listenable: terminalFontStore,
+        builder: (context, _) => _buildBar(context),
+      ),
     );
   }
 

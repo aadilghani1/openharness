@@ -13,12 +13,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/harness_customize_pane.dart';
+import 'package:harness/shared/widgets/app_dialog.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
-import 'keymap_runtime_test.dart' show mount, nativeChannel;
+import 'keymap_runtime_test.dart' show mount, native, nativeChannel;
 import 'support/mixed_agents.dart';
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
@@ -371,5 +373,48 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(updates.last['footerCovered'], isFalse);
+  });
+
+  testWidgets('customization previews a passive footer only while current', (
+    tester,
+  ) async {
+    await setup(tester, withPane: true, mac: true);
+    final opening = native(tester, 'customize');
+    await tester.pumpAndSettle();
+    expect(find.byType(HarnessCustomizePane), findsOneWidget);
+    expect(updates.last['footerCovered'], isFalse);
+    expect(updates.last['footerPassive'], isTrue);
+    expect(updates.last['enabled'], isFalse);
+
+    unawaited(
+      showAppDialog<void>(
+        context: tester.element(find.byType(HarnessCustomizePane)),
+        builder: (context) => AlertDialog(
+          title: const Text('Nested task'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close nested task'),
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(updates.last['footerCovered'], isTrue);
+    expect(updates.last['footerPassive'], isFalse);
+    expect(updates.last['enabled'], isFalse);
+    await tester.tap(find.text('Close nested task'));
+    await tester.pumpAndSettle();
+    expect(updates.last['footerCovered'], isFalse);
+    expect(updates.last['footerPassive'], isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('harness-customize-close')));
+    await tester.pumpAndSettle();
+    await opening;
+    expect(updates.last['footerCovered'], isFalse);
+    expect(updates.last['footerPassive'], isFalse);
+    expect(updates.last['enabled'], isTrue);
+    expect(connection.starts, isEmpty);
   });
 }

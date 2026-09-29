@@ -265,9 +265,8 @@ class _DisciplineHero extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'GET STARTED',
-                    style: grid.AppType.monoMeta(
-                      letterSpacing: 1.2,
+                    'Get started',
+                    style: grid.AppType.caption(
                       fontWeight: grid.AppFont.medium,
                       color: grid.AppPalette.accentOnSurface,
                     ),

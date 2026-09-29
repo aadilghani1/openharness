@@ -84,12 +84,14 @@ class _PaletteChoice extends StatelessWidget {
             overlayColor: const WidgetStatePropertyAll(Colors.white10),
             side: WidgetStateProperty.resolveWith(
               (states) => BorderSide(
-                color: selected || states.contains(WidgetState.focused)
+                color: states.contains(WidgetState.focused)
+                    ? Colors.white
+                    : selected
                     ? palette.accent
+                    : MediaQuery.highContrastOf(context)
+                    ? Colors.white60
                     : Colors.white12,
-                width: selected || states.contains(WidgetState.focused)
-                    ? 1.5
-                    : 1,
+                width: MediaQuery.highContrastOf(context) ? 2 : 1.5,
               ),
             ),
             shape: WidgetStatePropertyAll(

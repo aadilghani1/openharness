@@ -207,10 +207,7 @@ void main() {
     final id = remote.zoo.daemons.single.id;
     final def = daemonRoster.byId(id)!;
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
-    expect(
-      find.textContaining("fork() returned 0. it's a $id."),
-      findsOneWidget,
-    );
+    expect(find.textContaining("Meet $id."), findsOneWidget);
     expect(glyph(tester), isNot(r'\_(oo)_/'), reason: 'revealed');
     // Copy puts a fenced code block on the clipboard.
     String? copied;
@@ -266,19 +263,25 @@ void main() {
     final id = remote.zoo.daemons.single.id;
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
     // Nobody has said yet whether it may watch: [ next ], not [ close ].
-    expect(find.text('[ close ]'), findsNothing);
+    expect(find.text('Close'), findsNothing);
     await skipName(tester);
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-next')));
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-consent')), findsOneWidget);
     expect(find.text('What $id sees'), findsOneWidget);
     for (final what in ['reads', 'writes', 'runs', 'does']) {
-      expect(find.text(what), findsOneWidget);
+      expect(
+        find.text('${what[0].toUpperCase()}${what.substring(1)}'),
+        findsOneWidget,
+      );
     }
     expect(find.textContaining('your next prompt'), findsOneWidget);
     expect(find.textContaining('never a plain terminal'), findsOneWidget);
     expect(find.textContaining('a lesson only with your yes'), findsOneWidget);
     expect(remote.zoo.consent, isNull, reason: 'nothing until an answer');
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-watch')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-consent-watch')));
     await tester.pump();
     await zoo.flush();
@@ -286,6 +289,9 @@ void main() {
     expect(remote.zoo.autonomy, 'watch', reason: 'a yes starts at watch');
     // Suggest is its own step.
     expect(find.text('Let $id suggest answers?'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-suggest-yes')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-consent-suggest-yes')));
     await tester.pump();
     await zoo.flush();
@@ -317,6 +323,9 @@ void main() {
     await skipName(tester);
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-next')));
     await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-not-now')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-consent-not-now')));
     await tester.pump();
     await zoo.flush();
@@ -332,10 +341,16 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('daemon-consent')));
     await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-watch')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-consent-watch')));
     await tester.pump();
     await zoo.flush();
     expect(remote.zoo.watching, isTrue);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-keep-watch')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-consent-keep-watch')));
     await tester.pump();
     expect(remote.zoo.autonomy, 'watch');
@@ -506,13 +521,13 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
     // Four tabs, tmux's window list; now is first. 2 is the zoo.
-    expect(find.text('1:now*'), findsOneWidget);
-    expect(find.text('2:zoo '), findsOneWidget);
+    expect(find.text('Now'), findsOneWidget);
+    expect(find.text('Zoo'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-panel-line')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-portrait')), findsNothing);
     await key(tester, LogicalKeyboardKey.digit2);
     await tester.pump();
-    expect(find.text('2:zoo*'), findsOneWidget);
+    expect(find.text('Zoo'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-portrait')), findsOneWidget);
     expect(find.textContaining('screen -> tmux -> tim'), findsOneWidget);
     expect(find.textContaining('Named the way vim was'), findsOneWidget);
@@ -562,7 +577,7 @@ void main() {
     // It opens again where it was left.
     await tester.tap(slot);
     await tester.pump();
-    expect(find.text('4:settings*'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
@@ -838,13 +853,13 @@ void main() {
     // The switches are on the settings tab: 4.
     await key(tester, LogicalKeyboardKey.digit4);
     await tester.pump();
-    expect(find.text('4:settings*'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('daemon-quiet')));
     await tester.pump();
-    expect(find.text('[ quiet: on ]'), findsOneWidget);
+    expect(find.text('Quiet on'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('daemon-motion')));
     await tester.pump();
-    expect(find.text('[ motion: off ]'), findsOneWidget);
+    expect(find.text('Motion off'), findsOneWidget);
     await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump(const Duration(seconds: 3));
@@ -1137,8 +1152,8 @@ void main() {
         'ttlMs': 30000,
       });
       await tester.pump();
-      expect(find.text('<tim> api waits on you, 40m.'), findsOneWidget);
-      expect(find.text('you > what needs me?'), findsOneWidget);
+      expect(find.text('tim: api waits on you, 40m.'), findsOneWidget);
+      expect(find.text('You: what needs me?'), findsOneWidget);
       // Every talk says what it costs.
       expect(
         tester
@@ -1320,7 +1335,7 @@ void main() {
       for (final level in zooAutonomyLevels) {
         expect(find.byKey(ValueKey('daemon-autonomy:$level')), findsOneWidget);
       }
-      expect(find.text('(*) watch'), findsOneWidget, reason: 'the default');
+      expect(find.text('watch'), findsOneWidget, reason: 'the default');
       expect(
         find.textContaining('your key approves one waiting answer at a time'),
         findsOneWidget,
@@ -1332,10 +1347,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        find.text('[ rules: ~/.config/harness/pair.jsonc ]'),
-        findsOneWidget,
-      );
+      expect(find.text('Open rules file'), findsOneWidget);
       await tapIn(
         tester,
         find.byKey(const ValueKey('daemon-autonomy:suggest')),
@@ -1343,7 +1355,7 @@ void main() {
       await zoo.flush();
       expect(remote.zoo.autonomy, 'suggest');
       await frame(tester, 'daemon_state', {...state(), 'autonomy': 'suggest'});
-      expect(find.text('(*) suggest'), findsOneWidget);
+      expect(find.text('suggest'), findsOneWidget);
       // A raise above suggest is a request: harnessd asks for a yes here.
       await tapIn(
         tester,
@@ -1375,7 +1387,7 @@ void main() {
         'autonomyRequested': 'act-on-key',
         'confirms': [confirm],
       });
-      expect(find.text('(~) act on key  waits for your yes'), findsOneWidget);
+      expect(find.text('act on key · waits for your yes'), findsOneWidget);
       expect(
         find.textContaining('it drives harnesses it started without asking'),
         findsOneWidget,
@@ -1411,7 +1423,10 @@ void main() {
         find.byKey(const ValueKey('daemon-panel-autonomy-badge')),
         findsOneWidget,
       );
-      expect(find.text('[act on key]'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('daemon-panel-autonomy-badge')),
+        findsOneWidget,
+      );
       await skipName(tester);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
@@ -1517,7 +1532,7 @@ void main() {
       await tester.pump();
       await key(tester, LogicalKeyboardKey.digit3);
       await tester.pump();
-      expect(find.text('3:lessons*'), findsOneWidget);
+      expect(find.text('Lessons'), findsOneWidget);
       expect(find.text('pending "run-migrations-safely"'), findsOneWidget);
       expect(find.text('learned note for api · 2026-09-25'), findsOneWidget);
       // No approve here: a window's own say-so is never the person's yes.

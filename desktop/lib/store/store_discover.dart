@@ -300,9 +300,8 @@ class _FeaturedStory extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  category.toUpperCase(),
-                  style: grid.AppType.monoMeta(
-                    letterSpacing: 1.1,
+                  category,
+                  style: grid.AppType.caption(
                     fontWeight: grid.AppFont.medium,
                     color: grid.AppPalette.accentOnSurface,
                   ),

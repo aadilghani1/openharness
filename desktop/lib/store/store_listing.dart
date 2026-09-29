@@ -127,7 +127,7 @@ class _ProductRow extends StatelessWidget {
                   width: 18,
                   child: Text(
                     '$rank',
-                    style: grid.AppType.monoLabel(
+                    style: grid.AppType.label(
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),
@@ -190,7 +190,7 @@ class _ProductRow extends StatelessWidget {
                                   const SizedBox(width: 3),
                                   Text(
                                     '${rating.average.toStringAsFixed(1)} · ${rating.count}',
-                                    style: grid.AppType.monoMeta(
+                                    style: grid.AppType.caption(
                                       color: grid.AppPalette.textSecondary,
                                     ),
                                   ),

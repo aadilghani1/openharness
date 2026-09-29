@@ -69,15 +69,25 @@ class DesktopDialogSurface extends StatelessWidget {
   final double elevation;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: DesktopChrome.surface,
-    surfaceTintColor: Colors.transparent,
-    elevation: elevation,
-    shadowColor: Colors.black.withValues(alpha: .24),
-    shape: DesktopChrome.shape(radius: radius),
-    clipBehavior: Clip.antiAlias,
-    child: child,
-  );
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Material(
+      color: DesktopChrome.surface,
+      surfaceTintColor: Colors.transparent,
+      elevation: elevation,
+      shadowColor: Colors.black.withValues(alpha: .24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(radius),
+        side: BorderSide(
+          color: MediaQuery.highContrastOf(context)
+              ? DesktopChrome.foreground.withValues(alpha: .6)
+              : DesktopChrome.rim,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
 }
 
 class DesktopDialogBackdrop extends StatelessWidget {

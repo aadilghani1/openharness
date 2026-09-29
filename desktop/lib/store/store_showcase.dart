@@ -101,8 +101,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
           children: [
             Text(
               '${(i + 1).toString().padLeft(2, '0')} / ${widget.count.toString().padLeft(2, '0')}',
-              style: grid.AppType.monoMeta(
-                letterSpacing: 2,
+              style: grid.AppType.caption(
                 color: grid.AppPalette.accentOnSurface,
               ),
             ),

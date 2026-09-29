@@ -1067,6 +1067,18 @@ private extension SwarmTabStrip {
       "Closing the modal restores the native footer")
     try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == true,
       "Closing the modal restores the footer's accessibility controls")
+    covered["footerPassive"] = true
+    covered["enabled"] = false
+    update(covered)
+    try checkTitlebar(!statusBar.isHidden,
+      "Status customization keeps the footer visible as a passive preview")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == false,
+      "A passive footer is excluded from modal accessibility traversal")
+    try checkTitlebar(!focusedModelButton.isEnabled && !pullRequestButton.isEnabled,
+      "Passive footer controls cannot activate underlying commands")
+    covered["footerPassive"] = false
+    covered["enabled"] = true
+    update(covered)
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
     try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
     try tabs[0].checkDoubleClickIsolation()

@@ -5,7 +5,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/widgets/box_chrome.dart';
 import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -347,8 +346,8 @@ void main() {
     // The two sections this picker has, and NOT the API section the window's own Models menu
     // carries — this control cannot put an agent on an API provider, so offering one would be a
     // choice that goes nowhere.
-    expect(find.text('SUBSCRIPTION'), findsOneWidget);
-    expect(find.text('ON YOUR MACHINES'), findsOneWidget);
+    expect(find.text('Subscription'), findsOneWidget);
+    expect(find.text('On your machines'), findsOneWidget);
     expect(find.text('API'), findsNothing);
 
     // A picker that can only move an agent ONTO a grid is a one-way door, so the engine's own login
@@ -432,8 +431,10 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.text('SUBSCRIPTION'), findsOneWidget);
-    final bounds = tester.getRect(find.byType(TerminalBox));
+    expect(find.text('Subscription'), findsOneWidget);
+    final bounds = tester.getRect(
+      find.byKey(const ValueKey('pane-menu-surface')),
+    );
     expect(bounds.left, greaterThanOrEqualTo(8));
     expect(bounds.right, lessThanOrEqualTo(372));
     expect(bounds.bottom, lessThanOrEqualTo(292));
@@ -442,13 +443,13 @@ void main() {
     // keyboard contract that survived the panel.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(find.text('SUBSCRIPTION'), findsNothing);
+    expect(find.text('Subscription'), findsNothing);
     expect(trigger.hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     dismissTransientMenus();
     await tester.pumpAndSettle();
-    expect(find.text('SUBSCRIPTION'), findsNothing);
+    expect(find.text('Subscription'), findsNothing);
     expect(ownLogin, 0);
     expect(manage, 0);
   });
@@ -566,7 +567,7 @@ void main() {
     expect(find.text('Qwen3.5-4B'), findsOneWidget);
     expect(find.text('LFM2.5-8B'), findsOneWidget);
     // Still one menu, redrawn — not a second one over the first.
-    expect(find.text('ON YOUR MACHINES'), findsOneWidget);
+    expect(find.text('On your machines'), findsOneWidget);
   });
 
   testWidgets('shared model changes refresh the open picker', (tester) async {
@@ -593,7 +594,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Old model'), findsNothing);
     expect(find.text('New model'), findsOneWidget);
-    expect(find.text('SHARED · TEAM'), findsOneWidget);
+    expect(find.text('Shared · Team'), findsOneWidget);
   });
 
   testWidgets(
@@ -628,16 +629,16 @@ void main() {
       );
       await open(tester, onSelected: (m) => picked = m);
 
-      expect(find.text('ON YOUR MACHINES'), findsOneWidget);
-      expect(find.text('SHARED · AUTONOMOUS.AI'), findsOneWidget);
+      expect(find.text('On your machines'), findsOneWidget);
+      expect(find.text('Shared · autonomous.ai'), findsOneWidget);
       // The grid's name is folded INTO its heading now, not hung on a line beneath it —
       // where it read as an entry of the same kind as the models under it.
       expect(find.text('Qwen3.5-4B'), findsOneWidget);
       expect(find.text('DeepSeek-V4-Flash'), findsOneWidget);
       // Own first: Local sits above the shared grids.
       expect(
-        tester.getTopLeft(find.text('ON YOUR MACHINES')).dy <
-            tester.getTopLeft(find.text('SHARED · AUTONOMOUS.AI')).dy,
+        tester.getTopLeft(find.text('On your machines')).dy <
+            tester.getTopLeft(find.text('Shared · autonomous.ai')).dy,
         isTrue,
       );
       // The grid's name is folded INTO its heading now rather than hung on a line beneath it,
@@ -660,7 +661,9 @@ void main() {
     tester,
   ) async {
     await open(tester);
-    final width = tester.getSize(find.byType(Material).last).width;
+    final width = tester
+        .getSize(find.byKey(const ValueKey('pane-menu-surface')))
+        .width;
     expect(
       width,
       greaterThanOrEqualTo(340),
@@ -685,7 +688,9 @@ void main() {
       ],
     );
     await open(tester);
-    final width = tester.getSize(find.byType(Material).last).width;
+    final width = tester
+        .getSize(find.byKey(const ValueKey('pane-menu-surface')))
+        .width;
     expect(
       width,
       greaterThan(340),
@@ -735,13 +740,13 @@ void main() {
       );
       await tester.tap(find.byType(GridModelPicker));
       await tester.pumpAndSettle();
-      expect(find.text('SUBSCRIPTION'), findsOneWidget);
+      expect(find.text('Subscription'), findsOneWidget);
 
       await tester.tap(find.text('underneath'));
       await tester.pumpAndSettle();
 
       expect(
-        find.text('SUBSCRIPTION'),
+        find.text('Subscription'),
         findsNothing,
         reason: 'the menu closes',
       );
@@ -883,7 +888,13 @@ void main() {
       final inkWell = tester.widget<InkWell>(
         find.ancestor(of: find.text(row), matching: find.byType(InkWell)).first,
       );
-      expect(inkWell.mouseCursor, SystemMouseCursors.click, reason: row);
+      expect(
+        WidgetStateProperty.resolveAs<MouseCursor?>(inkWell.mouseCursor, {
+          WidgetState.hovered,
+        }),
+        SystemMouseCursors.click,
+        reason: row,
+      );
       // BOTH annotations, because the innermost one under the pointer is what decides: InkWell
       // installs a MouseRegion of its own, so an ancestor asking for a hand does not settle it.
       //
@@ -897,7 +908,13 @@ void main() {
               matching: find.byType(MouseRegion),
             ),
           )
-          .where((region) => region.cursor == SystemMouseCursors.click)
+          .where(
+            (region) =>
+                WidgetStateProperty.resolveAs<MouseCursor>(region.cursor, {
+                  WidgetState.hovered,
+                }) ==
+                SystemMouseCursors.click,
+          )
           .length;
       expect(asking, greaterThanOrEqualTo(2), reason: row);
     }

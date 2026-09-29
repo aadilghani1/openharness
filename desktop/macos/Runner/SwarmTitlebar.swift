@@ -1786,9 +1786,11 @@ private final class SwarmTabStrip: NSView {
     // The footer is a sibling above Flutter. Let Flutter's modal backdrop
     // cover this area too, including hit testing and accessibility.
     statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false || state["footerCovered"] as? Bool == true
+    let passiveFooter = state["footerPassive"] as? Bool == true
+    statusBar.setAccessibilityHidden(passiveFooter || statusBar.isHidden)
     setAccessibilityChildren(
       [scroll, newButton, searchButton, notificationsButton, storeButton] +
-      (statusBar.isHidden ? [] : [statusBar]))
+      (statusBar.isHidden || passiveFooter ? [] : [statusBar]))
     reduceMotion = state["reduceMotion"] as? Bool == true
     if let style = state["barStyle"] as? [String: Any] {
       let size = CGFloat(min(36, max(8, (style["size"] as? NSNumber)?.doubleValue ?? 13)))

@@ -879,9 +879,12 @@ abstract final class AppCard {
 /// The app's theme for a given [brightness]. Both the light and dark themes are
 /// built from this one function so the two never drift; the color tokens above
 /// resolve against [AppTheme.brightness] at paint time.
-ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
+ThemeData buildAppTheme({
+  Brightness brightness = Brightness.light,
+  bool highContrast = false,
+}) {
   final isDark = brightness == Brightness.dark;
-  final scheme = isDark
+  final baseScheme = isDark
       ? ColorScheme.dark(
           primary: AppPalette.accent,
           onPrimary: Colors.white,
@@ -909,6 +912,12 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
           outlineVariant: Color(0x0F000000),
           error: Color(0xFFB3261E),
         );
+  final scheme = highContrast
+      ? baseScheme.copyWith(
+          outline: baseScheme.onSurface.withValues(alpha: .6),
+          outlineVariant: baseScheme.onSurface.withValues(alpha: .4),
+        )
+      : baseScheme;
 
   // The chrome fills used by menus, dialogs and toasts. A getter-backed token
   // can't be a compile-time const, so these are resolved here per-brightness —
@@ -927,11 +936,15 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
   final textTheme = _appTextTheme(scheme.onSurface, scheme.onSurfaceVariant);
 
   return ThemeData(
-    filledButtonTheme: FilledButtonThemeData(style: _filledButtonStyle(scheme)),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: _outlinedButtonStyle(scheme),
+    filledButtonTheme: FilledButtonThemeData(
+      style: _filledButtonStyle(scheme, highContrast: highContrast),
     ),
-    textButtonTheme: TextButtonThemeData(style: _textButtonStyle(scheme)),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: _outlinedButtonStyle(scheme, highContrast: highContrast),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: _textButtonStyle(scheme, highContrast: highContrast),
+    ),
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
@@ -1051,6 +1064,16 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     iconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 18),
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
+        side: WidgetStateProperty.resolveWith(
+          (states) => BorderSide(
+            width: highContrast ? 2 : 1.5,
+            color:
+                !states.contains(WidgetState.disabled) &&
+                    states.contains(WidgetState.focused)
+                ? (isDark ? const Color(0xFF6E8BFF) : scheme.primary)
+                : Colors.transparent,
+          ),
+        ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
         ),
@@ -1120,9 +1143,15 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       ),
       border: _fieldBorder(scheme.outline),
       enabledBorder: _fieldBorder(scheme.outline),
-      focusedBorder: _fieldBorder(AppPalette.accent, width: 1.5),
+      focusedBorder: _fieldBorder(
+        isDark ? const Color(0xFF6E8BFF) : scheme.primary,
+        width: highContrast ? 2 : 1.5,
+      ),
       errorBorder: _fieldBorder(scheme.error),
-      focusedErrorBorder: _fieldBorder(scheme.error, width: 1.5),
+      focusedErrorBorder: _fieldBorder(
+        scheme.error,
+        width: highContrast ? 2 : 1.5,
+      ),
     ),
     // Fill, rim and elevation come from [AppMenu] so a Material popup cannot
     // disagree with a MenuAnchor about what a menu looks like.
@@ -1439,7 +1468,10 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
   foregroundColor: Colors.white,
 );
 
-ButtonStyle _filledButtonStyle(ColorScheme scheme) => FilledButton.styleFrom(
+ButtonStyle _filledButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => FilledButton.styleFrom(
   backgroundColor: scheme.primary,
   foregroundColor: scheme.onPrimary,
   disabledBackgroundColor: scheme.onSurface.withValues(alpha: .08),
@@ -1460,25 +1492,30 @@ ButtonStyle _filledButtonStyle(ColorScheme scheme) => FilledButton.styleFrom(
   // second colour. See [_textButtonStyle] for why any of these are needed at
   // all — `NoSplash` took the ripple away and left nothing behind it.
   overlayColor: const Color(0x1FFFFFFF),
-).copyWith(side: _controlRim(scheme, filled: true));
+).copyWith(side: _controlRim(scheme, filled: true, highContrast: highContrast));
 
 /// The secondary action: a hairline rim, no fill — Apple's "bordered" button.
-ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
-    OutlinedButton.styleFrom(
-      animationDuration: Duration.zero,
-      minimumSize: Size(0, AppControl.heightScaled),
-      padding: AppControl.paddingScaled,
-      shape: _buttonShape,
-      textStyle: _buttonTextStyle,
-      side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
-      backgroundColor: scheme.onSurface.withValues(alpha: .04),
-      foregroundColor: scheme.onSurface,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.standard,
-    ).copyWith(side: _controlRim(scheme));
+ButtonStyle _outlinedButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => OutlinedButton.styleFrom(
+  animationDuration: Duration.zero,
+  minimumSize: Size(0, AppControl.heightScaled),
+  padding: AppControl.paddingScaled,
+  shape: _buttonShape,
+  textStyle: _buttonTextStyle,
+  side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
+  backgroundColor: scheme.onSurface.withValues(alpha: .04),
+  foregroundColor: scheme.onSurface,
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  visualDensity: VisualDensity.standard,
+).copyWith(side: _controlRim(scheme, highContrast: highContrast));
 
 /// A quiet capsule for secondary dialog and workspace actions.
-ButtonStyle _textButtonStyle(ColorScheme scheme) => TextButton.styleFrom(
+ButtonStyle _textButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => TextButton.styleFrom(
   foregroundColor: scheme.onSurface,
   backgroundColor: scheme.onSurface.withValues(alpha: .055),
   side: BorderSide(color: scheme.onSurface.withValues(alpha: .10)),
@@ -1502,18 +1539,19 @@ ButtonStyle _textButtonStyle(ColorScheme scheme) => TextButton.styleFrom(
   // [AppSurface.hoverFill] is the same wash the rows and menu items already
   // use, so a button now answers the pointer the way everything around it does.
   overlayColor: AppSurface.hoverFill,
-).copyWith(side: _controlRim(scheme));
+).copyWith(side: _controlRim(scheme, highContrast: highContrast));
 
 /// Keep a real focus boundary without changing the control's layout. A filled
 /// primary uses its contrasting label color; neutral controls use the accent.
 WidgetStateProperty<BorderSide> _controlRim(
   ColorScheme scheme, {
   bool filled = false,
+  bool highContrast = false,
 }) => WidgetStateProperty.resolveWith((states) {
   final disabled = states.contains(WidgetState.disabled);
   final focused = states.contains(WidgetState.focused) && !disabled;
   return BorderSide(
-    width: 1.5,
+    width: highContrast ? 2 : 1.5,
     color: focused
         ? filled
               ? scheme.onPrimary
@@ -1522,7 +1560,13 @@ WidgetStateProperty<BorderSide> _controlRim(
               : scheme.primary
         : filled
         ? Colors.transparent
-        : scheme.onSurface.withValues(alpha: disabled ? .06 : .14),
+        : scheme.onSurface.withValues(
+            alpha: disabled
+                ? .06
+                : highContrast
+                ? .6
+                : .14,
+          ),
   );
 });
 

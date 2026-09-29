@@ -17,6 +17,8 @@ void main() {
     of: find.byType(AppIconButton),
     matching: find.byType(RotationTransition),
   );
+  Color? ink(WidgetTester tester) =>
+      IconTheme.of(tester.element(find.byType(Icon))).color;
 
   Future<void> pumpButton(
     WidgetTester tester, {
@@ -87,11 +89,11 @@ void main() {
     tester,
   ) async {
     await pumpButton(tester, spinning: true, onPressed: () {});
-    final spinningInk = tester.widget<Icon>(find.byType(Icon)).color;
+    final spinningInk = ink(tester);
     await tester.pumpWidget(const SizedBox.shrink());
 
     await pumpButton(tester, spinning: false, onPressed: () {});
-    expect(spinningInk, tester.widget<Icon>(find.byType(Icon)).color);
+    expect(spinningInk, ink(tester));
 
     // A button with nothing to do is the one that greys out.
     await tester.pumpWidget(
@@ -104,7 +106,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(tester.widget<Icon>(find.byType(Icon)).color, AppPalette.textFaint);
+    expect(ink(tester), AppPalette.textFaint);
   });
 
   testWidgets('the glyph stops upright immediately when the work finishes', (

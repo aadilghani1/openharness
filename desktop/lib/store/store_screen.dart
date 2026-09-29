@@ -648,9 +648,8 @@ class _StoreNav extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
                   child: Text(
-                    'DISCIPLINES',
-                    style: grid.AppType.monoMeta(
-                      letterSpacing: 1.4,
+                    'Disciplines',
+                    style: grid.AppType.caption(
                       fontWeight: grid.AppFont.medium,
                       color: grid.AppPalette.textFaint,
                     ),
@@ -671,7 +670,7 @@ class _StoreNav extends StatelessWidget {
                             alignment: Alignment.centerRight,
                             child: Text(
                               '${counts[name]}',
-                              style: grid.AppType.monoMeta(
+                              style: grid.AppType.caption(
                                 color: grid.AppPalette.textFaint,
                               ),
                             ),
@@ -1699,7 +1698,7 @@ class _RatingSummary extends StatelessWidget {
                         child: Text(
                           '$stars',
                           textAlign: TextAlign.right,
-                          style: grid.AppType.monoMeta(
+                          style: grid.AppType.caption(
                             color: grid.AppPalette.textFaint,
                           ),
                         ),

@@ -395,6 +395,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _pickingFolder = false;
   bool _newHarnessHidden = false;
   bool _routeIsCurrent = true;
+  bool _footerPreviewCurrent = false;
   String? _linkDialogMachineId;
   bool _browserMachineSetupHandled = false;
   String? _nativeState;
@@ -1047,39 +1048,60 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeNewHarness(restoreFocus: false);
     String? next;
     await _dialog(() async {
-      next = await showDialog<String>(
+      next = await showAppDialog<String>(
         context: context,
         builder: (context) => Dialog(
-          backgroundColor: grid.AppPalette.swarmWelcome,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
           insetPadding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1200, maxHeight: 800),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
-                  child: Row(
-                    children: [
-                      Text('Quick Start', style: grid.AppType.heading()),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'tour'),
-                        child: const Text('Try the keyboard tour'),
-                      ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close, size: 18),
-                      ),
-                    ],
+            child: DesktopDialogSurface(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 16, 16, 0),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact =
+                            constraints.maxWidth <
+                            MediaQuery.textScalerOf(context).scale(470);
+                        final tour = TextButton(
+                          onPressed: () => Navigator.pop(context, 'tour'),
+                          child: const Text('Try the keyboard tour'),
+                        );
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Quick Start',
+                                    style: DesktopChrome.heading(),
+                                  ),
+                                ),
+                                if (!compact) tour,
+                                IconButton(
+                                  tooltip: 'Close',
+                                  onPressed: () => Navigator.pop(context),
+                                  icon: const Icon(Icons.close, size: 18),
+                                ),
+                              ],
+                            ),
+                            if (compact) tour,
+                          ],
+                        );
+                      },
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: WorkspaceStartGuide(
-                    onShortcuts: () => Navigator.pop(context, 'shortcuts'),
+                  Expanded(
+                    child: WorkspaceStartGuide(
+                      onShortcuts: () => Navigator.pop(context, 'shortcuts'),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1677,9 +1699,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'agentId': focused.agentId,
             },
       'footerCovered':
-          !_routeIsCurrent ||
+          (!_routeIsCurrent && !_footerPreviewCurrent) ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
+      'footerPassive': _footerPreviewCurrent && !_routeIsCurrent,
       'focusedContext': focused == null
           ? null
           : {
@@ -2481,7 +2504,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _customize() => _dialog(() => showHarnessCustomizePane(context));
+  void _footerPreviewChanged(bool current) {
+    if (!mounted || _footerPreviewCurrent == current) return;
+    _footerPreviewCurrent = current;
+    if (_native) _syncNative();
+  }
+
+  Future<void> _showCustomizePane() => showHarnessCustomizePane(
+    context,
+    bottomInset: _native ? _statusBarHeight : 0,
+    onCurrentChanged: _footerPreviewChanged,
+  );
+
+  Future<void> _customize() => _dialog(_showCustomizePane);
 
   Future<void> _settings([SettingsSection? section]) => _dialog(
     () => showSettingsScreen(
@@ -2489,6 +2524,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app,
       initialSection: section,
       experimentalFeatures: _experimentalFeatures,
+      onCustomize: _showCustomizePane,
       source: 'swarm',
     ),
   );
@@ -3670,7 +3706,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!_brain.paired) {
       _face.sayNote(
         _brain.active
-            ? 'pair a daemon first: its panel has [ pair ].'
+            ? 'Pair a daemon first using Pair in its panel.'
             : 'harnessd here cannot talk yet. update it.',
       );
     }
@@ -4117,6 +4153,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _daemonOverlay = OverlayEntry(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeDaemon,
+        width: 480,
         child: DaemonPanel(
           key: ValueKey(_zoo.scope),
           face: _face,
@@ -4157,6 +4194,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     required Widget child,
     required VoidCallback onBarrierTap,
     int cells = 46,
+    double? width,
   }) => LayoutBuilder(
     builder: (context, constraints) {
       final top = _native ? 0.0 : _tabBarHeight;
@@ -4176,7 +4214,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             right: 10,
             width: (constraints.maxWidth - 20).clamp(
               0,
-              terminalCellSizeOf(context).width * cells,
+              width ?? terminalCellSizeOf(context).width * cells,
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(

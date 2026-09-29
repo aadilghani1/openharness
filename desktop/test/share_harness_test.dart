@@ -390,6 +390,14 @@ void main() {
     await field(tester, 'comments');
     await tester.pumpAndSettle();
     expect(find.text('Start the conversation.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('comments-heading')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('share-choices-surface')),
+        matching: find.text('Comments'),
+      ),
+      findsOneWidget,
+    );
     expect(calls, ['list', 'comments']);
     await tester.enterText(find.byType(TextField), 'Please review this step.');
     tester.view.physicalSize = const Size(900, 800);
@@ -755,8 +763,13 @@ void main() {
           await show(
             tester,
             (action, payload) async {
-              if (action != 'list') changes.add(action);
-              return {'collaboration': true, 'shares': []};
+              if (action != 'list' && action != 'comments') changes.add(action);
+              return {
+                'collaboration': true,
+                'shares': [],
+                'comments': [],
+                'canComment': true,
+              };
             },
             brightness: brightness,
             scale: scale,
@@ -778,6 +791,25 @@ void main() {
           await tester.tap(find.text('Back'));
           await tester.pumpAndSettle();
           expect(find.text('Copy link').hitTestable(), findsOneWidget);
+          await field(tester, 'options');
+          await field(tester, 'comments');
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byKey(const Key('comment-input')),
+            'Please review the latest version.',
+          );
+          await tester.pumpAndSettle();
+          final post = find.byKey(const ValueKey('comment-post'));
+          await tester.ensureVisible(post);
+          await tester.pumpAndSettle();
+          expect(post.hitTestable(), findsOneWidget);
+          expect(
+            find.byKey(const ValueKey('comments-heading')),
+            findsOneWidget,
+          );
+          await capture(tester, 'comments-${brightness.name}-$scale');
+          await tester.tap(find.text('Back'));
+          await tester.pumpAndSettle();
           await tester.tap(find.text('Close'));
           await tester.pumpAndSettle();
           expect(find.byType(ShareHarnessDialog), findsNothing);

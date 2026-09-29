@@ -49,6 +49,52 @@ Future<void> _open(WidgetTester tester) async {
 void main() {
   tearDown(() => grid.AppTheme.brightness.value = Brightness.light);
 
+  testWidgets('large text fits and focus remains distinct from selection', (
+    tester,
+  ) async {
+    final focus = FocusNode();
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(
+      _host(
+        MediaQuery(
+          data: const MediaQueryData(
+            textScaler: TextScaler.linear(2),
+            highContrast: true,
+            disableAnimations: true,
+          ),
+          child: AppSelectField<String>(
+            width: 280,
+            value: 'a',
+            options: const [SelectOption(value: 'a', label: 'Alpha')],
+            selected: false,
+            focusNode: focus,
+            onChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+    final field = tester.getRect(_field);
+    final label = tester.getRect(find.text('Alpha'));
+    expect(label.top, greaterThan(field.top));
+    expect(label.bottom, lessThan(field.bottom));
+    final box = find.descendant(
+      of: _field,
+      matching: find.byType(AnimatedContainer),
+    );
+    Border rim() =>
+        (tester.widget<AnimatedContainer>(box).decoration! as BoxDecoration)
+                .border!
+            as Border;
+    final before = rim();
+    focus.requestFocus();
+    await tester.pump();
+    expect(rim().top.color, isNot(before.top.color));
+    expect(rim().top.width, before.top.width);
+    expect(tester.getRect(find.text('Alpha')), label);
+    expect(tester.widget<AnimatedContainer>(box).duration, Duration.zero);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('typing a name focuses a choice without applying it', (
     tester,
   ) async {

@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/theme/app_theme.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/pane_menu.dart';
 
 void main() {
@@ -29,28 +30,48 @@ void main() {
 
   Widget item(Widget row) => paneMenuItem(onTap: () {}, child: row);
 
-  testWidgets('hover has its own colour, and focus paints none', (tester) async {
-    // Two rows looked equally chosen: one was SELECTED and the other was merely under the pointer
-    // or holding focus, and all three states painted the same fill.
-    await show(tester, [
-      item(const PaneMenuRow(selected: true, title: 'chosen', status: 'here')),
-      item(const PaneMenuRow(selected: false, title: 'other', status: 'there')),
-    ]);
+  testWidgets(
+    'hover stays distinct from selection and focus has a stable rim',
+    (tester) async {
+      // Two rows looked equally chosen: one was SELECTED and the other was merely under the pointer
+      // or holding focus, and all three states painted the same fill.
+      await show(tester, [
+        item(
+          const PaneMenuRow(selected: true, title: 'chosen', status: 'here'),
+        ),
+        item(
+          const PaneMenuRow(selected: false, title: 'other', status: 'there'),
+        ),
+      ]);
 
-    for (final well in tester.widgetList<InkWell>(find.byType(InkWell))) {
-      // Stated, not inherited: the Material default sat close enough to the selected fill to be
-      // indistinguishable.
-      expect(well.hoverColor, AppColors.rowHover);
-      // An ink ripple is a THIRD fill on the same rectangle, and it lingers past the tap.
-      expect(well.splashColor, Colors.transparent);
-      expect(well.highlightColor, Colors.transparent);
-      // Focus is a keyboard position, not a decision — and a menu focuses its first row as it
-      // opens, so painting it lit a row before the pointer had moved.
-      expect(well.focusColor, Colors.transparent);
-    }
-    expect(AppColors.rowHover, isNot(AppColors.selected));
-    expect(AppColors.rowHover.a, lessThan(AppColors.selected.a));
-  });
+      for (final button in tester.widgetList<TextButton>(
+        find.byType(TextButton),
+      )) {
+        expect(
+          button.style!.overlayColor!.resolve({WidgetState.hovered}),
+          AppColors.rowHover,
+        );
+        expect(
+          button.style!.overlayColor!.resolve({WidgetState.focused}),
+          Colors.transparent,
+        );
+      }
+      expect(AppColors.rowHover, isNot(AppColors.selected));
+      expect(AppColors.rowHover.a, lessThan(AppColors.selected.a));
+
+      final other = find.widgetWithText(TextButton, 'other');
+      final before = tester.getRect(other);
+      Focus.of(tester.element(find.text('other'))).requestFocus();
+      await tester.pumpAndSettle();
+      final material = tester.widget<Material>(
+        find.descendant(of: other, matching: find.byType(Material)),
+      );
+      final rim = (material.shape! as OutlinedBorder).side;
+      expect(rim.color, DesktopChrome.accent);
+      expect(rim.width, greaterThan(0));
+      expect(tester.getRect(other), before);
+    },
+  );
 
   testWidgets('only the chosen row is filled', (tester) async {
     await show(tester, [
@@ -74,40 +95,41 @@ void main() {
     expect(fillOf('other')?.color, isNull);
   });
 
-  testWidgets('trailing metadata shares one right edge, whatever the row holds', (
-    tester,
-  ) async {
-    // Every trailing field was a `Flexible`, whose flex is ONE — so a row's spare width was split
-    // evenly between the title and each field beside it. A row with two fields put them a third
-    // and two thirds across; a row with one put it halfway. Three columns, three offsets.
-    await show(tester, [
-      item(const PaneMenuRow(selected: false, title: 'one', status: 'a')),
-      item(
-        const PaneMenuRow(
-          selected: false,
-          title: 'two',
-          status: 'firmware-engineer-daniel',
+  testWidgets(
+    'trailing metadata shares one right edge, whatever the row holds',
+    (tester) async {
+      // Every trailing field was a `Flexible`, whose flex is ONE — so a row's spare width was split
+      // evenly between the title and each field beside it. A row with two fields put them a third
+      // and two thirds across; a row with one put it halfway. Three columns, three offsets.
+      await show(tester, [
+        item(const PaneMenuRow(selected: false, title: 'one', status: 'a')),
+        item(
+          const PaneMenuRow(
+            selected: false,
+            title: 'two',
+            status: 'firmware-engineer-daniel',
+          ),
         ),
-      ),
-      item(
-        const PaneMenuRow(
-          selected: false,
-          title: 'three',
-          detail: '7f0c59',
-          status: '11% remaining',
+        item(
+          const PaneMenuRow(
+            selected: false,
+            title: 'three',
+            detail: '7f0c59',
+            status: '11% remaining',
+          ),
         ),
-      ),
-    ]);
+      ]);
 
-    final edges = [
-      tester.getRect(find.text('a')).right,
-      tester.getRect(find.text('firmware-engineer-daniel')).right,
-      tester.getRect(find.text('11% remaining')).right,
-    ];
-    for (final edge in edges) {
-      expect((edge - edges.first).abs(), lessThan(0.5));
-    }
-  });
+      final edges = [
+        tester.getRect(find.text('a')).right,
+        tester.getRect(find.text('firmware-engineer-daniel')).right,
+        tester.getRect(find.text('11% remaining')).right,
+      ];
+      for (final edge in edges) {
+        expect((edge - edges.first).abs(), lessThan(0.5));
+      }
+    },
+  );
 
   testWidgets('a long trailing field ellipsizes instead of eating the title', (
     tester,

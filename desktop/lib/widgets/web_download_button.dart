@@ -10,7 +10,7 @@ class WebDownloadButton extends StatelessWidget {
   const WebDownloadButton({super.key});
 
   static final uri = Uri.parse('https://harness.autonomous.ai/download');
-  static const _text = '[ Download app ]';
+  static const _text = 'Download app';
 
   static double widthOf(BuildContext context) =>
       workspaceBarTextSizeOf(context, _text).width +

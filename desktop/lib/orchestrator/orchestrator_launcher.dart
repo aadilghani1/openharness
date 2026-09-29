@@ -152,12 +152,12 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
     grid.AppTheme.watch(context);
     return Dialog(
       backgroundColor: grid.AppPalette.panelBg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 740, maxHeight: 740),
+        constraints: const BoxConstraints(maxWidth: 680, maxHeight: 740),
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(28),
+          padding: const EdgeInsets.all(24),
           child: CallbackShortcuts(
             bindings: {
               const SingleActivator(
@@ -206,7 +206,7 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                   minLines: 5,
                   maxLines: 9,
                   maxLength: 24000,
-                  style: grid.AppType.mono(height: 1.45),
+                  style: grid.AppType.body(height: 1.45),
                   onChanged: (_) => setState(() {}),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
@@ -263,7 +263,7 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
                         _starting
                             ? 'Starting…'
                             : _attempt == null
-                            ? 'Start creating  ${kIsWeb ? 'Alt+↵' : '⌘↵'}'
+                            ? 'Start creating'
                             : 'Check launch',
                       ),
                     ),

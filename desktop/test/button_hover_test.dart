@@ -89,6 +89,34 @@ void main() {
         );
       });
 
+      test('Increase Contrast strengthens neutral controls and focus', () {
+        final accessible = buildAppTheme(
+          brightness: brightness,
+          highContrast: true,
+        );
+        final surface = accessible.colorScheme.surface;
+        for (final control in [
+          accessible.textButtonTheme.style!,
+          accessible.outlinedButtonTheme.style!,
+        ]) {
+          final rest = control.side!.resolve({})!;
+          final focused = control.side!.resolve({WidgetState.focused})!;
+          expect(rest.width, focused.width);
+          expect(
+            _contrast(_over(surface, rest.color), surface),
+            greaterThanOrEqualTo(3),
+          );
+          expect(
+            _contrast(_over(surface, focused.color), surface),
+            greaterThanOrEqualTo(3),
+          );
+          expect(
+            control.side!.resolve({WidgetState.disabled})!.color.a,
+            lessThan(rest.color.a),
+          );
+        }
+      });
+
       // An overlay that exists but cannot be seen is the same bug wearing a
       // value. These are measured on the surfaces buttons actually sit on.
       test('the hover wash is visible on the surfaces buttons sit on', () {
@@ -126,25 +154,34 @@ void main() {
       ),
     );
     final button = find.byType(AppIconButton);
-    final fill = find.descendant(
+    final material = find.descendant(
       of: button,
-      matching: find.byType(AnimatedContainer),
+      matching: find.byType(Material),
     );
-    Color background() =>
-        (tester.widget<AnimatedContainer>(fill).decoration! as BoxDecoration)
-            .color!;
-    expect(background().a, 0);
+    BorderSide rim() =>
+        (tester.widget<Material>(material).shape! as OutlinedBorder).side;
+    Color? ink() => IconTheme.of(tester.element(find.byType(Icon))).color;
+    final restingInk = ink();
+    final bounds = tester.getRect(button);
+    expect(bounds.size, const Size(32, 32));
+    expect(rim().color.a, 0);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(button));
     await tester.pumpAndSettle();
-    expect(background().a, greaterThan(0));
+    expect(ink(), isNot(restingInk));
+    expect(rim().color.a, 0, reason: 'hover is distinct from keyboard focus');
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle();
-    expect(background().a, 0);
+    expect(ink(), restingInk);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pumpAndSettle();
-    expect(background().a, greaterThan(0));
+    expect(rim().color.a, greaterThan(0));
+    expect(
+      tester.getRect(button),
+      bounds,
+      reason: 'focus must not move controls',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyEvent(LogicalKeyboardKey.space);
     expect(presses, 2);

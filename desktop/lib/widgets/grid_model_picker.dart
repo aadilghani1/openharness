@@ -750,6 +750,7 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel>
 
   @override
   Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
     final canRunLocally = widget.answer.canRunLocally(widget.engineLabel);
     final sections = widget.sections;
     final total = sections.fold<int>(0, (n, s) => n + _matching(s).length);

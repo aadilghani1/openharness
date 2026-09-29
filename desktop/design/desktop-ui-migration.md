@@ -9,29 +9,32 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 
 | Surface | Current evidence / work remaining |
 | --- | --- |
-| Shared type, controls, fields, menus | System typography, semantic colors, and stable button focus boundaries implemented; small icon controls and Increase Contrast overrides remain |
+| Shared type, controls, fields, menus | System typography, semantic colors, 32-point icon controls, stable focus boundaries, Increase Contrast and platform text scaling implemented; terminal scaling stays independent |
 | Welcome / New Tab | Shared 680-point composer and recent-session context implemented; inspected in rebuilt app |
 | Cmd-N and child choosers | Purpose icons, approval explanations, visible focus, and coding-agent-first order implemented; shared controller retained |
 | Cmd-P and resource previews | Modern frame and Harnesses scope implemented; inspected search, scopes, and dismissal in rebuilt app |
 | Rename and takeover | Desktop prompt anatomy implemented; safety/IME and focus-return tests pass |
 | Stop, delete, restart, fork | Desktop confirmations implemented; long errors scroll independently of fixed actions; synthetic light/dark/narrow renders inspected |
-| Sharing | Access/people/options dialog migrated and rendered; embedded comments and observer sidebar remain |
+| Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
 | Add Phone | Desktop QR/device layout implemented; pairing lifecycle tests and light/dark enlarged-text renders pass |
 | Machine recovery/linking | Desktop linking/password layouts implemented; bounded selectable errors, fixed actions, and 32-point reveal controls tested/rendered |
 | Notifications | Desktop popup, two-line rows, glyphs, and empty/error states implemented; unchanged event rules tested; live empty popup inspected |
 | Branches / pull requests | Desktop lists implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
-| Settings / customization | Graphical settings audited; Customize Status, small icon controls, and robot-error text color remain |
-| Store | Existing graphical discovery/detail/launch routes audited; remaining ordinary monospace labels and small controls need cleanup |
+| Settings / customization | Desktop status customization, natural-height controls, error contrast, keyboard focus and passive native footer preview implemented; actual status previews preserve the selected renderer |
+| Store | Existing graphical discovery/detail/launch routes retained; ordinary labels, search and counts use system typography; desktop and narrow/enlarged previews inspected |
 | Sign-in / setup / boot | Boot/preflight/setup migrated and rendered; installer lifecycle tests pass; sign-in already graphical and scrollable |
 | Shortcuts / keyboard practice | Desktop browsing/practice layout implemented and rendered; remapping and scratch terminal retained |
-| Teams / ancillary dialogs | Live Swarm conversation remains terminal-styled; generic team-creation presenter currently has no production caller |
-| Layout / move / pane menus | Compact Find options and shared menu shell remain; normal footer model menu already uses modern resource picker |
-| Native tabs / footer / menus | Preserve familiar placement and compact tabs; audit font, sizing, state, hover and AX consistency |
-| Linux / browser presentation | Shared behavior remains; verify responsive widgets and identify platform-only gaps explicitly |
+| Teams / ancillary dialogs | Swarm conversation, questions, member controls and Quick Start use desktop typography and controls; polling, answers, learning steps and storage unchanged |
+| Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu and compact Find options implemented; keyboard navigation and terminal Find sizing retained |
+| Daemon panels | Companion settings, pairing, proposal controls and consent use desktop controls; artwork, reveal frames, state and approval gates retained |
+| Native tabs / footer / menus | Familiar compact tabs and footer preserved; modals hide native footer/AX actions, with an explicitly passive preview for status customization |
+| Linux / browser presentation | Shared light/dark, narrow and enlarged-text fixtures cover responsive behavior; physical Linux/browser platform validation is not claimed |
 
 Legacy/test-only paths (including the old NewAgentDialog entry when
-`newHarnessOpensInBox` is disabled) must be labeled as such in reviews. Do not
-count an unused widget migration as completion of a visible user journey.
+`newHarnessOpensInBox` is disabled) are excluded from the visible migration.
+The standalone MachinesManager, old machine-link dialog, and generic
+team-creation presenter have no production caller in this tree. They are not
+counted as completed user journeys. Shared controls still serve their tests.
 
 ## AI review panel
 
@@ -84,6 +87,36 @@ native runtime checks, reviewer findings, fixes, and unresolved gaps. Test trace
 must correspond to the final source. Native keyboard injection does not prove
 physical AppKit IME or VoiceOver interaction. No live user data in saved previews.
 
-Completion requires every reachable non-pane surface above to follow the design
-system, verified core behavior unchanged, and concrete evidence for both visual
-quality and interaction. Until then keep the overall goal active.
+### Complete desktop presentation pass, 2026-09-29
+
+- Full desktop suite: **4,628 passed, 16 skipped**, with fresh line and branch
+  coverage. New Harness covers **3,813/3,813 executable lines** across its
+  complete controller and form. This is not a whole-app coverage claim.
+- Static analysis of `lib`, `test`, and `integration_test` is clean. The normal
+  macOS debug build succeeds. **999 native titlebar checks** pass, including
+  passive footer preview containment. The macOS Flutter integration fixture
+  passes **19 creation/search journeys**. Its test app is replaced by the normal
+  review build afterward.
+- Independent frontend and product review found and resolved a scrolling-menu
+  focus loop, Find scaling inheritance, observer-header overflow, Add project's
+  intrinsic-layout failure, small-window conversation space, stale focus styles,
+  and Quick Start's remaining terminal-style app controls. The last guide-strip
+  fill adjustment passed its **24-test** guidance/practice rerun.
+- Synthetic real-font renders were inspected for the remaining menus, Store,
+  layout/move palettes, comments, Swarm conversation, Quick Start, observer
+  header, status customization, and companion panels. Cases include both
+  appearances, 360–390-point widths, up to 200% text, Increase Contrast, and
+  Reduce Motion. Rendering fixtures preserve real approval and stale-response
+  guards while substituting data and services.
+- Live macOS review checked the creation form and coding-agent-first chooser,
+  nested dismissal, full footer coverage, search scope switching, settings,
+  status customization's visible but noninteractive footer preview, Store, and
+  Quick Start. Existing terminals and tabs restored. No agent was launched,
+  sharing changed, account authorized, or companion approval accepted for review.
+- The migrated reachable surfaces now follow the shared desktop system.
+  Terminal rendering, status artwork, core controllers, and launch/notification
+  semantics retain their existing behavior. Physical AppKit IME, VoiceOver,
+  and native Linux/browser execution remain separate validation limits; widget
+  semantics and injected-key tests do not establish those results.
+
+The experimental branch remains unmerged for the user's visual review.

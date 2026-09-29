@@ -882,28 +882,11 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         cancel: _backToForm,
         child: SizedBox(
           height: 560,
-          child: Padding(
+          child: HarnessComments(
+            key: _commentsKey,
+            manage: widget.manage,
+            headerAction: back,
             padding: const EdgeInsets.all(DesktopChrome.panelPadding),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(title, style: DesktopChrome.heading()),
-                    ),
-                    back,
-                  ],
-                ),
-                const SizedBox(height: DesktopChrome.groupGap),
-                Expanded(
-                  child: HarnessComments(
-                    key: _commentsKey,
-                    manage: widget.manage,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       );

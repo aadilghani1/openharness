@@ -167,7 +167,7 @@ class _SessionCard extends StatelessWidget {
                                 const SizedBox(width: 8),
                                 Text(
                                   'Watch session',
-                                  style: grid.AppType.monoLabel(
+                                  style: grid.AppType.label(
                                     color: Colors.white,
                                   ),
                                 ),
@@ -220,7 +220,7 @@ class _SessionCard extends StatelessWidget {
                         child: Text(
                           entry.category ?? storeCategoryFor(entry),
                           textAlign: TextAlign.end,
-                          style: grid.AppType.monoMeta(
+                          style: grid.AppType.caption(
                             color: grid.AppPalette.textFaint,
                           ),
                         ),

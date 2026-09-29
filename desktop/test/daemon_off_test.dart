@@ -5,7 +5,6 @@
 // no habits, no keys taken, no commands, no easter row, no notices.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/gestures.dart';
@@ -463,23 +462,22 @@ void main() {
     },
   );
 
-  testWidgets('a 404 is off: no slot and the bar from before daemons, at '
+  testWidgets('a 404 is off: no slot and the disabled-feature bar, at '
       'every width', (tester) async {
     seedStatusBarWorkspace(app);
-    // This baseline includes the native search button and reserves a visible
-    // tab at narrow widths. Keep the independent Share experiment
-    // enabled while checking that daemons reserve no space.
+    // Compare the same workspace with the creature feature disabled. The
+    // independent Share control may change appearance without granting an
+    // absent daemon any space in either bar.
     await experiments.set(ExperimentalFeature.shareButton, true);
-    await mount(tester);
-    await tester.pump();
+    await mount(tester, enabled: false);
+    expect(remote.fetches, 0);
+    expect(slot, findsNothing);
+    final before = await measureStatusBar(tester);
+    await setCreature(tester, true);
     expect(remote.fetches, 1);
     expect(zoo.daemons, DaemonsSwitch.off);
     expect(slot, findsNothing);
-    final before = jsonDecode(
-      File('test/fixtures/status_bar_before_daemons.json').readAsStringSync(),
-    );
-    final now = await measureStatusBar(tester);
-    expect(jsonDecode(jsonEncode(now)), before);
+    expect(await measureStatusBar(tester), before);
     expect(slot, findsNothing);
     await unmount(tester);
   });
@@ -489,17 +487,25 @@ void main() {
     seedStatusBarWorkspace(app);
     await experiments.set(ExperimentalFeature.shareButton, true);
     final gate = Completer<void>();
-    await mount(tester, on: true, gate: gate);
+    await mount(tester, on: true, enabled: false, gate: gate);
+    expect(remote.fetches, 0);
+    expect(slot, findsNothing);
+    final before = await measureStatusBar(tester);
+    await setCreature(tester, true);
+    expect(remote.fetches, 1);
     expect(zoo.daemons, DaemonsSwitch.unknown);
-    final before = jsonDecode(
-      File('test/fixtures/status_bar_before_daemons.json').readAsStringSync(),
-    );
-    expect(jsonDecode(jsonEncode(await measureStatusBar(tester))), before);
+    expect(slot, findsNothing);
+    expect(await measureStatusBar(tester), before);
     gate.complete();
     await tester.pump();
     await tester.pump();
     expect(zoo.daemons, DaemonsSwitch.on);
     expect(slot, findsOneWidget, reason: 'on (200): as today');
+    expect(
+      await measureStatusBar(tester),
+      isNot(before),
+      reason: 'a present daemon is the state that may take bar space',
+    );
     await unmount(tester);
   });
 

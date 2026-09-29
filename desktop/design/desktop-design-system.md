@@ -82,7 +82,9 @@ Do not use monospace just because a control is for a developer.
 
 Use the existing `AppPalette` as the color source. Do not add a second palette
 in each feature. `DesktopChrome`, `AppMenu`, and the app theme derive their
-surfaces and control states from it. Light mode is a first-class design.
+surfaces and control states from it. Shared controls support both appearances
+and are reviewed in light and dark fixtures; the desktop currently retains
+its existing dark appearance policy. This experiment does not add a mode switch.
 
 Prefer a quiet opaque window surface and a subtly separated popover/dialog.
 Use a thin rim and restrained shadow only for floating layers. Preserve the

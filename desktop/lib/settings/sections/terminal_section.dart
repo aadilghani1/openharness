@@ -168,7 +168,7 @@ class _SizeStepper extends StatelessWidget {
     grid.AppTheme.watch(context);
     return Container(
       width: SettingRow.controlWidth,
-      height: grid.AppControl.height,
+      constraints: const BoxConstraints(minHeight: grid.AppControl.height),
       padding: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
         // A recessed well, the same one [AppSelectField] sits in — the two

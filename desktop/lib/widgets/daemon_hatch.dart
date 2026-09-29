@@ -15,7 +15,7 @@ import '../daemons/zoo.dart';
 import '../shared/theme/app_theme.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme_store.dart';
-import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 import 'daemon_consent.dart';
 import 'daemon_portrait.dart';
 import 'daemon_slot.dart';
@@ -807,12 +807,12 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         final theme = currentTerminalTheme();
         final cell = terminalCellSizeOf(context);
         final pitch = _pitch;
-        final background = pitch ? daemonPitch : theme.background;
         // On the black stage the ink is light, whatever the theme.
         final fg = pitch ? const Color(0xffd0d0d0) : theme.foreground;
-        final ink = terminalContentStyle(color: fg)
-            .copyWith(fontFeatures: daemonTextFeatures);
-        final muted = fg.withValues(alpha: .6);
+        final ink = terminalContentStyle(color: fg).copyWith(
+          fontFeatures: daemonTextFeatures,
+          fontWeight: FontWeight.normal,
+        );
         return CallbackShortcuts(
           bindings: {const SingleActivator(LogicalKeyboardKey.escape): _escape},
           child: Focus(
@@ -824,28 +824,33 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               label: 'Hatching',
               child: Material(
                 key: const ValueKey('daemon-hatch'),
-                color: background,
+                color: DesktopChrome.surface,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-                  side: terminalPaneBorder(focused: true),
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.dialogRadius,
+                  ),
+                  side: BorderSide(
+                    color: MediaQuery.highContrastOf(context)
+                        ? DesktopChrome.foreground.withValues(alpha: .6)
+                        : DesktopChrome.rim,
+                  ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: SingleChildScrollView(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: cell.width * 2,
-                    vertical: cell.height,
-                  ),
+                  padding: const EdgeInsets.all(24),
                   // A steady stage: the egg, the hatchling standing in it
                   // and the banner all fit, so the reveal never jumps before
                   // the card.
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
-                      minHeight: cell.height * _stageRows,
+                      minHeight: _stage.index < HatchStage.card.index
+                          ? cell.height * _stageRows
+                          : 0,
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: _children(theme, cell, ink, muted, pitch),
+                      children: _children(theme, ink, pitch),
                     ),
                   ),
                 ),
@@ -1104,14 +1109,22 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     ),
   );
 
-  List<Widget> _children(
-    TerminalTheme theme,
-    Size cell,
-    TextStyle ink,
-    Color muted,
-    bool pitch,
-  ) {
+  /// Artwork keeps the selected terminal font and background while ordinary
+  /// controls follow the desktop appearance and accessibility text size.
+  Widget _artWell(Widget child, Color background) => ClipRRect(
+    borderRadius: BorderRadius.circular(8),
+    child: ColoredBox(
+      color: background,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: MediaQuery.withNoTextScaling(child: child),
+      ),
+    ),
+  );
+
+  List<Widget> _children(TerminalTheme theme, TextStyle ink, bool pitch) {
     final def = _def;
+    final stageGround = pitch ? daemonPitch : theme.background;
     if (_stage == HatchStage.consent || _stage == HatchStage.suggest) {
       final name = _owned?.name ?? def?.id ?? 'it';
       return [
@@ -1119,7 +1132,6 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
           alignment: Alignment.centerLeft,
           child: DaemonConsent(
             name: name,
-            ink: ink.color,
             step: _stage == HatchStage.consent
                 ? DaemonConsentStep.watch
                 : DaemonConsentStep.suggest,
@@ -1145,15 +1157,16 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         Text(
           'The egg did not open.',
           key: const ValueKey('daemon-hatch-failed'),
-          style: ink,
+          style: DesktopChrome.heading(),
         ),
+        const SizedBox(height: 8),
         Text(
           'harnessd could not be reached. It is still in your zoo.',
           textAlign: TextAlign.center,
-          style: ink.copyWith(color: muted),
+          style: DesktopChrome.text(size: 13),
         ),
-        SizedBox(height: cell.height),
-        _button('[ close ]', _close, theme, ink),
+        const SizedBox(height: 20),
+        _button('Close', _close),
       ];
     }
     if (def == null ||
@@ -1162,10 +1175,10 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         _stage == HatchStage.burst ||
         _stage == HatchStage.tumble ||
         _stage == HatchStage.open) {
-      return [_eggStage(theme, ink)];
+      return [_artWell(_eggStage(theme, ink), stageGround)];
     }
     if (_stage == HatchStage.merged || _stage == HatchStage.grew) {
-      return _merged(def, theme, cell, ink, muted);
+      return _merged(def, theme, ink);
     }
     final shiny = _hatch?.shiny == true;
     final traits = _traits;
@@ -1179,8 +1192,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     final rows = bannerRows(def.id);
     final carded = _stage == HatchStage.card || _stage == HatchStage.name;
     final card = carded ? _card : null;
-    // The shared banner face (daemons/banner.json), monospace, at a line
-    // height that keeps its rows from touching.
+    // The banner and serialized card are terminal artwork, not UI labels.
     final banner = ink.copyWith(height: 1.15);
     final cardGround = pitch
         ? const Color(0xff0c0c0c)
@@ -1191,212 +1203,190 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               '${oneInText(oneIn(roster, def.id, traits))}'
         : null;
     return [
-      if (_stage == HatchStage.pitch)
-        Padding(
-          padding: EdgeInsets.only(bottom: cell.height),
-          child: Text(
-            'It is pitch black. You are likely to be eaten by a grue.',
-            key: const ValueKey('daemon-hatch-pitch'),
-            textAlign: TextAlign.center,
-            style: ink.copyWith(color: const Color(0xff949494)),
-          ),
+      _artWell(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_stage == HatchStage.pitch)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Text(
+                  'It is pitch black. You are likely to be eaten by a grue.',
+                  key: const ValueKey('daemon-hatch-pitch'),
+                  textAlign: TextAlign.center,
+                  style: ink.copyWith(color: const Color(0xff949494)),
+                ),
+              ),
+            if (_stage != HatchStage.pitch && card == null)
+              _eggStage(theme, ink),
+            if (_bannerRows > 0) ...[
+              const SizedBox(height: 8),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  rows.take(_bannerRows).join('\n'),
+                  key: const ValueKey('daemon-hatch-banner'),
+                  semanticsLabel: def.id,
+                  style: banner,
+                ),
+              ),
+            ],
+            if (carded) ...[
+              const SizedBox(height: 8),
+              Text(
+                rarityStamp(roster, def, shiny: shiny),
+                key: const ValueKey('daemon-hatch-stamp'),
+                style: ink.copyWith(color: rarity, letterSpacing: 1),
+              ),
+              if (flags != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  flags,
+                  key: const ValueKey('daemon-hatch-flags'),
+                  textAlign: TextAlign.center,
+                  style: ink,
+                ),
+              ],
+              if (card != null) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: cardGround,
+                    border: Border.all(color: ink.color!.withValues(alpha: .2)),
+                  ),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: DaemonCardText(
+                      key: const ValueKey('daemon-hatch-card'),
+                      lines: card,
+                      portraitRows:
+                          art?.frames.first.rows.length ??
+                          cardPortrait(roster, def, version).length,
+                      style: ink.copyWith(fontSize: (ink.fontSize ?? 13) * .92),
+                      colour: daemonColor(def, theme, shiny: shiny),
+                      backdrop: daemonBackdrop(def),
+                      mats: art?.frames.first.mats,
+                      plate:
+                          daemonIndividualInk(
+                            roster,
+                            def,
+                            traits,
+                            theme,
+                            shiny: shiny,
+                            background: cardGround,
+                          ) ??
+                          daemonPlateInk(
+                            roster,
+                            def,
+                            theme,
+                            shiny: shiny,
+                            background: cardGround,
+                          ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ],
         ),
-      if (_stage != HatchStage.pitch && card == null) _eggStage(theme, ink),
-      if (_bannerRows > 0) ...[
-        SizedBox(height: cell.height / 2),
-        Text(
-          rows.take(_bannerRows).join('\n'),
-          key: const ValueKey('daemon-hatch-banner'),
-          semanticsLabel: def.id,
-          style: banner,
-        ),
-      ],
+        stageGround,
+      ),
       if (carded) ...[
-        SizedBox(height: cell.height / 2),
+        const SizedBox(height: 16),
         Text(
-          rarityStamp(roster, def, shiny: shiny),
-          key: const ValueKey('daemon-hatch-stamp'),
-          style: ink.copyWith(color: rarity, letterSpacing: 1),
-        ),
-        if (flags != null) ...[
-          SizedBox(height: cell.height / 2),
-          Text(
-            flags,
-            key: const ValueKey('daemon-hatch-flags'),
-            textAlign: TextAlign.center,
-            style: ink,
-          ),
-        ],
-        SizedBox(height: cell.height / 2),
-        Text(
-          "fork() returned 0. it's a ${def.id}.",
+          'Meet ${def.id}.',
           key: const ValueKey('daemon-hatch-words'),
           textAlign: TextAlign.center,
-          style: ink.copyWith(color: muted),
+          style: DesktopChrome.heading(),
         ),
         if (card != null) ...[
-          SizedBox(height: cell.height),
-          Container(
-            padding: EdgeInsets.all(cell.width),
-            decoration: BoxDecoration(
-              color: cardGround,
-              border: Border.all(color: ink.color!.withValues(alpha: .2)),
-            ),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: DaemonCardText(
-                key: const ValueKey('daemon-hatch-card'),
-                lines: card,
-                portraitRows:
-                    art?.frames.first.rows.length ??
-                    cardPortrait(roster, def, version).length,
-                style: ink.copyWith(fontSize: (ink.fontSize ?? 13) * .92),
-                colour: daemonColor(def, theme, shiny: shiny),
-                backdrop: daemonBackdrop(def),
-                mats: art?.frames.first.mats,
-                plate:
-                    daemonIndividualInk(
-                      roster,
-                      def,
-                      traits,
-                      theme,
-                      shiny: shiny,
-                      background: cardGround,
-                    ) ??
-                    daemonPlateInk(
-                      roster,
-                      def,
-                      theme,
-                      shiny: shiny,
-                      background: cardGround,
-                    ),
-              ),
-            ),
-          ),
-          SizedBox(height: cell.height / 2),
+          const SizedBox(height: 16),
           if (_stage == HatchStage.name)
-            ..._namePrompt(def, theme, cell, ink, muted)
-          else
-            Row(
+            ..._namePrompt(def)
+          else ...[
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 _button(
-                  '[ copy ]',
+                  'Copy card',
                   _copy,
-                  theme,
-                  ink,
                   focusNode: _copyFocus,
                   key: const ValueKey('daemon-hatch-copy'),
                 ),
-                SizedBox(width: cell.width),
                 if (widget.needsConsent)
                   _button(
-                    '[ next ]',
+                    'Next',
                     _toConsent,
-                    theme,
-                    ink,
                     focusNode: _nextFocus,
                     key: const ValueKey('daemon-hatch-next'),
                   )
                 else
-                  _button('[ close ]', _close, theme, ink),
-                SizedBox(width: cell.width * 2),
-                Expanded(
-                  child: Text(
-                    _copyNote ?? 'esc closes',
-                    style: ink.copyWith(color: muted),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+                  _button('Close', _close),
               ],
             ),
+            const SizedBox(height: 8),
+            Text(_copyNote ?? 'Esc closes', style: DesktopChrome.metadata()),
+          ],
         ],
       ],
     ];
   }
 
-  /// `name > _`: what to call it. Enter names it (empty skips), Escape or
-  /// `[ skip ]` goes on without a name; it can be named later in the zoo.
-  List<Widget> _namePrompt(
-    DaemonDef def,
-    TerminalTheme theme,
-    Size cell,
-    TextStyle ink,
-    Color muted,
-  ) => [
+  /// Enter names it (empty skips); Escape or Skip continues without a name.
+  List<Widget> _namePrompt(DaemonDef def) => [
     Text(
-      'what will you call it?',
+      'What will you call it?',
       key: const ValueKey('daemon-hatch-name-question'),
-      style: ink,
+      style: DesktopChrome.text(size: 13),
     ),
+    const SizedBox(height: 8),
     TextField(
       key: const ValueKey('daemon-hatch-name'),
       controller: _name,
       focusNode: _nameFocus,
       maxLength: 24,
-      style: ink,
-      cursorWidth: cell.width,
-      cursorHeight: cell.height,
-      cursorColor: theme.cursor,
+      style: DesktopChrome.text(size: 13),
+      cursorColor: DesktopChrome.accent,
       decoration: InputDecoration(
-        prefixText: 'name > ',
-        prefixStyle: ink.copyWith(color: muted),
+        labelText: 'Name',
         hintText: individualName(
           def.id,
           serial: _owned?.serial ?? _hatch?.serial,
         ),
-        hintStyle: ink.copyWith(color: muted.withValues(alpha: .35)),
         counterText: '',
         errorText: _nameError,
-        errorStyle: ink.copyWith(color: theme.red),
-        isDense: true,
-        border: InputBorder.none,
-        enabledBorder: InputBorder.none,
-        focusedBorder: InputBorder.none,
-        contentPadding: EdgeInsets.zero,
       ),
       onSubmitted: (_) => _saveName(),
     ),
-    Row(
+    const SizedBox(height: 12),
+    Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 8,
+      runSpacing: 8,
       children: [
         _button(
-          '[ name it ]',
+          'Name it',
           _saveName,
-          theme,
-          ink,
           key: const ValueKey('daemon-hatch-name-save'),
         ),
-        SizedBox(width: cell.width),
         _button(
-          '[ skip ]',
+          'Skip',
           _endNaming,
-          theme,
-          ink,
           key: const ValueKey('daemon-hatch-name-skip'),
-        ),
-        SizedBox(width: cell.width * 2),
-        Expanded(
-          child: Text(
-            'enter names it · esc skips',
-            style: ink.copyWith(color: muted),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
         ),
       ],
     ),
+    const SizedBox(height: 8),
+    Text('Enter names it · Esc skips', style: DesktopChrome.metadata()),
   ];
 
   /// A merged duplicate (a server from before individuals): yours, at its
   /// version and in its colour (shiny now, if the duplicate was), `tim ·
   /// +150 xp`, then how it grew.
-  List<Widget> _merged(
-    DaemonDef def,
-    TerminalTheme theme,
-    Size cell,
-    TextStyle ink,
-    Color muted,
-  ) {
+  List<Widget> _merged(DaemonDef def, TerminalTheme theme, TextStyle ink) {
     final hatch = _hatch!;
     final owned = _owned;
     final grew = _stage == HatchStage.grew ? _grew : null;
@@ -1414,7 +1404,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     final mood = grew == null ? DaemonMood.idle : DaemonMood.done;
     return [
       Container(
-        color: daemonBackdrop(def),
+        color: daemonBackdrop(def) ?? theme.background,
         child: _portrait(
           def,
           version,
@@ -1439,13 +1429,13 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               : still(version, mood),
         ),
       ),
-      SizedBox(height: cell.height / 2),
+      const SizedBox(height: 8),
       Text(
         '$name · +${hatch.xp} xp',
         key: const ValueKey('daemon-hatch-merged'),
-        style: ink.copyWith(color: theme.yellow, letterSpacing: 1),
+        style: DesktopChrome.heading(),
       ),
-      SizedBox(height: cell.height / 2),
+      const SizedBox(height: 8),
       Text(
         [
           'another ${def.id}. +${hatch.xp} xp.',
@@ -1453,14 +1443,14 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ].join(' '),
         key: const ValueKey('daemon-hatch-words'),
         textAlign: TextAlign.center,
-        style: ink.copyWith(color: muted),
+        style: DesktopChrome.metadata(),
       ),
       if (grew != null) ...[
-        SizedBox(height: cell.height / 2),
+        const SizedBox(height: 8),
         Text(
           '$name grew: bond ${grew.$1} · ${grew.$2}',
           key: const ValueKey('daemon-hatch-grew'),
-          style: ink.copyWith(color: theme.green),
+          style: DesktopChrome.text(size: 13, medium: true),
         ),
         // Its room is kept while the portrait morphs, so nothing moves when
         // the changelog line appears.
@@ -1472,62 +1462,33 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 ? const ValueKey('daemon-hatch-changelog')
                 : null,
             textAlign: TextAlign.center,
-            style: ink.copyWith(color: muted),
+            style: DesktopChrome.metadata(),
           ),
         ),
       ],
-      SizedBox(height: cell.height),
+      const SizedBox(height: 16),
       if (widget.needsConsent)
         _button(
-          '[ next ]',
+          'Next',
           _toConsent,
-          theme,
-          ink,
           focusNode: _nextFocus,
           key: const ValueKey('daemon-hatch-next'),
         )
       else
-        _button('[ close ]', _close, theme, ink),
+        _button('Close', _close),
     ];
   }
 
   Widget _button(
     String label,
-    VoidCallback onPressed,
-    TerminalTheme theme,
-    TextStyle ink, {
+    VoidCallback onPressed, {
     FocusNode? focusNode,
     Key? key,
-  }) => TextButton(
+  }) => DesktopPill(
     key: key,
+    label: label,
     focusNode: focusNode,
     onPressed: onPressed,
-    style:
-        TextButton.styleFrom(
-          minimumSize: Size.zero,
-          padding: EdgeInsets.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          foregroundColor: ink.color,
-          shape: const RoundedRectangleBorder(),
-          splashFactory: NoSplash.splashFactory,
-        ).copyWith(
-          overlayColor: WidgetStateProperty.resolveWith(
-            (states) =>
-                states.any(
-                  {
-                    WidgetState.hovered,
-                    WidgetState.focused,
-                    WidgetState.pressed,
-                  }.contains,
-                )
-                ? theme.selection.withValues(alpha: .5)
-                : Colors.transparent,
-          ),
-        ),
-    child: Text(
-      label,
-      style: ink.copyWith(color: _pitch ? ink.color : theme.cursor),
-    ),
   );
 }
 

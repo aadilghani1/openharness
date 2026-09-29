@@ -121,17 +121,19 @@ class HarnessApp extends StatelessWidget {
       // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
       // resolve between.
       theme: grid.buildAppTheme(brightness: Brightness.dark),
-      // The chosen point size is already applied to every style and terminal
-      // cell. A second UI scale would make the chrome disagree with the grid.
-      builder: (context, child) => MediaQuery.withNoTextScaling(
-        child: _GridTokenScope(
-          child: keymap == null
-              ? child ?? const SizedBox.shrink()
-              : KeymapProvider(
-                  keymap: keymap!,
-                  child: child ?? const SizedBox.shrink(),
-                ),
-        ),
+      highContrastTheme: grid.buildAppTheme(
+        brightness: Brightness.dark,
+        highContrast: true,
+      ),
+      // Desktop forms respect the platform's text size. Fixed-grid terminal
+      // surfaces own their no-scaling boundary alongside terminal zoom.
+      builder: (context, child) => _GridTokenScope(
+        child: keymap == null
+            ? child ?? const SizedBox.shrink()
+            : KeymapProvider(
+                keymap: keymap!,
+                child: child ?? const SizedBox.shrink(),
+              ),
       ),
       home: AnalyticsLifecycle(
         child: RootShell(authenticatedScreen: authenticatedScreen),

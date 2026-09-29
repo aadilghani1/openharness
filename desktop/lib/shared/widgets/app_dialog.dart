@@ -39,6 +39,7 @@ Future<T?> showAppDialog<T>({
   Color? veilTint,
   double veilBlur = kDialogVeilBlur,
   Duration transitionDuration = Duration.zero,
+  ValueChanged<bool>? onCurrentChanged,
 }) => showGeneralDialog<T>(
   context: context,
   // The route's own barrier draws nothing: the veil below is the barrier.
@@ -51,11 +52,14 @@ Future<T?> showAppDialog<T>({
   transitionDuration: MediaQuery.disableAnimationsOf(context)
       ? Duration.zero
       : transitionDuration,
-  pageBuilder: (context, _, _) => _AppDialogVeil(
-    tint: veilTint,
-    blur: veilBlur,
-    dismissible: barrierDismissible,
-    child: Builder(builder: builder),
+  pageBuilder: (context, _, _) => _DialogVisibility(
+    onCurrentChanged: onCurrentChanged,
+    child: _AppDialogVeil(
+      tint: veilTint,
+      blur: veilBlur,
+      dismissible: barrierDismissible,
+      child: Builder(builder: builder),
+    ),
   ),
   transitionBuilder: (context, anim, _, child) =>
       transitionDuration == Duration.zero ||
@@ -63,6 +67,43 @@ Future<T?> showAppDialog<T>({
       ? child
       : FadeTransition(opacity: anim, child: child),
 );
+
+/// Lets an explicit preview route preserve passive native chrome. A nested
+/// route hides that preview again; this never grants input to the workspace.
+class _DialogVisibility extends StatefulWidget {
+  const _DialogVisibility({required this.child, this.onCurrentChanged});
+  final Widget child;
+  final ValueChanged<bool>? onCurrentChanged;
+
+  @override
+  State<_DialogVisibility> createState() => _DialogVisibilityState();
+}
+
+class _DialogVisibilityState extends State<_DialogVisibility> {
+  bool? _current;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final current = ModalRoute.isCurrentOf(context) ?? false;
+    if (current == _current) return;
+    _current = current;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && current == _current) {
+        widget.onCurrentChanged?.call(current);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.onCurrentChanged?.call(false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
 
 /// The veil, and the dialog standing on it.
 class _AppDialogVeil extends StatelessWidget {

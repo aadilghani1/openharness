@@ -615,83 +615,108 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
               borderRadius: BorderRadius.circular(
                 widget.radius ?? AppControl.radius,
               ),
-              child: SizedBox(
-                width: widget.width,
-                height: widget.height,
-                child: AnimatedContainer(
-                  duration: AppMotion.hover,
-                  curve: AppMotion.curve,
-                  padding: widget.padding,
-                  decoration: BoxDecoration(
-                    color: _hovered || _focused || controller.isOpen
-                        ? widget.fillColor == null
-                              ? AppSurface.recessHover
-                              : Color.alphaBlend(
-                                  Colors.white.withValues(alpha: .05),
-                                  widget.fillColor!,
-                                )
-                        : widget.fillColor ?? AppSurface.recess,
-                    borderRadius: BorderRadius.circular(
-                      widget.radius ?? AppControl.radius,
+              child: Semantics(
+                button: true,
+                expanded: controller.isOpen,
+                selected: widget.selected,
+                child: SizedBox(
+                  width: widget.width,
+                  height: widget.trigger == null
+                      ? math.max(
+                          widget.height,
+                          MediaQuery.textScalerOf(context).scale(
+                                    widget.textStyle?.fontSize ??
+                                        AppType.bodySize,
+                                  ) *
+                                  1.4 +
+                              12,
+                        )
+                      : widget.height,
+                  child: AnimatedContainer(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : AppMotion.hover,
+                    curve: AppMotion.curve,
+                    padding: widget.padding,
+                    decoration: BoxDecoration(
+                      color: _hovered || _focused || controller.isOpen
+                          ? widget.fillColor == null
+                                ? AppSurface.recessHover
+                                : Color.alphaBlend(
+                                    AppPalette.textPrimary.withValues(
+                                      alpha: .05,
+                                    ),
+                                    widget.fillColor!,
+                                  )
+                          : widget.fillColor ?? AppSurface.recess,
+                      borderRadius: BorderRadius.circular(
+                        widget.radius ?? AppControl.radius,
+                      ),
+                      border: Border.all(
+                        width: MediaQuery.highContrastOf(context) ? 2 : 1.5,
+                        color: _focused
+                            ? AppTheme.pick(
+                                AppPalette.accent,
+                                const Color(0xFF6E8BFF),
+                              )
+                            : widget.selected == true
+                            ? AppPalette.accentOnSurface
+                            : MediaQuery.highContrastOf(context)
+                            ? AppPalette.textSecondary
+                            : Colors.transparent,
+                      ),
                     ),
-                    border: Border.all(
-                      color:
-                          widget.selected == true ||
-                              (_focused && widget.selected == null)
-                          ? AppPalette.accentOnSurface
-                          : Colors.transparent,
-                    ),
-                  ),
-                  child:
-                      widget.trigger ??
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Row(
-                              children: [
-                                if (current?.leading != null) ...[
-                                  current!.leading!(),
-                                  const SizedBox(width: 8),
-                                ],
-                                Flexible(
-                                  child: Text(
-                                    current?.label ?? '—',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style:
-                                        widget.textStyle ??
-                                        AppType.label(
-                                          fontWeight: AppControl.fontWeight,
-                                          color: AppPalette.textPrimary,
-                                        ),
-                                  ),
-                                ),
-                                if (current?.note != null) ...[
-                                  const SizedBox(width: 8),
+                    child:
+                        widget.trigger ??
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  if (current?.leading != null) ...[
+                                    current!.leading!(),
+                                    const SizedBox(width: 8),
+                                  ],
                                   Flexible(
                                     child: Text(
-                                      current!.note!,
+                                      current?.label ?? '—',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: AppType.mono(
-                                        color: AppPalette.textFaint,
-                                      ),
+                                      style:
+                                          widget.textStyle ??
+                                          AppType.label(
+                                            fontWeight: AppControl.fontWeight,
+                                            color: AppPalette.textPrimary,
+                                          ),
                                     ),
                                   ),
+                                  if (current?.note != null) ...[
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        current!.note!,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppType.body(
+                                          color: AppPalette.textFaint,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.expand_more_rounded,
-                            size: AppControl.iconSize,
-                            color: _hovered || controller.isOpen
-                                ? AppPalette.textPrimary
-                                : AppPalette.textSecondary,
-                          ),
-                        ],
-                      ),
+                            const SizedBox(width: 6),
+                            Icon(
+                              Icons.expand_more_rounded,
+                              size: AppControl.iconSize,
+                              color: _hovered || controller.isOpen
+                                  ? AppPalette.textPrimary
+                                  : AppPalette.textSecondary,
+                            ),
+                          ],
+                        ),
+                  ),
                 ),
               ),
             ),

@@ -321,7 +321,9 @@ class _DevicesSectionState extends State<DevicesSection> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Text(
                   _actionError ?? _error!,
-                  style: grid.AppType.body(color: grid.AppPalette.dangerFill),
+                  style: grid.AppType.body(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
                 ),
               ),
             if (!_unsupported && !_loading) ...[

@@ -252,14 +252,14 @@ class _Field extends StatelessWidget {
                       onChanged: onChanged,
                       textInputAction: TextInputAction.search,
                       textAlignVertical: TextAlignVertical.center,
-                      style: grid.AppType.mono(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textPrimary,
                       ),
                       // Bare: the outline around it is this field's border,
                       // so none of the theme's own may draw inside it.
                       decoration: InputDecoration(
                         hintText: 'Search harnesses',
-                        hintStyle: grid.AppType.mono(
+                        hintStyle: grid.AppType.body(
                           color: grid.AppPalette.textSecondary,
                         ),
                         isCollapsed: true,
