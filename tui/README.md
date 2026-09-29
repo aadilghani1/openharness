@@ -69,8 +69,12 @@ tmux. `run-shell` lines run too: a plugin's `tmux …` reaches hn (the `tmux` on
 never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
-and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same
-pane numbers and the same active pane after each. Use `set -g @hn-animations off` to keep
+and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
+pane numbers and the same active pane after each. hn draws these layouts as dark pane surfaces
+with one-cell gaps, inset terminal content and a highlighted title for the focused pane. Padding
+shrinks automatically in small panes. The space between panes remains a resize handle; mouse
+coordinates, copy selection and PTY dimensions follow the inset content. `window_layout` keeps
+the original split structure. Use `set -g @hn-animations off` to keep
 working and loading indicators still. Some defaults differ, and your `.tmux.conf`
 overrides each: `pane-border-status top` (each pane's title row: its harness's state and name, and
 its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
@@ -179,8 +183,10 @@ pane counts as done and unread (`✓`) until you go to that pane.
 All of this is in options, which `show -g`, `show -gw` and `C-b C` print as they are:
 `status-left`, `status-right`, the window formats and each pane's title row
 (`pane-border-format`). Set them in your `~/.tmux.conf` as you would for tmux; what you set
-replaces hn's. `set -g @hn-look tmux` puts back all of tmux's own: no title rows, tmux's status
-line and window list.
+replaces hn's. The default is `set -g @hn-look panes`. `set -g @hn-look classic` restores hn's
+previous line borders and green status line. `set -g @hn-look tmux` uses tmux's appearance and
+content dimensions: no padding or title rows, and tmux's status line and window list. Changing
+the look takes effect immediately and preserves pane identities and the split structure.
 
 For your own formats: `#{fleet}` (the status line's counts, ready to drop into your theme) and
 `#{fleet_needs}` `#{fleet_failed}` `#{fleet_done}` `#{fleet_working}` `#{fleet_idle}`, `#{spinner}`,

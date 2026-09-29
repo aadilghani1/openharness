@@ -1027,6 +1027,16 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 /// another of this client's).
 fn attached(app: &App) -> usize { app.session_attached(app.session_id) }
 
+/// Structural dimensions for split percentages, including a zoomed pane before it unzooms.
+/// Presentation padding must not change the split tree that the same command creates.
+pub fn layout_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
+    let r = tab_rect(app, window, pane)?;
+    let tab = app.tabs.get(window)?;
+    let body = app.window_area(tab);
+    let c = app.layout_content_of(tab, r);
+    Some(ratatui::layout::Rect { x: c.x - body.x, y: c.y - body.y, width: c.width, height: c.height })
+}
+
 pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
     let body = app.window_area(app.tabs.get(window)?);

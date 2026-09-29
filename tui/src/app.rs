@@ -3636,13 +3636,19 @@ impl App {
         layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
     }
 
-    /// A pane's own cells within its tile: the status line taken off, above or below.
-    pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
+    /// The structural cells used by tmux navigation and divider dragging.
+    pub fn layout_content_of(&self, tab: &Tab, r: Rect) -> Rect {
         match self.pane_status(tab) {
             layout::Status::Top => Rect::new(r.x, r.y + 1, r.width, r.height.saturating_sub(1)),
             layout::Status::Bottom => Rect::new(r.x, r.y, r.width, r.height.saturating_sub(1)),
             layout::Status::Off => r,
         }
+    }
+
+    /// The program's actual viewport, shared by drawing, PTY resizing and mouse coordinates.
+    pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
+        if self.options.pane_look() { crate::pane_frame::frame(r, self.window_area(tab), self.pane_status(tab)).content }
+        else { self.layout_content_of(tab, r) }
     }
 
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
@@ -3990,7 +3996,7 @@ impl App {
             let (w, h) = self.tabs[t].root.as_ref().map(|r| r.size()).unwrap_or((body.width, body.height));
             if at.dir == Dir::Horizontal { w } else { h }
         } else {
-            at.pane.and_then(|p| crate::format::content_rect(self, t, p)).map(|r| if at.dir == Dir::Horizontal { r.width } else { r.height }).unwrap_or(0)
+            at.pane.and_then(|p| crate::format::layout_rect(self, t, p)).map(|r| if at.dir == Dir::Horizontal { r.width } else { r.height }).unwrap_or(0)
         };
         let size = at.size.map(|(n, pct)| if pct { cur as u32 * n as u32 / 100 } else { n as u32 });
         self.fit_panes_of(t);
@@ -4688,18 +4694,21 @@ impl App {
         let mut out = Vec::new();
         if let Some(root) = tab.root.as_ref() { root.rects(body, &mut out) }
         tab.panes().into_iter().filter_map(|id| out.iter().find(|(p, _)| *p == id).map(|(_, r)| {
-            let c = self.content_of(tab, *r);
+            let c = self.layout_content_of(tab, *r);
             (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y - body.y) as u32, w: c.width as u32, h: c.height as u32 })
         })).collect()
     }
 
     /// The current window's panes as drawn (a zoomed window's one pane filling it), where their
     /// contents are in the window: tmux's xoff/yoff/sx/sy for the mouse.
-    pub fn visible_geoms(&self) -> Vec<(u64, layout::Geom)> {
+    pub fn visible_geoms(&self) -> Vec<(u64, layout::Geom)> { self.visible_geoms_for(true) }
+    pub fn visible_layout_geoms(&self) -> Vec<(u64, layout::Geom)> { self.visible_geoms_for(false) }
+
+    fn visible_geoms_for(&self, inset: bool) -> Vec<(u64, layout::Geom)> {
         let body = self.body();
         let tab = self.tab();
         tab.panes().into_iter().filter_map(|id| self.rects.iter().find(|(p, _)| *p == id).map(|(_, r)| {
-            let c = self.content_of(tab, *r);
+            let c = if inset { self.content_of(tab, *r) } else { self.layout_content_of(tab, *r) };
             (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y.saturating_sub(body.y)) as u32, w: c.width as u32, h: c.height as u32 })
         })).collect()
     }

@@ -142,6 +142,27 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
     })
 }
 
+/// Pane surfaces use a quiet dark palette; explicit tmux style settings still win.
+fn pane_defaults() -> &'static BTreeMap<String, String> {
+    static D: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    D.get_or_init(|| {
+        let mut m = defaults().clone();
+        for (name, value) in [
+            ("window-style", "fg=#dce1e7,bg=#1c1f24"),
+            ("window-active-style", "default"),
+            ("pane-border-style", "fg=#a2aab6,bg=#25292f"),
+            ("pane-active-border-style", "fg=#c4e0d5,bg=#2b3837"),
+            ("status-style", "fg=#a2aab6,bg=#111519"),
+            ("window-status-current-style", "fg=#d9ece5,bg=#2b3837,bold"),
+            ("window-status-style", "fg=#a2aab6,bg=#111519"),
+            ("window-status-separator", "  "),
+        ] { m.insert(name.into(), value.into()); }
+        m
+    })
+}
+
+const PANE_LOOK: [&str; 8] = ["window-style", "window-active-style", "pane-border-style", "pane-active-border-style", "status-style", "window-status-current-style", "window-status-style", "window-status-separator"];
+
 /// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
 pub const LOOK: [&str; 11] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string", "allow-set-title"];
 
@@ -210,12 +231,17 @@ impl Store {
     /// panes' title rows), where you have not set them yourself.
     pub fn tmux_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("tmux") }
 
+    /// The normal hn presentation; classic keeps the earlier line borders.
+    pub fn pane_look(&self) -> bool { !matches!(self.get("@hn-look", "", None).as_deref(), Some("tmux" | "classic")) }
+
     /// Reduce motion independently of the status/pane appearance.
     pub fn animations(&self) -> bool { !matches!(self.get("@hn-animations", "", None).as_deref(), Some("off" | "0" | "no")) }
 
     /// The default for a name: hn's, or tmux's under `@hn-look tmux`.
     fn default_of(&self, name: &str) -> Option<&'static String> {
-        if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name) } else { defaults().get(name) }
+        if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name) }
+        else if PANE_LOOK.contains(&name) && self.pane_look() { pane_defaults().get(name) }
+        else { defaults().get(name) }
     }
 
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
@@ -558,6 +584,25 @@ mod tests {
         assert_eq!(s.get("mouse", "", None).as_deref(), Some("on"));
         s.set("@hn-look", None, &SetFlags { global: true, unset: true, ..Default::default() }, "", 0).unwrap();
         assert_eq!(s.get("pane-border-status", "", None).as_deref(), Some("top"));
+    }
+
+    #[test]
+    fn pane_palette_changes_without_overriding_user_styles() {
+        let mut s = Store::default();
+        let g = SetFlags { global: true, ..Default::default() };
+        let gw = SetFlags { global: true, window: true, ..Default::default() };
+        assert!(s.pane_look());
+        assert_eq!(s.get("window-style", "", None).as_deref(), Some("fg=#dce1e7,bg=#1c1f24"));
+        s.set("window-style", Some("bg=blue"), &gw, "", 0).unwrap();
+        for look in ["classic", "tmux", "panes"] {
+            s.set("@hn-look", Some(look), &g, "", 0).unwrap();
+            assert_eq!(s.pane_look(), look == "panes");
+            assert_eq!(s.get("window-style", "", None).as_deref(), Some("bg=blue"));
+            let expected = if look == "panes" { pane_defaults() } else { defaults() };
+            assert_eq!(s.get("status-style", "", None), expected.get("status-style").cloned());
+        }
+        s.set("window-style", None, &SetFlags { unset: true, ..gw }, "", 0).unwrap();
+        assert_eq!(s.get("window-style", "", None).as_deref(), Some("fg=#dce1e7,bg=#1c1f24"));
     }
 
     #[test]

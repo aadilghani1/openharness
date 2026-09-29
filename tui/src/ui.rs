@@ -1,8 +1,6 @@
-//! Drawing, the way tmux and fzf draw. A frame is the active window's panes (edge to edge when
-//! there is one; tmux borders with `pane-border-status top` when there are several), then the
-//! status line — tmux's: green, at the bottom, `[harness] 0:name* 1:name-`, the pane's title and
-//! the time on the right; prompts and messages take it over in yellow. The search is fzf's own
-//! layout and colours, with a preview window.
+//! Pane surfaces with space between them, integrated titles, and a status line at the bottom.
+//! The tmux split tree remains intact beneath presentation insets. Classic and tmux looks
+//! retain line borders; the search keeps fzf's layout and colours with a preview window.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -232,9 +230,14 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
 
 // ── the window ───────────────────────────────────────────────────────────────
 
-/// The active window's panes, then their borders and status lines as tmux draws them.
+/// The active window's programs, then their pane surfaces or classic borders and titles.
 fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let focus = app.focused();
+    let surfaces = app.options.pane_look();
+    if surfaces {
+        crate::term_out::clear_extras(body);
+        buf.set_style(body, Style::default().bg(Color::Rgb(17, 21, 25)));
+    }
     let rects = app.rects.clone();
     let mut cursor = None;
     for (id, rect) in rects.iter() {
@@ -245,6 +248,10 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         // window-style (both the pane's own, its window's or the global ones).
         let (a, w) = (app.style_of("window-active-style", app.active, Some(*id)), app.style_of("window-style", app.active, Some(*id)));
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
+        if surfaces {
+            let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.pane_status(app.tab()));
+            buf.set_style(f.surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
+        }
         // choose-tree's tree, over the pane.
         if app.panes.get(id).map(|p| p.tree_top()).unwrap_or(false) {
             if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
@@ -267,8 +274,25 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             pane.dirty = false;
         }
     }
-    borders(buf, app, body);
+    if surfaces { pane_headers(buf, app); } else { borders(buf, app, body); }
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
+}
+
+/// Titles belong to their pane surface. Focus is a quiet header accent; content keeps its
+/// original ANSI colours and remains equally legible in the other panes.
+fn pane_headers(buf: &mut Buffer, app: &App) {
+    let canvas = app.window_area(app.tab());
+    for (id, rect) in &app.rects {
+        let f = crate::pane_frame::frame(*rect, canvas, app.pane_status(app.tab()));
+        let Some(title) = f.title else { continue };
+        let active = Some(*id) == app.focused();
+        let style = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, Some(*id));
+        buf.set_style(title, style);
+        let marker = if app.marked == Some(*id) { "◆" } else if active { "▌" } else { " " };
+        if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
+        let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
+        title_line(buf, app, *id, text, style);
+    }
 }
 
 /// screen-redraw.c over the window: every border cell (its junction, the active pane's in

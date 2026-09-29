@@ -1235,6 +1235,7 @@ fn run_words(app: &mut App, words: &[String]) {
 /// hn keeps outside the store — the prefix, the mouse, a window's synchronize-panes …
 fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: Option<usize>) {
     let name = name.to_string();
+    if name == "@hn-look" { app.redraw_all = true; app.fit_panes(); }
     // alerts_reset_all: every window's silence timer starts again.
     if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
     if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
