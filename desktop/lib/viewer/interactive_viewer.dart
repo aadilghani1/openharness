@@ -116,7 +116,9 @@ class InteractiveViewerSession extends ChangeNotifier {
       if (!_disposed) {
         error = failure.code == 'UNSUPPORTED'
             ? 'Update Harness on this machine to use its viewer in the browser.'
-            : 'The viewer disconnected. Reconnect and try again.';
+            : (failure.detail?.trim().isNotEmpty == true
+                  ? failure.detail!
+                  : 'The viewer disconnected. Reconnect and try again.');
       }
     } catch (_) {
       if (!_disposed) {

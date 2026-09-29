@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
+import socket
+import threading
 import subprocess
 import sys
 import tempfile
@@ -32,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
     env.update(HOME=tmp, PORT=str(port), HN_SOCKET_NAME=prefix, HN_TMPDIR=tmp,
                HARNESS_TUI_DESK='off', HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off',
                HN_VIEWER_OPENER_LOG=str(log), PATH=str(bin_dir) + os.pathsep + env.get('PATH', ''),
-               MOCK_VIEWER='1', MOCK_WEB_URL='https://harness.example', DISPLAY=':hn-test')
+               MOCK_VIEWER='1', MOCK_VIEWER_EDGES='1', MOCK_WEB_URL='https://harness.example', DISPLAY=':hn-test')
     def hn(*args, extra=None, ok=True):
         result = subprocess.run([str(binary), '-L', prefix, '--port', str(port), *args],
                                 env={**env, **(extra or {})}, text=True, capture_output=True, timeout=20)
@@ -46,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
         assert uri.scheme == 'https' and uri.netloc == 'harness.example', result.stdout
         assert uri.path == '/', result.stdout
         assert urllib.parse.parse_qs(uri.query) == {
-            'viewer': ['1'], 'machine': ['mock000000000000000000000000000' + ('2' if agent.startswith('remote') else '1')],
+            'viewer': ['1'], 'machine': ['mock000000000000000000000000000' + ('2' if agent.startswith('remote') or agent.endswith('-remote') else '1')],
             'agent': [agent]}, result.stdout
     mock = subprocess.Popen(['node', str(root / 'tests/mock-daemon.mjs'), str(port)], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -71,6 +74,21 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
         assert hn('view', '--unknown', ok=False).returncode == 2
         assert hn('view', '-t', ok=False).returncode == 2
         assert hn('view', '-t', 'Mock Blender', extra={'HN_VIEWER_OPENER_EXIT': '1'}).stdout.strip() == local
+        assert 'usage: hn view' in hn('view', '--help').stdout
+        assert hn('view', ok=False).returncode == 1
+        assert hn('view', '-t', '', ok=False).returncode == 2
+        assert hn('view', '-p', '-t', 'Mock B', ok=False).returncode == 1
+        assert 'more than one harness' in hn('view', '-p', '-t', 'Duplicate Viewer', ok=False).stderr
+        for key in ('SSH_CLIENT', 'SSH_TTY', 'SSH_CONNECTION'):
+            count = len(opened())
+            web_link(hn('view', '-t', 'mock-blender', extra={key: 'fixture'}), 'mock-blender')
+            assert len(opened()) == count
+        web_link(hn('view', '-c', '-t', 'mock-blender'), 'mock-blender')
+        web_link(hn('view', '-pcw', '-t', 'Waiting Viewer'), 'waiting-viewer')
+        assert 'Renderer could not start' in hn('view', '-p', '-t', 'Failed Viewer', ok=False).stderr
+        assert 'invalid viewer address' in hn('view', '-p', '-t', 'Unsafe Viewer', ok=False).stderr
+        assert hn('view', '-p', '-t', 'Quoted " viewer; $(false)').stdout.strip() == f'http://127.0.0.1:{port}/test-viewer?x=a&y=b'
+        web_link(hn('view', '-p', '-t', 'mock0000000000000000000000000002:duplicate-remote'), 'duplicate-remote')
         print('PASS: standalone viewer, exact opener argv, SSH, remote target, print and browser-failure fallback')
         hn('new-session', '-d', '-s', 'viewer-test')
         hn('open-harness', '-s', 'Mock Blender')
@@ -79,8 +97,86 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
         web_link(hn('view', extra={'SSH_TTY': '/dev/fixture'}), 'mock-blender')
         assert len(opened()) == count
         assert hn('view', '-p', '-t', 'Mock Claude', ok=False).returncode == 1
+        assert 'more than one harness' in hn('view', '-p', '-t', 'Duplicate Viewer', ok=False).stderr
+        web_link(hn('view', '-pc', '-t', 'Waiting Viewer'), 'waiting-viewer')
+        assert hn('view', '-p', '-t', 'Quoted " viewer; $(false)').stdout.strip() == f'http://127.0.0.1:{port}/test-viewer?x=a&y=b'
+        assert 'invalid viewer address' in hn('view', '-p', '-t', 'Unsafe Viewer', ok=False).stderr
         assert 'open-viewer' in hn('list-commands').stdout
         print('PASS: active pane through hn IPC; caller SSH environment controls the handoff')
+
+        # An hn client can disappear or lose its reply while a shell asks for a viewer.
+        # A private Unix socket returning a damaged response exercises that recovery path.
+        broken = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        broken_path = home / (prefix + '-broken.sock')
+        broken.bind(str(broken_path))
+        broken.listen()
+        broken.settimeout(.1)
+        stopped = threading.Event()
+        def damaged_client():
+            while not stopped.is_set():
+                try: peer, _ = broken.accept()
+                except socket.timeout: continue
+                except OSError: return
+                with peer:
+                    peer.settimeout(1)
+                    try:
+                        if peer.recv(8192): peer.sendall(b'not-json\n')
+                    except OSError: pass
+        worker = threading.Thread(target=damaged_client, daemon=True)
+        worker.start()
+        try:
+            result = hn('-S', str(broken_path), 'view', '-p', '-t', 'Mock Blender', ok=False)
+            assert result.returncode == 1 and 'could not reach the hn client' in result.stderr, result
+        finally:
+            stopped.set()
+            worker.join(timeout=2)
+            broken.close()
+
+        tmux = shutil.which('tmux')
+        assert tmux, 'Viewer command-prompt tests need tmux'
+        tmux_prefix = prefix + '-ui'
+        def mux(*args, ok=True):
+            result = subprocess.run([tmux, '-L', tmux_prefix, *args], env=env, capture_output=True, text=True, timeout=10)
+            if ok: assert result.returncode == 0, result.stderr
+            return result.stdout
+        def until(label, predicate):
+            end = time.monotonic() + 15
+            while not predicate():
+                if time.monotonic() > end: raise AssertionError(label + ': ' + mux('capture-pane', '-p', '-t', 'viewer-ui'))
+                time.sleep(.05)
+        def command(text):
+            mux('send-keys', '-t', 'viewer-ui', 'C-b', ':')
+            mux('send-keys', '-t', 'viewer-ui', '-l', text)
+            mux('send-keys', '-t', 'viewer-ui', 'Enter')
+        try:
+            for mode in ('local', 'ssh', 'failed-opener'):
+                extra = ['SSH_CONNECTION=fixture'] if mode == 'ssh' else ['HN_VIEWER_OPENER_EXIT=1'] if mode == 'failed-opener' else []
+                launch = ['env', '-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'HN_SOCKET', *extra,
+                          str(binary), '-L', prefix, '--port', str(port), 'attach-session', '-t', 'viewer-test']
+                mux('new-session', '-d', '-s', 'viewer-ui', '-x', '140', '-y', '35', shlex.join(launch))
+                until('interactive viewer pane attached', lambda: 'Mock Blender' in mux('capture-pane', '-p', '-t', 'viewer-ui'))
+                if mode == 'local':
+                    before = len(opened())
+                    command('view')
+                    until('local command opens browser', lambda: len(opened()) > before)
+                    command('view -c')
+                    until('clipboard confirmation', lambda: 'terminal clipboard' in mux('capture-pane', '-p', '-t', 'viewer-ui'))
+                    command('view -p')
+                    until('print-only viewer modal', lambda: local in mux('capture-pane', '-p', '-t', 'viewer-ui'))
+                else:
+                    before = len(opened())
+                    command('view')
+                    until('viewer fallback link', lambda: 'Open this link in your browser' in mux('capture-pane', '-p', '-t', 'viewer-ui'))
+                    if mode == 'ssh': assert len(opened()) == before
+                # Detach normally so hn saves its session and coverage counters before tmux exits.
+                mux('send-keys', '-t', 'viewer-ui', 'Escape')
+                mux('send-keys', '-t', 'viewer-ui', 'C-b', 'd')
+                until('interactive client detached', lambda: not mux('capture-pane', '-p', '-t', 'viewer-ui', ok=False))
+                mux('kill-session', '-t', 'viewer-ui', ok=False)
+            print('PASS: real TUI command prompt opens, prints, copies and falls back correctly locally and over SSH')
+        finally:
+            mux('kill-server', ok=False)
+
     finally:
         hn('kill-server', ok=False)
         mock.terminate()

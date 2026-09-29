@@ -27,9 +27,23 @@ class _App extends AppNotifier {
             : PaneLayoutStore(storage: storage),
         workspaceEnabled: () => false,
       );
+  bool inventoryLoaded = true;
+  String? inventoryError;
   @override
-  bool get machineInventoryLoaded => true;
-  int retries = 0;
+  bool get machineInventoryLoaded => inventoryLoaded;
+  @override
+  String? get machineListError => inventoryError;
+  int retries = 0, inventoryRetries = 0, offlineRetries = 0;
+  @override
+  Future<void> retryMachines() async {
+    inventoryRetries++;
+  }
+
+  @override
+  Future<void> retryOfflineMachine(String machineId) async {
+    offlineRetries++;
+  }
+
   @override
   Future<void> reloadMachineData(String machineId) async {
     retries++;
@@ -136,6 +150,119 @@ void main() {
       expect(find.text('Render server is offline.'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       app.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'inventory, ownership, connection and viewer failures each recover without a terminal',
+    (tester) async {
+      final app = _App()..inventoryLoaded = false;
+      addTearDown(app.dispose);
+      Future<void> update() async {
+        app.notifyListeners();
+        await tester.pump();
+      }
+
+      Future<void> retry() async {
+        await tester.tap(find.textContaining('Retry'));
+        await tester.pump();
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: ViewerPage(app: app, location: const ViewerLocation('m', 'a')),
+        ),
+      );
+      expect(find.text('Finding this machine…'), findsOneWidget);
+      app.inventoryError = 'Inventory is unavailable';
+      await update();
+      expect(find.text('Inventory is unavailable'), findsOneWidget);
+      await retry();
+      expect(app.inventoryRetries, 1);
+      app.inventoryError = null;
+      app.inventoryLoaded = true;
+      await update();
+      expect(
+        find.textContaining('not available to this account'),
+        findsOneWidget,
+      );
+      await retry();
+      expect(app.inventoryRetries, 2);
+      app.machineStates['m'] = MachineState(
+        const Machine(
+          machineId: 'm',
+          name: 'Shared',
+          authMode: MachineAuthMode.remote,
+          isShared: true,
+        ),
+      );
+      await update();
+      expect(find.textContaining('Sign in as the owner'), findsOneWidget);
+      final machine = MachineState(
+        const Machine(
+          machineId: 'm',
+          name: 'Renderer',
+          authMode: MachineAuthMode.remote,
+        ),
+      )..nodeOnline = false;
+      app.machineStates['m'] = machine;
+      await update();
+      expect(find.text('Renderer is offline.'), findsOneWidget);
+      await retry();
+      expect(app.offlineRetries, 1);
+      machine.nodeOnline = true;
+      machine.connectionStatus = ConnectionStatus.disconnected;
+      await update();
+      expect(find.textContaining('machine is disconnected'), findsOneWidget);
+      await retry();
+      expect(app.retries, 1);
+      machine.connectionStatus = ConnectionStatus.connecting;
+      machine.agentLoadStatus = AgentLoadStatus.loading;
+      await update();
+      expect(find.text('Connecting to Renderer…'), findsOneWidget);
+      machine.connectionStatus = ConnectionStatus.connected;
+      machine.agentLoadStatus = AgentLoadStatus.error;
+      await update();
+      expect(find.textContaining('machine is disconnected'), findsOneWidget);
+      machine.agentLoadStatus = AgentLoadStatus.loaded;
+      machine.agents = [const Agent(id: 'a', name: 'Fixture')];
+      await update();
+      expect(find.text('This harness has no viewer.'), findsOneWidget);
+      await retry();
+      expect(app.retries, 2);
+      machine.agents = [
+        const Agent(
+          id: 'a',
+          name: 'Fixture',
+          viewerError: 'Renderer could not start',
+        ),
+      ];
+      await update();
+      expect(find.text('Renderer could not start'), findsOneWidget);
+      machine.agents = [
+        const Agent(
+          id: 'a',
+          name: 'Fixture',
+          viewerUrl: 'http://127.0.0.1:19679/first',
+        ),
+      ];
+      await update();
+      final first = tester.widget<WebPanePanel>(find.byType(WebPanePanel)).pane;
+      machine.agents = [
+        const Agent(
+          id: 'a',
+          name: 'Fixture',
+          viewerUrl: 'http://127.0.0.1:19679/restarted',
+        ),
+      ];
+      await update();
+      final next = tester.widget<WebPanePanel>(find.byType(WebPanePanel)).pane;
+      expect(next, same(first));
+      expect(next.url, endsWith('/restarted'));
+      expect(app.allPanes, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
       expect(tester.takeException(), isNull);
     },
   );

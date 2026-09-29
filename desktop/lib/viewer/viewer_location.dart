@@ -4,16 +4,29 @@ class ViewerLocation {
   const ViewerLocation(this.machineId, this.agentId);
   final String machineId, agentId;
 
-  static bool isRoute(Uri uri) =>
-      uri.path == '/' && uri.queryParameters.containsKey('viewer');
+  static bool isRoute(Uri uri) {
+    if (uri.path != '/') return false;
+    // Inspect keys without decoding values: a damaged identity must still stay on
+    // the viewer error page instead of throwing or restoring the normal desk.
+    for (final field in uri.query.split('&')) {
+      try {
+        if (Uri.decodeQueryComponent(field.split('=').first) == 'viewer') {
+          return true;
+        }
+      } on FormatException {
+        // An unrelated damaged key cannot hide a later viewer flag.
+      }
+    }
+    return false;
+  }
 
   static ViewerLocation? parse(Uri uri) {
-    if (!isRoute(uri) ||
-        uri.queryParametersAll['viewer']?.length != 1 ||
-        uri.queryParameters['viewer'] != '1') {
-      return null;
-    }
+    if (!isRoute(uri)) return null;
     try {
+      if (uri.queryParametersAll['viewer']?.length != 1 ||
+          uri.queryParameters['viewer'] != '1') {
+        return null;
+      }
       String? id(String key) {
         final values = uri.queryParametersAll[key];
         if (values == null || values.length != 1) return null;

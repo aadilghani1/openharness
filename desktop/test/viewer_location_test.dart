@@ -46,4 +46,42 @@ void main() {
       isTrue,
     );
   });
+
+  test(
+    'malformed UTF-8 and duplicate viewer flags fail closed without throwing',
+    () {
+      for (final query in [
+        'viewer=1&machine=m&agent=%FF',
+        'viewer=1&machine=%C0%AF&agent=a',
+        'viewer=%FF&machine=m&agent=a',
+        'viewer=1&machine=m&agent=a&unknown=%FF',
+        '%FF=x&viewer=1&machine=m&agent=a',
+        'viewer=1&viewer=0&machine=m&agent=a',
+        'viewer=0&machine=m&agent=a',
+        'viewer=1&machine=m&machine=n&agent=a',
+        'viewer=1&machine=m&agent=%7F',
+        'viewer=1&machine=m&agent=${'a' * 161}',
+      ]) {
+        final uri = Uri.parse('https://harness.example/?$query');
+        expect(ViewerLocation.isRoute(uri), isTrue, reason: query);
+        expect(ViewerLocation.parse(uri), isNull, reason: query);
+        expect(ViewerLocation.workspaceAllowed(uri), isFalse, reason: query);
+        expect(ViewerLocation.returnPath('/?$query'), isNull, reason: query);
+      }
+      expect(ViewerLocation.returnPath(null), isNull);
+      expect(ViewerLocation.returnPath(42), isNull);
+      expect(ViewerLocation.returnPath('http://[invalid'), isNull);
+    },
+  );
+
+  test('encoded query keys and boundary identities survive sign-in', () {
+    final uri = Uri.parse(
+      'https://harness.example/?view%65r=1&machine=${'m' * 160}&agent=%E6%B5%8B%E8%AF%95%2B%23',
+    );
+    expect(ViewerLocation.isRoute(uri), isTrue);
+    expect(ViewerLocation.parse(uri)!.machineId.length, 160);
+    expect(ViewerLocation.parse(uri)!.agentId, '测试+#');
+    expect(ViewerLocation.workspaceAllowed(uri), isFalse);
+    expect(ViewerLocation.parse(Uri.parse('https://harness.example/')), isNull);
+  });
 }

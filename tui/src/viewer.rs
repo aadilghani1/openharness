@@ -53,6 +53,9 @@ pub fn web_link(base: &str, machine: &str, agent: &str) -> Result<String, String
         return Err("the daemon has no browser address — update Harness on this machine".into())
     }
     let uri: Uri = base.parse().map_err(|_| "invalid browser address")?;
+    if uri.path() != "/" && !uri.path().is_empty() {
+        return Err("the daemon browser address must point to the website root".into())
+    }
     if uri.scheme_str() != Some("https") && !matches!(uri.host(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1")) {
         return Err("the browser address must use HTTPS (HTTP is allowed for localhost development)".into())
     }
@@ -170,6 +173,13 @@ mod tests {
         assert!(web_link("http://example.com", "m", "a").is_err());
         assert!(web_link("http://127.0.0.1:19778", "m", "a").is_ok());
         assert!(web_link("https://harness.example?x=1", "m", "a").is_err());
+        assert!(web_link("https://harness.example/workspace", "m", "a").is_err());
+        for base in ["http://localhost:19682", "http://[::1]:19682", "https://harness.example/"] {
+            assert!(web_link(base, "m", "a").is_ok(), "{base}");
+        }
+        for base in ["", "https://", "https://harness.example/#token", "https://user@host", "file:///tmp/test", "--help"] {
+            assert!(web_link(base, "m", "a").is_err(), "{base}");
+        }
     }
     #[test]
     fn no_viewer_is_an_error_and_waiting_viewer_gets_its_own_page() {
