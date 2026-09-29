@@ -212,6 +212,15 @@ class _WorkspaceLinks implements PeerLinkClient {
   final replies = <Completer<CliLinkConnectResult>>[];
 
   @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => throw UnsupportedError('This fixture covers password linking.');
+
+  @override
   Future<CliLinkConnectResult> connect(
     String machineId,
     String password, {
