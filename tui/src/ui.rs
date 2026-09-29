@@ -237,7 +237,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let surfaces = app.options.pane_look();
     if surfaces {
         crate::term_out::clear_extras(body);
-        buf.set_style(body, Style::default().bg(Color::Rgb(17, 21, 25)));
+        buf.set_style(body, Style::default().bg(theme::pane_palette().canvas));
     }
     let rects = app.rects.clone();
     let mut cursor = None;
@@ -333,7 +333,7 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
 fn border_style(app: &App, active: bool) -> Style {
     let mut s = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, app.focused());
     let own = if active { app.look.active_border.is_some() } else { app.look.border.is_some() };
-    if !own {
+    if !own && !app.options.tmux_look() {
         let (_, fg, _) = crate::theme::palette();
         s = s.fg(fg);
         if !active { s = s.add_modifier(Modifier::DIM) }

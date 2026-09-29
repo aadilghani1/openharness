@@ -1204,7 +1204,12 @@ impl App {
     /// the terminal answers OSC 11 and again when a machine connects; the daemon restyles the
     /// existing sessions too, as the desktop app's `theme_set` does.
     pub fn push_theme(&mut self) {
-        let Some((bg, fg)) = crate::term_out::terminal_colours() else { return };
+        let Some((mut bg, mut fg)) = crate::term_out::terminal_colours() else { return };
+        if self.options.pane_look() {
+            let palette = crate::theme::pane_palette();
+            bg = crate::tmuxconf::colour_name(palette.surface);
+            fg = crate::tmuxconf::colour_name(palette.foreground);
+        }
         let machines: Vec<String> = self.fleet.machines.iter()
             .filter(|m| self.link(&m.id).is_some())
             .map(|m| m.id.clone()).collect();
@@ -3637,7 +3642,7 @@ impl App {
         // takes the theme's own colours — its background the terminal's background, its text the
         // readable opposite — so it is a visible bar in the theme (a dark bar, light text on a
         // dark terminal), not a transparent one, and not tmux's stock green.
-        if !own {
+        if !own && !self.options.pane_look() && !self.options.tmux_look() {
             let (bg, fg, _) = crate::theme::palette();
             s = s.bg(bg).fg(fg);
         }
@@ -3651,7 +3656,7 @@ impl App {
         // No message colours of its own and the terminal has told us what it looks like: the
         // message line shows the theme's readable text on the terminal's own background (left
         // transparent), so it blends with the theme instead of tmux's stock yellow.
-        if !own {
+        if !own && !self.options.tmux_look() {
             let (_, fg, _) = crate::theme::palette();
             s = s.bg(Color::Reset).fg(fg);
         }

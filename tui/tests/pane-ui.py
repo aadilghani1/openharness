@@ -227,6 +227,25 @@ try:
     wait(lambda: any(i['text'] == '\x1b[<0;3;2M' for i in api()['inputs'][before:]), 'top status rows and program mouse coordinates')
     hn('set', '-g', 'status-position', 'bottom')
     hn('set', '-g', 'status', 'on')
+    # OSC replies are metadata, not keystrokes. Surface defaults follow live light/dark changes.
+    def background(hex_value):
+        raw = f'\x1b]11;{hex_value}\x07'.encode()
+        tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
+    layout_before_theme = value('#{window_layout}')
+    before = len(api()['inputs'])
+    background('#f7f7f7')
+    wait(lambda: hn('show', '-gwv', 'window-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
+    assert value('#{window_layout}') == layout_before_theme
+    snapshot('panes-light')
+    hn('set', '-gw', 'window-style', 'fg=red,bg=blue')
+    background('#101010')
+    wait(lambda: hn('show', '-gv', 'status-style').endswith('bg=#101010'), 'dark theme after a light theme')
+    assert hn('show', '-gwv', 'window-style') == 'fg=red,bg=blue'
+    assert len(api()['inputs']) == before, 'terminal query replies reached an application'
+    hn('set', '-gwu', 'window-style')
+    assert hn('show', '-gwv', 'window-style').startswith('fg=#f5f5f5,')
+    print('PASS pane UI: live light/dark themes, reported defaults and custom style preservation', flush=True)
+
     hn('send-keys', '-t', first, '-l', '\x1b[H\x1b[31;44mHN_COLOR\x1b[0m')
     wait(lambda: 'HN_COLOR' in tmux('capture-pane', '-p', '-t', 'test'), 'explicit program colours')
     coloured = next(row for row in tmux('capture-pane', '-p', '-e', '-t', 'test').splitlines() if 'HN_COLOR' in row)

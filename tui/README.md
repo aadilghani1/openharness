@@ -70,8 +70,9 @@ never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
-pane numbers and the same active pane after each. hn draws these layouts as dark pane surfaces
-with one-cell gaps, inset terminal content and a highlighted title for the focused pane. Padding
+pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
+with one-cell gaps, inset terminal content and a highlighted title for the focused pane. The
+surfaces follow the terminal's light/dark theme. Padding
 shrinks automatically in small panes. The space between panes remains a resize handle; mouse
 coordinates, copy selection and PTY dimensions follow the inset content. `window_layout` keeps
 the original split structure. Use `set -g @hn-animations off` to keep
@@ -184,7 +185,7 @@ All of this is in options, which `show -g`, `show -gw` and `C-b C` print as they
 `status-left`, `status-right`, the window formats and each pane's title row
 (`pane-border-format`). Set them in your `~/.tmux.conf` as you would for tmux; what you set
 replaces hn's. The default is `set -g @hn-look panes`. `set -g @hn-look classic` restores hn's
-previous line borders and green status line. `set -g @hn-look tmux` uses tmux's appearance and
+previous line borders. `set -g @hn-look tmux` uses tmux's appearance and
 content dimensions: no padding or title rows, and tmux's status line and window list. Changing
 the look takes effect immediately and preserves pane identities and the split structure.
 

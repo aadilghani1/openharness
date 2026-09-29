@@ -15,7 +15,7 @@ home="$(mktemp -d /tmp/hn-e2e.XXXXXX)"
 export HN_TMPDIR="$home"
 tmux_() { tmux -L "$sock" "$@"; }
 screen() { tmux_ capture-pane -p -t t; }
-fail() { echo "✗ $1"; echo "--- screen ---"; screen || true; exit 1; }
+fail() { echo "✗ $1"; echo "--- screen ---"; screen || true; hn show-messages || true; hn display -p 'key-table=#{client_key_table} prefix=#{client_prefix} mode=#{pane_mode}' || true; exit 1; }
 expect() { # expect <what> <text> [timeout-ms]
   local waited=0 limit="${3:-3000}"
   until screen | grep -qF -- "$2"; do
@@ -85,7 +85,9 @@ wait_eq "#{pane_mode}" "view-mode" hn display -p '#{pane_mode}'
 tmux_ send-keys -t t q
 wait_eq "q leaves view mode" "0" hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t C-b ":"
-expect "C-b : is the command prompt" ":"
+# Titles contain colons too. Wait for the actual status prompt before typing a command.
+command_prompt() { screen | tail -n 1 | grep -q '^:' && echo yes; }
+wait_eq "C-b : is the command prompt" yes command_prompt
 tmux_ send-keys -t t "split-window -h" Enter
 # tmux's split: a shell at once, and what is typed straight after it lands in it.
 tmux_ send-keys -t t "typed-ahead"

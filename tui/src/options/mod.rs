@@ -143,22 +143,19 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
     })
 }
 
-/// Pane surfaces use a quiet dark palette; explicit tmux style settings still win.
-fn pane_defaults() -> &'static BTreeMap<String, String> {
-    static D: OnceLock<BTreeMap<String, String>> = OnceLock::new();
-    D.get_or_init(|| {
-        let mut m = defaults().clone();
-        for (name, value) in [
-            ("window-style", "fg=#dce1e7,bg=#1c1f24"),
-            ("window-active-style", "default"),
-            ("pane-border-style", "fg=#a2aab6,bg=#25292f"),
-            ("pane-active-border-style", "fg=#c4e0d5,bg=#2b3837"),
-            ("status-style", "fg=#a2aab6,bg=#111519"),
-            ("window-status-current-style", "fg=#d9ece5,bg=#2b3837,bold"),
-            ("window-status-style", "fg=#a2aab6,bg=#111519"),
-            ("window-status-separator", "  "),
-        ] { m.insert(name.into(), value.into()); }
-        m
+/// Explicit user styles win; default surfaces follow the terminal's current theme.
+fn pane_default(name: &str) -> Option<String> {
+    let p = crate::theme::pane_palette();
+    let pair = |fg, bg| format!("fg={},bg={}", crate::tmuxconf::colour_name(fg), crate::tmuxconf::colour_name(bg));
+    Some(match name {
+        "window-style" => pair(p.foreground, p.surface),
+        "window-active-style" => "default".into(),
+        "pane-border-style" => pair(p.muted, p.header),
+        "pane-active-border-style" => pair(p.active_foreground, p.active_header),
+        "status-style" | "window-status-style" => pair(p.muted, p.canvas),
+        "window-status-current-style" => format!("{},bold", pair(p.active_foreground, p.active_header)),
+        "window-status-separator" => "  ".into(),
+        _ => return None,
     })
 }
 
@@ -239,10 +236,10 @@ impl Store {
     pub fn animations(&self) -> bool { !matches!(self.get("@hn-animations", "", None).as_deref(), Some("off" | "0" | "no")) }
 
     /// The default for a name: hn's, or tmux's under `@hn-look tmux`.
-    fn default_of(&self, name: &str) -> Option<&'static String> {
-        if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name) }
-        else if PANE_LOOK.contains(&name) && self.pane_look() { pane_defaults().get(name) }
-        else { defaults().get(name) }
+    fn default_of(&self, name: &str) -> Option<String> {
+        if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name).cloned() }
+        else if PANE_LOOK.contains(&name) && self.pane_look() { pane_default(name) }
+        else { defaults().get(name).cloned() }
     }
 
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
@@ -262,7 +259,7 @@ impl Store {
             index?;
             return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => defaults().get(name).cloned() };
         }
-        layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| self.default_of(name).cloned())
+        layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| self.default_of(name))
     }
 
     /// As tmux's formats read it (options_to_string, numeric): a flag is 1 or 0; an array its items
@@ -393,7 +390,7 @@ impl Store {
     fn global_rows(&self, scope: Scope) -> BTreeMap<String, String> {
         let in_scope = |o: &Opt| match scope { Scope::Server => o.scope == Scope::Server, Scope::Session => o.scope == Scope::Session, Scope::Window => matches!(o.scope, Scope::Window | Scope::Pane), Scope::Pane => false };
         let mut rows: BTreeMap<String, String> = defaults().iter().filter(|(k, _)| find(k).map(in_scope).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect();
-        for n in LOOK { if rows.contains_key(n) { if let Some(v) = self.default_of(n) { rows.insert(n.to_string(), v.clone()); } } }
+        for n in LOOK.into_iter().chain(PANE_LOOK) { if rows.contains_key(n) { if let Some(v) = self.default_of(n) { rows.insert(n.to_string(), v); } } }
         // (hn's own hooks, harness-*, only once set: the list is tmux's.)
         for h in table::HOOKS.iter().filter(|o| in_scope(o) && !o.name.starts_with("harness-")) { rows.insert(h.name.to_string(), String::new()); }
         if let Some(map) = self.map(scope, true, "", 0) { overlay(&mut rows, map) }
@@ -593,17 +590,16 @@ mod tests {
         let g = SetFlags { global: true, ..Default::default() };
         let gw = SetFlags { global: true, window: true, ..Default::default() };
         assert!(s.pane_look());
-        assert_eq!(s.get("window-style", "", None).as_deref(), Some("fg=#dce1e7,bg=#1c1f24"));
+        assert!(s.get("window-style", "", None).unwrap().starts_with("fg=#"));
         s.set("window-style", Some("bg=blue"), &gw, "", 0).unwrap();
         for look in ["classic", "tmux", "panes"] {
             s.set("@hn-look", Some(look), &g, "", 0).unwrap();
             assert_eq!(s.pane_look(), look == "panes");
             assert_eq!(s.get("window-style", "", None).as_deref(), Some("bg=blue"));
-            let expected = if look == "panes" { pane_defaults() } else { defaults() };
-            assert_eq!(s.get("status-style", "", None), expected.get("status-style").cloned());
+            if look != "panes" { assert_eq!(s.get("status-style", "", None), defaults().get("status-style").cloned()); }
         }
         s.set("window-style", None, &SetFlags { unset: true, ..gw }, "", 0).unwrap();
-        assert_eq!(s.get("window-style", "", None).as_deref(), Some("fg=#dce1e7,bg=#1c1f24"));
+        assert!(s.get("window-style", "", None).unwrap().starts_with("fg=#"));
     }
 
     #[test]
