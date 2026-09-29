@@ -428,7 +428,7 @@ class _ViewerActions extends StatelessWidget {
         action('Reload viewer', LucideIcons.refreshCw, onReload),
         const SizedBox(width: 2),
         action(
-          zoomed ? 'Restore agents' : 'Zoom viewer',
+          zoomed ? 'Restore harnesses' : 'Zoom viewer',
           zoomed ? LucideIcons.minimize : LucideIcons.maximize,
           onZoom,
         ),

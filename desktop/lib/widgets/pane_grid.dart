@@ -240,7 +240,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     skipTraversal: true,
   );
   late Object _lastInputDestination;
-  final _resizeFocus = FocusNode(debugLabel: 'Resize focused agent');
+  final _resizeFocus = FocusNode(debugLabel: 'Resize focused harness');
   final _resizeHelp = OverlayPortalController();
   late int _resizeRequest;
   late String _activeId;
@@ -628,7 +628,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                           children: [
                             TextSpan(
                               text: '$key  ',
-                              style: const TextStyle(color: Colors.white70),
+                              style: TextStyle(color: boxText(.70)),
                             ),
                             TextSpan(text: action),
                           ],
@@ -1213,9 +1213,7 @@ class _PaneCell extends StatelessWidget {
         // decoration present even when clear: inserting/removing it would
         // reparent the terminal and lose its input, scroll and selection state.
         foregroundDecoration: BoxDecoration(
-          color: dimmed
-              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
-              : null,
+          color: dimmed ? const Color(0xFF9D9D9D).withValues(alpha: .30) : null,
           border: blocked
               ? Border.all(color: grid.AppPalette.warn, width: 2)
               : null,
@@ -1420,7 +1418,7 @@ class _PaneContent extends StatelessWidget {
           icon: Icons.terminal,
           detail:
               agent?.terminalUnavailableReason ??
-              'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
+              'This harness is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
       } else if (agent.launchState == 'failed') {
         // A resume the daemon could not CONFIRM is not a start that failed: the
@@ -1570,7 +1568,7 @@ class _PaneContent extends StatelessWidget {
         full: HarnessJoinGuideScreen(
           notifier: notifier,
           machineState: machine,
-          agentName: agentName ?? 'selected agent',
+          agentName: agentName ?? 'selected harness',
         ),
       );
     }
@@ -1579,7 +1577,7 @@ class _PaneContent extends StatelessWidget {
         activity: activityMark,
         title: machine.machine.displayName,
         icon: Icons.check_circle_outline,
-        message: 'This machine is ready. Drag an agent here to open it.',
+        message: 'This machine is ready. Drag a harness here to open it.',
         onClose: close,
       );
     }
@@ -1588,7 +1586,7 @@ class _PaneContent extends StatelessWidget {
         activity: activityMark,
         title: wantedAgentId,
         icon: Icons.help_outline,
-        message: 'This agent is no longer on ${machine.machine.displayName}.',
+        message: 'This harness is no longer on ${machine.machine.displayName}.',
         onClose: close,
       );
     }
@@ -1599,7 +1597,7 @@ class _PaneContent extends StatelessWidget {
         icon: Icons.terminal,
         message:
             agent.terminalUnavailableReason ??
-            'This agent has no available terminal.',
+            'This harness has no available terminal.',
         onClose: close,
       );
     }
@@ -2191,8 +2189,8 @@ class _DropZone extends StatelessWidget {
                           ),
                           child: Text(
                             paneId == null
-                                ? 'Open ${candidate.first?.name ?? 'agent'} here'
-                                : 'Show ${candidate.first?.name ?? 'agent'} in this pane',
+                                ? 'Open ${candidate.first?.name ?? 'harness'} here'
+                                : 'Show ${candidate.first?.name ?? 'harness'} in this pane',
                             style: grid.AppType.label(color: AppColors.text),
                           ),
                         ),
@@ -2283,7 +2281,7 @@ class _EmptyGrid extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Select an agent, or drag one in from the left.',
+                'Select a harness, or drag one in from the left.',
                 style: grid.AppType.body(color: AppColors.mutedStrong),
               ),
               // Selecting and dragging both need an agent to already exist. On a

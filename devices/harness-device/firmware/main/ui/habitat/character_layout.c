@@ -60,7 +60,7 @@ static void lines(ht_scene_t *s, int y, int width, int count, const ht_font_t *f
     const char *rest = text;
     for (int row = 0; row < count; row++) {
         int w = widths ? widths[row] : width;
-        const char *begin = rest, *end = ht_take_line(&rest, w / font->width);
+        const char *begin = rest, *end = ht_take_display_line(&rest, w / font->width, font);
         char line[HT_TEXT_BYTES];
         size_t n = (size_t)(end - begin);
         if (n >= sizeof line) n = sizeof line - 1;
@@ -91,16 +91,10 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
     // Summary text has no action glyph. Only incomplete prose gets an ellipsis;
     // the desktop action lives in the inbox footer. Bound cached UTF-8 input.
     char marked[7 * HT_TEXT_BYTES + 4];
-    size_t used = 0;
-    const char *p = recap ? recap : "";
-    while (*p) {
-        const char *start = p;
-        ht_utf8_next(&p);
-        size_t bytes = (size_t)(p - start);
-        if (used + bytes + 4 > sizeof marked) break;
-        memcpy(marked + used, start, bytes);
-        used += bytes;
-    }
+    // Normalize before the character budget and round-screen line wrapping.
+    // The stored message remains untouched; ⅓ occupies three display cells.
+    ht_display_text(marked,sizeof marked - 3,recap,font);
+    size_t used = strlen(marked);
     while (used && marked[used - 1] == ' ') used--;
     marked[used] = 0;
     if (used >= 2 && !strcmp(marked + used - 2, " +"))

@@ -220,7 +220,7 @@ class _ScannerState extends State<_Scanner> {
                       child: Text(
                         _problem!,
                         textAlign: TextAlign.center,
-                        style: boxMonoStyle(color: Colors.white70),
+                        style: boxMonoStyle(color: boxText(.70)),
                       ),
                     )
                   : ClipRRect(

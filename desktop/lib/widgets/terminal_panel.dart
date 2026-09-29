@@ -368,6 +368,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.visible && (_focusNode.hasFocus || _composerFocus.hasFocus)) {
+      widget.session.inputTabId = widget.paneLocation?.$1;
+    }
     if (!identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.modelStarts.removeListener(_onModelStartsChanged);
       widget.notifier.modelStarts.addListener(_onModelStartsChanged);
@@ -709,12 +712,16 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   /// Typing in the composer focuses the tile, exactly like clicking into the terminal does.
   void _handleComposerFocusChange() {
-    if (_composerFocus.hasFocus) widget.onRendererFocus?.call();
+    if (_composerFocus.hasFocus) {
+      widget.session.inputTabId = widget.paneLocation?.$1;
+      widget.onRendererFocus?.call();
+    }
   }
 
   void _handleFocusChange() {
     _syncCursorBlink();
     if (_focusNode.hasFocus) {
+      widget.session.inputTabId = widget.paneLocation?.$1;
       widget.onRendererFocus?.call();
     }
   }
@@ -1504,7 +1511,8 @@ class _TerminalPanelState extends State<TerminalPanel>
     final p = _passage;
     if (p != null && p.validate() && p.canHighlight) {
       final range = p.range;
-      final theme = terminalThemeFor(
+      // Laid on the screen itself, so the screen's own scheme.
+      final theme = terminalScreenThemeFor(
         grid.AppTheme.palette.value,
         terminalThemeStore.value,
       );
@@ -1686,6 +1694,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// clipboard than this one — see `MachineState.isLocalMachine`.
   Future<void> _paste() async {
     final target = widget.session;
+    final origin = widget.paneLocation?.$1;
     final streamId = target.streamId;
     bool stillOwnsPaste() =>
         mounted &&
@@ -1716,7 +1725,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       final machine = widget.notifier.stateOf(target.machineId);
       _controller.clearSelection();
       if (machine != null && machine.terminalPasteRawAvailable) {
-        await target.pasteText(text);
+        await target.pasteText(text, tabId: origin);
       } else {
         target.terminal.paste(text);
       }
@@ -1784,6 +1793,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
   /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    widget.session.inputTabId = widget.paneLocation?.$1;
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
       return KeyEventResult.handled;
@@ -2059,8 +2069,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       session.agentName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
+                                      // The header's own ink, which this
+                                      // line stands in for while Find is open.
                                       style: grid.AppType.monoLabel(
-                                        color: Colors.white70,
+                                        color: terminalThemeFor(
+                                          grid.AppTheme.palette.value,
+                                          terminalThemeStore.value,
+                                        ).foreground.withValues(alpha: .70),
                                         fontWeight: FontWeight.w400,
                                       ),
                                     ),
@@ -2136,7 +2151,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                             focusNode: _focusNode,
                             autofocus: widget.focused && !showComposer,
                             readOnly: widget.readOnly || !session.acceptsInput,
-                            theme: terminalThemeFor(
+                            theme: terminalScreenThemeFor(
                               grid.AppTheme.palette.value,
                               terminalThemeStore.value,
                             ),
@@ -2258,6 +2273,7 @@ class _TerminalPanelState extends State<TerminalPanel>
               ),
             if (showComposer)
               TerminalComposer(
+                tabId: widget.paneLocation?.$1,
                 session: session,
                 focusNode: _composerFocus,
                 inputEnabled: !widget.readOnly,
@@ -3335,7 +3351,10 @@ class _PaneGhost extends StatelessWidget {
             border: Border.all(color: AppColors.accent, width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.45),
+                // A lifted tile: the dark shadow would smudge a light ground.
+                color: Colors.black.withValues(
+                  alpha: grid.AppTheme.pick(0.18, 0.45),
+                ),
                 blurRadius: 24,
                 offset: const Offset(0, 10),
               ),

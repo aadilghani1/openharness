@@ -36,6 +36,8 @@ import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
+import 'viewer/viewer_location.dart';
+import 'viewer/viewer_page.dart';
 import 'viewer/pending_pair.dart';
 import 'viewer/pending_pair_store.dart';
 import 'widgets/add_machine_dialog.dart';
@@ -123,9 +125,9 @@ class HarnessApp extends StatelessWidget {
       ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
-      // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
-      // resolve between.
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      // One theme, no `darkTheme`/`themeMode` to resolve between: the chosen
+      // palette says whether it is light or dark.
+      theme: grid.buildAppTheme(brightness: prefs.palette.brightness),
       // The chosen point size is already applied to every style and terminal
       // cell. A second UI scale would make the chrome disagree with the grid.
       builder: (context, child) => MediaQuery.withNoTextScaling(
@@ -152,9 +154,9 @@ class HarnessApp extends StatelessWidget {
 /// mounted with. [grid.BrightnessScope] marks the ones that called
 /// `AppTheme.watch` dirty directly, across that boundary.
 ///
-/// Pinned to [Brightness.dark] rather than read from `Theme.of(context)`:
-/// Harness Desktop is dark-only, and there is no other theme for `Theme.of`
-/// to ever resolve to here.
+/// Set from the palette rather than read from `Theme.of(context)`: the palette
+/// is where light or dark is chosen, and [HarnessApp] builds the theme from the
+/// same value, so the two cannot disagree.
 class _GridTokenScope extends StatelessWidget {
   const _GridTokenScope({required this.child});
 
@@ -162,7 +164,7 @@ class _GridTokenScope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    grid.AppTheme.brightness.value = Brightness.dark;
+    grid.AppTheme.brightness.value = grid.AppTheme.palette.value.brightness;
     return grid.BrightnessScope(child: child);
   }
 }
@@ -367,7 +369,18 @@ class _RootShellState extends ConsumerState<RootShell>
             _holdPhoneLink(app);
           case AppStatus.authenticated:
             _webQrStarted = false;
-            screen = widget.authenticatedScreen(app);
+            final viewerLocation = kIsWeb
+                ? ViewerLocation.parse(Uri.base)
+                : null;
+            screen = viewerLocation != null
+                ? ViewerPage(app: app, location: viewerLocation)
+                : kIsWeb && ViewerLocation.isRoute(Uri.base)
+                ? const Center(
+                    child: Text(
+                      'This viewer link is incomplete. Run hn view again.',
+                    ),
+                  )
+                : widget.authenticatedScreen(app);
             _askAboutPendingPair(app);
         }
         // Preserve the fragment pin while dialogs navigate; an OAuth callback can restore it later.

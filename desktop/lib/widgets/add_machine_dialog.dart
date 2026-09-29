@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../api/api_client.dart' show MachineSignInRequest;
@@ -337,7 +338,12 @@ class _AddMachineDialogState extends State<AddMachineDialog> {
                       null => 'status unknown',
                     },
                     style: boxMonoStyle(
-                      color: online == true ? Colors.greenAccent : kBoxFaint,
+                      color: online == true
+                          ? grid.AppTheme.pick(
+                              grid.AppPalette.online,
+                              Colors.greenAccent,
+                            )
+                          : kBoxFaint,
                     ),
                   ),
                 if (fp != null && _phase != _Phase.failed) ...[
@@ -375,7 +381,12 @@ class _AddMachineDialogState extends State<AddMachineDialog> {
                               'it gets your account and your machines.'
                         : 'Only approve a machine you are setting up right now.',
                     key: const Key('add-machine-warning'),
-                    style: boxMonoStyle(color: Colors.amberAccent),
+                    style: boxMonoStyle(
+                      color: grid.AppTheme.pick(
+                        grid.AppPalette.warn,
+                        Colors.amberAccent,
+                      ),
+                    ),
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -411,8 +422,11 @@ class _AddMachineDialogState extends State<AddMachineDialog> {
                   key: const Key('add-machine-status'),
                   style: boxMonoStyle(
                     color: _phase == _Phase.failed
-                        ? Colors.redAccent
-                        : Colors.white70,
+                        ? grid.AppTheme.pick(
+                            grid.AppPalette.dangerFill,
+                            Colors.redAccent,
+                          )
+                        : boxText(.70),
                   ),
                 ),
                 const SizedBox(height: 14),

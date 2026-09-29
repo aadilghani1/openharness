@@ -74,7 +74,7 @@ class _TrackingSectionState extends State<TrackingSection> {
       title: 'Tracking',
       subtitle:
           'Every analytics event this app reports, and where it goes. Held in '
-          'memory for this session only — nothing here is written to disk.',
+          'memory for this harness only — nothing here is written to disk.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

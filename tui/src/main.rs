@@ -42,6 +42,7 @@ mod term_out;
 mod term_input;
 mod tmuxconf;
 mod ui;
+mod viewer;
 
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -312,6 +313,22 @@ async fn run(config: config::Config) -> io::Result<()> {
             } else { cli::has_session_named(f.name.as_deref(), &t) };
             if !found { if !ipc::alive(f.socket.as_deref(), f.name.as_deref()) { eprintln!("can't find session: {t}") } std::process::exit(1) }
         }
+    }
+    // Refuse to start a client from inside an existing hn client — as tmux
+    // refuses `tmux` from inside a tmux pane. Without this, `hn` (and `harness
+    // tui`, which wraps `hn`) inside a pane would open a whole TUI on top of
+    // itself, tail-eating the parent's screen until the process tree gives up.
+    // Detection matches ipc::chosen's own rule: $TMUX's socket path pointing at
+    // hn's socket directory means the parent process is a client of ours. Match
+    // tmux's exact wording so tmux-savvy users read the same escape hatch:
+    // `TMUX= hn` (or `unset TMUX; hn`) bypasses.
+    if std::env::var("TMUX").ok()
+        .and_then(|t| t.split(',').next().map(std::path::PathBuf::from))
+        .filter(|p| p.starts_with(ipc::dir()))
+        .is_some()
+    {
+        eprintln!("sessions should be nested with care, unset $TMUX to force");
+        std::process::exit(1);
     }
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
     // A terminal that cannot clear its screen (dumb, or none named) is refused as tmux refuses it.

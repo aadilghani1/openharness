@@ -3935,9 +3935,9 @@ class AppNotifier extends ChangeNotifier {
 
   String? _creationPlacementError(String targetId) {
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This tab was closed';
+    if (target == null) return 'This swarm was closed';
     if (target.panes.length >= maxPanes) {
-      return 'This tab is full. Open a new tab to create a harness.';
+      return 'This swarm is full. Open a new swarm to create a harness.';
     }
     return null;
   }
@@ -4155,7 +4155,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     if (_creationPlacementError(targetId) != null) {
       _lastError =
-          'The harness was created, but its original tab or layout changed. '
+          'The harness was created, but its original swarm or layout changed. '
           'Use Open Harness to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -5065,7 +5065,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This tab holds $maxPanes harnesses. Open another tab to add more.';
+          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
