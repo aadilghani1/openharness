@@ -1642,7 +1642,18 @@ class NewHarnessController extends ChangeNotifier {
     detail: machineLabel,
   );
 
+  bool _projectsOnSelectedMachine = false;
+
+  /// The desktop Repo menu owns machine selection; its recent folders must
+  /// match that location. The terminal menu retains its fleet-wide history.
+  void scopeProjectsToSelectedMachine(bool scoped) {
+    if (_projectsOnSelectedMachine == scoped) return;
+    _projectsOnSelectedMachine = scoped;
+    _refresh(resetCursor: true);
+  }
+
   List<NewHarnessOption> _projectMenu() => [
+    if (_projectsOnSelectedMachine) _changeMachine,
     const NewHarnessOption(
       id: repositoryId,
       synthetic: true,
@@ -2407,12 +2418,15 @@ class NewHarnessController extends ChangeNotifier {
         : options.indexWhere(
             (option) => !option.synthetic && option.title == _cycle!.name,
           );
+    final firstProject = options.indexWhere((option) => !option.synthetic);
     cursor = cycling >= 0
         ? cycling
         : kept >= 0
         ? kept
         : field == NewHarnessField.projectMenu
-        ? (options.length > 3 ? 3 : 1)
+        ? (firstProject >= 0
+              ? firstProject
+              : options.indexWhere((option) => option.id == existingProjectId))
         : query.isEmpty && now >= 0
         ? now
         : field == NewHarnessField.profile
@@ -2778,6 +2792,7 @@ class NewHarnessController extends ChangeNotifier {
       ...app.machineStates.values.where((m) => !m.isLocalMachine),
     ].where((m) => !m.machine.isShared)) {
       final id = machine.machine.machineId;
+      if (_projectsOnSelectedMachine && id != _machineId) continue;
       final folders = _recentProjectFolders(id).toList();
       final names = <String, int>{};
       for (final folder in folders) {

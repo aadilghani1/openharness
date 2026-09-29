@@ -67,9 +67,14 @@ class DesktopDialogSurface extends StatelessWidget {
 }
 
 class DesktopDialogBackdrop extends StatelessWidget {
-  const DesktopDialogBackdrop({super.key, required this.onDismiss});
+  const DesktopDialogBackdrop({
+    super.key,
+    required this.onDismiss,
+    this.frameless = false,
+  });
 
   final VoidCallback onDismiss;
+  final bool frameless;
 
   @override
   Widget build(BuildContext context) => BlockSemantics(
@@ -77,9 +82,16 @@ class DesktopDialogBackdrop extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onDismiss,
       child: ColoredBox(
-        color: Colors.black.withValues(
-          alpha: Theme.of(context).brightness == Brightness.dark ? .76 : .40,
-        ),
+        color: frameless
+            ? (Theme.of(context).brightness == Brightness.dark
+                      ? Colors.black
+                      : Colors.white)
+                  .withValues(alpha: .95)
+            : Colors.black.withValues(
+                alpha: Theme.of(context).brightness == Brightness.dark
+                    ? .76
+                    : .40,
+              ),
       ),
     ),
   );

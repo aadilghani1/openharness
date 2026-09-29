@@ -2786,6 +2786,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     Positioned.fill(
                       child: DesktopDialogBackdrop(
                         key: const ValueKey('new-harness-dismiss'),
+                        frameless: true,
                         onDismiss: () => _newHarnessFormKey.currentState
                             ?.dismissFromOutside(),
                       ),

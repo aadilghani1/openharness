@@ -360,7 +360,11 @@ void main() {
     tester,
   ) async {
     final fixture = await _mount(tester);
-    await tester.tap(find.byKey(const ValueKey('new-harness-machine')));
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-option-project:machine')),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(_query, 'no such agent exists');
     await tester.pumpAndSettle();
@@ -371,11 +375,15 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('new-harness-chooser-back')),
-      findsNothing,
+      findsOneWidget,
     );
     fixture.box.warn('Choose an installed agent to continue.');
     await tester.pumpAndSettle();
     expect(find.text('Choose an installed agent to continue.'), findsWidgets);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(fixture.box.field, NewHarnessField.projectMenu);
+    expect(_query, findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(_query, findsNothing);
@@ -438,7 +446,11 @@ void main() {
     (tester) async {
       final fixture = await _mount(tester);
       await tester.enterText(_task, 'Keep my review notes');
-      await tester.tap(find.byKey(const ValueKey('new-harness-machine')));
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('new-harness-option-project:machine')),
+      );
       await tester.pumpAndSettle();
       await tester.enterText(_query, 'Studio');
       final surface = tester.getRect(

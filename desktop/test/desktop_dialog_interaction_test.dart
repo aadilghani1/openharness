@@ -213,7 +213,7 @@ const _nativeSmokeJourneys = {
   'Tab and Shift-Tab remain inside the composer and reach controls',
   'Space opens a focused chooser without starting',
   'Return opens a focused chooser without starting',
-  'agent machine and repo appear in order above the composer',
+  'agent and repo appear in order above the composer',
   'Tab leaves a chooser without applying its highlight',
   'Shift-Tab leaves a chooser without applying its highlight',
   'Escape closes only the chooser and returns to its control',
@@ -304,22 +304,16 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('agent machine and repo appear in order above the composer', (
-    tester,
-  ) async {
+  journey('agent and repo appear in order above the composer', (tester) async {
     await _mount(tester);
     await _new(tester);
     final agent = find.byKey(const ValueKey('new-harness-field-agent'));
     final machine = find.byKey(const ValueKey('new-harness-machine'));
     final project = find.byKey(const ValueKey('new-harness-field-project'));
-    expect(tester.getTopLeft(agent).dy, tester.getTopLeft(machine).dy);
-    expect(tester.getTopLeft(machine).dy, tester.getTopLeft(project).dy);
+    expect(machine, findsNothing);
+    expect(tester.getTopLeft(agent).dy, tester.getTopLeft(project).dy);
     expect(
       tester.getTopRight(agent).dx,
-      lessThan(tester.getTopLeft(machine).dx),
-    );
-    expect(
-      tester.getTopRight(machine).dx,
       lessThan(tester.getTopLeft(project).dx),
     );
     expect(
@@ -346,7 +340,9 @@ void main({bool nativeSmoke = false}) {
             tester,
             find.byKey(
               ValueKey(
-                reverse ? 'new-harness-field-start' : 'new-harness-machine',
+                reverse
+                    ? 'new-harness-field-start'
+                    : 'new-harness-field-project',
               ),
             ),
           ),
@@ -435,12 +431,18 @@ void main({bool nativeSmoke = false}) {
       final opener = find.byKey(
         ValueKey(
           field == 'machine'
-              ? 'new-harness-machine'
+              ? 'new-harness-field-project'
               : 'new-harness-field-$field',
         ),
       );
       await tester.tap(opener);
       await tester.pump();
+      if (field == 'machine') {
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-option-project:machine')),
+        );
+        await tester.pump();
+      }
       expect(_chooser, findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter, cmd: true);
       expect(
@@ -701,10 +703,7 @@ void main({bool nativeSmoke = false}) {
         }
         await tester.pumpAndSettle();
         expect(original.worktree, !worktree);
-        expect(
-          find.text(original.worktree ? 'Worktree on' : 'Worktree off'),
-          findsOneWidget,
-        );
+        expect(find.text('Worktree'), findsOneWidget);
         final branch = original.worktree ? 'feature' : 'main';
         await open(field('branch'), keyboard: keyboard);
         await choose('refs/heads/$branch', branch, keyboard: !keyboard);
@@ -737,9 +736,14 @@ void main({bool nativeSmoke = false}) {
         expectStableDraft();
 
         final machineControl = find.byKey(
-          const ValueKey('new-harness-machine'),
+          const ValueKey('new-harness-field-project'),
         );
         await open(machineControl, keyboard: keyboard);
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-option-project:machine')),
+        );
+        await tester.pumpAndSettle();
+        expect(original.field, NewHarnessField.machine);
         await tester.enterText(_query, 'unavailable-machine-$round');
         await tester.pumpAndSettle();
         expect(find.text('No matches'), findsOneWidget);

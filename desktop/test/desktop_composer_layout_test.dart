@@ -152,7 +152,9 @@ Finder _field(String name) => find.byKey(ValueKey('new-harness-field-$name'));
 final _surface = find.byKey(const ValueKey('new-harness-surface'));
 final _composer = find.byKey(const ValueKey('new-harness-composer'));
 final _task = find.byKey(const ValueKey('new-harness-task'));
-final _machine = find.byKey(const ValueKey('new-harness-machine'));
+final _machine = find.byKey(
+  const ValueKey('new-harness-option-project:machine'),
+);
 final _close = find.byKey(const ValueKey('new-harness-close'));
 final _chooser = find.byKey(const ValueKey('new-harness-chooser-surface'));
 final _query = find.byKey(const ValueKey('new-harness-query'));
@@ -250,6 +252,7 @@ Future<_ReviewFixture> _mount(
                 children: [
                   Positioned.fill(
                     child: DesktopDialogBackdrop(
+                      frameless: true,
                       onDismiss: () =>
                           fixture.form.currentState?.dismissFromOutside(),
                     ),
@@ -341,7 +344,6 @@ void main() {
         final surface = tester.getRect(_surface);
         final composer = tester.getRect(_composer);
         final agent = tester.getRect(_field('agent'));
-        final machine = tester.getRect(_machine);
         final repo = tester.getRect(_field('project'));
         final action = tester.getRect(_field('start'));
         final model = tester.getRect(_field('model'));
@@ -350,9 +352,13 @@ void main() {
         final worktree = tester.getRect(_field('worktree'));
         final branch = tester.getRect(_field('branch'));
 
-        expect(surface.width, 860);
-        expect(agent.right, lessThan(machine.left));
-        expect(machine.right, lessThan(repo.left));
+        expect(surface.width, 680);
+        expect(
+          tester.widget<Material>(_surface).type,
+          MaterialType.transparency,
+        );
+        expect(agent.right, lessThan(repo.left));
+        expect(_machine, findsNothing);
         expect(agent.center.dy, closeTo(repo.center.dy, 1));
         expect(repo.bottom, lessThan(composer.top));
         expect(composer.contains(action.topLeft), isTrue);
@@ -382,39 +388,42 @@ void main() {
     );
   }
 
-  testWidgets('footer controls stay text-only and use a stable focus fill', (
-    tester,
-  ) async {
-    final fixture = await _mount(tester);
-    Material buttonMaterial(Finder control) => tester.widget<Material>(
-      find.descendant(of: control, matching: find.byType(Material)).first,
-    );
-    for (final name in [
-      'model',
-      'approvals',
-      'profile',
-      'worktree',
-      'branch',
-    ]) {
-      final control = _field(name);
-      expect(
-        find.descendant(of: control, matching: find.byType(Icon)),
-        findsNothing,
+  testWidgets(
+    'footer controls keep a stable focus fill and explicit Git symbols',
+    (tester) async {
+      final fixture = await _mount(tester);
+      Material buttonMaterial(Finder control) => tester.widget<Material>(
+        find.descendant(of: control, matching: find.byType(Material)).first,
       );
-      final before = tester.getRect(control);
-      final resting = buttonMaterial(control);
-      await _focus(tester, control);
-      final focused = buttonMaterial(control);
-      expect(focused.color, isNot(resting.color));
-      expect(tester.getRect(control), before);
-      final restingShape = resting.shape! as OutlinedBorder;
-      final focusedShape = focused.shape! as OutlinedBorder;
-      expect(focusedShape.side, restingShape.side);
-      expect(focusedShape.side.width, lessThanOrEqualTo(1));
-    }
-    expect(find.text('Worktree on'), findsOneWidget);
-    expect(fixture.app.launches, isEmpty);
-  });
+      for (final name in [
+        'model',
+        'approvals',
+        'profile',
+        'worktree',
+        'branch',
+      ]) {
+        final control = _field(name);
+        expect(
+          find.descendant(of: control, matching: find.byType(Icon)),
+          name == 'worktree' || name == 'branch'
+              ? findsOneWidget
+              : findsNothing,
+        );
+        final before = tester.getRect(control);
+        final resting = buttonMaterial(control);
+        await _focus(tester, control);
+        final focused = buttonMaterial(control);
+        expect(focused.color, isNot(resting.color));
+        expect(tester.getRect(control), before);
+        final restingShape = resting.shape! as OutlinedBorder;
+        final focusedShape = focused.shape! as OutlinedBorder;
+        expect(focusedShape.side, restingShape.side);
+        expect(focusedShape.side.width, lessThanOrEqualTo(1));
+      }
+      expect(find.text('Worktree'), findsOneWidget);
+      expect(fixture.app.launches, isEmpty);
+    },
+  );
 
   testWidgets('agent identity is shown by the Codex and Claude marks', (
     tester,
@@ -471,6 +480,10 @@ void main() {
           (_machine, NewHarnessField.machine, 'machine', 160.0),
           (_field('project'), NewHarnessField.projectMenu, 'repo', 280.0),
         ]) {
+          if (field == NewHarnessField.machine) {
+            await tester.tap(_field('project'));
+            await tester.pumpAndSettle();
+          }
           await tester.tap(trigger);
           await tester.pumpAndSettle();
           expect(fixture.box.field, field);
@@ -478,7 +491,7 @@ void main() {
           expect(_query.hitTestable(), findsOneWidget);
           expect(
             find.descendant(of: _chooser, matching: find.byType(IconButton)),
-            findsNothing,
+            field == NewHarnessField.machine ? findsOneWidget : findsNothing,
           );
           expect(find.text('Choose machine'), findsNothing);
           expect(find.text('Choose repo'), findsNothing);
@@ -522,14 +535,105 @@ void main() {
           await capture(tester, fixture, '$name-menu-${brightness.name}');
           await key(tester, LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
+          if (field == NewHarnessField.machine) {
+            expect(fixture.box.field, NewHarnessField.projectMenu);
+            await key(tester, LogicalKeyboardKey.escape);
+            await tester.pumpAndSettle();
+          }
           expect(_chooser, findsNothing);
-          expect(_focused(tester, trigger), isTrue);
+          expect(_focused(tester, _field('project')), isTrue);
         }
         expect(fixture.closes, 0);
         expect(fixture.app.launches, isEmpty);
       },
     );
   }
+
+  testWidgets('Repo scopes folders to its machine and preserves the draft', (
+    tester,
+  ) async {
+    final fixture = await _mount(tester);
+    const remote = Machine(
+      machineId: 'remote',
+      name: 'Build server',
+      authMode: MachineAuthMode.remote,
+    );
+    fixture.app.machineStates['remote'] = MachineState(remote)
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..engines.replace(const [
+        EngineAvailability(engine: 'codex', installed: true),
+      ]);
+    await fixture.app.projectHistory.select('remote', '/srv/remote-repo');
+    await tester.enterText(_task, 'Keep my unsent task across machines');
+    await tester.tap(_field('project'));
+    await tester.pumpAndSettle();
+    expect(find.text('Local · office'), findsOneWidget);
+    expect(
+      fixture.box.options
+          .where((o) => !o.synthetic)
+          .every((o) => o.machineId == 'review'),
+      isTrue,
+    );
+
+    // Machine selection is reachable through the same arrow/Enter navigation
+    // as folders, without adding a Tab stop to the main composer.
+    for (
+      var i = 0;
+      i < 6 && fixture.box.selected?.id != NewHarnessController.changeMachineId;
+      i++
+    ) {
+      await key(tester, LogicalKeyboardKey.arrowUp);
+    }
+    expect(fixture.box.selected?.id, NewHarnessController.changeMachineId);
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(fixture.box.field, NewHarnessField.machine);
+    await tester.enterText(_query, 'Build server');
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(fixture.box.field, NewHarnessField.projectMenu);
+    expect(fixture.box.machineId, 'remote');
+    expect(find.text('remote-repo'), findsOneWidget);
+    expect(
+      fixture.box.options
+          .where((o) => !o.synthetic)
+          .every((o) => o.machineId == 'remote'),
+      isTrue,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('new-harness-option-project:remote:/srv/remote-repo'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(_chooser, findsNothing);
+    expect(_focused(tester, _field('project')), isTrue);
+    expect(find.text('remote-repo · Build server'), findsOneWidget);
+    expect(fixture.box.project.folder, '/srv/remote-repo');
+
+    await tester.tap(_field('project'));
+    await tester.pumpAndSettle();
+    await tester.enterText(_query, 'remote');
+    await tester.tap(_machine);
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(fixture.box.field, NewHarnessField.projectMenu);
+    expect(fixture.box.query, 'remote');
+    expect(fixture.box.machineId, 'remote');
+    await tester.tap(_machine);
+    await tester.pumpAndSettle();
+    await tester.enterText(_query, 'office');
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(fixture.box.machineId, 'review');
+    expect(fixture.box.project.folder, '/work/autonomous-harness');
+    expect(fixture.box.query, isEmpty);
+    expect(fixture.box.task, 'Keep my unsent task across machines');
+    expect(fixture.app.launches, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final (size, scale, name) in [
     (const Size(1200, 800), 1.0, 'wide'),
@@ -565,7 +669,7 @@ void main() {
         expect(branchText.semanticsLabel, contains(branch));
         await tester.tap(_field('worktree'));
         await tester.pumpAndSettle();
-        expect(find.text('Worktree off'), findsOneWidget);
+        expect(find.text('Worktree'), findsOneWidget);
         expect(tester.getRect(_field('worktree')), worktreeBounds);
         expect(tester.getRect(_field('branch')), branchBounds);
         expect(fixture.box.branchRef, 'refs/heads/$branch');
@@ -583,7 +687,6 @@ void main() {
       final fixture = await _mount(tester);
       final cycle = [
         _field('agent'),
-        _machine,
         _field('project'),
         _task,
         _field('model'),
@@ -623,7 +726,6 @@ void main() {
     final semantics = tester.ensureSemantics();
     for (final label in [
       'Agent, Codex',
-      'Machine, office',
       'Repo, office:/work/autonomous-harness',
       'Model, OpenAI',
       'Approvals, Auto-approve',
@@ -692,40 +794,39 @@ void main() {
     },
   );
 
-  testWidgets(
-    'empty editor shows the working launch key after focus and remapping',
-    (tester) async {
-      final fixture = await _mount(tester);
-      Finder hint(String label) =>
-          find.descendant(of: _field('start'), matching: find.text(label));
-      expect(hint('↵'), findsOneWidget);
-      await tester.tap(_task);
-      await tester.pumpAndSettle();
-      expect(hint('↵'), findsNothing);
-      expect(hint('⌘↵'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.enter);
-      expect(fixture.app.launches, isEmpty);
+  testWidgets('unlabelled launch button retains editor keys and remapping', (
+    tester,
+  ) async {
+    final fixture = await _mount(tester);
+    Finder hint(String label) =>
+        find.descendant(of: _field('start'), matching: find.text(label));
+    expect(hint('↵'), findsNothing);
+    await tester.tap(_task);
+    await tester.pumpAndSettle();
+    expect(hint('↵'), findsNothing);
+    expect(hint('⌘↵'), findsNothing);
+    await key(tester, LogicalKeyboardKey.enter);
+    expect(fixture.app.launches, isEmpty);
 
-      fixture.map.apply(
-        '{"bindings":[{"keys":"cmd+enter","command":null,"when":"picker"}]}',
-      );
-      await tester.pumpAndSettle();
-      expect(hint('⌘↵'), findsNothing);
-      await key(tester, LogicalKeyboardKey.enter, cmd: true);
-      expect(fixture.app.launches, isEmpty);
+    fixture.map.apply(
+      '{"bindings":[{"keys":"cmd+enter","command":null,"when":"picker"}]}',
+    );
+    await tester.pumpAndSettle();
+    expect(hint('⌘↵'), findsNothing);
+    await key(tester, LogicalKeyboardKey.enter, cmd: true);
+    expect(fixture.app.launches, isEmpty);
 
-      fixture.map.apply(
-        '{"bindings":[{"keys":"f8","command":"picker.add_here","when":"picker"},'
-        '{"keys":"cmd+enter","command":null,"when":"picker"}]}',
-      );
-      await tester.pumpAndSettle();
-      expect(hint('F8'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.f8);
-      await tester.pumpAndSettle();
-      expect(fixture.app.launches, hasLength(1));
-      expect(fixture.app.launches.single['prompt'], isNull);
-    },
-  );
+    fixture.map.apply(
+      '{"bindings":[{"keys":"f8","command":"picker.add_here","when":"picker"},'
+      '{"keys":"cmd+enter","command":null,"when":"picker"}]}',
+    );
+    await tester.pumpAndSettle();
+    expect(hint('F8'), findsNothing);
+    await key(tester, LogicalKeyboardKey.f8);
+    await tester.pumpAndSettle();
+    expect(fixture.app.launches, hasLength(1));
+    expect(fixture.app.launches.single['prompt'], isNull);
+  });
 
   testWidgets(
     'each menu dismisses by mouse without dismissing or editing the form',
@@ -735,7 +836,6 @@ void main() {
       await tester.enterText(_task, draft);
       for (final trigger in [
         _field('agent'),
-        _machine,
         _field('project'),
         _field('model'),
         _field('approvals'),

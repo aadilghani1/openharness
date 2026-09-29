@@ -309,7 +309,7 @@ void main({bool nativeSmoke = false}) {
     tester,
   ) async {
     final fixture = await _mount(tester);
-    expect(tester.getSize(_surface).width, 860);
+    expect(tester.getSize(_surface).width, 680);
     expect(_task, findsOneWidget);
     expect(
       tester.widget<TextField>(_task).decoration?.hintText,
@@ -341,12 +341,9 @@ void main({bool nativeSmoke = false}) {
       find.byKey(const ValueKey('new-harness-field-branch')),
       findsOneWidget,
     );
+    expect(_machine, findsNothing);
     expect(
       tester.getTopRight(_agent).dx,
-      lessThan(tester.getTopLeft(_machine).dx),
-    );
-    expect(
-      tester.getTopRight(_machine).dx,
       lessThan(
         tester
             .getTopLeft(find.byKey(const ValueKey('new-harness-field-project')))
@@ -370,7 +367,6 @@ void main({bool nativeSmoke = false}) {
     final fixture = await _mount(tester);
     for (final target in [
       _agent,
-      _machine,
       find.byKey(const ValueKey('new-harness-field-project')),
       _task,
       find.byKey(const ValueKey('new-harness-field-model')),
@@ -451,7 +447,7 @@ void main({bool nativeSmoke = false}) {
           await _focus(tester, _task);
         }
         await tester.pumpAndSettle();
-        expect(tester.getSize(_surface).width, 860);
+        expect(tester.getSize(_surface).width, 680);
         expect(_focused(tester, _task), isTrue);
         expect(
           tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller,
@@ -470,7 +466,7 @@ void main({bool nativeSmoke = false}) {
         await key(tester, LogicalKeyboardKey.escape);
         expect(_task, findsOneWidget);
         expect(controller.task, 'A first question');
-        expect(tester.getSize(_surface).width, 860);
+        expect(tester.getSize(_surface).width, 680);
         expect(_focused(tester, _agent), isTrue);
         expect(fixture.app.launches, isEmpty);
       },
@@ -549,7 +545,7 @@ void main({bool nativeSmoke = false}) {
         expect(_chooser, findsOneWidget);
         await key(tester, LogicalKeyboardKey.escape);
         expect(_focused(tester, target), isTrue);
-        expect(tester.getSize(_surface).width, 860);
+        expect(tester.getSize(_surface).width, 680);
         if (engine == 'codex') {
           await capture(tester, fixture, 'direct-settings-dark');
         }
@@ -575,7 +571,7 @@ void main({bool nativeSmoke = false}) {
       expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(_focused(tester, target), isTrue);
       expect(fixture.closed, 0);
-      expect(tester.getSize(_surface).width, 860);
+      expect(tester.getSize(_surface).width, 680);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
       expect(fixture.closed, 1);
@@ -705,7 +701,7 @@ void main({bool nativeSmoke = false}) {
       find.byKey(const ValueKey('new-harness-field-advanced')),
       findsNothing,
     );
-    expect(tester.getSize(_surface).width, 860);
+    expect(tester.getSize(_surface).width, 680);
     expect(_focused(tester, _start), isTrue);
     expect(fixture.box.engine, 'claude');
     expect(fixture.box.worktree, isFalse);
@@ -726,14 +722,14 @@ void main({bool nativeSmoke = false}) {
         'Draft from earlier',
       );
       expect(_focused(tester, _task), isTrue);
-      expect(tester.getSize(_surface).width, 860);
+      expect(tester.getSize(_surface).width, 680);
       restored.box.setTask('');
       final empty = restored.box.draft;
       await tester.pumpWidget(const SizedBox());
       final emptyFixture = await _mount(tester, draft: empty);
       expect(_task, findsOneWidget);
       expect(_focused(tester, _start), isTrue);
-      expect(tester.getSize(_surface).width, 860);
+      expect(tester.getSize(_surface).width, 680);
       expect(emptyFixture.box.project, draft.project);
       expect(emptyFixture.box.worktree, draft.worktree);
     },

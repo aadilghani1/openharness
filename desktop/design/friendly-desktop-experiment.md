@@ -5,22 +5,25 @@ This experiment follows the user's new direction for the UI around the terminal,
 superseding the flat, fixed-cell dialog presentation for the surfaces below.
 It is not included in Desktop 1.2.27 and must not be merged without review.
 
-- Cmd-N and Cmd-P are floating dialogs with the same frame, shadow, backdrop,
-  typography, and focus treatment. The dark backdrop suppresses busy terminal
-  content behind them. Keyboard focus uses a quiet fill change without thick
-  outlines or changing control dimensions.
-- Cmd-N opens a centered, 860-point composer. Agent, Machine, and Repo are
-  compact capsule selectors across the top, with the agent's existing brand
-  mark and Close at the right. There is
-  no visible heading. The always-visible message editor says “What’s next?”;
-  New harness is inside its lower-right corner and works without a message.
-  Direct Model, Approvals, and Codex Profile controls sit below the composer
-  on the left; Worktree on/off and Branch sit on the right, in that order.
-  These are small text-only controls. There is no Options disclosure. The Git
-  controls stay together on one baseline, moving together below the other
-  settings in narrow windows or at larger text sizes. Long branch names
-  truncate in the closed control; its tooltip and accessibility label retain
-  the complete branch and worktree plan.
+- Cmd-N places a centered, 680-point composer directly on a 95% dark backdrop,
+  without an outer card, border, or shadow. Light mode uses a 95% white backdrop
+  so the unframed labels remain readable. Cmd-P retains its floating frame.
+  Both use system typography and a quiet focused fill without shifting controls.
+- Agent and Repo are compact capsule selectors above the editor, with the
+  agent's existing brand mark and Close at the right. The always-visible message
+  editor says “What’s next?”; New harness sits inside its lower-right corner,
+  works without a message, and has no visible Return symbol.
+  Model, Approvals, and Codex Profile sit below the composer on the left;
+  a checked Worktree control and a branch icon/name sit on the right. Git
+  controls stay together, moving below the other settings in narrow windows
+  or at larger text sizes. Long branch names truncate; the tooltip and
+  accessibility label retain the complete branch and worktree plan.
+- Machine selection is inside Repo. Its first row shows Local and the computer
+  name, or the selected remote machine. Selecting it opens the machine list;
+  accepting or pressing Escape returns to Repo. Recent folders are scoped to
+  that machine. Fresh launch contexts still default to local; restored drafts
+  and explicit Store machine choices retain their destination. The closed Repo
+  control includes the machine name for remote destinations.
 - The last explicit approval choice is remembered per agent, including Full
   access when selected. Worktree choices are remembered per machine/project.
   Projects without a saved choice keep Worktree on; agents without a saved
@@ -38,7 +41,7 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
   Shift-Tab dismiss a chooser without applying a value and continue form traversal.
 - Focus stays inside the active dialog. New harness receives initial focus for
   empty drafts; restored tasks receive editor focus. Tab from New harness wraps
-  to Agent, then Machine, Repo, message, Model, Approvals, Profile, Worktree,
+  to Agent, then Repo, message, Model, Approvals, Profile, Worktree,
   Branch, and Close. Shift-Tab reaches Close. Tab reaches each visible control without
   stopping on hidden fields. Arrow keys navigate searchable option lists.
   Existing command identities and shortcut remapping remain available.
@@ -72,12 +75,24 @@ It is not included in Desktop 1.2.27 and must not be merged without review.
 - System UI typography is used for controls, selected branches, and task text; paths,
   shortcut hints, workspace bars, and terminal content retain monospace.
 - Header selectors use compact capsules; composer settings use quiet text
-  controls with a focused fill. The default action carries its live shortcut hint.
+  controls with a focused fill. The default action retains its keyboard commands
+  without displaying a shortcut symbol.
   Icon-only toolbar controls and navigation links retain their roles.
 
 Review creation and search with keyboard, mouse, input composition, long text,
 light/dark palettes, narrow windows, and unavailable resources. Use synthetic
 fixtures for saved previews; never commit live account screenshots.
+
+Validation of the frameless composer iteration on 2026-09-29, after `89aceb38`:
+
+- 177 targeted tests passed across composer layout, compact launch, dialog
+  interaction, launch edge cases, entry rules, saved preferences, project
+  context, and friendly desktop suites. This includes keyboard machine
+  selection, machine-scoped folders, nested cancellation, and draft retention.
+- App/test static analysis and the macOS debug build passed. Synthetic previews
+  were inspected in both themes, including narrow layouts and enlarged text.
+  The normal app was reopened and the composer and local Repo menu inspected.
+- This iteration did not rerun the full suite or native fixture described below.
 
 Validation of the minimal composer iteration on 2026-09-29,
 against the experiment baseline `a26237c9`:
