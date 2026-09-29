@@ -78,20 +78,22 @@ const LOGO = [
 ];
 
 describe("scripts/install.sh: what it says once it is done", () => {
-  it("ends with the wordmark and the guide — login, start, remote password, then harness remote — in that order", () => {
+  it("ends with the wordmark and the guide — harness login by QR, how to scan it, then hn and the rest — in that order", () => {
     const result = runFinale("standalone", true);
     expect(result.status).toBe(0);
     const out = result.stdout;
     for (const line of LOGO) expect(out).toContain(line);
     expect(out).toContain("✓ harness 0.2.60 installed.");
-    const order = ["harness login", "harness start", "harness remote-password set", "harness remote  ", "harness machines", "harness status", "harness --help"];
+    const order = ["harness login", "Scan it with your phone", "harness login --browser", "      hn", "harness status", "harness machines", "harness remote", "harness --help"];
     const at = order.map((command) => out.indexOf(command));
     expect(at.every((index) => index >= 0)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
     expect(out.indexOf(LOGO[1])).toBeLessThan(out.indexOf("harness login"));
-    // Every command is explained, and nothing is run: the fixture launcher only answered `version`.
-    expect(out).toContain("# 1. sign in");
-    expect(out).toContain("# 3. let your OTHER machines reach this one");
+    // How to scan is spelled out — both ways — and nothing is run: the fixture launcher only answered `version`.
+    expect(out).toContain("its Camera");
+    expect(out).toContain("Scan a QR code");
+    // One step: signing in starts Harness and links this computer; no remote password to set first.
+    expect(out).not.toContain("harness remote-password set");
     expect(out).not.toContain("'harness' is installed in ~/.local/bin");
   }, 20_000);
 
