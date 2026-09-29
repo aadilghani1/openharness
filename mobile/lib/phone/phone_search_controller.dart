@@ -325,9 +325,9 @@ class PhoneSearchController extends ChangeNotifier {
   /// Announce a change the APP made, one microtask late.
   ///
   /// ⚠️ **Never synchronously, because these two arrive mid-build.**
-  /// [PhoneSearchResults] warms the preview store from its `initState`, and the
-  /// store publishes to its listeners as it goes — so the controller was told to
-  /// re-rank while the very list watching it was still being built, and
+  /// [PhoneSearchResults] once warmed the preview store from its `initState`,
+  /// and the store publishes to its listeners as it goes — so the controller was
+  /// told to re-rank while the very list watching it was still being built, and
   /// `markNeedsBuild` threw. A microtask drains after the build phase, which is
   /// the earliest moment a rebuild can legally be asked for.
   ///

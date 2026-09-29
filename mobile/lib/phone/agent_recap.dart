@@ -48,6 +48,35 @@ PhoneRecap? phoneRecap(SessionPreviewStore previews, SessionPreviewKey? key) {
   if (preview == null) return null;
   final headline = preview.recap;
   final saved = preview.savedText;
+  final body = preview.response;
+  // Find rebuilds on every preview the store publishes — as often as every 80 ms while an agent
+  // streams — and a streamed delta moves none of these three. Same strings, same recap: the
+  // flattening is not run again.
+  final memo = _recaps[preview];
+  if (memo != null &&
+      identical(memo.headline, headline) &&
+      identical(memo.saved, saved) &&
+      identical(memo.body, body)) {
+    return memo.recap;
+  }
+  final recap = _recapOf(headline, saved, body);
+  _recaps[preview] = (
+    headline: headline,
+    saved: saved,
+    body: body,
+    recap: recap,
+  );
+  return recap;
+}
+
+/// The last recap [phoneRecap] made for each preview, with the strings it was made from. Held
+/// beside the preview rather than in it, so it goes when the store lets the preview go.
+final _recaps =
+    Expando<
+      ({String? headline, String? saved, String? body, PhoneRecap? recap})
+    >('phoneRecap');
+
+PhoneRecap? _recapOf(String? headline, String? saved, String? body) {
   if (headline != null && saved != null) {
     final flat = flattenRecap(headline);
     if (flat.isNotEmpty) {
@@ -58,7 +87,6 @@ PhoneRecap? phoneRecap(SessionPreviewStore previews, SessionPreviewKey? key) {
       );
     }
   }
-  final body = preview.response;
   if (body == null) return null;
   final flat = _flattenHead(body);
   if (flat.isEmpty) return null;

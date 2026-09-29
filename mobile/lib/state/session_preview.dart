@@ -3,8 +3,9 @@
 /// does. Keep the two in step; the additions here are
 /// [SessionPreview.searchParts], which the phone's result rows quote from,
 /// [SessionPreviewStore.markStale], for turns a sleeping phone never heard, and
-/// [SessionPreview.recap] with [SessionPreviewStore.isReading], for the recap
-/// under each row of the Harnesses list.
+/// [SessionPreview.recap] with [SessionPreviewStore.isPending], for the recap
+/// under each row of the Harnesses list, and
+/// [SessionPreviewStore.maxInFlight], so that list's rows fill in faster.
 library;
 
 import 'dart:async';
@@ -114,14 +115,16 @@ class SessionPreview {
 }
 
 /// Bounded memory shared across picker openings. Inventory warms small cached
-/// `agent_recent` replies with two requests at a time. Selection reads memory;
-/// a settled cold selection may schedule the same inexpensive background read.
+/// `agent_recent` replies with [maxInFlight] requests at a time. Selection
+/// reads memory; a settled cold selection may schedule the same inexpensive
+/// background read.
 class SessionPreviewStore extends ChangeNotifier {
   SessionPreviewStore({
     required this.fetchRecent,
     required this.canFetch,
     this.capacity = 256,
     this.freshFor = const Duration(minutes: 1),
+    this.maxInFlight = 2,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
@@ -129,6 +132,9 @@ class SessionPreviewStore extends ChangeNotifier {
   final bool Function(SessionPreviewKey) canFetch;
   final int capacity;
   final Duration freshFor;
+
+  /// How many reads are out at once, across every machine. The desktop's two.
+  final int maxInFlight;
   final DateTime Function() _now;
   final _records = <SessionPreviewKey, SessionPreview>{};
   final _queue = <SessionPreviewKey>{};
@@ -147,14 +153,24 @@ class SessionPreviewStore extends ChangeNotifier {
   /// until [freshFor] runs out and something happens to warm it again.
   void markStale(SessionPreviewKey key) => _records[key]?._attemptedAt = null;
 
-  /// Whether [key] is being read, or is queued to be — what lets a row hold a
-  /// placeholder for content on its way rather than grow when it lands.
+  /// Whether what [key] said is still to come: being read, queued to be, or
+  /// never read at all — what lets a row hold a placeholder for content on its
+  /// way rather than grow when it lands.
+  ///
+  /// ⚠️ **Never read counts.** Find warms the rows it draws one frame after
+  /// drawing them, so a row scrolled into view is not queued yet on its first
+  /// frame — and is about to be. A row that held nothing there and a
+  /// placeholder a frame later would flicker at the edge of every scroll.
   ///
   /// False for a key that can no longer be fetched: a queued read of it is
   /// dropped without a word ([_drain]), and a placeholder waiting on it would
-  /// wait for ever.
-  bool isReading(SessionPreviewKey key) =>
-      (_inFlight.contains(key) || _queue.contains(key)) && canFetch(key);
+  /// wait for ever. False, too, once a read has answered, even with nothing or
+  /// an error: that session has nothing to show, not something on its way.
+  bool isPending(SessionPreviewKey key) {
+    if (!canFetch(key)) return false;
+    if (_inFlight.contains(key) || _queue.contains(key)) return true;
+    return !(_records[key]?.fetched ?? false);
+  }
 
   SessionPreview _entry(SessionPreviewKey key) {
     final entry = _records.remove(key) ?? SessionPreview();
@@ -193,7 +209,7 @@ class SessionPreviewStore extends ChangeNotifier {
   }
 
   void _drain() {
-    while (!_disposed && _inFlight.length < 2 && _queue.isNotEmpty) {
+    while (!_disposed && _inFlight.length < maxInFlight && _queue.isNotEmpty) {
       final key = _queue.first;
       _queue.remove(key);
       if (!canFetch(key)) continue;

@@ -7,6 +7,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
+import 'package:harness_mobile/state/session_preview.dart'
+    show SessionPreviewKey;
 
 import 'agent_index.dart';
 import 'agent_recap.dart';
@@ -151,10 +153,38 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(notifier.reachAllMachines());
     });
-    notifier.sessionPreviews.warm([
-      for (final entry in recentAgents(agentIndex(notifier)))
-        notifier.previewKey(entry.machineId, entry.agent),
-    ], prioritize: true);
+    // No warm of the recaps here: each row asks for its own as it is built — see [_want].
+  }
+
+  /// The sessions whose rows this frame built, read once it is over — see [_want].
+  final _wanted = <SessionPreviewKey>{};
+  bool _warmScheduled = false;
+
+  /// Asks for what [key]'s session last said, because its row is on screen or about to be.
+  ///
+  /// ⚠️ **By the rows built, not the agents known.** Warming the first 32 agents by recency, as
+  /// this did on open, read rows in an order Find does not draw them in — needs you, the frozen
+  /// open order, paused last — and never reached a row past the 32nd: a list of a hundred sessions
+  /// held two thirds of its recaps empty however far it was scrolled. The list is lazy, so the rows
+  /// built are the ones in view and the next few below; asked for top first and ahead of anything
+  /// already queued, they fill in in the order they are read.
+  ///
+  /// After the frame, in one batch: warming mid-build would start reads from inside a layout, and a
+  /// row at a time would reorder the store's queue once per row. Asked again on every rebuild —
+  /// the store skips what is in flight or fresh, so that costs a lookup a row, and a row still on
+  /// screen after [SessionPreviewStore.freshFor] is read again.
+  void _want(SessionPreviewKey key) {
+    _wanted.add(key);
+    if (_warmScheduled) return;
+    _warmScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _warmScheduled = false;
+      final keys = _wanted.toList();
+      _wanted.clear();
+      if (mounted) {
+        widget.notifier.sessionPreviews.warm(keys, prioritize: true);
+      }
+    });
   }
 
   @override
@@ -329,25 +359,33 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final selectedAt = typed ? ordered.indexWhere(search.canSubmit) : -1;
     final newHarness = widget.onNewHarness;
     final project = search.projectMatch;
-    final children = <Widget>[];
+    // ⚠️ **Built as they scroll in, not all at once.** Each entry makes its widget only when the
+    // list asks for it, so a hundred sessions cost the rows in view: their state words, their lit
+    // matches, their recaps — and the read that fetches each recap ([_want]). An eager list did all
+    // of that for every row on every rebuild, and this screen rebuilds on every preview the store
+    // publishes.
+    final items = <Widget Function()>[];
+    // Where each session's entry is, so a row keeps its own element when the ranking moves it.
+    final rowAt = <String, int>{};
     var index = 0;
-    // A row, and under it what its session last came to.
-    List<Widget> row(PhoneDestination row) => [
-      _findRow(row, terms, now, tty, selected: index++ == selectedAt),
-      ?_recap(row),
-    ];
-    if (needsYou.isNotEmpty) {
-      children.add(FindHeader('needs you', color: tty.yellow));
-      children.addAll(needsYou.expand(row));
-      children.add(const FindHeader('recent'));
+    void row(PhoneDestination row) {
+      final selected = index++ == selectedAt;
+      rowAt[row.id] = items.length;
+      items.add(() => _session(row, terms, now, tty, selected: selected));
     }
-    children.addAll(rest.expand(row));
-    if (current != null) children.addAll(row(current));
+
+    if (needsYou.isNotEmpty) {
+      items.add(() => FindHeader('needs you', color: tty.yellow));
+      needsYou.forEach(row);
+      items.add(() => const FindHeader('recent'));
+    }
+    rest.forEach(row);
+    if (current != null) row(current);
     // At the end and without a heading: each one's own word on the right says `paused`.
-    children.addAll(pausedRows.expand(row));
+    pausedRows.forEach(row);
     if (ordered.isEmpty) {
-      children.add(
-        Padding(
+      items.add(
+        () => Padding(
           padding: const EdgeInsets.fromLTRB(Tty.origin, 20, Tty.origin, 8),
           child: TtyText(
             switch (tab) {
@@ -367,8 +405,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       // The way out of an empty tab, where the eye already is — rather than back up at a chip the
       // rail may have scrolled away.
       if (tab != null && (!typed || everywhere > 0)) {
-        children.add(
-          FindRow(
+        items.add(
+          () => FindRow(
             title: 'Show all tabs',
             detail: typed
                 ? '$everywhere ${everywhere == 1 ? 'match' : 'matches'} in all tabs'
@@ -379,10 +417,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       }
     }
     if (search.commandMatches.isNotEmpty) {
-      children.add(const FindHeader('commands'));
+      items.add(() => const FindHeader('commands'));
       for (final command in search.commandMatches) {
-        children.add(
-          FindRow(
+        items.add(
+          () => FindRow(
             title: command.title,
             terms: terms,
             state: command.shortcut,
@@ -393,9 +431,9 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     if (newHarness != null && plain) {
       final place = project == null ? null : _projectPlace(project);
-      children.add(const SizedBox(height: 8));
-      children.add(
-        FindAddRow(
+      items.add(() => const SizedBox(height: 8));
+      items.add(
+        () => FindAddRow(
           label: place == null
               ? 'New Harness'
               : 'New Harness in ${project!.title}',
@@ -404,11 +442,39 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         ),
       );
     }
-    children.add(const SizedBox(height: 24));
-    return ListView(
+    items.add(() => const SizedBox(height: 24));
+    return ListView.builder(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: EdgeInsets.zero,
-      children: children,
+      itemCount: items.length,
+      itemBuilder: (context, i) => items[i](),
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? rowAt[key.value] : null,
+    );
+  }
+
+  /// One session's entry in the list: its row, and under it what the session last came to.
+  ///
+  /// Keyed by the row's id — what [ListView.builder]'s `findChildIndexCallback` looks it up by — so
+  /// a recap somebody is unfolding stays with its session when a match moves it up the list.
+  Widget _session(
+    PhoneDestination row,
+    List<String> terms,
+    DateTime now,
+    Tty tty, {
+    required bool selected,
+  }) {
+    final line = _findRow(row, terms, now, tty, selected: selected);
+    final recap = _recap(row);
+    return KeyedSubtree(
+      key: ValueKey(row.id),
+      child: recap == null
+          ? line
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [line, recap],
+            ),
     );
   }
 
@@ -418,6 +484,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     if (!row.isAgent) return null;
     final previews = widget.notifier.sessionPreviews;
     final key = row.previewKey;
+    if (key != null) _want(key);
     final recap = phoneRecap(previews, key);
     if (recap != null) {
       return AgentRecap(
@@ -428,7 +495,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         }),
       );
     }
-    if (key != null && previews.isReading(key)) {
+    if (key != null && previews.isPending(key)) {
       return const AgentRecapPlaceholder();
     }
     return null;

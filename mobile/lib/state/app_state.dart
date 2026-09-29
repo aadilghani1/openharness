@@ -282,9 +282,14 @@ class AppNotifier extends ChangeNotifier {
   /// Read again after [freshFor] at the soonest, not the desktop's minute: a
   /// phone pays for the bytes, and the live events already keep a connected
   /// machine's agents current.
+  ///
+  /// Four reads out at once, not the desktop's two: Find draws a recap under every row and reads
+  /// them as the rows come into view, and each read is one small relay round trip — two at a time
+  /// left a screenful of rows waiting on the latency rather than on the bytes.
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
     freshFor: const Duration(minutes: 5),
+    maxInFlight: 4,
     fetchRecent: (key) => _conn(key.machineId).request(
       'agent_recent',
       payload: {'agentId': key.agentId, 'n': 3},
