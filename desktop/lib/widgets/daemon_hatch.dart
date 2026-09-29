@@ -735,7 +735,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     try {
       await Clipboard.setData(
         ClipboardData(
-          text: _def?.id == 'tim'
+          text: IllustratedArt.supports(_def?.id)
               ? illustratedCardDetails(
                   card,
                   _portraitArt?.frames.first.rows.length ??
@@ -750,7 +750,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       );
       if (mounted) {
         setState(
-          () => _copyNote = _def?.id == 'tim'
+          () => _copyNote = IllustratedArt.supports(_def?.id)
               ? 'Details copied.'
               : 'Copied as a code block.',
         );
@@ -953,7 +953,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     double growth = 1,
   }) => FittedBox(
     fit: BoxFit.scaleDown,
-    child: def.id == 'tim' && growFrom != null && growth < 1
+    child: IllustratedArt.supports(def.id) && growFrom != null && growth < 1
         ? SizedBox.square(
             dimension: 350,
             child: Stack(
@@ -962,13 +962,17 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 Opacity(
                   opacity: 1 - growth,
                   child: DaemonIllustration(
-                    art: IllustratedArt.tim(version: growFrom),
+                    art: IllustratedArt.daemon(def.id, version: growFrom),
                   ),
                 ),
                 Opacity(
                   opacity: growth,
                   child: DaemonIllustration(
-                    art: IllustratedArt.tim(version: version, mood: mood),
+                    art: IllustratedArt.daemon(
+                      def.id,
+                      version: version,
+                      mood: mood,
+                    ),
                   ),
                 ),
               ],
@@ -1093,7 +1097,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (_bannerRows > 0) ...[
         SizedBox(height: cell.height / 2),
         Text(
-          def.id == 'tim' ? 'Tim' : rows.take(_bannerRows).join('\n'),
+          IllustratedArt.supports(def.id)
+              ? IllustratedArt.name(def.id)
+              : rows.take(_bannerRows).join('\n'),
           key: const ValueKey('daemon-hatch-banner'),
           semanticsLabel: def.id,
           style: banner,
@@ -1135,8 +1141,8 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               child: DaemonCardText(
                 key: const ValueKey('daemon-hatch-card'),
                 lines: card,
-                illustration: def.id == 'tim'
-                    ? IllustratedArt.tim(version: version)
+                illustration: IllustratedArt.supports(def.id)
+                    ? IllustratedArt.daemon(def.id, version: version)
                     : null,
                 portraitRows:
                     art?.frames.first.rows.length ??

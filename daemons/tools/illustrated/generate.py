@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake illustrated Tim and every egg into deterministic desktop PNG assets.
+"""Bake all ten illustrated daemons and every egg into deterministic desktop PNG assets.
 
 Run from any working directory: python3 daemons/tools/illustrated/generate.py
 Only Pillow is required. The local daemon_art.py is the code-authored source;
@@ -91,7 +91,14 @@ def _compose(*layers):
 
 
 def render_tim(stage, mood, frame):
-    """The same Tim grows longer arms; his face and adult shape never change."""
+    """Preserve Tim's established growth and shell registration."""
+    return render_daemon("tim", stage, mood, frame)
+
+
+def render_daemon(species, stage, mood, frame):
+    """Approved adult shapes, smaller young, and registered expression loops."""
+    if species not in art.IDS:
+        raise ValueError(species)
     if stage not in AGES or mood not in TIM_COUNTS or not 0 <= frame < TIM_COUNTS[mood]:
         raise ValueError((stage, mood, frame))
     phase = frame*math.tau/4
@@ -101,17 +108,17 @@ def render_tim(stage, mood, frame):
                          "fail": (0, "offline"), "nap": (0, "asleep"),
                          "back": (4, "done"), "boop": (0, "booped"),
                          "blink": (0, "blink")}[mood]
-    layers = art.render_layers("tim", pose=group+fraction, expression=expression)
+    layers = art.render_layers(species, pose=group+fraction, expression=expression)
     growth = AGES[stage]
     scale, arm_x, arm_y = growth["scale"], growth["arm_x"], growth["arm_y"]
-    if stage != "adult":
+    if species == "tim" and stage != "adult":
         # Attachments remain behind the lower head. Compressing the rear layer
         # about those roots gives a hatchling short curls rather than a shrunken
         # adult. The stage's transformed floor is then brought back to y=315.
         layers["rear"] = _affine(layers["rear"], arm_x, arm_y, pivot=(170, 191))
     result = _compose(*layers.values())
     if stage != "adult":
-        floor = 191+(315-191)*arm_y
+        floor = 191+(315-191)*arm_y if species == "tim" else 315
         result = _affine(result, scale, scale, dy=scale*(315-floor))
     if mood == "done":
         bob = (0, -5, -9, -4)[frame]*scale
@@ -405,6 +412,17 @@ def _contact_sheets():
                       f'{"silhouette" if row == 0 else "colour"} / {progress:g}',
                       font=_font(18), fill="#445047")
     sheet.save(REVIEW / "hatch-composition.png")
+    for tone, bg, fg in (("light", "#f2f0e9", "#445047"),
+                         ("dark", "#26252c", "#f2f0e9")):
+        sheet = Image.new("RGB", (5*240, 2*275), bg)
+        draw = ImageDraw.Draw(sheet)
+        for n, species in enumerate(art.IDS):
+            image = render_daemon(species, "adult", "idle", 0)
+            image = image.resize((220, 220), Image.Resampling.LANCZOS)
+            x, y = (n % 5)*240+10, (n // 5)*275+10
+            sheet.paste(image, (x, y), image)
+            draw.text((x+12, y+235), art.DISPLAY_NAMES[species], font=_font(18), fill=fg)
+        sheet.save(REVIEW / f"all-daemons-{tone}.png")
 
 
 def _sha(path):
@@ -443,23 +461,26 @@ def main():
                                   "sha256": _sha(path), "alpha_bounds": im.getchannel("A").getbbox()}
         assets.append({"key": key, "family": family, **state, "files": files})
 
-    for stage in AGES:
-        for mood, count in TIM_COUNTS.items():
-            for frame in range(count):
-                save(f"tim_{stage}_{mood}_{frame}", render_tim(stage, mood, frame),
-                     "tim", {"stage": stage, "mood": mood, "frame": frame})
+    for species in art.IDS:
+        for stage in AGES:
+            for mood, count in TIM_COUNTS.items():
+                for frame in range(count):
+                    save(f"{species}_{stage}_{mood}_{frame}",
+                         render_daemon(species, stage, mood, frame),
+                         species, {"stage": stage, "mood": mood, "frame": frame})
     for kind in EGG_KINDS:
         for stage, count in EGG_COUNTS.items():
             for frame in range(count):
                 save(f"egg_{kind}_{stage}_{frame}", render_egg(kind, stage, frame),
                      "egg", {"kind": kind, "stage": stage, "frame": frame})
-    expected = len(AGES)*sum(TIM_COUNTS.values())+len(EGG_KINDS)*sum(EGG_COUNTS.values())
-    assert len(assets) == expected == 314
+    expected = len(art.IDS)*len(AGES)*sum(TIM_COUNTS.values())+len(EGG_KINDS)*sum(EGG_COUNTS.values())
+    assert len(assets) == expected == 1124
     assert len({a["key"] for a in assets}) == len(assets)
     manifest = {
-        "version": 1,
+        "version": 2,
+        "species": art.IDS,
         "format": "PNG / straight-alpha RGBA / sRGB",
-        "description": "Code-authored illustrated Tim and anonymous eggs; no random individual traits are drawn.",
+        "description": "Code-authored illustrated init collection and anonymous eggs; no random individual traits are drawn.",
         "geometry": {"slot": [64, 64], "portrait": [350, 350], "floor": 315,
                      "transparent_border": 1, "growth": AGES,
                      "egg_rim_y": [181, 200], "egg_rim_center_y": 198,
@@ -467,8 +488,8 @@ def main():
                      "hatch_figure_clip": [88, 0, 264, 200],
                      "peek_eye_bounds": [[142, 169, 160, 190], [190, 169, 208, 190]]},
         "version_stages": VERSIONS,
-        "tim_frame_counts": TIM_COUNTS,
-        "tim_frame_ms": TIM_FRAME_MS,
+        "daemon_frame_counts": TIM_COUNTS,
+        "daemon_frame_ms": TIM_FRAME_MS,
         "egg_kinds": EGG_KINDS,
         "egg_frame_counts": EGG_COUNTS,
         "egg_frame_ms": EGG_FRAME_MS,
@@ -484,6 +505,27 @@ def main():
                           for size in ("slot", "portrait")},
         "assets": assets,
     }
+    # One idle anchor per species/age or egg kind. Never recenter individual
+    # animation frames: jumps and breathing must remain visible. Both consumers
+    # use these generated numbers instead of maintaining separate magic offsets.
+    centers = {}
+    for asset in assets:
+        is_idle = asset["family"] != "egg" and asset["mood"] == "idle"
+        is_shell = asset["family"] == "egg" and asset["stage"] == "p0"
+        if asset["frame"] == 0 and (is_idle or is_shell):
+            key = "_".join(asset["key"].split("_")[:2])
+            center = []
+            for size in ("slot", "portrait"):
+                x0, y0, x1, y1 = asset["files"][size]["alpha_bounds"]
+                center.extend(((x0+x1)/2, (y0+y1)/2))
+            centers[key] = center
+    (OUT / "alignment.json").write_text(json.dumps(centers, indent=2)+"\n")
+    dart = ["// Generated by daemons/tools/illustrated/generate.py. Do not edit.",
+            "const illustratedArtCenters = <String, (double, double, double, double)>{"]
+    for key, center in centers.items():
+        dart.append(f"  '{key}': ({', '.join(str(v) for v in center)}),")
+    dart.append("};")
+    (ROOT / "desktop/lib/daemons/illustrated_alignment.g.dart").write_text("\n".join(dart)+"\n")
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
     _contact_sheets()
     print(json.dumps({k: manifest[k] for k in ("asset_key_count", "png_count", "png_bytes", "bytes_by_size")}, indent=2))

@@ -405,7 +405,7 @@ void main() {
     testWidgets('released: drop init only; unix and tty on hold show '
         'nowhere, not even what you own of them', (tester) async {
       await panel(tester, DateTime.utc(2026, 9, 28, 12));
-      expect(find.text('zoo · drop 1 init  1/9'), findsOneWidget);
+      expect(find.text('Collection · 1 of 9 discovered'), findsOneWidget);
       expect(find.textContaining('unix'), findsNothing);
       expect(find.textContaining('tty'), findsNothing);
       expect(find.byKey(const ValueKey('daemon-zoo-fish')), findsNothing);
@@ -443,7 +443,7 @@ void main() {
       tester,
     ) async {
       await panel(tester, DateTime.utc(2026, 9, 20, 12));
-      expect(find.text('zoo · drop 1 init  out 2026-09-27'), findsOneWidget);
+      expect(find.text('Collection · Arrives 2026-09-27'), findsOneWidget);
       final tim = tester.widget<DaemonIllustration>(
         find.byKey(const ValueKey('daemon-zoo-tim')),
       );
@@ -494,105 +494,73 @@ void main() {
       textKey: const ValueKey('p'),
     );
 
-    List<String> loop(String id, DaemonMood mood, [String v = '2.0']) => [
-      for (final f in daemonPlates.loop(id, PlateSize.portrait, v, mood))
-        f.join('\n'),
-    ];
+    String imageAsset(WidgetTester tester) {
+      final image = tester.widget<Image>(find.byType(Image));
+      final provider = image.image;
+      return ((provider is ResizeImage ? provider.imageProvider : provider)
+              as AssetImage)
+          .assetName;
+    }
 
-    testWidgets('loops the mood, a frame every frameMs, and starts a new '
-        "mood's loop at its beginning", (tester) async {
+    testWidgets(
+      'illustrated portraits loop and restart when the mood changes',
+      (tester) async {
+        await tester.pumpWidget(host(portrait('gnu')));
+        expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
+        await tester.pump(const Duration(milliseconds: 190));
+        expect(imageAsset(tester), endsWith('gnu_adult_idle_1.png'));
+        await tester.pump(const Duration(milliseconds: 190 * 3));
+        expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
+        await tester.pumpWidget(host(portrait('gnu', mood: DaemonMood.work)));
+        expect(imageAsset(tester), endsWith('gnu_adult_work_0.png'));
+        await tester.pump(const Duration(milliseconds: 190));
+        expect(imageAsset(tester), endsWith('gnu_adult_work_1.png'));
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets('Reduce Motion and static portraits hold frame zero', (
+      tester,
+    ) async {
+      await tester.pumpWidget(host(portrait('gnu'), reduceMotion: true));
+      await tester.pump(const Duration(seconds: 2));
+      expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
+      await tester.pumpWidget(host(portrait('gnu', animate: false)));
+      await tester.pump(const Duration(seconds: 2));
+      expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
       await tester.pumpWidget(host(portrait('gnu')));
-      final idle = loop('gnu', DaemonMood.idle);
-      expect(shown(tester, 'p'), idle[0]);
-      await tester.pump(const Duration(milliseconds: 170));
-      expect(shown(tester, 'p'), idle[1]);
-      await tester.pump(const Duration(milliseconds: 170 * 7));
-      expect(shown(tester, 'p'), idle[0], reason: 'eight frames, then again');
-      await tester.pumpWidget(host(portrait('gnu', mood: DaemonMood.work)));
-      final work = loop('gnu', DaemonMood.work);
-      expect(shown(tester, 'p'), work[0]);
-      await tester.pump(const Duration(milliseconds: 170 * 5));
-      expect(shown(tester, 'p'), work[1], reason: 'four frames');
-      // Taken away mid-loop: no timer is left behind.
+      await tester.pump(const Duration(milliseconds: 380));
+      expect(imageAsset(tester), endsWith('gnu_adult_idle_2.png'));
+      await tester.pumpWidget(host(portrait('gnu'), reduceMotion: true));
+      expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('Reduce Motion, or no animation, shows frame 0 and never '
-        'ticks', (tester) async {
-      await tester.pumpWidget(host(portrait('gnu'), reduceMotion: true));
-      final idle = loop('gnu', DaemonMood.idle);
-      await tester.pump(const Duration(seconds: 2));
-      expect(shown(tester, 'p'), idle[0]);
-      await tester.pumpWidget(host(portrait('gnu', animate: false)));
-      await tester.pump(const Duration(seconds: 2));
-      expect(shown(tester, 'p'), idle[0]);
-      // Moving again, then Reduce Motion: back to frame 0 at once.
-      await tester.pumpWidget(host(portrait('gnu')));
-      await tester.pump(const Duration(milliseconds: 340));
-      expect(shown(tester, 'p'), idle[2]);
-      await tester.pumpWidget(host(portrait('gnu'), reduceMotion: true));
-      expect(shown(tester, 'p'), idle[0]);
-    });
-
-    testWidgets('every glyph in the plate colour, on the terminal background, '
-        'with a glow in the bottom colour', (tester) async {
-      for (final shiny in [false, true]) {
-        await tester.pumpWidget(
-          host(
-            portrait(
-              'gnu',
-              size: PlateSize.reveal,
-              animate: false,
-              shiny: shiny,
+    testWidgets(
+      'curated portraits preserve artwork colours for shiny metadata',
+      (tester) async {
+        for (final shiny in [false, true]) {
+          await tester.pumpWidget(
+            host(
+              portrait(
+                'gnu',
+                size: PlateSize.reveal,
+                animate: false,
+                shiny: shiny,
+              ),
             ),
-          ),
-        );
-        final text = tester.widget<Text>(find.byKey(const ValueKey('p')));
-        final rows = daemonPlates.frame(
-          'gnu',
-          PlateSize.reveal,
-          '2.0',
-          DaemonMood.idle,
-        );
-        final tim = roster.byId('gnu')!;
-        final gradient = plateGradient(tim, shiny: shiny)!;
-        var r = 0, c = 0, glyphs = 0;
-        for (final span in (text.textSpan! as TextSpan).children!) {
-          final run = span as TextSpan;
-          expect(
-            run.style!.shadows!.single.color.withValues(alpha: 1),
-            gradient.bottom,
           );
-          for (final ch in run.text!.split('')) {
-            if (ch == '\n') {
-              r++;
-              c = 0;
-              continue;
-            }
-            expect(ch, rows[r][c]);
-            if (ch != ' ') {
-              expect(
-                run.style!.color,
-                plateColor(
-                  roster,
-                  tim,
-                  rows.length,
-                  r,
-                  ch,
-                  background: dark.background,
-                  shiny: shiny,
-                ),
-                reason: 'shiny=$shiny ($r, $c) "$ch"',
-              );
-              glyphs++;
-            }
-            c++;
-          }
+          expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
+          final picture = tester.widget<DaemonIllustration>(
+            find.byKey(const ValueKey('p')),
+          );
+          expect(picture.size, 350);
+          expect(picture.silhouette, isNull);
+          expect(tester.widget<Image>(find.byType(Image)).color, isNull);
         }
-        expect(r, rows.length - 1);
-        expect(glyphs, greaterThan(200));
-      }
-    });
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
 
     testWidgets('a line-art daemon draws its line portrait in its colour', (
       tester,

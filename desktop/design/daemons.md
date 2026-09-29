@@ -6,29 +6,42 @@ says where the desktop keeps each part and what it chose where the contract
 leaves room. It replaces the local "terminal companion" (six species, canned
 chat, a local blind box), which is gone.
 
-## Illustrated Tim and eggs
+## Illustrated collection and eggs
 
 When Settings → Experimental → Focus-bar creature is on, the creature now sits
 at the far right of the **top tab bar**, after Harness Store. The setting keeps
 its existing account, rollout and collection behavior. Turning it off removes
 the slot and any hover preview; it never deletes the saved collection.
 
-Tim uses code-authored PNG artwork shared with the Pro drawing source:
+All ten init daemons use code-authored PNG artwork shared with the Pro drawing source:
 `daemons/tools/illustrated/`. The desktop bundles 64px slot images and 350px
 portraits. A small slot never decodes the larger image. PNGs are cached; a
 portrait animation repaints only its own boundary and stops for Reduce Motion,
 Motion off, hidden pages and background windows. No model or vector parser runs
-while drawing. Other species keep their existing renderer during this first
-Tim rollout.
+while drawing. Future species outside the init collection retain their existing renderer.
 
-Versions **0.1 / 1.0 / 2.0** are a hatchling with short arms, a young Tim, and the
-approved full-grown purple octopus. Bond/XP thresholds, random draws, ownership,
+Tab-bar artwork is centred on the visible idle pose, not the PNG canvas. Each
+growth stage and the egg family keep a fixed anchor through every frame, so
+breathing and hatching retain their registration. `IllustratedArt.center` and
+`SwarmDaemonArt.center` read matching generated source-pixel anchors from
+`illustrated_alignment.g.dart` and `assets/daemon-art/alignment.json`. AppKit drawing respects flipped coordinates.
+Native checks measure the painted centre at all thirty species/age combinations and for the egg.
+
+The zoo leads with a growth label (Hatchling, Young, Adult), a centred portrait,
+bond progress, and Rename / Card / Details. Details reveals lore, rarity,
+version and collected traits. A single companion is not repeated in an
+individuals section. The collection wraps on narrower windows and highlights
+only the selected name row. None of these presentation changes alter ownership,
+hatching, progress or pairing.
+
+Versions **0.1 / 1.0 / 2.0** show a hatchling, a young daemon, and its approved
+adult shape. Tim grows longer arms; the other nine grow from smaller proportions. Bond/XP thresholds, random draws, ownership,
 naming and consent are unchanged. All eight egg kinds use new shell artwork for
 p0–p4, rocking, bursting, falling shell halves and the open bowl. The hatchling
 rises behind that bowl as a silhouette before its colour appears. Collection
-cards, portraits, previews and Tim's growth transition use the same artwork.
+cards, portraits, previews and every growth transition use the same artwork.
 Rolled traits remain metadata; arbitrary markings and accessories are not yet
-illustrated by the curated Tim art.
+illustrated by the curated artwork.
 
 Hovering for 220ms reveals the full-size artwork below the tab bar without
 taking keyboard focus, hatching, or changing progress. Leaving, clicking,
@@ -43,10 +56,17 @@ Native hover emits `daemonHover` so Flutter owns the same preview on every
 platform. The bottom focus bar retains pane context and the existing voice line.
 
 Regenerate with `python3 daemons/tools/illustrated/generate.py`. The manifest
-records all 314 art keys, both resolutions, frame counts, source hashes and hatch
+records all 1,124 art keys, both resolutions, frame counts, source hashes and hatch
 registration. Review sheets live beside the generator. Test with
 `test/daemons/illustrated_art_test.dart`, `test/daemon_off_test.dart`, and
 `test/daemon_review_render_test.dart`, plus the native titlebar checks.
+
+Zoo → **Browse artwork** opens a local preview of all ten, including Beastie.
+Left/right and Previous/Next wrap through the collection; the named controls
+jump directly to a species. Stage, Expression and Pause change the preview.
+Escape returns to the zoo. This view has no account or collection writer: it
+never discovers, hatches, renames, pairs, or grants XP to a daemon. The regular
+collection still hides unearned species and the secret.
 
 ## Off: invisible and free
 
@@ -259,8 +279,8 @@ place to practise it.
 ## Creature slot
 
 The top-right slot has a fixed 44pt footprint, independent of mood, name, egg
-count and progress. Tim and eggs use the illustrated asset above; remaining
-species use a fitted legacy cell until their artwork is migrated. When disabled,
+count and progress. All ten init species and eggs use the illustrated assets
+above; future species outside that set use a fitted legacy cell. When disabled,
 no space is reserved and the original tab layout returns.
 
 The compact artwork alone occupies the slot. Additional eggs, progress and

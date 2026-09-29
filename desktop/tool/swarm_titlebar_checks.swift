@@ -47,10 +47,20 @@ private extension NSView {
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
     let scale = NSAffineTransform(); scale.scale(by: 2); scale.concat()
     background.setFill(); bounds.fill()
-    func paint(_ view: NSView) {
+    func paint(_ view: NSView, parentFlipped: Bool) {
       guard !view.isHidden else { return }
       NSGraphicsContext.saveGraphicsState()
       defer { NSGraphicsContext.restoreGraphicsState() }
+      // Match AppKit's coordinate system for each child. Calling draw directly
+      // in the bitmap's unflipped context concealed flipped-image bugs.
+      if view.isFlipped != parentFlipped {
+        let flip = NSAffineTransform()
+        flip.translateX(by: 0, yBy: view.bounds.height)
+        flip.scaleX(by: 1, yBy: -1)
+        flip.concat()
+      }
+      NSGraphicsContext.current = NSGraphicsContext(
+        cgContext: NSGraphicsContext.current!.cgContext, flipped: view.isFlipped)
       view.bounds.clip()
       view.draw(view.bounds)
       for child in view.subviews {
@@ -58,11 +68,11 @@ private extension NSView {
         let move = NSAffineTransform()
         move.translateX(by: child.frame.minX - view.bounds.minX, yBy: child.frame.minY - view.bounds.minY)
         move.concat()
-        paint(child)
+        paint(child, parentFlipped: view.isFlipped)
         NSGraphicsContext.restoreGraphicsState()
       }
     }
-    paint(self)
+    paint(self, parentFlipped: false)
     return bitmap
   }
 }
@@ -596,8 +606,9 @@ private extension SwarmTabStrip {
         image.representations.allSatisfy { $0.pixelsWide <= 64 && $0.pixelsHigh <= 64 },
         "Native PNG decoding bounds \(file.lastPathComponent) to its slot-sized bitmap")
     }
-    let stages = ["egg_first_p0_0", "egg_first_p4_0", "egg_first_burst_0", "egg_first_open_0",
-      "tim_baby_idle_0", "tim_young_idle_0", "tim_adult_idle_0"]
+    let species = ["tim", "gnu", "lynx", "mutt", "yak", "gopher", "bug", "tux", "auk", "beastie"]
+    let stages = ["egg_first_p0_0", "egg_first_p4_0", "egg_first_burst_0", "egg_first_open_0"] +
+      species.flatMap { id in ["baby", "young", "adult"].map { "\(id)_\($0)_idle_0" } }
     let bar = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
     bar.daemonMayAppear = { true }
     bar.daemonArt = art
@@ -623,10 +634,24 @@ private extension SwarmTabStrip {
           bar.daemonButton.frame.minX == bar.storeButton.frame.maxX,
           "\(stage) is illustrated after Store on the \(light ? "light" : "dark") native bar")
         pictures.insert(bar.daemonButton.renderedPixels())
+        let bitmap = bar.renderedTree(background: bar.palette.tabBar)
+        if stage == "egg_first_p0_0" || stage.hasSuffix("idle_0") {
+          var top = bitmap.pixelsHigh, bottom = -1
+          for y in 0..<bitmap.pixelsHigh {
+            for x in Int(bar.daemonButton.frame.minX * 2)..<Int(bar.daemonButton.frame.maxX * 2) {
+              guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+              let channels = [c.redComponent, c.greenComponent, c.blueComponent]
+              if channels.max()! - channels.min()! > 0.10 {
+                top = min(top, y); bottom = max(bottom, y)
+              }
+            }
+          }
+          try checkTitlebar(bottom >= top && abs(Double(top + bottom + 1) / 2 - Double(bitmap.pixelsHigh) / 2) <= 2,
+            "\(stage) centres its visible artwork on the bar, independent of transparent padding")
+        }
         if let capture = ProcessInfo.processInfo.environment["HARNESS_DAEMON_NATIVE_CAPTURE_DIR"] {
           let directory = URL(fileURLWithPath: capture)
           try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-          let bitmap = bar.renderedTree(background: bar.palette.tabBar)
           try bitmap.representation(using: .png, properties: [:])!.write(to:
             directory.appendingPathComponent("native-\(light ? "light" : "dark")-\(stage).png"))
         }

@@ -1091,6 +1091,27 @@ private func validDaemonText(_ value: String?, cells: Int) -> String? {
 /// Only generated, bundled slot frames may reach AppKit. No URLs, paths supplied
 /// by a daemon, or full-size hover portraits are decoded by this small control.
 private final class SwarmDaemonArt {
+  // Generated from each idle pose, shared with Flutter. Keep anchors fixed
+  // throughout animation so breathing and jumps don't get centered away.
+  private lazy var centers: [String: [Double]] = {
+    guard let url = assetURL("assets/daemon-art/alignment.json"),
+      let data = try? Data(contentsOf: url), data.count <= 16384,
+      let values = try? JSONDecoder().decode([String: [Double]].self, from: data),
+      values.count <= 64,
+      values.values.allSatisfy({ $0.count == 4 && $0.enumerated().allSatisfy {
+        $0.element.isFinite && (0...($0.offset < 2 ? 64.0 : 350.0)).contains($0.element)
+      } }) else { return [:] }
+    return values
+  }()
+
+  func center(asset: String?) -> NSPoint {
+    guard let asset, Self.opens(asset) else { return NSPoint(x: 0.5, y: 0.5) }
+    let name = asset.components(separatedBy: "/").last ?? ""
+    let key = name.components(separatedBy: "_").prefix(2).joined(separator: "_")
+    guard let center = centers[key] else { return NSPoint(x: 0.5, y: 0.5) }
+    return NSPoint(x: center[0] / 64, y: center[1] / 64)
+  }
+
   static func opens(_ asset: String) -> Bool {
     let prefix = "assets/daemon-art/slot/"
     guard asset.utf8.count <= 160, asset.hasPrefix(prefix), asset.hasSuffix(".png") else { return false }
@@ -1464,6 +1485,7 @@ private final class SwarmSymbolButton: SwarmIconButton {
   /// The grue on a light theme: a black patch behind its eight cells.
   var patch: NSColor?
   var art: NSImage?
+  var artCenter = NSPoint(x: 0.5, y: 0.5)
   /// The pointer arrived: "I see you". Never moves keyboard focus.
   var onEnter: (() -> Void)?
   var onExit: (() -> Void)?
@@ -1489,9 +1511,10 @@ private final class SwarmSymbolButton: SwarmIconButton {
       let size = NSSize(width: art.size.width * scale, height: art.size.height * scale)
       NSGraphicsContext.saveGraphicsState()
       NSGraphicsContext.current?.imageInterpolation = .high
-      art.draw(in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+      let yCenter = isFlipped ? artCenter.y : 1 - artCenter.y
+      art.draw(in: NSRect(x: bounds.midX - size.width * artCenter.x, y: bounds.midY - size.height * yCenter,
         width: size.width, height: size.height), from: .zero, operation: .sourceOver,
-        fraction: isEnabled || busy ? 1 : 0.35)
+        fraction: isEnabled || busy ? 1 : 0.35, respectFlipped: true, hints: nil)
       if isEnabled && hasKeyboardFocus {
         NSColor.keyboardFocusIndicatorColor.setStroke()
         let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4)
@@ -2069,6 +2092,7 @@ private final class SwarmTabStrip: NSView {
     daemonButton.glyph = validDaemonGlyph(state["glyph"] as? String) ?? ""
     daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
     daemonButton.art = wanted ? daemonArt.image(asset: state["art"] as? String) : nil
+    daemonButton.artCenter = daemonArt.center(asset: state["art"] as? String)
     daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
     daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil
     let label = state["label"] as? String ?? "Daemon"

@@ -137,7 +137,7 @@ class _DaemonPortraitState extends State<DaemonPortrait> {
   /// can move (no Reduce Motion, a live ticker), with more than one frame.
   bool get _moving =>
       widget.animate &&
-      widget.def.id != 'tim' &&
+      !IllustratedArt.supports(widget.def.id) &&
       widget.def.plate &&
       widget.rows == null &&
       !widget.silhouette &&
@@ -163,10 +163,11 @@ class _DaemonPortraitState extends State<DaemonPortrait> {
   Widget build(BuildContext context) {
     final w = widget;
     final label = w.semanticsLabel;
-    if (w.def.id == 'tim') {
+    if (IllustratedArt.supports(w.def.id)) {
       return DaemonIllustration(
         key: w.textKey,
-        art: IllustratedArt.tim(
+        art: IllustratedArt.daemon(
+          w.def.id,
           version: w.version,
           mood: w.mood,
           blink: w.lid != null,
@@ -174,7 +175,8 @@ class _DaemonPortraitState extends State<DaemonPortrait> {
         size: w.size == PlateSize.reveal ? 350 : 240,
         animate: w.animate && !w.silhouette && w.rows == null,
         silhouette: w.silhouette ? w.style.color : null,
-        semanticsLabel: label ?? 'Tim ${w.version}',
+        semanticsLabel:
+            label ?? '${IllustratedArt.name(w.def.id)} ${w.version}',
       );
     }
     if (!w.def.plate) {

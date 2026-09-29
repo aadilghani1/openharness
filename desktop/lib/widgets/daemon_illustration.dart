@@ -76,26 +76,34 @@ class _DaemonIllustrationState extends State<DaemonIllustration> {
     final small = widget.size <= 64;
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final frame = reduced ? 0 : widget.frame + _tick;
+    final center = widget.art.center(slot: small);
+    final sourceSize = small ? 64 : 350;
     return RepaintBoundary(
       child: SizedBox.square(
         dimension: widget.size,
-        child: Image.asset(
-          widget.art.asset(frame, slot: small),
-          key: ValueKey(widget.art.stem),
-          width: widget.size,
-          height: widget.size,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
-          // Never decode an upscaled copy of the source bitmap.
-          cacheWidth: math.min(
-            small ? 64 : 350,
-            (widget.size * MediaQuery.devicePixelRatioOf(context)).ceil(),
+        child: Transform.translate(
+          offset: Offset(
+            (.5 - center.$1 / sourceSize) * widget.size,
+            (.5 - center.$2 / sourceSize) * widget.size,
           ),
-          gaplessPlayback: true,
-          color: widget.silhouette,
-          colorBlendMode: widget.silhouette == null ? null : BlendMode.srcIn,
-          semanticLabel: widget.semanticsLabel,
-          excludeFromSemantics: widget.semanticsLabel == null,
+          child: Image.asset(
+            widget.art.asset(frame, slot: small),
+            key: ValueKey(widget.art.stem),
+            width: widget.size,
+            height: widget.size,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.medium,
+            // Never decode an upscaled copy of the source bitmap.
+            cacheWidth: math.min(
+              small ? 64 : 350,
+              (widget.size * MediaQuery.devicePixelRatioOf(context)).ceil(),
+            ),
+            gaplessPlayback: true,
+            color: widget.silhouette,
+            colorBlendMode: widget.silhouette == null ? null : BlendMode.srcIn,
+            semanticLabel: widget.semanticsLabel,
+            excludeFromSemantics: widget.semanticsLabel == null,
+          ),
         ),
       ),
     );

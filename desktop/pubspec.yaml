@@ -123,6 +123,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/daemon-art/alignment.json
     - assets/daemon-art/slot/
     - assets/daemon-art/portrait/
     - assets/fonts/roboto-mono/OFL.txt
