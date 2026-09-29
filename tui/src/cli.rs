@@ -354,7 +354,7 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
             let t = a.get('t').unwrap_or("");
             let Some(i) = find(t) else { eprintln!("can't find session: {t}"); return 1 };
             let (n, _, _, is_desk) = sessions[i].clone();
-            if is_desk { eprintln!("hn: the desk's session ({n}) is killed from a client: its windows are the account's tabs"); return 1 }
+            if is_desk { eprintln!("hn: the desk's session ({n}) is killed from a client: its windows are the account's swarms"); return 1 }
             // Its shells end, as its windows' would.
             let row = rows.iter().find(|r| r.get("name").and_then(Value::as_str) == Some(n.as_str())).cloned().unwrap_or(Value::Null);
             for w in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {

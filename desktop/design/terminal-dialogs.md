@@ -1,5 +1,8 @@
 # Terminal dialog design system
 
+Use the [product terminology](../../docs/terminology.md): a swarm groups harnesses;
+a harness is one running agent session.
+
 **Fixed cells. Plain text. One-line selection.**
 
 This is the dialog chapter of the [terminal workspace design system](terminal-workspace.md).
@@ -65,16 +68,16 @@ when using custom row widgets.
   Do not draw a separate prompt character beside these inputs.
 - All Cmd-P results occupy one row: title
   on the left and activity age, when available, on the right. Machine, project,
-  model, API connection, and Store details live in the preview. For sessions,
+  model, API connection, and Store details live in the preview. For harnesses,
   the preview puts the compact
-  Standard context `machine:project  (branch)` directly below the session title,
+  Standard context `machine:project  (branch)` directly below the harness title,
   followed by status and harness type. Omit missing fields and preserve
   important state such as Offline.
 - Boolean controls use `[x]` and `[ ]`; Enter and Space toggle them.
 - Menu actions use concise text, such as `New Harness`, with the same row
   highlight as other choices and no surrounding brackets. Shortcut hints,
   when needed, are text beside the action, resolved from the live keymap.
-- Omit redundant heading rows such as “New Tab” or “New Pane.” Add a label or
+- Omit redundant heading rows such as “New Swarm” or “New Pane.” Add a label or
   explanation only when it helps someone understand a choice or state.
 - Preserve user content, including Unicode. The restriction on decorative
   graphics applies to our controls, not to the text someone supplied.
@@ -93,7 +96,7 @@ creation entries, use consecutive single lines. Details remain searchable and
 available to screen readers. Machine and project previews retain their name
 and harness count even when they contain just one session.
 
-Unavailable sessions keep their place in the list. Dim their names and replace
+Unavailable harnesses keep their place in the list. Dim their names and replace
 the activity age with a short reason such as `Offline`, `Not connected`, or
 `Link required`. They remain selectable for their saved preview, but Enter and
 click cannot open them. Availability updates in place when the machine reconnects.
@@ -186,7 +189,7 @@ and pointer movement can also select a row. A pointer cannot change the resource
 while its management controls own keyboard focus. Clearing the root search returns
 to the hints; live inventory updates must not choose a row for the user. Enter
 does nothing until a row is selected. Keep the input and list in place throughout.
-Cmd-P has no New Harness row, including in machine and project session lists.
+Cmd-P has no New Harness row, including in machine and project harness lists.
 Cmd-N opens creation. Resource setup rows use general guidance rather than
 presumed defaults.
 Page Up/Down pages the result list; Shift-Up/Down scrolls the preview by one

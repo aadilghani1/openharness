@@ -144,8 +144,8 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   }
 
   static const _actions = [
-    ('agent.new', 'Start an agent'),
-    ('harnesses.list', 'Manage all your agents'),
+    ('agent.new', 'Start a harness'),
+    ('harnesses.list', 'Manage all your harnesses'),
     ('models.list', 'Deploy a local model'),
     ('machines.list', 'Manage all your machines'),
     ('app.store', 'Build beyond code'),
@@ -434,7 +434,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     if (rows.isEmpty) {
       return sessions.loading && widget.app!.searchableMachineIds.isNotEmpty
           ? Text(
-              'Finding your sessions…',
+              'Finding your harnesses…',
               textAlign: TextAlign.left,
               style: TextStyle(color: muted),
             )

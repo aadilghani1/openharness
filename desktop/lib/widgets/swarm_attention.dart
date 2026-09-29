@@ -155,7 +155,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
               const SizedBox(height: 8),
               SwarmSearchField(
                 autofocus: true,
-                hintText: 'Find a question, agent, or project',
+                hintText: 'Find a question, harness, or project',
                 onChanged: (value) => setState(() {
                   _query = value;
                   _cursor = 0;
@@ -171,7 +171,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                     ? Center(
                         child: Text(
                           _catalog.isEmpty
-                              ? 'No agents need your input'
+                              ? 'No harnesses need your input'
                               : 'No matching questions',
                           style: AppType.body(color: Colors.white60),
                         ),
@@ -251,7 +251,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   selected != null && !selected.available
-                      ? 'This agent’s terminal is unavailable · Esc to close'
+                      ? 'This harness’s terminal is unavailable · Esc to close'
                       : selected != null && !selected.destination.hasView
                       ? '↵ Open Harness in $_targetName · Esc to close'
                       : '↑↓ or ⌃N ⌃P to choose · Return to jump · Esc to close',

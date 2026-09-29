@@ -805,7 +805,7 @@ export class AskQuestionController {
     const terminalTarget = session?.agentId || session?.sessionId
     if (!terminalTarget) {
       console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
-      return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That agent is no longer running.' }
+      return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That harness is no longer running.' }
     }
     if (remembered) {
       const owner = this.deps.getSession(remembered)
@@ -813,7 +813,7 @@ export class AskQuestionController {
     }
     if (this.driving.has(terminalTarget)) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
-      return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this agent.' }
+      return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this harness.' }
     }
     // `forAnswer`: a dialog is the engine waiting for input mid-turn, so the open turn must not block it.
     const release = this.deps.acquireControl?.(terminalTarget, { forAnswer: true })

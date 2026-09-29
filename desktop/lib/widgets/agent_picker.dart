@@ -365,7 +365,8 @@ class _AgentPickerState extends State<AgentPicker> {
   Widget _chosen(AgentChoice? choice) => KeyedSubtree(
     key: Key('new-agent-${widget.label.toLowerCase()}-choice'),
     child: Text(
-      choice?.label ?? 'Choose an agent',
+      choice?.label ??
+          (widget.label == 'Agent' ? 'Choose an agent' : 'Choose a harness'),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: widget.terminalStyle
@@ -590,6 +591,9 @@ class _AgentPickerState extends State<AgentPicker> {
     final preview = showPreview
         ? _AgentPreview(
             key: ValueKey('new-agent-${widget.label.toLowerCase()}-preview'),
+            semanticLabel: widget.label == 'Agent'
+                ? 'Agent preview'
+                : 'Harness preview',
             choice: highlighted,
             status: widget.statusOf?.call(highlighted.id),
             current: highlighted.id == widget.value,
@@ -613,7 +617,7 @@ class _AgentPickerState extends State<AgentPicker> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'No agents match “${_query.text.trim()}”.',
+                    'No ${widget.label == 'Agent' ? 'agents' : 'harnesses'} match “${_query.text.trim()}”.',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: grid.AppType.monoLabel(
@@ -862,7 +866,7 @@ class _AgentPickerState extends State<AgentPicker> {
                   onPressed: () => _choose(choice),
                   style: TextButton.styleFrom(foregroundColor: Colors.white),
                   child: SwarmSearchActionLabel(
-                    current ? 'Keep agent' : 'Use agent',
+                    '${current ? 'Keep' : 'Use'} ${widget.label == 'Agent' ? 'agent' : 'harness'}',
                     compact: compactAction,
                   ),
                 ),
@@ -939,9 +943,11 @@ class _AgentPreview extends StatelessWidget {
     required this.current,
     this.controller,
     this.terminalStyle = false,
+    this.semanticLabel = 'Agent preview',
   });
 
   final AgentChoice choice;
+  final String semanticLabel;
   final String? status;
   final bool current;
   final ScrollController? controller;
@@ -962,7 +968,7 @@ class _AgentPreview extends StatelessWidget {
     final chips = [if (current) 'Chosen', ?status];
     return Semantics(
       container: true,
-      label: 'Agent preview',
+      label: semanticLabel,
       child: SingleChildScrollView(
         controller: controller,
         padding: terminalStyle

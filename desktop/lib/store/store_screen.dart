@@ -640,7 +640,7 @@ class _StoreNav extends StatelessWidget {
                     key: const ValueKey('store-shelf-sessions'),
                     icon: LucideIcons.play300,
                     label: 'Featured',
-                    tooltip: '$sessionCount recorded sessions',
+                    tooltip: '$sessionCount recorded runs',
                     selected: !hasProduct && shelf is _Sessions,
                     onTap: () => onSelect(const _Sessions()),
                   ),

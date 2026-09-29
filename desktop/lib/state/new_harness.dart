@@ -1212,7 +1212,7 @@ class NewHarnessController extends ChangeNotifier {
     if (_harnessId != null && !_offered(_harnessId!)) {
       return (
         field: NewHarnessField.harness,
-        message: '$harnessLabel is unavailable. Choose an agent.',
+        message: '$harnessLabel is unavailable. Choose an agent or harness.',
       );
     }
     if (!compatibleEngines.contains(_engine) ||
@@ -1309,8 +1309,8 @@ class NewHarnessController extends ChangeNotifier {
   String get hint => switch (field) {
     NewHarnessField.launch => '',
     NewHarnessField.projectMenu => 'Search projects',
-    NewHarnessField.task => 'What should this agent work on? (optional)',
-    NewHarnessField.harness => 'Search agents',
+    NewHarnessField.task => 'What should this harness work on? (optional)',
+    NewHarnessField.harness => 'Search agents and harnesses',
     NewHarnessField.agent => 'Search agents',
     NewHarnessField.model => 'Search subscriptions and models',
     NewHarnessField.machine => 'Search machines',
@@ -3203,7 +3203,9 @@ class NewHarnessController extends ChangeNotifier {
       if (!_offered(harness)) {
         busy = false;
         focusField(NewHarnessField.harness);
-        return _fail('$harnessLabel is unavailable. Choose an agent.');
+        return _fail(
+          '$harnessLabel is unavailable. Choose an agent or harness.',
+        );
       }
       harness =
           harnessForOperation(machine.dsh.entries, harness)?.id ?? harness;

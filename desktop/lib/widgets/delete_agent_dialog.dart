@@ -181,7 +181,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Its panes close across tabs. Close Pane keeps it running.',
+                        'Its panes close across swarms. Close Pane keeps it running.',
                         style: boxMonoStyle(color: kBoxFaint),
                       ),
                       if (_stopping) ...[

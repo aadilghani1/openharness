@@ -26,7 +26,7 @@ class WallpaperSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'A little curiosity for your new tabs.',
+            'A little curiosity for your new swarms.',
             style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 16),

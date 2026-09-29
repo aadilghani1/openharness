@@ -510,7 +510,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                   top: widget.terminal ? cell.height : 24,
                                 ),
                                 child: Text(
-                                  'No recent session text available.',
+                                  'No recent harness text available.',
                                   style: widget.terminal
                                       ? terminalContentStyle(
                                           color: theme.foreground.withValues(
@@ -551,7 +551,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
             : _single(row, agents.single, padding, cell, theme);
         return Semantics(
           container: true,
-          label: 'Agent preview',
+          label: 'Harness preview',
           // A session's latest turns carry their list's own scrollbar, on the
           // turns alone: one around the whole preview, header included, drew
           // a second thumb beside it.
@@ -811,7 +811,7 @@ class _AgentPreview extends StatelessWidget {
         ] else if (compact) ...[
           SizedBox(height: terminal ? cell.height : 10),
           Text(
-            _displayText(excerpt ?? 'No recent session text available.'),
+            _displayText(excerpt ?? 'No recent harness text available.'),
             maxLines: 4,
             overflow: TextOverflow.ellipsis,
             style: excerpt == null ? muted : body,
@@ -886,7 +886,7 @@ class _AgentPreview extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Earlier in this session',
+                      'Earlier in this harness',
                       style: terminal
                           ? muted
                           : muted.copyWith(fontWeight: FontWeight.w500),
@@ -913,7 +913,7 @@ class _AgentPreview extends StatelessWidget {
           if (record?.hasContent != true && waiting == null)
             Padding(
               padding: EdgeInsets.only(bottom: terminal ? cell.height : 24),
-              child: Text('No recent session text available.', style: muted),
+              child: Text('No recent harness text available.', style: muted),
             ),
           if (!terminal) const SizedBox(height: 8),
           if (project?.cwd case final cwd?) Text(cwd, style: muted),

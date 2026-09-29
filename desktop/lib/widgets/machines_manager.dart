@@ -76,7 +76,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
     if (machine.machine.isShared) 'view only',
     if (machine.agentLoadStatus == AgentLoadStatus.loaded ||
         machine.agents.isNotEmpty)
-      '${machine.agents.length} ${machine.agents.length == 1 ? 'agent' : 'agents'}',
+      '${machine.agents.length} ${machine.agents.length == 1 ? 'harness' : 'harnesses'}',
   ].join(' · ');
 
   List<_Entry> get _allEntries {

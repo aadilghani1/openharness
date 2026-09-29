@@ -1370,7 +1370,7 @@ export class CableSession {
       const command = turn.form.command
       if (!command || transcript.length > 240) {
         this.cancelFormVoice()
-        await reply({ t: 'voice.error', message: 'Say a short agent or project name.' })
+        await reply({ t: 'voice.error', message: 'Say a short harness or project name.' })
         return
       }
       const result = await this.host.form!({ ...command, op: 'query', text: transcript })
@@ -1440,7 +1440,7 @@ export class CableSession {
     agentName = agents.find((a) => a.id === agentId)?.name ?? ''
 
     if (!agentId) {
-      await reply({ t: 'voice.error', message: 'No agent to send that to' })
+      await reply({ t: 'voice.error', message: 'No harness to send that to' })
       return
     }
     const instruction = turn.cmd ? `/${turn.cmd} ${transcript}` : transcript

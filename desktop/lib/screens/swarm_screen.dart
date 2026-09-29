@@ -2371,9 +2371,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       focused?.agent == null ? 'Share' : 'Share ${focused!.agent!.displayName}';
 
   String _shareTooltip(WorkspacePaneContext? focused) {
-    if (focused?.agent == null) return 'Focus an agent to share it';
+    if (focused?.agent == null) return 'Focus a harness to share it';
     if (app.stateOf(focused!.pane.machineId)?.machine.isShared != false) {
-      return 'Only the owner can share this agent';
+      return 'Only the owner can share this harness';
     }
     return [
       _shareLabel(focused),
@@ -3010,9 +3010,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final agent = _focusedAgent;
     final String? error;
     if (pane == null || agent == null) {
-      error = 'Focus an agent pane to clone it.';
+      error = 'Focus a harness pane to clone it.';
     } else if (app.stateOf(pane.machineId)?.machine.isShared != false) {
-      error = 'Shared agents are view-only.';
+      error = 'Shared harnesses are view-only.';
     } else {
       error = await app.cloneAgent(
         pane.machineId,
@@ -5206,7 +5206,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (_newHarness case final box?) {
       if (box.busy || box.checking) {
-        box.warn('Check the pending creation before opening another tab.');
+        box.warn('Check the pending creation before opening another swarm.');
         return false;
       }
       if (!box.requestDismiss()) return false;
@@ -5626,7 +5626,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       SwarmDestination(
         id: 'picker:projects',
         title: '#  Projects',
-        detail: 'Choose a project, then one of its agents',
+        detail: 'Choose a project, then one of its harnesses',
         swarmId: null,
         current: false,
         pickerQuery: '# ',
@@ -5634,7 +5634,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       SwarmDestination(
         id: 'picker:machines',
         title: '@  Machines',
-        detail: 'Choose a machine, then one of its agents',
+        detail: 'Choose a machine, then one of its harnesses',
         swarmId: null,
         current: false,
         pickerQuery: '@ ',
@@ -5670,9 +5670,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'Clone Harness',
         'Another of this one, fresh conversation',
       ),
-      ?mode('navigation.needs_input', 'Agents needing input', 'Who is waiting'),
+      ?mode(
+        'navigation.needs_input',
+        'Harnesses needing input',
+        'Who is waiting',
+      ),
       ?mode('navigation.history', 'History', 'Where you have been'),
-      ?mode('task.route', 'Boss mode', 'Describe a task, it picks the agent'),
+      ?mode('task.route', 'Boss mode', 'Describe a task, it picks the harness'),
       ?mode('pane.layout', 'Layout', 'Arrange the panes'),
       ?mode('keyboard.help', 'Keyboard shortcuts', 'Every key'),
       ?mode('keyboard.quick_start', 'Quick start', 'Four steps into real work'),
@@ -6650,12 +6654,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ),
               _statusToolSymbol(
                 'new-tab',
-                'New Tab',
+                'New Swarm',
                 _newTab,
                 '+',
                 Size(cell.width * 3, toolHeight),
                 theme,
-                tooltip: 'New Tab ${_keymap.hint('swarm.new') ?? ''}',
+                tooltip: 'New Swarm ${_keymap.hint('swarm.new') ?? ''}',
               ),
               const Spacer(),
               WorkspaceBarControl(

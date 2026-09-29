@@ -93,7 +93,7 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
                     Text('History', style: grid.AppType.monoLabel()),
                     Spacer(),
                     Text(
-                      'This session',
+                      'This window',
                       style: boxMonoStyle(color: Colors.white54),
                     ),
                   ],
@@ -991,9 +991,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               : search.adding &&
                                     search.query.isEmpty &&
                                     search.capacity <= 0
-                              ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
+                              ? 'This swarm is full (${AppNotifier.maxPanes} panes). Open a new swarm to add more.'
                               : search.adding && search.query.isEmpty
-                              ? 'No harnesses yet. Start an agent or choose @ machines to connect a machine.'
+                              ? 'No harnesses yet. Start a harness or choose @ machines to connect a machine.'
                               : search.adding
                               ? 'No matching harnesses'
                               : 'No matching results',
@@ -1341,11 +1341,11 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         color: row.isNote
             ? muted
             : !widget.enabled ||
-                (row.isModel &&
-                    !widget.search.isModelDownloadsRow(row) &&
-                    !widget.search.canExpandApi(row) &&
-                    !widget.search.canSelectModel(row) &&
-                    !widget.search.canGetModel(row))
+                  (row.isModel &&
+                      !widget.search.isModelDownloadsRow(row) &&
+                      !widget.search.canExpandApi(row) &&
+                      !widget.search.canSelectModel(row) &&
+                      !widget.search.canGetModel(row))
             ? theme.foreground.withValues(alpha: .28)
             : row.isCreate || widget.search.isModelDownloadsRow(row)
             ? theme.cursor
@@ -1440,7 +1440,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                         maxLines: 1,
                         style: terminalContentStyle(color: muted),
                       ),
-                    ] else if (widget.search.modelRowStatus(row) case final status?) ...[
+                    ] else if (widget.search.modelRowStatus(row)
+                        case final status?) ...[
                       SizedBox(width: cell.width * 2),
                       Text(
                         status,

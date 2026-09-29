@@ -420,13 +420,13 @@ Machine:
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
+  harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
-                               every session, live or stopped (--limit=N, --json)
-  harness channel --help       consult agents in a tab and read shared collaboration history
+                               every harness, live or stopped (--limit=N, --json)
+  harness channel --help       consult agents in a swarm and read shared collaboration history
   harness team --help          advanced team commands and correlated agent replies
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
@@ -2101,6 +2101,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
+    onScopedInput: (id, bytes, tabId, pasted) => backend.swarmPromptScopes.raw(id, bytes, tabId, pasted),
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
@@ -2531,6 +2532,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   ): Promise<boolean> =>
     attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
   const input: SessionInputController = new SessionInputController({
+    beforeSubmit: (id, text, tabId, deliveryId) => backend.swarmPromptScopes.prepare(id, text, tabId, deliveryId),
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
@@ -3085,6 +3087,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
+        if (!opts?.resumed && !opts?.replay) backend.swarmPromptScopes.started(agentId, event.payload.userMessage, 'transcript', registry.bySession(sessionId)?.engine)
         deviceInput.onTurnStarted(agentId, event.payload.userMessage)
         autonomousDeviceService?.turnStarted(agentId)
         startHeartbeat(sessionId)
@@ -3212,6 +3215,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
+    backend.swarmPromptScopes.forget(doomed?.agentId ?? sessionId)
     input.forget(doomed?.agentId ?? sessionId)
     deviceInput.forget(doomed?.agentId ?? sessionId)
     if (!opts.keepAgent) detachDsh(announceId)
@@ -3230,7 +3234,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => { input.forget(agentId); deviceInput.forget(agentId) },
+    forgetInput: agentId => { backend.swarmPromptScopes.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -3474,6 +3478,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
+      backend.swarmPromptScopes.forget(previousOwner.agentId)
       input.forget(previousOwner.agentId)
       deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
@@ -3618,6 +3623,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDormant: async (agent, reason) => {
       if (!agent.active) return
       invalidateTerminalControl(agent.agentId)
+      backend.swarmPromptScopes.forget(agent.agentId)
       input.forget(agent.agentId)
       deviceInput.forget(agent.agentId)
       if (agent.sessionId) {
@@ -3978,6 +3984,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return null
     },
     onRegistered: handleRegistered,
+    onPromptSubmitted: (id, text) => backend.swarmPromptScopes.started(id, text, 'hook', registry.byAgent(id)?.engine),
     onSessionEnd,
     // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
     // adapter only learned of a turn from Stop, and emitted turn_started+turn_ended in the same
@@ -4869,7 +4876,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // backend.onMessage.
     //
     // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
-    // registry, so a remote agent lands as "This agent is no longer available" — an error about an agent
+    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
     // that is alive and answering on another machine. sendTurn is the fork that already knows the
     // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
     // one the dial has been using for every voice turn.
@@ -6303,7 +6310,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
     const target = { ...session }
     const current = () => operationCurrent() && sameRestartTarget(target)
-    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
+    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' } as const
     if (!current()) return changed
     // Both branches below `cd` into the row's folder before they exec, and both have already killed
     // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
@@ -6392,7 +6399,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   })
 
-  const submitAgent = (id: string, content: string, deliveryId?: string): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, tabId?: string): void => {
     const record = registry.resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -6405,9 +6412,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    input.submit(record?.agentId ?? sessionId, adapted, deliveryId)
+    input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
   }
-  backend.onMessage = (id, content, deliveryId) => submitAgent(id, content, deliveryId)
+  backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   backend.readChannelDesk = async () => {
     const response = await proxyBackend('GET', '/api/tab-channels')

@@ -1193,7 +1193,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
   ) async {
-    newSwarm(name: 'Inspect agent');
+    newSwarm(name: 'Inspect harness');
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
   }
 
@@ -6670,7 +6670,7 @@ class AppNotifier extends ChangeNotifier {
           unawaited(connection.forceReconnect());
         }
       } else {
-        machine.agentsLoadError = 'Could not load agents: $error';
+        machine.agentsLoadError = 'Could not load harnesses: $error';
       }
       // A NO_PEER_LINK close already set needsLink (via onLocalFailure) perhaps a microtask before
       // this catch runs — don't downgrade that specific, actionable state back to a generic error.
@@ -8165,9 +8165,9 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_TOO_LARGE' => 'Remote previews support files up to 512 MB. Use a smaller export or transfer this file separately.',
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
-        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this agent. Use one in its working folder or a temp folder.',
+        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
-          'This agent is no longer available. Reconnect and try again.',
+          'This harness is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',
         _ => 'The remote machine could not read this file. Check that it is accessible and try again.',
       });
@@ -8548,12 +8548,12 @@ class AppNotifier extends ChangeNotifier {
       return 'The layout changed. Close this dialog and split the pane again.';
     }
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This tab was closed';
+    if (target == null) return 'This swarm was closed';
     if (placement != null && (target.isStore || target.isOrchestrator)) {
-      return 'Open a new tab to add a harness.';
+      return 'Open a new swarm to add a harness.';
     }
     if (target.panes.length >= maxPanes) {
-      return 'This tab is full. Open a new tab to start a harness.';
+      return 'This swarm is full. Open a new swarm to start a harness.';
     }
     return null;
   }
@@ -8918,7 +8918,7 @@ class AppNotifier extends ChangeNotifier {
     if (_creationPlacementError(targetId, split, placement: placement) !=
         null) {
       _lastError =
-          'The harness started, but its original tab or layout changed. '
+          'The harness started, but its original swarm or layout changed. '
           'Use New Pane to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -9101,15 +9101,15 @@ class AppNotifier extends ChangeNotifier {
       return Future.value('Shared harnesses are view-only.');
     }
     if (pendingAgentStop(machineId, agentId) != null) {
-      return Future.value('The agent is stopping.');
+      return Future.value('The harness is stopping.');
     }
     final agent = machine.agents
         .where((agent) => agent.id == agentId)
         .firstOrNull;
-    if (agent == null) return Future.value('Agent not found');
+    if (agent == null) return Future.value('Harness not found');
     if (_pendingAgentRename(machineId, agentId) case final pending?) {
       if (pending.name == trimmed) return pending.result.future;
-      return Future.value('A rename is already in progress for this agent.');
+      return Future.value('A rename is already in progress for this harness.');
     }
     if (agent.name == trimmed) return Future.value();
     final request = _AgentRename(machine, agent, _authRevision, trimmed);
@@ -9129,7 +9129,7 @@ class AppNotifier extends ChangeNotifier {
         payload: {'agentId': agentId, 'name': request.name},
       );
       if (!_agentRenameCurrent(request)) {
-        error = 'The agent changed while saving. Refresh and try again.';
+        error = 'The harness changed while saving. Refresh and try again.';
         return;
       }
       if (result['error'] case final String code) {
@@ -9154,8 +9154,8 @@ class AppNotifier extends ChangeNotifier {
       _renameAgent(request.machine, agentId, name);
     } catch (failure) {
       error = failure is WsRequestTimeout
-          ? 'Could not confirm the rename. Refresh agents to check the name.'
-          : 'Could not rename the agent. Try again.';
+          ? 'Could not confirm the rename. Refresh harnesses to check the name.'
+          : 'Could not rename the harness. Try again.';
     } finally {
       if (identical(_agentRenames[(machineId, agentId)], request)) {
         _agentRenames.remove((machineId, agentId));
@@ -9351,7 +9351,7 @@ class AppNotifier extends ChangeNotifier {
         .firstOrNull;
     if (agent == null) {
       return Future.value(
-        'The agent is no longer listed. Refresh to check its status.',
+        'The harness is no longer listed. Refresh to check its status.',
       );
     }
     final request = _AgentStop(machine, agent, _authRevision);
@@ -9386,7 +9386,7 @@ class AppNotifier extends ChangeNotifier {
           current == null ||
           current.sessionId != agent.sessionId) {
         return Future.value(
-          'The agent changed. Close this prompt and check it before stopping.',
+          'The harness changed. Close this prompt and check it before stopping.',
         );
       }
       return deleteAgent(machineId, agentId);
@@ -9403,7 +9403,7 @@ class AppNotifier extends ChangeNotifier {
       if (request.confirmed) return;
       if (!_agentStopCurrent(request)) {
         error =
-            'The agent changed while stopping. Refresh to check its status.';
+            'The harness changed while stopping. Refresh to check its status.';
         return;
       }
       if (result['error'] case final String code) {
@@ -9422,9 +9422,8 @@ class AppNotifier extends ChangeNotifier {
         error = switch (failure) {
           WsRequestFailure(:final code, :final detail) =>
             'Stop failed: ${detail != null && detail.isNotEmpty ? detail : code}',
-          WsRequestTimeout() =>
-            'Could not confirm the stop. Refresh agents to check its status.',
-          _ => 'Could not stop the agent. Try again.',
+          WsRequestTimeout() => 'Could not confirm the stop. Refresh harnesses to check its status.',
+          _ => 'Could not stop the harness. Try again.',
         };
       }
     } finally {
@@ -9557,7 +9556,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (pendingAgentStop(machineId, agentId) != null) {
       return const RestartAgentResult(
-        error: 'The agent is stopping.',
+        error: 'The harness is stopping.',
         retryable: false,
       );
     }
@@ -9565,7 +9564,7 @@ class AppNotifier extends ChangeNotifier {
         attempt.agent?.id != agentId ||
         !_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
       return const RestartAgentResult(
-        error: 'The agent changed. Close this prompt and check it before restarting.',
+        error: 'The harness changed. Close this prompt and check it before restarting.',
         retryable: false,
       );
     }
@@ -9612,7 +9611,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!_restartCurrent(attempt)) {
       return const RestartAgentResult(
-        error: 'The agent changed while restarting. Check its current status.',
+        error:
+            'The harness changed while restarting. Check its current status.',
         retryable: false,
       );
     }
@@ -9641,7 +9641,7 @@ class AppNotifier extends ChangeNotifier {
         return RestartAgentResult(
           error: resuming
               ? 'The machine is still resuming the harness. Select it again in a moment.'
-              : 'The machine is still restarting the agent. Check again in a moment.',
+              : 'The machine is still restarting the harness. Check again in a moment.',
         );
       case 'missing':
       case 'unconfirmed':
@@ -9649,7 +9649,7 @@ class AppNotifier extends ChangeNotifier {
       case 'unavailable':
         attempt._awaitingConfirmation = false;
         return const RestartAgentResult(
-          error: 'The restarted agent is no longer available. Close this prompt and check current agents.',
+          error: 'The restarted harness is no longer available. Close this prompt and check current harnesses.',
           retryable: false,
         );
       case 'failed':
@@ -9737,8 +9737,8 @@ class AppNotifier extends ChangeNotifier {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'
-                : 'Update the harness CLI on this machine to restart an agent.',
-          'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
+                : 'Update the harness CLI on this machine to restart a harness.',
+          'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
@@ -9832,13 +9832,13 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null) return Future.value('Machine not found');
     if (machine.machine.isShared) {
-      return Future.value('Shared agents are view-only.');
+      return Future.value('Shared harnesses are view-only.');
     }
     final source = machine.agents
         .where((agent) => agent.id == agentId)
         .firstOrNull;
     if (source == null) {
-      return Future.value('The source agent is no longer available.');
+      return Future.value('The source harness is no longer available.');
     }
     final engine = source.engine;
     if (engine == null) {
@@ -9846,7 +9846,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!source.canClone) {
       return Future.value(
-        '${source.displayName} runs on a grid; cloning a grid agent is not supported.',
+        '${source.displayName} runs on a grid; cloning a grid harness is not supported.',
       );
     }
     final terminal = isTerminalEngine(engine);
@@ -10002,7 +10002,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!_machineWorkCurrent(machine, attempt._authRevision)) {
       return const ForkAgentResult(
-        error: 'The machine changed while forking. Check its agents after reconnecting.',
+        error: 'The machine changed while forking. Check its harnesses after reconnecting.',
       );
     }
     if ((checking ||
@@ -10076,7 +10076,7 @@ class AppNotifier extends ChangeNotifier {
       return ForkAgentResult(
         agentId: fork.id,
         level: result['level'] == 'handoff' ? 'handoff' : 'native',
-        notice: 'The fork was created but has since stopped. Use New Pane to check current agents.',
+        notice: 'The fork was created but has since stopped. Use New Pane to check current harnesses.',
       );
     }
     _upsertAgent(machine, fork);
@@ -10086,10 +10086,10 @@ class AppNotifier extends ChangeNotifier {
     String? notice;
     if (target == null || !swarms.contains(target)) {
       notice =
-          'Fork created. Its original tab closed; use New Pane to open it.';
+          'Fork created. Its original swarm closed; use New Pane to open it.';
     } else if (target.panes.length >= maxPanes && !keepFocus) {
       notice =
-          'Fork created. Its original tab is full; use New Tab to open it.';
+          'Fork created. Its original swarm is full; use New Swarm to open it.';
     } else {
       if (target.panes.length >= maxPanes) {
         newSwarm(name: fork.name);
@@ -10116,7 +10116,7 @@ class AppNotifier extends ChangeNotifier {
       ? detail
       : switch (code) {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-            'Update the harness CLI on this machine to fork an agent.',
+            'Update the harness CLI on this machine to fork a harness.',
           'AGENT_BUSY' =>
             'This harness is working. Wait for its turn to finish, then fork.',
           _ => 'Fork failed: $code',
@@ -10734,7 +10734,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This tab holds $maxPanes agents. Open another tab to add more.';
+          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
@@ -11327,7 +11327,7 @@ class AppNotifier extends ChangeNotifier {
               .firstOrNull;
     if (twin == null && target.panes.length >= maxPanes) {
       _lastError =
-          'That tab holds $maxPanes agents. Close one there to move this in.';
+          'That swarm holds $maxPanes harnesses. Close one there to move this in.';
       _lastErrorRetryable = false;
       notifyListeners();
       return false;
@@ -12599,7 +12599,7 @@ class AppNotifier extends ChangeNotifier {
         focusedPane?.agentId != agentId) {
       visit.dispose();
       _deviceVisit = null;
-      return fail('That agent could not be opened.');
+      return fail('That harness could not be opened.');
     }
     if (!latest &&
         identical(focusedPane, visit.origin) &&
