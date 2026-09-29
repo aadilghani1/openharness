@@ -89,23 +89,27 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
     D.get_or_init(|| {
         let mut m = tmux_defaults().clone();
         m.insert("pane-border-status".into(), "top".into());
-        // Each pane's title row: the harness's symbol in its state's colour, the pane's title
-        // (the harness's name), [watching — who has it] when another window has the pane to type
-        // in, and at the far end, as far as there is room, its project and branch.
-        m.insert("pane-border-format".into(), " #{?pane_agent_icon,#{pane_agent_mark} ,}#{pane_title}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],}#{?pane_where, #[dim]· #{pane_where} #[nodim],}".into());
-        // The status line: tmux's, with what Harness adds — the name bold while the prefix
-        // waits; on the right, the fleet in counts (#{fleet}: ?2 ✗1 ✓5 ⠹41), the focused pane's machine (a far one, as
-        // scp writes it: gpu-box:ml-lab), project and branch (as zsh's robbyrussell prompt writes
-        // them) where tmux has the pane's title (in the pane's own title row here), host and clock;
-        // a space first, so a full window list never runs into it. Narrower than 110 columns only
-        // the branch: the window list keeps its room.
+        // Each pane's title row: the harness's name, then its state symbol, [watching — who
+        // has it] when another window has the pane to type in, and its project and branch
+        // where there is room. Git context stays here; the status bar keeps the location cue.
+        m.insert("pane-border-format".into(), " #{pane_title}#{?pane_agent_icon, #{pane_agent_mark},}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],}#{?pane_where, #[dim]· #{pane_where} #[nodim],}".into());
+        // Session and window navigation on the left; connection, quota, fleet, location and
+        // clock on the right. A leading space keeps a full window list from running into it.
         m.insert("status-left".into(), "#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} ".into());
-        m.insert("status-right".into(), " #{?daemon_down,#[bold]daemon down#[nobold] ,}#{?usage_high,#{usage_high_mark} ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{host_short} %H:%M".into());
+        m.insert("status-right".into(), " #{?daemon_down,#[bold]daemon down#[nobold] ,}#{?usage_high,#{usage_high_mark} ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?pane_machine,#{=/12/…:pane_machine},#{host_short}}#{?pane_current_path,:#{=/18/…:#{b:pane_current_path}},#{?pane_project,:#{=/18/…:pane_project},}} %H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
+        // Keep tmux's familiar current/previous markers beside the name, then any other
+        // flags, then the harness state. The selected tab needs no filled badge.
         for name in ["window-status-format", "window-status-current-format"] {
-            m.insert(name.into(), "#I:#{window_short_name}#{?window_agent_icon, #{window_agent_icon},}#{?window_flags,#{window_flags},}".into());
+            m.insert(name.into(), "#I:#{window_short_name}#{?window_active,*,#{?window_last_flag,-,}}#{s/[*-]//:window_flags}#{?window_agent_icon, #{window_agent_icon},}".into());
         }
+        // Unread activity and bells already carry #/! markers. Keep a continuous status
+        // background and emphasize text instead of introducing inverted tab badges.
+        for name in ["window-status-activity-style", "window-status-bell-style"] {
+            m.insert(name.into(), "bold".into());
+        }
+        if let Some(line) = m.get_mut("status-format[1]") { *line = line.replace("#[reverse]", "#[bold]"); }
         // The terminal's title: the harnesses waiting on you, and the one in front with its state,
         // so a terminal tab says what is in it (the status changing in the title as it works).
         m.insert("set-titles".into(), "on".into());
@@ -153,7 +157,7 @@ fn pane_default(name: &str) -> Option<String> {
         "pane-border-style" => pair(p.muted, p.header),
         "pane-active-border-style" => pair(p.active_foreground, p.active_header),
         "status-style" | "window-status-style" => pair(p.status_foreground, p.status),
-        "window-status-current-style" => format!("{},bold", pair(p.status_active_foreground, p.status_active)),
+        "window-status-current-style" => format!("{},bold", pair(p.status_foreground, p.status)),
         "window-status-separator" => "  ".into(),
         _ => return None,
     })
@@ -162,7 +166,7 @@ fn pane_default(name: &str) -> Option<String> {
 const PANE_LOOK: [&str; 8] = ["window-style", "window-active-style", "pane-border-style", "pane-active-border-style", "status-style", "window-status-current-style", "window-status-style", "window-status-separator"];
 
 /// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
-pub const LOOK: [&str; 11] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string", "allow-set-title"];
+pub const LOOK: [&str; 14] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string", "allow-set-title", "window-status-activity-style", "window-status-bell-style", "status-format[1]"];
 
 /// Where a `set` lands, as tmux's flags choose it.
 #[derive(Default, Clone, Debug)]
@@ -222,7 +226,8 @@ impl Store {
     /// defaults, as set over them.
     pub fn array(&self, name: &str) -> Vec<String> {
         for m in [&self.server, &self.global_session, &self.global_window] { if holds(m, name) { return items(m, name).into_iter().map(|(_, v)| v).collect() } }
-        items(defaults(), name).into_iter().map(|(_, v)| v).collect()
+        let defaults = if self.tmux_look() { tmux_defaults() } else { defaults() };
+        items(defaults, name).into_iter().map(|(_, v)| v).collect()
     }
 
     /// `@hn-look tmux`: tmux's own look in place of hn's (the status line, the window list, the
@@ -262,7 +267,7 @@ impl Store {
         if find(name).map(|o| o.array).unwrap_or(false) {
             let (base, index) = split_index(name);
             index?;
-            return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => defaults().get(name).cloned() };
+            return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => self.default_of(name, false) };
         }
         let inherit_window_style = name == "window-active-style" && layers.iter().flatten().any(|m| m.contains_key("window-style"));
         layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| self.default_of(name, inherit_window_style))
@@ -621,6 +626,31 @@ mod tests {
             s.set("window-active-style", Some("fg=yellow,bg=black"), &f, "w", 1).unwrap();
             assert_eq!(s.get("window-active-style", "w", Some(1)).as_deref(), Some("fg=yellow,bg=black"));
         }
+    }
+
+    #[test]
+    fn status_alerts_use_emphasis_unless_tmux_or_an_explicit_style_is_requested() {
+        let mut s = Store::default();
+        for name in ["window-status-activity-style", "window-status-bell-style"] {
+            assert_eq!(s.get(name, "w", None).as_deref(), Some("bold"));
+        }
+        assert!(!s.array("status-format")[1].contains("reverse"));
+        assert!(!s.get("status-format[1]", "w", None).unwrap().contains("reverse"));
+        assert!(!s.global_rows(Scope::Session)["status-format[1]"].contains("reverse"));
+        let global = SetFlags { global: true, ..Default::default() };
+        s.set("@hn-look", Some("tmux"), &global, "w", 1).unwrap();
+        for name in ["window-status-activity-style", "window-status-bell-style"] {
+            assert_eq!(s.get(name, "w", None).as_deref(), Some("reverse"));
+        }
+        assert!(s.array("status-format")[1].contains("reverse"));
+        assert!(s.get("status-format[1]", "w", None).unwrap().contains("reverse"));
+        assert!(s.global_rows(Scope::Session)["status-format[1]"].contains("reverse"));
+        s.set("@hn-look", Some("panes"), &global, "w", 1).unwrap();
+        s.set("window-status-bell-style", Some("fg=red,reverse"),
+            &SetFlags { global: true, window: true, ..Default::default() }, "w", 1).unwrap();
+        assert_eq!(s.get("window-status-bell-style", "w", None).as_deref(), Some("fg=red,reverse"));
+        s.set("status-format[1]", Some("#[reverse]custom"), &global, "w", 1).unwrap();
+        assert_eq!(s.get("status-format[1]", "w", None).as_deref(), Some("#[reverse]custom"));
     }
 
     #[test]

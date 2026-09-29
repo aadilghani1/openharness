@@ -1004,7 +1004,8 @@ pub fn agent_mark(state: crate::fleet::State, tick: u64) -> String {
 }
 
 
-/// Keep warnings readable on the status bar: a colored dot, plain text, no badge background.
+/// Compact quota warning: provider plus percentage, with color only on the number.
+/// The raw format retains the reset window for scripts and custom status lines.
 fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, marked: bool) -> String {
     let mut worst: Option<(&crate::fleet::Usage, &crate::fleet::Window)> = None;
     for u in readings { for w in &u.windows {
@@ -1018,7 +1019,7 @@ fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, ma
         (false, false) => "#f3cc76", (false, true) => "#ff9b8e",
         (true, false) => "#875600", (true, true) => "#a53028",
     };
-    format!("#[fg={color}]●#[fg=default] {provider} · {} {:.0}%", w.label, w.used)
+    format!("{provider} #[fg={color}]{:.0}%#[fg=default]", w.used)
 }
 
 pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
@@ -1220,9 +1221,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // The harness's symbol as its title draws it (#{pane_agent_icon}, styled): in its state's
         // colour, needs you bold, idle dim.
         "pane_agent_mark" => pane.and_then(|p| app.pane_state(p.id)).map(|s| agent_mark(s, app.tick)).unwrap_or_default(),
-        // Where the harness works, as zsh's robbyrussell prompt writes it: `project git:(branch)`,
-        // else `git:(branch)`, else the branch — the longest that fits beside the pane's title (a
-        // folder with no git: its name).
+        // Where the harness works: `project ⑂ branch`, then progressively shorter context
+        // as the pane narrows. The Unicode fork needs no patched icon font. A folder with
+        // no git shows its name.
         "pane_where" => pane.zip(agent).and_then(|(p, a)| {
             if a.branch.is_empty() && a.project.is_empty() { return None }
             let room = content_rect(app, window, p.id)?.width.saturating_sub(4) as usize;
@@ -1231,14 +1232,14 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             if app.pane_state(p.id).is_some() { left += 2 }
             if let crate::pane::Phase::Watching(who) = &p.phase { left += width(" [watching]") + if who.is_empty() { 0 } else { width(&format!(" — {who} has it")) } }
             let pr = a.pr.as_ref().map(|p| format!(" {}", p.label())).unwrap_or_default();
-            // A pane on another machine says which (scp's way, as the status line: gpu-box:ml-lab).
+            // A pane on another machine says which (scp's way: gpu-box:ml-lab).
             let far = (p.machine_id != app.fleet.local_id && !a.project.is_empty()).then(|| format!("{}:", app.fleet.machine_name(&p.machine_id))).filter(|m| m.len() > 1);
             let far_project = far.as_ref().map(|m| format!("{m}{}", a.project));
             // A folder that is not a git repository: its name alone (and the machine's).
             if a.branch.is_empty() { return [far_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4) }
-            [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} git:({}){pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} git:({})", a.branch)),
-                (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} git:({}){pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)),
-                (!pr.is_empty()).then(|| format!("git:({}){pr}", a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
+            [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} ⑂ {}{pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} ⑂ {}", a.branch)),
+                (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} ⑂ {}{pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} ⑂ {}", a.project, a.branch)),
+                (!pr.is_empty()).then(|| format!("⑂ {}{pr}", a.branch)), Some(format!("⑂ {}", a.branch)), Some(a.branch.clone())]
                 .into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4)
         }).unwrap_or_default(),
         // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it
@@ -1569,12 +1570,16 @@ mod tests {
         assert_eq!(super::quota_warning(std::iter::once(&u), true), "");
         u.windows[0].used = 80.0;
         let warning = super::quota_warning(std::iter::once(&u), true);
-        assert!(warning.contains("●#[fg=default] Claude · week 80%"));
+        assert!(warning.starts_with("Claude #[fg="));
+        assert!(warning.ends_with("]80%#[fg=default]"));
+        assert!(!warning.contains("week") && !warning.contains('●'));
         assert!(!warning.contains("reverse") && !warning.contains("bg="));
         u.windows[0].used = 100.0;
         let full = super::quota_warning(std::iter::once(&u), true);
-        assert_ne!(warning.split(']').next(), full.split(']').next());
-        assert!(full.ends_with("Claude · week 100%"));
+        let indicator_color = |s: &str| s.split("#[fg=").nth(1).unwrap().split(']').next().unwrap().to_owned();
+        assert_ne!(indicator_color(&warning), indicator_color(&full));
+        assert!(full.starts_with("Claude #[fg="));
+        assert!(full.ends_with("]100%#[fg=default]"));
         assert_eq!(super::quota_warning(std::iter::once(&u), false), "claude week 100%");
     }
 

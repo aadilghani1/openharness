@@ -429,7 +429,6 @@ pub struct PanePalette {
     pub foreground: Color, pub inactive_foreground: Color, pub muted: Color,
     pub header: Color, pub active_header: Color, pub active_foreground: Color,
     pub status: Color, pub status_foreground: Color,
-    pub status_active: Color, pub status_active_foreground: Color,
 }
 
 pub fn pane_palette() -> PanePalette {
@@ -451,17 +450,15 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
     PanePalette {
         canvas: if light { mix(bg, foreground, 14) } else { mix(bg, Color::Rgb(0, 0, 0), 45) },
         surface: bg,
-        inactive_surface: mix(bg, foreground, if light { 8 } else { 18 }),
+        inactive_surface: if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) },
         foreground, inactive_foreground: mix(foreground, bg, 9),
         muted: mix(foreground, bg, 30),
-        header: mix(bg, foreground, if light { 12 } else { 21 }),
-        active_header: mix(bg, green, if light { 8 } else { 10 }),
-        active_foreground: foreground,
+        header: if light { mix(bg, foreground, 12) } else { Color::Rgb(64, 64, 64) },
+        active_header: bg,
+        active_foreground: if light { Color::Rgb(74, 89, 105) } else { Color::Rgb(192, 200, 210) },
         // A familiar green anchor, subdued enough that the working pane keeps the attention.
         status: mix(bg, green, if light { 18 } else { 28 }),
         status_foreground: if light { Color::Rgb(35, 62, 29) } else { Color::Rgb(196, 216, 183) },
-        status_active: if light { green } else { Color::Rgb(143, 184, 113) },
-        status_active_foreground: if light { Color::Rgb(250, 253, 248) } else { Color::Rgb(20, 35, 15) },
     }
 }
 
@@ -1285,10 +1282,10 @@ mod palette_tests {
             assert!((luminance(p.surface) - luminance(p.foreground)).abs() > 180_000);
             assert!((luminance(p.inactive_surface) - luminance(p.inactive_foreground)).abs() > 150_000);
             assert!((luminance(p.status) - luminance(p.status_foreground)).abs() > 120_000);
-            assert!((luminance(p.status_active) - luminance(p.status_active_foreground)).abs() > 120_000);
         }
         let fallback = super::pane_palette_for(None);
         assert_eq!(fallback.surface, Color::Rgb(28, 31, 36));
+        assert_eq!(fallback.inactive_surface, Color::Rgb(64, 64, 64));
     }
 
     use super::palette;

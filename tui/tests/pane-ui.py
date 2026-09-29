@@ -31,7 +31,7 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{fleet}  studio  20:41 "\n')
+CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -111,6 +111,15 @@ def pane_background(pane):
     return background_at(x, y + height - 2)
 
 
+def pane_outline(pane):
+    x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split())
+    screen = tmux('capture-pane', '-p', '-t', 'test').splitlines()
+    corners = ((x - 2, y - 3, '┌'), (x + w + 1, y - 3, '┐'),
+               (x - 2, y + h + 1, '└'), (x + w + 1, y + h + 1, '┘'))
+    return all(0 <= row < len(screen) and 0 <= col < len(screen[row]) and screen[row][col] == glyph
+               for col, row, glyph in corners)
+
+
 def snapshot(name):
     if OUTPUT:
         (OUTPUT / (name + '.ansi')).write_text(tmux('capture-pane', '-p', '-e', '-t', 'test'))
@@ -148,32 +157,63 @@ try:
     keys('C-b', 'Left')
     wait(lambda: value('#{pane_id}') == first, 'focus before visual capture')
     time.sleep(.2)
-    snapshot('panes-columns')
     original = value('#{window_layout}')
     active_bg = hn('show', '-gwv', 'window-active-style').split('bg=')[1]
     inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
     assert active_bg != inactive_bg
+    assert inactive_bg == '#404040'
+    wait(lambda: pane_outline(first) and not pane_outline(second), 'thin outline only around the focused pane')
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
-    assert tab.startswith(label + ' '), (tab, label)
+    assert tab.startswith(label + '* '), (tab, label)
     assert value('#{window_agent_icon}') in tab[len(label):]
+    assert '*' in value('#{window_flags}')
+    selected_bg = hn('show', '-gwv', 'window-status-current-style').split('bg=')[1].split(',')[0]
+    normal_bg = hn('show', '-gwv', 'window-status-style').split('bg=')[1].split(',')[0]
+    assert selected_bg == normal_bg, 'the star identifies the active tab without a second filled highlight'
+    current = value('#{window_id}')
+    other = next(w for w in hn('list-windows', '-F', '#{window_id}').splitlines() if w != current)
+    hn('select-window', '-t', other)
+    previous = value(hn('show', '-gwv', 'window-status-format'), current)
+    assert previous.startswith(label + '-'), (previous, label)
+    hn('select-window', '-t', current)
     assert 'reverse' not in value('#{fleet}')
     assert 'reverse' not in value('#{tree_mode_format}')
     assert 'reverse' not in value('#{pane_agent_mark}', second)
-    assert 'reverse' not in hn('show', '-gv', 'status-right')
-    wait(lambda: 'Claude · 5h 100%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'plain quota warning reaches the status row')
-    print('PASS pane UI: whole-pane focus contrast, name before status, plain status badges', flush=True)
+    custom_status = hn('show', '-gv', 'status-right')
+    assert 'reverse' not in custom_status
+    title = value('#{pane_title}', first)
+    header = value(hn('show', '-gwv', 'pane-border-format'), first)
+    plain_header = re.sub(r'#\[[^]]*\]', '', header).strip()
+    assert plain_header.startswith(title + ' '), (title, plain_header)
+    hn('set', '-gu', 'status-right')
+    default_status = hn('show', '-gv', 'status-right')
+    assert all(part not in default_status for part in ('pane_branch', 'pane_where', 'git:'))
+    location = value('#{pane_machine}:#{b:pane_current_path}')
+    assert location in value(default_status), (location, value(default_status))
+    wait(lambda: location in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'bottom right shows the focused machine and folder')
+    hn('set', '-g', 'status-right', custom_status)
+    for option in ('window-status-activity-style', 'window-status-bell-style'):
+        assert hn('show', '-gwv', option) == 'bold'
+    assert 'reverse' not in hn('show', '-gv', 'status-format[1]')
+    wait(lambda: 'Claude 100%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'plain quota warning reaches the status row')
+    snapshot('panes-columns')
+    print('PASS pane UI: whole-pane focus contrast, name before status, compact quota and location', flush=True)
 
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == second, 'C-b Right with insets')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'keyboard focus moves pane contrast')
+    wait(lambda: pane_outline(second) and not pane_outline(first), 'keyboard focus moves the outline without stale borders')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == third, 'second C-b Right')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == first, 'directional wrap')
     keys('C-b', 'z')
     wait(lambda: value('#{window_zoomed_flag}') == '1', 'zoom')
+    branch_context = value('#{pane_where}')
+    assert '⑂ ' + value('#{pane_branch}') in branch_context, branch_context
+    assert 'git:(' not in branch_context
     keys('C-b', 'z')
     wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
     assert value('#{window_layout}') == original
@@ -203,6 +243,7 @@ try:
     mouse(0, second_x, 1, release=True)
     wait(lambda: value('#{pane_id}') == second, 'click the pane header')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'mouse focus moves pane contrast')
+    wait(lambda: pane_outline(second) and not pane_outline(first), 'mouse focus moves the outline')
     assert len(api()['inputs']) == before, api()['inputs'][before:]
     mouse(0, border, 10)
     mouse(32, border + 3, 10)
@@ -295,7 +336,7 @@ try:
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
     assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
-    wait(lambda: pane_background(first) == '#101010' and pane_background(second) == '#393939', 'dark focus contrast')
+    wait(lambda: pane_background(first) == '#101010' and pane_background(second) == '#404040', 'dark focus contrast')
     print('PASS pane UI: live light/dark themes, reported defaults and custom style preservation', flush=True)
 
     hn('send-keys', '-t', first, '-l', '\x1b[H\x1b[31;44mHN_COLOR\x1b[0m')

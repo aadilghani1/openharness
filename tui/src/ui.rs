@@ -275,21 +275,34 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             pane.dirty = false;
         }
     }
-    if surfaces { pane_headers(buf, app); } else { borders(buf, app, body); }
+    if surfaces { pane_chrome(buf, app); } else { borders(buf, app, body); }
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
 }
 
-/// Titles belong to their pane surface. Focus is a quiet header accent; content keeps its
-/// original ANSI colours and remains equally legible in the other panes.
-fn pane_headers(buf: &mut Buffer, app: &App) {
+/// Integrated titles and a thin focus outline in the gutters. Program cells retain their
+/// ANSI colours; moving focus changes no content dimensions or mouse coordinates.
+fn pane_chrome(buf: &mut Buffer, app: &App) {
     let canvas = app.window_area(app.tab());
     for (id, rect) in &app.rects {
         let f = crate::pane_frame::frame(*rect, canvas, app.pane_status(app.tab()));
-        let Some(title) = f.title else { continue };
         let active = Some(*id) == app.focused();
         let style = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, Some(*id));
+        if let Some(outline) = f.outline.filter(|_| active) {
+            let lines = app.options.get("pane-border-lines", &app.tab().id, Some(*id)).unwrap_or_default();
+            let (tl, tr, bl, br, hz, vt, _, _) = box_set(&lines);
+            let border = style.bg(theme::pane_palette().canvas);
+            let put = |buf: &mut Buffer, x, y, glyph| {
+                if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(glyph).set_style(border); }
+            };
+            let (right, bottom) = (outline.right() - 1, outline.bottom() - 1);
+            for x in outline.x + 1..right { put(buf, x, outline.y, hz); put(buf, x, bottom, hz); }
+            for y in outline.y + 1..bottom { put(buf, outline.x, y, vt); put(buf, right, y, vt); }
+            put(buf, outline.x, outline.y, tl); put(buf, right, outline.y, tr);
+            put(buf, outline.x, bottom, bl); put(buf, right, bottom, br);
+        }
+        let Some(title) = f.title else { continue };
         buf.set_style(title, style);
-        let marker = if app.marked == Some(*id) { "◆" } else if active { "▌" } else { " " };
+        let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
         let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
         title_line(buf, app, *id, text, style);
@@ -342,7 +355,7 @@ fn border_style(app: &App, active: bool) -> Style {
 }
 
 /// A pane's status line over its border characters: its pane-border-format (hn's: the harness's
-/// symbol, its name, and as far as the pane is wide, its project and branch), drawn as
+/// name, its state symbol, and as far as the pane is wide, its project and branch), drawn as
 /// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
 /// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
 /// writes nothing.

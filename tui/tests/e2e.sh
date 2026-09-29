@@ -61,7 +61,7 @@ tmux_ send-keys -t t 'Mock\ Claude'
 expect "fuzzy filter narrows" "1/"
 # Enter, as tmux's chooser: the harness in a window of its own (not a split of this one).
 tmux_ send-keys -t t Enter
-expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude ·*"
+expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude* ·"
 wait_eq "the harness window's one pane" "1" hn display -p '#{window_panes}'
 hn kill-window
 tmux_ send-keys -t t C-b s
@@ -91,14 +91,16 @@ wait_eq "C-b : is the command prompt" yes command_prompt
 tmux_ send-keys -t t "split-window -h" Enter
 # tmux's split: a shell at once, and what is typed straight after it lands in it.
 tmux_ send-keys -t t "typed-ahead"
-expect "split-window -h gives a shell" '▌ Mock terminal'
+wait_eq "split-window -h adds a pane" "3" hn display -p '#{window_panes}'
+expect "split-window -h gives a shell" 'Mock terminal'
 expect "keys typed while it starts go into it" "typed-ahead"
 tmux_ send-keys -t t C-b x y
 tmux_ send-keys -t t C-b s
 tmux_ send-keys -t t "remote"
 tmux_ send-keys -t t C-v
 expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
-expect "pane header names the focused harness" '▌ Remote shell'
+wait_eq "the remote harness is focused" 'Remote shell' hn display -p '#{pane_title}'
+expect "pane header names the focused harness" 'Remote shell'
 # From a shell, as tmux is scripted: the running client answers.
 out=$(hn display -p '#{session_windows} #{pane_index}')
 [ -n "$out" ] || fail "hn display -p from a shell answered nothing"

@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use crate::layout::Status;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect> }
+pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect>, pub outline: Option<Rect> }
 
 pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
     let mut surface = tile;
@@ -29,7 +29,13 @@ pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
     }
     if content.width >= 12 { content.x += 1; content.width -= 2; }
     if content.height >= 10 { content.y += 1; content.height -= 2; }
-    Frame { surface, content, title }
+    // The focus outline occupies existing gutter cells, never a program cell. Compact
+    // panes without a complete gutter keep all their space and rely on surface contrast.
+    let outline = (tile.width >= 12 && canvas.width >= 40 && tile.height >= 8 && canvas.height >= 12
+        && surface.x > canvas.x && surface.y > canvas.y
+        && surface.right() < canvas.right() && surface.bottom() < canvas.bottom())
+        .then(|| Rect::new(surface.x - 1, surface.y - 1, surface.width + 2, surface.height + 2));
+    Frame { surface, content, title, outline }
 }
 
 #[cfg(test)]
@@ -45,6 +51,11 @@ mod tests {
             assert_eq!(f.content.intersection(f.surface), f.content);
             assert!(f.content.width > 0 && f.content.height > 0);
             if let Some(title) = f.title { assert_eq!(title.intersection(f.content).height, 0); }
+            if let Some(outline) = f.outline {
+                assert_eq!(outline.intersection(tile), outline);
+                assert!(outline.x < f.surface.x && outline.y < f.surface.y);
+                assert!(outline.right() > f.surface.right() && outline.bottom() > f.surface.bottom());
+            }
         } } }
     }
 
@@ -54,9 +65,15 @@ mod tests {
         let left = frame(Rect::new(0, 0, 59, 40), canvas, Status::Top);
         let right = frame(Rect::new(60, 0, 60, 40), canvas, Status::Top);
         assert_eq!(right.surface.x - left.surface.right(), 1);
+        assert_eq!(left.outline.unwrap().intersection(right.surface).width, 0);
+        assert_eq!(right.outline.unwrap().intersection(left.surface).width, 0);
         let top = frame(Rect::new(0, 0, 120, 20), canvas, Status::Top);
         let bottom = frame(Rect::new(0, 20, 120, 20), canvas, Status::Top);
         assert_eq!(bottom.surface.y - top.surface.bottom(), 1);
+        assert_eq!(top.outline.unwrap().intersection(bottom.surface).height, 0);
+        assert_eq!(bottom.outline.unwrap().intersection(top.surface).height, 0);
         assert!(top.content.y > top.title.unwrap().y);
+        // Short inner tiles share a title row without the normal outer gutter.
+        assert!(frame(Rect::new(20, 20, 40, 5), canvas, Status::Top).outline.is_none());
     }
 }
