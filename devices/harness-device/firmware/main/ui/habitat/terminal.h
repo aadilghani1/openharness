@@ -27,6 +27,8 @@ extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_
 // Precomputed curved-label and larger inbox navigation glyphs.
 extern const ht_font_t ht_open_20, ht_nav_32;
 extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
+extern const ht_font_t ht_right_20, ht_right_28, ht_open_28;
+extern const uint8_t ht_right_20_ink[1][4];
 // One authored outline bell in a normal terminal cell, not an emoji font.
 #define HT_BELL "\xee\x80\x80"
 extern const ht_font_t ht_bell_20, ht_bell_28;
@@ -95,6 +97,10 @@ uint32_t ht_glyph_cache_builds(void);
 size_t ht_glyph_cache_bytes(void);
 // Consume one word-wrapped UTF-8 line; shared by rectangular and round reading areas.
 const char *ht_take_line(const char **cursor, int cells);
+// Display-only normalization, before measuring/wrapping. Bounded, no allocation;
+// false means the destination was truncated. Source and destination must differ.
+bool ht_display_text(char *dst, size_t capacity, const char *src, const ht_font_t *font);
+const char *ht_take_display_line(const char **cursor, int cells, const ht_font_t *font);
 int ht_wrap(ht_scene_t *scene, int x, int y, int width, int lines, int skip, const ht_font_t *font,
             uint16_t fg, const char *text);
 void ht_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out);
