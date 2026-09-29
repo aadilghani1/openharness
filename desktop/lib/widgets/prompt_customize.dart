@@ -10,6 +10,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'status_line.dart';
+import 'workspace_pull_request_label.dart';
 
 class PromptCustomize extends StatelessWidget {
   const PromptCustomize({super.key, required this.store});
@@ -39,17 +40,20 @@ class PromptCustomize extends StatelessWidget {
           separateMachine: true,
         );
         final previewContext = example(prefs.statusStyle);
-        final preview = StatusLineParts(prefs.statusStyle, [
-          ...previewContext.segments,
-          if (!prefs.statusStyle.segmented &&
-              previewContext.segments.isNotEmpty)
-            const StatusLineSegment(' '),
-          ...pullRequestStatusLineParts(
-            number: 298,
-            state: 'Merged',
-            style: prefs.statusStyle,
-          ).segments,
-        ]);
+        final joined =
+            prefs.statusStyle.segmented && previewContext.segments.isNotEmpty;
+        final prBackground = !joined
+            ? null
+            : statusLinePaintSegments(
+                pullRequestStatusLineParts(
+                  number: 298,
+                  state: 'Merged',
+                  style: prefs.statusStyle,
+                ),
+                theme,
+                color: prefs.color,
+                segmentOffset: previewContext.segments.length,
+              ).single.background;
         final buttonStyle = TextButton.styleFrom(
           alignment: Alignment.centerLeft,
           foregroundColor: theme.foreground,
@@ -90,6 +94,16 @@ class PromptCustomize extends StatelessWidget {
               Text('Status line', style: style),
               SizedBox(height: cell.height),
               for (final format in StatusLineStyle.values) ...[
+                if (format == StatusLineStyle.standard ||
+                    format == StatusLineStyle.agnoster) ...[
+                  Text(
+                    format.segmented ? 'Powerline' : 'Minimal',
+                    style: style.copyWith(
+                      color: theme.foreground.withValues(alpha: .6),
+                    ),
+                  ),
+                  SizedBox(height: cell.height),
+                ],
                 SizedBox(
                   height: cell.height,
                   child: TextButton(
@@ -137,11 +151,27 @@ class PromptCustomize extends StatelessWidget {
                     horizontal: cell.width,
                     vertical: cell.height,
                   ),
-                  child: StatusLine(
-                    key: const ValueKey('prompt-preview'),
-                    parts: preview,
-                    color: prefs.color,
-                    textAlign: TextAlign.left,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: StatusLine(
+                          key: const ValueKey('prompt-preview'),
+                          parts: previewContext,
+                          color: prefs.color,
+                          textAlign: TextAlign.left,
+                          workspaceBar: true,
+                          nextBackground: prBackground,
+                        ),
+                      ),
+                      if (!joined) SizedBox(width: cell.width),
+                      WorkspacePullRequestLabel(
+                        number: 298,
+                        state: 'Merged',
+                        color: prefs.color,
+                        style: prefs.statusStyle,
+                        segmentOffset: previewContext.segments.length,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -166,7 +196,7 @@ class PromptCustomize extends StatelessWidget {
               ),
               toggle(
                 'color',
-                'Color (Plain is always monochrome)',
+                'Color',
                 prefs.color,
                 (value) => choose(prefs.copyWith(color: value)),
               ),

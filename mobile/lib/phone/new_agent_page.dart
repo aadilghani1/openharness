@@ -4,17 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
+import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
+import 'package:harness_mobile/core/git_project.dart';
 import 'package:harness_mobile/core/project_folder.dart';
 import 'package:harness_mobile/widgets/remote_folder_picker.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import 'agent_index.dart';
-import 'phone_header.dart';
+import 'branch_picker_sheet.dart';
 import 'phone_navigation.dart';
+import 'new_agent_draft.dart';
+import 'new_agent_model_sheet.dart';
 import 'phone_status.dart';
-import 'settings_row.dart';
+import 'new_agent_chooser.dart';
+import 'tty.dart';
+import 'tty_controls.dart';
+import 'voice_input_controller.dart';
 
 /// Starting an agent from the phone: a folder on that machine, and an engine to
 /// run there.
@@ -23,19 +33,27 @@ import 'settings_row.dart';
 /// open a folder browser on top — a sheet that has to be dismissed to reach the
 /// browser, and rebuilt after it, loses the other choice on the way.
 ///
-/// The desktop asks the same two things (`widgets/new_agent_dialog.dart`) and a
-/// few more it has room for — a Codex profile, a split to place the pane into,
-/// a permission bypass. A phone shows one agent at a time, so there is no split
-/// to aim at, and the rest belong to the machine that already knows them.
+/// Agent and project are the default flow. Model, approvals, Codex profile,
+/// branch and the independent worktree toggle live under Options, as on desktop.
 class NewAgentPage extends StatefulWidget {
   const NewAgentPage({
     super.key,
     required this.notifier,
     required this.machineId,
+    this.folder,
+    this.voice,
   });
+
+  /// The mic the task field talks through — the pager's, so a take survives the swipe here. Null
+  /// makes the page its own.
+  final VoiceInputController? voice;
 
   final AppNotifier notifier;
   final String machineId;
+
+  /// A folder on [machineId] to start in — Find's `+ New Harness in api`. Null takes the last one
+  /// used there.
+  final String? folder;
 
   @override
   State<NewAgentPage> createState() => _NewAgentPageState();
@@ -45,12 +63,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// The machine the agent is created on. Starts on the one the page was opened with, and the
   /// MACHINE rows change it.
   late String _machineId = widget.machineId;
-
-  /// Whether the MACHINE row is folded open onto the other machines.
-  bool _machinesOpen = false;
-
-  /// Whether the engines past [_primaryEngines] are shown.
-  bool _moreEnginesOpen = false;
 
   String? _folder;
 
@@ -70,6 +82,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   String? _engine = 'claude';
   String? _error;
   bool _creating = false;
+  bool _optionsOpen = false;
+  GridModel? _model;
 
   /// Codex state folders this machine reported, and the one chosen. Null is the
   /// machine's own default `CODEX_HOME`, which is what the desktop dialog calls
@@ -78,15 +92,63 @@ class _NewAgentPageState extends State<NewAgentPage> {
   LocalCodexProfile? _codexProfile;
   bool _codexProfilesLoaded = false;
 
-  /// Whether the Recent row is folded open.
+  /// How far the harness may go without asking — the desktop's Approvals row.
   ///
-  /// Starts shut every time, and closes again on a pick: what it lists are answers, and once one is
-  /// taken the list has nothing left to say.
-  bool _recentOpen = false;
+  /// ⚠️ **Per engine, and reset with it.** Claude's "Accept edits" is not a mode Codex has, and a
+  /// mode an engine lacks is refused by the CLI at launch — so switching engine drops back to
+  /// [kDefaultPermissionMode] rather than carrying a choice across. See
+  /// `core/permission_modes.dart`.
+  String _permissionMode = kDefaultPermissionMode;
+
+  /// The modes the chosen engine offers, empty for one that has none to choose between — the row
+  /// is then left out rather than drawn dead.
+  List<PermissionMode> get _permissionModes =>
+      _engine == null ? const [] : permissionModesOf(_engine!);
+
+  PermissionMode? get _permissionModeChoice =>
+      _permissionModes.where((mode) => mode.id == _permissionMode).firstOrNull;
+
+  /// What the machine said about [_folder]'s repository, and which folder it
+  /// answered about.
+  ///
+  /// ⚠️ **The path is kept beside the answer on purpose.** The read is a round
+  /// trip to somebody's laptop and the folder can change twice while one is in
+  /// flight; without it, a slow answer about the folder before last would draw
+  /// that repository's branches under this one's name.
+  GitProjectInfo? _git;
+  String? _gitFolder;
+  bool _gitLoading = false;
+
+  /// Set when the machine could not answer at all, as opposed to answering
+  /// "not a repository".
+  ///
+  /// ⚠️ **Kept apart from [_git] because the two used to look identical, and
+  /// that hid a real fault.** `git_project_info` was missing from this app's
+  /// end-to-end encrypted frame list, so every machine refused it with
+  /// `E2EE_REQUIRED` — and since a folder that is not a checkout also offers
+  /// nothing, the section simply never appeared and there was nothing on screen
+  /// to say why. A refusal says so now.
+  bool _gitFailed = false;
+
+  /// Start puts the harness in a worktree of its own rather than in the folder
+  /// itself. Set from [worktreeByDefault] each time a repository is read, which
+  /// is what the desktop's box does with the same answer.
+  bool _worktree = false;
+
+  /// What the new branch starts FROM (a ref), and what to call it. Null base
+  /// means [defaultBranchRef]; null name means a made-up one.
+  String? _branchRef;
+  String? _branchName;
+
+  /// Held for the length of the form rather than drawn fresh on every build:
+  /// the name is random, and one that changed under the person between the row
+  /// they read and the harness they started would be a different branch.
+  String? _placeholder;
 
   @override
   void initState() {
     super.initState();
+    _restoreDraft();
     // After the first frame, not during it: `probeEngines` can notify synchronously, and a notify
     // while this page is still being mounted marks the listeners above it dirty mid-build — the
     // "setState() called during build" assertion.
@@ -99,6 +161,139 @@ class _NewAgentPageState extends State<NewAgentPage> {
       widget.notifier.projectHistory.load().then((_) {
         if (mounted) setState(() {});
       }),
+    );
+    // The last agent started from this phone, the desktop's `agentPreference`. A draft being
+    // restored keeps its own.
+    if (newAgentDraft == null) {
+      final preference = widget.notifier.agentPreference;
+      unawaited(
+        preference.load().then((_) {
+          final remembered = preference.value;
+          if (!mounted || remembered == null || _engineChosen) return;
+          setState(() => _engine = remembered);
+        }),
+      );
+    }
+  }
+
+  /// Whether the engine was picked on this page — a remembered one arriving late must not undo it.
+  bool _engineChosen = false;
+
+  @override
+  void dispose() {
+    _keepDraft();
+    _task.dispose();
+    _ownVoice?.dispose();
+    super.dispose();
+  }
+
+  /// The first task — `prompt` on `agent_create`. Optional: empty starts the harness idle.
+  final _task = TextEditingController();
+
+  /// Made on the first tap of the mic, not before: a recorder opens a platform channel, and a
+  /// form nobody talks to should not.
+  VoiceInputController? _ownVoice;
+  VoiceInputController? get _voiceIfAny => widget.voice ?? _ownVoice;
+
+  /// The task field's mic: talk, and what was said is added to the task.
+  void _talk() {
+    final voice =
+        _voiceIfAny ??
+        (_ownVoice = VoiceInputController(
+          transcriber: (wav, lang) =>
+              widget.notifier.api.transcribeVoice(wav, lang: lang),
+        ));
+    if (widget.voice == null) setState(() {});
+    if (voice.status == VoiceInputStatus.listening) {
+      unawaited(
+        voice.submit((text) async {
+          if (!mounted) return false;
+          final said = text.trim();
+          final before = _task.text.trimRight();
+          final next = before.isEmpty ? said : '$before $said';
+          _task.value = TextEditingValue(
+            text: next,
+            selection: TextSelection.collapsed(offset: next.length),
+          );
+          setState(() {});
+          return true;
+        }),
+      );
+      return;
+    }
+    if (voice.status == VoiceInputStatus.idle) {
+      unawaited(voice.startListening());
+    }
+  }
+
+  /// Takes back what the form was left holding — see [NewAgentDraft].
+  ///
+  /// ⚠️ **The machine comes from the draft, not from the page's argument**, which is what the
+  /// desktop does (`_machineId = draft?.machineId ?? machineId`): the form was opened from a
+  /// terminal or a list that names ONE machine, and a draft that came back on a different one
+  /// would be a folder path belonging to a machine that has never heard of it.
+  ///
+  /// Nothing is restored for a machine the account no longer has. The whole draft goes with it,
+  /// rather than half of it: a folder and a branch are answers about a machine, and re-hanging
+  /// them on another is how a form comes back subtly wrong.
+  void _restoreDraft() {
+    final draft = newAgentDraft;
+    if (draft == null) return;
+    // Opened for a place — `+ New Harness in api` — the place wins; only the words carry over.
+    if (widget.folder != null) {
+      _task.text = draft.task ?? '';
+      return;
+    }
+    if (widget.notifier.stateOf(draft.machineId) == null) {
+      newAgentDraft = null;
+      return;
+    }
+    _machineId = draft.machineId;
+    _engine = draft.engine;
+    _permissionMode = draft.permissionMode;
+    _folder = draft.folder;
+    _project = draft.project;
+    _projectLabel = draft.projectLabel;
+    _worktree = draft.worktree ?? false;
+    _branchRef = draft.branchRef;
+    _branchName = draft.branchName;
+    _placeholder = draft.placeholder;
+    _git = draft.git;
+    _gitFolder = draft.gitFolder;
+    _codexProfile = draft.codexProfile;
+    _model = draft.model;
+    _task.text = draft.task ?? '';
+  }
+
+  /// Leaves the form's answers where the next open will find them. Called from [dispose], so it
+  /// covers every way out — Back, a swipe, the route being replaced — except the one that must
+  /// not be covered: [_create] clears the draft the moment a harness exists.
+  void _keepDraft() {
+    // Nothing chosen and nothing typed is not a draft; it is the form as it opens. Kept, it would
+    // pin the page to whichever machine was last looked at for the rest of the run.
+    if (_folder == null &&
+        _project == null &&
+        _branchName == null &&
+        _task.text.trim().isEmpty) {
+      newAgentDraft = null;
+      return;
+    }
+    newAgentDraft = NewAgentDraft(
+      machineId: _machineId,
+      engine: _engine,
+      permissionMode: _permissionMode,
+      folder: _folder,
+      project: _project,
+      projectLabel: _projectLabel,
+      worktree: _worktree,
+      branchRef: _branchRef,
+      branchName: _branchName,
+      placeholder: _placeholder,
+      git: _git,
+      gitFolder: _gitFolder,
+      codexProfile: _codexProfile,
+      model: _model,
+      task: _task.text,
     );
   }
 
@@ -118,20 +313,23 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// different folder that happens to share the path. The engine stays: it names a program, not a
   /// place.
   void _selectMachine(String machineId) {
-    if (machineId == _machineId) {
-      setState(() => _machinesOpen = false);
-      return;
-    }
+    if (machineId == _machineId) return;
     setState(() {
       _machineId = machineId;
-      _machinesOpen = false;
       _folder = null;
       _project = null;
       _projectLabel = null;
-      _recentOpen = false;
+      _git = null;
+      _gitFolder = null;
+      _gitLoading = false;
+      _gitFailed = false;
+      _worktree = false;
+      _branchRef = null;
+      _branchName = null;
       _codexProfiles = const [];
       _codexProfile = null;
       _codexProfilesLoaded = false;
+      _model = null;
       _error = null;
     });
     _askMachine();
@@ -146,6 +344,128 @@ class _NewAgentPageState extends State<NewAgentPage> {
           machine.machine.machineId == _machineId)
         machine,
   ];
+
+  /// Reads [folder]'s repository on its machine, and starts the Git choices
+  /// where the desktop starts them.
+  ///
+  /// Silent about failure. A folder that is not a repository and a machine that
+  /// could not answer both come back with nothing to offer, and neither is
+  /// something to interrupt a half-filled form about — the section simply does
+  /// not appear, and everything else on the page still works.
+  Future<void> _loadGit(String folder) async {
+    final machineId = _machineId;
+    setState(() {
+      _gitLoading = true;
+      _gitFailed = false;
+      _gitFolder = folder;
+      _git = null;
+      _branchRef = null;
+      _branchName = null;
+      _worktree = false;
+    });
+    final raw = await widget.notifier.readGitProject(machineId, folder);
+    // A late answer about a folder the form has since left belongs to nobody —
+    // see the note on [_gitFolder].
+    if (!mounted || machineId != _machineId || folder != _folder) return;
+    var info = GitProjectInfo.fromJson(raw);
+    // ⚠️ **A worktree is a temporary folder, so New shows its repository** — the desktop's rule
+    // (`state/new_harness.dart`). Harness made it for another harness; opening New on it named
+    // that harness's folder (`silent-beacon`) as the project, which nobody recognises. The
+    // machine names the main checkout, and new work starts from the branch that is on.
+    if (info.mainFolder case final main?) {
+      _folder = main;
+      _gitFolder = main;
+      info = GitProjectInfo(
+        isGit: true,
+        branch: info.mainBranch,
+        branches: info.branches,
+        defaultRef: info.defaultRef,
+        root: main,
+      );
+    }
+    setState(() {
+      _gitLoading = false;
+      _gitFailed = info.unavailable;
+      _git = info.isGit ? info : null;
+      if (!info.isGit) return;
+      _worktree = worktreeByDefault(info);
+      _branchRef = defaultBranchRef(info, worktree: _worktree);
+      _placeholder ??= placeholderBranch([
+        for (final branch in info.branches)
+          if (!branch.remote) branch.name,
+      ]);
+    });
+  }
+
+  /// The repository the Git rows are about, or null when there is none to show.
+  GitProjectInfo? get _repository =>
+      _folder != null && _folder == _gitFolder ? _git : null;
+
+  /// What Start would do, so the rows can say it before it is done. Null when
+  /// there is no repository, or when Worktree is off — the folder simply moves
+  /// to the branch then, and the row already names it.
+  WorktreePlan? get _plan {
+    final info = _repository;
+    if (info == null || !_worktree) return null;
+    return planWorktree(
+      info,
+      base: _branchRef ?? defaultBranchRef(info, worktree: true),
+      name: _branchName,
+      placeholder: _placeholder ?? 'new-branch',
+    );
+  }
+
+  /// What this form calls an engine.
+  ///
+  /// ⚠️ **"Claude Code", not "Claude", and only here.** The desktop's launcher says the same
+  /// (`new_harness.dart`: `id == 'claude' ? 'Claude Code' : engineIdentity(id).label`) while its
+  /// engine table keeps the bare `Claude` for everywhere else — a pane header, a row on the Agents
+  /// list. The launcher is the one screen naming the PROGRAM rather than the harness running it,
+  /// and "Claude" alone reads there as a model.
+  String _engineName(String id) => id == 'claude'
+      ? 'Claude Code'
+      : allEngines.where((identity) => identity.id == id).firstOrNull?.label ??
+            id;
+
+  /// What the BRANCH row says is about to happen, in the words of the thing it
+  /// will do. Null leaves the row showing the branch alone.
+  ///
+  /// ⚠️ The four answers are not decoration: with Worktree on, the same branch
+  /// name means make one, check one out, or walk into a worktree that already
+  /// exists — and the last two are surprises if the row said only "main".
+  String? get _branchNote => switch (_plan?.kind) {
+    WorktreeStart.newBranch => 'A new branch from here, in its own worktree',
+    WorktreeStart.existingBranch => 'Checked out in a new worktree',
+    WorktreeStart.openWorktree => 'Opens the worktree it already has',
+    WorktreeStart.unavailable =>
+      'The folder is on this branch — pick another, or turn Worktree off',
+    null =>
+      _repository == null || _branchName == null ? null : 'New branch here',
+  };
+
+  /// The branch the row names: the one Start begins FROM.
+  ///
+  /// ⚠️ **Never the made-up name a new worktree's branch gets.** With Worktree
+  /// on, [planWorktree] answers with a two-word placeholder — `brave-otter` —
+  /// that the daemon replaces with the session's own name later. Shown as the
+  /// title it read as the app picking a branch at random, and the branch the
+  /// person actually chose was nowhere on the row. The desktop's field shows
+  /// `branchLabel`, which is the name of `branchRef` and nothing else; this is
+  /// that. What the placeholder is FOR belongs in the note under it.
+  String get _branchTitle {
+    final typed = _branchName?.trim();
+    if (typed != null && typed.isNotEmpty) return typed;
+    final info = _repository;
+    final ref =
+        _branchRef ??
+        (info == null ? null : defaultBranchRef(info, worktree: _worktree));
+    if (ref == null) return info?.branch ?? 'Default';
+    final named = info?.branches
+        .where((branch) => branch.ref == ref)
+        .firstOrNull
+        ?.name;
+    return named ?? ref.replaceFirst(RegExp(r'^refs/(heads|remotes)/'), '');
+  }
 
   /// Discovery runs on the MACHINE, never on this device — the phone has no
   /// Codex config of its own and the agent will not run here anyway.
@@ -174,6 +494,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// to be new enough to be told.
   bool get _showsCodexProfile =>
       _engine == 'codex' &&
+      _model == null &&
       _machine?.engines['codex']?.supportsCodexHome == true;
 
   MachineState? get _machine => widget.notifier.stateOf(_machineId);
@@ -202,25 +523,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
         'project or clone one there.';
   }
 
-  /// Folders agents have been started in on THIS machine, newest first.
-  ///
-  /// ⚠️ A stored history, not a reading of what exists now. It survives the agent that put it
-  /// there, which is what makes "recent" honest — the list that came from `machine.agents` emptied
-  /// itself when an agent was deleted, and called that "recent" too.
-  ///
-  /// Scoped per machine because the paths are: a folder on one computer means nothing on another.
-  List<String> get _recent => widget.notifier.projectHistory.recent(_machineId);
-
-  /// Whether the chosen folder came from the browser rather than from Recent.
-  bool get _browsed => _folder != null && !_recent.contains(_folder);
-
-  /// The recent folder currently chosen, for the folded row to show, or null.
-  String? get _pickedRecent =>
-      _folder != null && _recent.contains(_folder) ? _folder : null;
-
-  String get _recentCount =>
-      _recent.length == 1 ? '1 folder' : '${_recent.length} folders';
-
   /// The last segment of a path, for the row's title. No `package:path` here — these are the remote
   /// machine's paths, and its separator is not this device's to assume.
   String _basename(String path) {
@@ -240,22 +542,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// not answered the probe yet look like it runs one engine. The row carries
   /// the caveat instead — see [_engineNote].
   List<EngineIdentity> get _engines => allEngines;
-
-  /// The engines shown before "More". The rest fold behind it: fourteen rows put the Create button's
-  /// neighbours out of reach, and most people start with one of these.
-  static const _primaryEngines = {'claude', 'codex', 'opencode', 'hermes'};
-
-  /// The engine rows on screen: the primary ones, then the rest once unfolded. A chosen engine from
-  /// the folded part stays visible, so the tick is never hidden behind "More".
-  List<EngineIdentity> get _shownEngines => [
-    for (final identity in _engines)
-      if (_primaryEngines.contains(identity.id) ||
-          _moreEnginesOpen ||
-          identity.id == _engine)
-        identity,
-  ];
-
-  int get _hiddenEngineCount => _engines.length - _shownEngines.length;
 
   /// The one caveat worth printing beside an engine's name, or none.
   ///
@@ -292,6 +578,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _project = ProjectFolderRequest.remote(repository);
       _projectLabel = repository.name;
       _folder = null;
+      _git = null;
+      _gitFolder = null;
       _error = null;
     });
   }
@@ -310,6 +598,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _projectLabel = null;
       _error = null;
     });
+    unawaited(_loadGit(chosen));
   }
 
   Future<void> _create() async {
@@ -325,28 +614,58 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // [AgentCreationAttempt.agentId]. A fresh one per submit, which is what the
     // call made on its own before: a retry after a refusal is a new request.
     final creation = AgentCreationAttempt();
+    // A folder in a repository is not sent as a bare `cwd`: the branch and the
+    // worktree travel with it, and [gitFolderRequest] is the desktop's own rule
+    // for turning the rows above into what the machine is asked to do. A folder
+    // that is not a repository, or one this form never read, falls through to
+    // the plain path — and `New project` / `Git…` keep the request they made.
+    final request =
+        project ??
+        (folder == null || _repository == null
+            ? null
+            : gitFolderRequest(
+                folder,
+                _repository!,
+                worktree: _worktree,
+                branchRef: _branchRef,
+                branchName: _branchName,
+                placeholder: _placeholder ?? 'new-branch',
+              ));
     final error = await widget.notifier.createAgent(
       _machineId,
       engine: engine,
       // Empty only in the branch that drops `cwd` from the payload entirely — `createAgent` keeps
       // this required so the ordinary case cannot be left out by accident.
       folder: folder ?? '',
-      projectFolder: project,
+      projectFolder: request,
+      // Omitted for an engine with no modes, rather than sent as the default: the CLI refuses a
+      // mode an engine lacks, and "the default" is the machine's to decide there.
+      permissionMode: _permissionModes.isEmpty ? null : _permissionMode,
       // Only for Codex, and only when chosen: omitted, the machine launches
       // with its own default CODEX_HOME.
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
+      model: _model,
       attempt: creation,
+      prompt: _engine != null && takesFirstTask(_engine!) ? _task.text : null,
     );
     if (!mounted) return;
     if (error == null) {
+      // The harness exists: the draft that described it would be a second one waiting to be made
+      // by accident. See [NewAgentDraft].
+      newAgentDraft = null;
+      unawaited(widget.notifier.agentPreference.select(engine));
       _open(creation.agentId);
       return;
     }
     setState(() {
       _creating = false;
       _error = error;
+      _failed = true;
     });
   }
+
+  /// The last Start did not take: the button says Try Again, and every value stays.
+  bool _failed = false;
 
   /// Where a finished creation lands: inside the agent it just started.
   ///
@@ -376,273 +695,769 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.notifier,
     builder: (context, _) {
-      AppTheme.watch(context);
-      final machine = _machine;
-      final machines = _machines;
-      // "New project" is the folder until one is chosen. Applied here rather than in `initState`
-      // because it can only be offered once the machine has said it can make one, and that answer
-      // lands after the page opens. Nothing but a machine switch leaves both unset again, so this
-      // never overrides a choice — and a switch re-applies it on the new machine.
-      if (_folder == null && _project == null && _canMakeProject) {
-        _project = const ProjectFolderRequest.newProject();
-        _projectLabel = 'New project';
-      }
-      final ready =
-          (_folder != null || _project != null) &&
-          _engine != null &&
-          !_creating;
+      final tty = Tty.of(context);
+      _applyDefaultProject();
+      final info = _repository;
+      final mode = _permissionModeChoice;
+      final ready = _engine != null && (_folder != null || _project != null);
+      final nothingRunning = _machines.every((m) => m.agents.isEmpty);
+      final count = _task.text.trim().length;
+      // Typing the task, the keyboard leaves room for one line of the choices, not four cut ones.
+      final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+      final summary = [
+        if (_folder != null || _project != null) _projectValue,
+        if (_engine != null) _engineName(_engine!),
+      ].join(' · ');
       return Scaffold(
-        backgroundColor: AppPalette.windowBg,
+        backgroundColor: tty.ground,
         body: SafeArea(
-          child: Column(
-            children: [
-              // No machine under the title any more: the MACHINE rows below say it, and are where it
-              // is changed.
-              const PhoneHeader(title: 'New Harness'),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  children: [
-                    const SettingsCaption('MACHINE'),
-                    SettingsGroup(
-                      children: [
-                        // Folded like Recent: the chosen machine is the answer most of the time,
-                        // and the others only matter to somebody about to change it.
-                        SettingsRow(
-                          title: machine?.machine.displayName ?? 'Machine',
-                          leading: Icon(
-                            LucideIcons.laptopMinimal300,
-                            size: 18,
-                            color: AppPalette.textSecondary,
-                          ),
-                          trailing: machines.length < 2
-                              ? null
-                              : Icon(
-                                  _machinesOpen
-                                      ? LucideIcons.chevronUp300
-                                      : LucideIcons.chevronDown300,
-                                  size: 18,
-                                  color: AppPalette.textFaint,
-                                ),
-                          onTap: machines.length < 2
-                              ? null
-                              : () => setState(
-                                  () => _machinesOpen = !_machinesOpen,
-                                ),
-                        ),
-                        if (_machinesOpen)
-                          for (final other in machines)
-                            SettingsRow(
-                              title: other.machine.displayName,
-                              nested: true,
-                              trailing: _check(
-                                other.machine.machineId == _machineId,
-                              ),
-                              onTap: () =>
-                                  _selectMachine(other.machine.machineId),
-                            ),
-                      ],
-                    ),
-                    const SettingsCaption('FOLDER'),
-                    SettingsGroup(
-                      children: [
-                        SettingsRow(
-                          title: 'New project',
-                          detail:
-                              _projectSourceNote ??
-                              'A fresh folder, made on the machine',
-                          leading: Icon(
-                            LucideIcons.folderPlus300,
-                            size: 18,
-                            color: AppPalette.textSecondary,
-                          ),
-                          trailing: _check(
-                            _project != null && _project!.repository == null,
-                          ),
-                          onTap: !_canMakeProject
-                              ? null
-                              : () => setState(() {
-                                  _project =
-                                      const ProjectFolderRequest.newProject();
-                                  _projectLabel = 'New project';
-                                  _folder = null;
-                                  _error = null;
-                                }),
-                        ),
-                        // Shows its path only when the choice is this row's own. A folder picked
-                        // from RECENT below is already named there, and printing it here too would
-                        // put one answer under two ticks.
-                        SettingsRow(
-                          title: 'Browse…',
-                          detail: _browsed ? _folder : null,
-                          leading: Icon(
-                            LucideIcons.folderSearch300,
-                            size: 18,
-                            color: AppPalette.textSecondary,
-                          ),
-                          trailing: _check(_browsed),
-                          onTap: () => unawaited(_browse()),
-                        ),
-                        SettingsRow(
-                          title: 'Git…',
-                          detail:
-                              _projectSourceNote ??
-                              (_project?.repository == null
-                                  ? 'Clone a GitHub repository'
-                                  : _projectLabel),
-                          leading: Icon(
-                            LucideIcons.gitBranch300,
-                            size: 18,
-                            color: AppPalette.textSecondary,
-                          ),
-                          trailing: _check(_project?.repository != null),
-                          onTap: !_canMakeProject
-                              ? null
-                              : () => unawaited(_pickRepository()),
-                        ),
-                        // The fourth source, folded shut. Its entries are answers already given
-                        // rather than a way of choosing, so they stay out of sight until asked
-                        // for — a machine used for months would otherwise bury the three rows
-                        // above under its own history.
-                        //
-                        // ⚠️ Absent entirely when there is no history, rather than opening onto
-                        // nothing. Nobody's first agent has a recent folder.
-                        if (_recent.isNotEmpty)
-                          SettingsRow(
-                            title: 'Recent',
-                            detail: _recentOpen
-                                ? null
-                                : (_pickedRecent ?? _recentCount),
-                            leading: Icon(
-                              LucideIcons.history300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
-                            trailing: Icon(
-                              _recentOpen
-                                  ? LucideIcons.chevronUp300
-                                  : LucideIcons.chevronDown300,
-                              size: 18,
-                              color: AppPalette.textFaint,
-                            ),
-                            onTap: () =>
-                                setState(() => _recentOpen = !_recentOpen),
-                          ),
-                        if (_recentOpen)
-                          for (final path in _recent)
-                            SettingsRow(
-                              title: _basename(path),
-                              detail: path,
-                              nested: true,
-                              // No leading glyph: the indent under an open Recent is what says
-                              // these belong to it, and a second icon column would put them back
-                              // level with the sources above.
-                              trailing: _check(_folder == path),
-                              onTap: () => setState(() {
-                                _folder = path;
-                                _project = null;
-                                _projectLabel = null;
-                                _recentOpen = false;
-                                _error = null;
-                              }),
-                            ),
-                      ],
-                    ),
-                    const SettingsCaption('ENGINE'),
-                    SettingsGroup(
-                      children: [
-                        for (final identity in _shownEngines) ...[
-                          SettingsRow(
-                            title: identity.label,
-                            detail: _engineNote(identity.id),
-                            leading: EngineMark(engine: identity.id, size: 18),
-                            trailing: _check(_engine == identity.id),
-                            onTap: () => setState(() {
-                              _engine = identity.id;
-                              _error = null;
-                            }),
-                          ),
-                          // Codex's profiles belong UNDER Codex, not in a section of their own at
-                          // the foot of the page. They are a detail of one engine — a section
-                          // separated from the row that summons it reads as a second question,
-                          // and appearing at the bottom of a long list is how it went unnoticed.
-                          //
-                          // ⚠️ Only for the engine that has them, and only once the machine has
-                          // said it understands CODEX_HOME. Every other engine shows nothing here,
-                          // which is why this is a list inside the loop rather than a block after
-                          // it.
-                          if (identity.id == 'codex' && _showsCodexProfile) ...[
-                            SettingsRow(
-                              title: 'Default profile',
-                              nested: true,
-                              detail: _codexProfilesLoaded
-                                  ? null
-                                  : 'Looking for others…',
-                              trailing: _check(_codexProfile == null),
-                              onTap: () => setState(() => _codexProfile = null),
-                            ),
-                            for (final profile in _codexProfiles)
-                              SettingsRow(
-                                title: profile.label,
-                                detail: profile.path,
-                                nested: true,
-                                trailing: _check(_codexProfile == profile),
-                                onTap: () =>
-                                    setState(() => _codexProfile = profile),
-                              ),
-                          ],
-                        ],
-                        // The rest of the engines, behind one row. It stays once opened: there is
-                        // nothing to fold back to that the person would want.
-                        if (!_moreEnginesOpen && _hiddenEngineCount > 0)
-                          SettingsRow(
-                            title: '$_hiddenEngineCount more',
-                            leading: Icon(
-                              LucideIcons.ellipsis300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
-                            onTap: () =>
-                                setState(() => _moreEnginesOpen = true),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              // ⚠️ The refusal belongs BESIDE the button, not at the end of the list above it.
-              // It used to sit after the engines and the Codex profile — past nine rows and well
-              // below the fold — while the button is pinned here. Pressing Create and being
-              // refused looked exactly like pressing Create and nothing happening, because the
-              // answer rendered somewhere nobody was looking.
-              if (_error != null)
+          // ⚠️ **A swipe right ANYWHERE goes back to Focus.** New is a swipe left from the terminal
+          // (Snapchat's layout), and the way home is the same swipe the other way — not only the
+          // system's sliver of left edge, which a thumb in the middle of the screen never finds.
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragStart: (_) => _swipedBack = 0,
+            onHorizontalDragUpdate: (details) =>
+                _swipedBack += details.primaryDelta ?? 0,
+            onHorizontalDragEnd: (details) {
+              if (_swipedBack >= 64 || (details.primaryVelocity ?? 0) >= 300) {
+                unawaited(Navigator.of(context).maybePop());
+              }
+            },
+            // A form, the phone's way: who and where on top, what to do and Start at the foot, in
+            // the thumb's reach and riding the keyboard. See
+            // docs/plans/2026-09-26-003-mobile-find-new-spec.md.
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(color: AppPalette.offline, fontSize: 13),
+                  padding: const EdgeInsets.fromLTRB(Tty.origin, 8, 4, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TtyText(
+                          'New Harness',
+                          size: TtySize.title,
+                          weight: FontWeight.w600,
+                        ),
+                      ),
+                      if (SampleMode.ofNotifier(widget.notifier) != null)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: TtyText(
+                            'Sample',
+                            color: tty.faint,
+                            size: TtySize.meta,
+                          ),
+                        ),
+                      // No Cancel: a swipe right goes back, the way a swipe left came in.
+                      const SizedBox(height: 44),
+                    ],
                   ),
                 ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: ready ? () => unawaited(_create()) : null,
-                    child: Text(_creating ? 'Starting…' : 'Create Harness'),
+                if (nothingRunning)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      Tty.origin,
+                      0,
+                      Tty.origin,
+                      4,
+                    ),
+                    // Where "harness" is taught: the moment somebody makes their first one. The agent
+                    // is Claude Code or Codex; a harness is one session of it — the owner: "you have
+                    // 1 agent codex but you have multiple harnesses (sessions) with it."
+                    child: TtyText(
+                      'A harness is one session of an agent. Start your first.',
+                      color: tty.faint,
+                      size: TtySize.meta,
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                if (typing)
+                  TtyFormRow(
+                    label: 'harness',
+                    value: summary.isEmpty ? 'Choose an agent' : summary,
+                    onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+                  ),
+                // ⚠️ **The dock scrolls once nothing else can give way.** The rows above it go first,
+                // as they always have; with none left, a dock taller than what is left used to
+                // overflow — an SE typing its task at the largest text size lost the foot of the
+                // field and Start with it. Held to the height below the header, it scrolls instead,
+                // pinned to its foot, so the field being typed into and Start stay on the keys.
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, box) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (typing)
+                          const Spacer()
+                        else
+                          Expanded(
+                            child: ListView(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: EdgeInsets.zero,
+                              children: [
+                                TtyFormRow(
+                                  label: 'agent',
+                                  value: _engine == null
+                                      ? 'Choose an agent'
+                                      : _engineName(_engine!),
+                                  valueColor: _engine == null
+                                      ? tty.green
+                                      : null,
+                                  detail: _engine == null
+                                      ? null
+                                      : _engineNote(_engine!),
+                                  onTap: _creating
+                                      ? null
+                                      : () => unawaited(_chooseAgent()),
+                                ),
+                                TtyFormRow(
+                                  label: 'project',
+                                  value: _folder == null && _project == null
+                                      ? 'Choose a project'
+                                      : _projectValue,
+                                  valueColor:
+                                      _folder == null && _project == null
+                                      ? tty.green
+                                      : null,
+                                  detail: null,
+                                  onTap: _creating
+                                      ? null
+                                      : () => unawaited(_chooseProject()),
+                                ),
+                                // The owner's default flow matches desktop: choose agent and project.
+                                // Worktree, approvals and profile stay behind Options.
+                                TtyFormRow(
+                                  label: 'options',
+                                  value: _optionsOpen ? '[-]' : '[+]',
+                                  chevron: false,
+                                  onTap: _creating
+                                      ? null
+                                      : () => setState(
+                                          () => _optionsOpen = !_optionsOpen,
+                                        ),
+                                ),
+                                if (_optionsOpen && _engine != null)
+                                  TtyFormRow(
+                                    label: 'model',
+                                    value:
+                                        _model?.id ??
+                                        modelSubscriptionLabel(_engine!),
+                                    detail: _model?.node,
+                                    onTap: _creating
+                                        ? null
+                                        : () => unawaited(_chooseModel()),
+                                  ),
+                                if (_optionsOpen && _permissionModes.isNotEmpty)
+                                  TtyFormRow(
+                                    label: 'approvals',
+                                    value: mode?.label ?? 'Auto-approve',
+                                    detail: mode?.detail,
+                                    valueColor: (mode?.risky ?? false)
+                                        ? tty.red
+                                        : null,
+                                    onTap: _creating
+                                        ? null
+                                        : () => unawaited(_chooseApprovals()),
+                                  ),
+                                if (_optionsOpen && _showsCodexProfile)
+                                  TtyFormRow(
+                                    label: 'profile',
+                                    value: _codexProfile?.label ?? 'Default',
+                                    onTap: _creating
+                                        ? null
+                                        : () => unawaited(_chooseProfile()),
+                                  ),
+                                if (_optionsOpen) ...[
+                                  TtyFormRow(
+                                    label: 'branch',
+                                    valueColor: info == null ? tty.faint : null,
+                                    value: _gitLoading
+                                        ? 'Reading…'
+                                        : _gitFailed
+                                        ? 'No answer from the computer'
+                                        : info != null
+                                        ? _branchTitle
+                                        : _project != null
+                                        ? 'Available after creation'
+                                        : _folder == null
+                                        ? 'Choose a project'
+                                        : 'Not a Git repository',
+                                    detail: info == null ? null : _branchNote,
+                                    onTap: info == null || _creating
+                                        ? null
+                                        : () => unawaited(_pickBranch(info)),
+                                  ),
+                                  Semantics(
+                                    checked: info != null && _worktree,
+                                    child: TtyFormRow(
+                                      label: 'worktree',
+                                      value: info != null && _worktree
+                                          ? '[x]'
+                                          : '[ ]',
+                                      valueColor: info == null
+                                          ? tty.faint
+                                          : null,
+                                      chevron: false,
+                                      onTap: info == null || _creating
+                                          ? null
+                                          : () => setState(() {
+                                              _worktree = !_worktree;
+                                              _error = null;
+                                            }),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        // The dock: the task, then Start. It rides the keyboard.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: box.maxHeight),
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                Tty.origin,
+                                20,
+                                Tty.origin,
+                                12,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // A first harness has nothing to go on: three first tasks to tap, the kind
+                                  // that shows what an agent does in a minute.
+                                  // Only for a first harness — once something is
+                                  // running, somebody knows what to ask, and the
+                                  // chips were filler over the form.
+                                  if (nothingRunning &&
+                                      _task.text.trim().isEmpty &&
+                                      !_creating)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          for (final idea in const [
+                                            'Explain this project to me',
+                                            'Find a bug and fix it',
+                                            'Run the tests',
+                                          ])
+                                            _Suggestion(
+                                              text: idea,
+                                              onTap: () => setState(() {
+                                                _task.value = TextEditingValue(
+                                                  text: idea,
+                                                  selection:
+                                                      TextSelection.collapsed(
+                                                        offset: idea.length,
+                                                      ),
+                                                );
+                                              }),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TtyText(
+                                          'task (optional)',
+                                          color: tty.faint,
+                                          size: TtySize.meta,
+                                        ),
+                                      ),
+                                      if (count > 1800)
+                                        TtyText(
+                                          '$count/$kFirstTaskMaxLength',
+                                          color: count > kFirstTaskMaxLength
+                                              ? tty.red
+                                              : tty.faint,
+                                          size: TtySize.meta,
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  TtyField(
+                                    controller: _task,
+                                    hint: 'What should it do?',
+                                    lines: 6,
+                                    maxLength: kFirstTaskMaxLength,
+                                    action: TextInputAction.newline,
+                                    onChanged: (_) => setState(() {}),
+                                    trailing: [
+                                      Align(
+                                        alignment: Alignment.bottomRight,
+                                        child: ListenableBuilder(
+                                          listenable:
+                                              _voiceIfAny ?? const _Silent(),
+                                          builder: (context, _) {
+                                            final status = _voiceIfAny?.status;
+                                            return TtyFieldMic(
+                                              live:
+                                                  status ==
+                                                      VoiceInputStatus
+                                                          .listening ||
+                                                  status ==
+                                                      VoiceInputStatus.starting,
+                                              onTap: _creating ? null : _talk,
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (_error != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Text(
+                                        '✗ ${_error!}',
+                                        style: tty.style(
+                                          color: tty.red,
+                                          size: TtySize.meta,
+                                        ),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 10),
+                                  TtyPrimaryButton(
+                                    // Says what it will do: start, or choose what is still missing first.
+                                    label: _failed
+                                        ? 'Try Again'
+                                        : ready
+                                        ? 'Start'
+                                        : _engine == null
+                                        ? 'Choose an agent'
+                                        : 'Choose a project',
+                                    busy: _creating,
+                                    busyLabel: 'Starting…',
+                                    // Never a dead button: with a choice missing, Start opens its chooser.
+                                    onPressed: () => unawaited(_start()),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
     },
   );
 
-  Widget? _check(bool selected) => selected
-      ? Icon(LucideIcons.check300, size: 18, color: AppPalette.accent)
-      : null;
+  Future<void> _chooseModel() async {
+    final engine = _engine;
+    if (engine == null) return;
+    final machineId = _machineId;
+    final choice = await showNewAgentModelSheet(
+      context,
+      notifier: widget.notifier,
+      machineId: machineId,
+      engine: engine,
+      selected: _model,
+      profileLabel: engine == 'codex' ? _codexProfile?.label : null,
+    );
+    if (choice == null ||
+        !mounted ||
+        machineId != _machineId ||
+        engine != _engine) {
+      return;
+    }
+    setState(() {
+      _model = choice.model;
+      _error = null;
+    });
+  }
+
+  /// A home folder written the way a shell prints it.
+  static String _tilde(String path) =>
+      path.replaceFirst(RegExp(r'^/(Users|home)/[^/]+'), '~');
+
+  /// How far the current drag has gone right — see the swipe back in [build].
+  double _swipedBack = 0;
+
+  /// The last project started on this machine, else its most recent one — the desktop's rule. No
+  /// project yet leaves the row on "Choose project", which the button then asks for.
+  void _applyDefaultProject() {
+    if (_folder != null || _project != null || _projectDefaulted) return;
+    final history = widget.notifier.projectHistory;
+    // Then, with no history on this phone: the folder of the computer's most recent harness —
+    // someone who has only ever started harnesses on the desktop still opens New ready to Start.
+    final folder =
+        widget.folder ??
+        history.selected(_machineId) ??
+        history.recent(_machineId).firstOrNull ??
+        _latestAgentFolder();
+    if (folder == null) return;
+    _projectDefaulted = true;
+    _folder = folder;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _folder == folder) unawaited(_loadGit(folder));
+    });
+  }
+
+  /// A folder Harness made for a harness's worktree — `~/harnesses/worktrees/<repo>/<name>`.
+  static bool _isHarnessWorktree(String folder) =>
+      folder.contains('/harnesses/worktrees/');
+
+  String? _latestAgentFolder() {
+    final agents = [...?_machine?.agents]
+      ..sort(
+        (a, b) =>
+            (b.updatedAt ?? DateTime(0)).compareTo(a.updatedAt ?? DateTime(0)),
+      );
+    for (final agent in agents) {
+      final path = agent.project?.root ?? agent.project?.cwd;
+      if (path != null && path.isNotEmpty) return path;
+    }
+    return null;
+  }
+
+  /// Set once the default project has been applied, so a person who clears it is not handed it
+  /// back on the next build.
+  bool _projectDefaulted = false;
+
+  /// The project on one line: `computer:name`. The full path is in the chooser.
+  String get _projectValue {
+    final String name;
+    if (_folder case final folder?) {
+      name = _basename(folder);
+    } else if (_project?.repository case final repository?) {
+      name = repository.name;
+    } else if (_project != null) {
+      name = 'New folder';
+    } else {
+      return 'Choose project';
+    }
+    // One line, `computer:name` — always the computer, as the title on Focus and every Find row
+    // write it. Most repositories live in a folder of the same name; the full path is in the
+    // chooser.
+    final machine = _machine?.machine.displayName;
+    return machine == null ? name : '$machine:$name';
+  }
+
+  /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
+  Future<void> _start() async {
+    // The keyboard goes with the form: the new harness should open on its terminal and the mic,
+    // not on a keyboard left up from typing the task.
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (_engine == null) {
+      setState(() => _error = 'Choose an agent.');
+      await _chooseAgent();
+      return;
+    }
+    if (_folder == null && _project == null) {
+      setState(() => _error = 'Choose a project.');
+      await _chooseProject();
+      return;
+    }
+    await _create();
+  }
+
+  Future<void> _chooseAgent() async {
+    await widget.notifier.agentPreference.load();
+    if (!mounted) return;
+    final machine = _machine;
+    final recent = widget.notifier.agentPreference.recent;
+    final ids = {for (final identity in _engines) identity.id, ?_engine};
+    final ordered = [
+      for (final id in recent)
+        if (ids.contains(id)) id,
+      ...(ids.where((id) => !recent.contains(id)).toList()
+        ..sort((a, b) => _engineName(a).compareTo(_engineName(b)))),
+    ];
+    final picked = await showNewAgentChooser<String>(
+      context,
+      title: 'Agent',
+      hint: 'Search agents',
+      items: [
+        for (final id in ordered)
+          ChooserItem(
+            value: id,
+            title: _engineName(id),
+            subtitle: _engineNote(id),
+            leading: EngineMark(engine: id, size: 18),
+            selected: id == _engine,
+            enabled:
+                machine == null ||
+                !machine.engines.loaded ||
+                _engineNote(id) == null,
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (picked != _engine) _permissionMode = kDefaultPermissionMode;
+      _engineChosen = true;
+      _engine = picked;
+      _error = null;
+    });
+  }
+
+  /// Every machine's projects as `machine · folder` pairs — this machine first, then the rest —
+  /// with Clone Repository, Open Folder and New Folder above them, as the desktop lists them.
+  /// Choosing a pair on another machine moves the harness there.
+  Future<void> _chooseProject() async {
+    final notifier = widget.notifier;
+    final machines = [
+      ?_machine,
+      for (final other in _machines)
+        if (other.machine.machineId != _machineId) other,
+    ];
+    final pairs = <ChooserItem<_ProjectChoice>>[];
+    for (final machine in machines) {
+      final id = machine.machine.machineId;
+      // Worktrees Start made are temporary: their repository is the project, and it is listed
+      // once it has been chosen (the desktop's `_recentProjectFolders`).
+      final folders = <String>{
+        if (id == _machineId) ?_folder,
+        for (final folder in [
+          ...notifier.projectHistory.recent(id),
+          for (final agent in machine.agents)
+            ?(agent.project?.root ?? agent.project?.cwd),
+        ])
+          if (folder.isNotEmpty && !_isHarnessWorktree(folder)) folder,
+      };
+      for (final folder in folders) {
+        pairs.add(
+          ChooserItem(
+            value: _ProjectChoice.folder(id, folder),
+            title: _basename(folder),
+            subtitle: '${machine.machine.displayName}:${_tilde(folder)}',
+            icon: LucideIcons.folder300,
+            selected: id == _machineId && folder == _folder,
+          ),
+        );
+      }
+    }
+    final here = _machine?.machine.displayName ?? 'this machine';
+    final canMake = _canMakeProject;
+    final picked = await showNewAgentChooser<_ProjectChoice>(
+      context,
+      title: 'Project',
+      hint: 'Search projects',
+      autofocusSearch: true,
+      actions: [
+        ChooserItem(
+          value: const _ProjectChoice.open(),
+          title: 'Open Folder',
+          subtitle: 'Any folder on $here',
+          icon: LucideIcons.folderSearch300,
+        ),
+        ChooserItem(
+          value: const _ProjectChoice.clone(),
+          title: 'Clone Repository',
+          subtitle: _projectSourceNote ?? 'A GitHub repository, on $here',
+          icon: LucideIcons.gitBranch300,
+          enabled: canMake,
+        ),
+        ChooserItem(
+          value: const _ProjectChoice.newFolder(),
+          title: 'New Folder',
+          subtitle: _projectSourceNote ?? 'A fresh folder, made on $here',
+          icon: LucideIcons.folderPlus300,
+          enabled: canMake,
+        ),
+      ],
+      items: pairs,
+    );
+    if (picked == null || !mounted) return;
+    switch (picked.kind) {
+      case _ProjectChoiceKind.clone:
+        await _pickRepository();
+      case _ProjectChoiceKind.open:
+        await _browse();
+      case _ProjectChoiceKind.newFolder:
+        setState(() {
+          _project = const ProjectFolderRequest.newProject();
+          _projectLabel = 'New folder';
+          _folder = null;
+          _git = null;
+          _gitFolder = null;
+          _error = null;
+        });
+      case _ProjectChoiceKind.folder:
+        final machineId = picked.machineId!, folder = picked.folder!;
+        if (machineId != _machineId) _selectMachine(machineId);
+        setState(() {
+          _projectDefaulted = true;
+          _folder = folder;
+          _project = null;
+          _projectLabel = null;
+          _error = null;
+        });
+        unawaited(_loadGit(folder));
+    }
+  }
+
+  Future<void> _chooseApprovals() async {
+    final picked = await showNewAgentChooser<String>(
+      context,
+      title: 'Approvals',
+      hint: 'How much it may do without asking',
+      items: [
+        for (final mode in _permissionModes)
+          ChooserItem(
+            value: mode.id,
+            title: mode.label,
+            subtitle: mode.detail,
+            icon: LucideIcons.shieldCheck300,
+            selected: mode.id == _permissionMode,
+            warn: mode.risky,
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _permissionMode = picked);
+  }
+
+  Future<void> _chooseProfile() async {
+    final picked = await showNewAgentChooser<LocalCodexProfile?>(
+      context,
+      title: 'Profile',
+      hint: 'Search profiles',
+      items: [
+        ChooserItem(
+          value: null,
+          title: 'Default',
+          subtitle: _codexProfilesLoaded ? null : 'Looking for others…',
+          icon: LucideIcons.user300,
+          selected: _codexProfile == null,
+        ),
+        for (final profile in _codexProfiles)
+          ChooserItem(
+            value: profile,
+            title: profile.label,
+            subtitle: profile.path,
+            icon: LucideIcons.user300,
+            selected: _codexProfile == profile,
+          ),
+      ],
+    );
+    if (!mounted) return;
+    setState(() => _codexProfile = picked);
+  }
+
+  /// The branch row: the picker, and the name dialog behind its first entry.
+  ///
+  /// ⚠️ **Two sheets, one after the other, rather than a field in the list.**
+  /// The picker is a list to search; naming a branch is a keyboard and a rule
+  /// about what Git accepts. Put together, the keyboard covered the list the
+  /// moment the field took focus.
+  Future<void> _pickBranch(GitProjectInfo info) async {
+    final choice = await showBranchPickerSheet(
+      context,
+      info: info,
+      selectedRef: _branchRef ?? defaultBranchRef(info, worktree: _worktree),
+      typedName: _branchName,
+    );
+    if (choice == null || !mounted) return;
+    if (choice.ref case final ref?) {
+      setState(() {
+        _branchRef = ref;
+        _branchName = null;
+        _error = null;
+      });
+      return;
+    }
+    await _typeBranch();
+  }
+
+  /// Asks for a branch name, and keeps only what Git would take.
+  Future<void> _typeBranch() async {
+    final typed = await showDialog<String>(
+      context: context,
+      useRootNavigator: true,
+      builder: (_) => _BranchDialog(initial: _branchName),
+    );
+    if (typed == null || !mounted) return;
+    setState(() {
+      _branchName = typed.isEmpty ? null : typed;
+      _error = null;
+    });
+  }
+}
+
+/// A branch name, cleaned the way Git would take it.
+///
+/// ⚠️ **Cleaned as it is typed, not on submit.** `branchNameFrom` turns spaces
+/// into dashes and drops what `git check-ref-format` refuses, and a person who
+/// only finds that out after starting a harness has a branch they did not name.
+/// Shown live, the field IS the answer.
+class _BranchDialog extends StatefulWidget {
+  const _BranchDialog({this.initial});
+
+  final String? initial;
+
+  @override
+  State<_BranchDialog> createState() => _BranchDialogState();
+}
+
+class _BranchDialogState extends State<_BranchDialog> {
+  late final _controller = TextEditingController(text: widget.initial ?? '');
+
+  String get _clean => branchNameFrom(_controller.text);
+  bool get _ok => _clean.isEmpty || plausibleBranchName(_clean);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_ok) return;
+    Navigator.of(context).pop(_clean);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final clean = _clean;
+    return AlertDialog(
+      title: const Text('New branch'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            autocorrect: false,
+            style: kFieldTextStyle,
+            textInputAction: TextInputAction.done,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _submit(),
+          ),
+          // Only when it differs: repeating back exactly what was typed is
+          // noise, and the line is here to warn.
+          if (clean.isNotEmpty && clean != _controller.text.trim()) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Git will call it $clean',
+              style: TextStyle(color: AppPalette.textSecondary, fontSize: 12.5),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _ok ? _submit : null, child: const Text('Use')),
+      ],
+    );
+  }
 }
 
 /// The Git field, as its own widget so the text it holds survives the parent's rebuilds — a
@@ -708,6 +1523,72 @@ class _RepositoryDialogState extends State<_RepositoryDialog> {
         ),
         FilledButton(onPressed: _submit, child: const Text('Select')),
       ],
+    );
+  }
+}
+
+enum _ProjectChoiceKind { folder, clone, open, newFolder }
+
+/// What the Project chooser hands back: a `machine · folder` pair, or one of its three actions.
+class _ProjectChoice {
+  const _ProjectChoice.folder(String this.machineId, String this.folder)
+    : kind = _ProjectChoiceKind.folder;
+  const _ProjectChoice.clone()
+    : kind = _ProjectChoiceKind.clone,
+      machineId = null,
+      folder = null;
+  const _ProjectChoice.open()
+    : kind = _ProjectChoiceKind.open,
+      machineId = null,
+      folder = null;
+  const _ProjectChoice.newFolder()
+    : kind = _ProjectChoiceKind.newFolder,
+      machineId = null,
+      folder = null;
+
+  final _ProjectChoiceKind kind;
+  final String? machineId;
+  final String? folder;
+}
+
+/// A listenable that never speaks — the mic's before a recorder exists.
+class _Silent implements Listenable {
+  const _Silent();
+
+  @override
+  void addListener(VoidCallback listener) {}
+
+  @override
+  void removeListener(VoidCallback listener) {}
+}
+
+/// A first task to tap — fills the task field.
+class _Suggestion extends StatelessWidget {
+  const _Suggestion({required this.text, required this.onTap});
+
+  final String text;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: text,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: tty.dim),
+          ),
+          child: TtyText(text, size: TtySize.meta, color: tty.text),
+        ),
+      ),
     );
   }
 }

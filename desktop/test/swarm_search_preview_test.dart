@@ -212,7 +212,10 @@ void main() {
     app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
     app.notifyListeners();
     await tester.pump();
-    expect(find.textContaining('Offline', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('Not connected', findRichText: true),
+      findsNWidgets(2),
+    );
     expect(find.text('Needs your input'), findsNothing);
     expect(
       find.textContaining('Keep shared workspaces in sync'),
@@ -614,7 +617,7 @@ void main() {
         'Retrying a checkout now reuses the original payment and receipt.',
       );
       expect(explanation, findsOneWidget);
-      expect(find.text('Earlier in this session'), findsOneWidget);
+      expect(find.text('Earlier in this harness'), findsOneWidget);
       final preview = tester.getRect(
         find.byKey(const ValueKey('swarm-search-preview')),
       );

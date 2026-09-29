@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,8 +32,7 @@ void main() {
             null,
           ),
         );
-        final app = createApp();
-        app.machineStates['m']!.nodeOnline = true;
+        final app = createApp(connected: true);
         final frames = <TerminalBinaryFrame>[];
         final pane = app.adoptSessionForTest(terminal('a0', frames));
         final original = app.activeSwarm;
@@ -109,7 +109,12 @@ void main() {
         find.byKey(const ValueKey('swarm-navigation-locations')),
         findsNothing,
       );
-      expect(find.byKey(const ValueKey('swarm-search-preview')), findsNothing);
+      final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      expect(preview, findsOneWidget);
+      expect(
+        find.descendant(of: preview, matching: find.byType(Text)),
+        search.selected == null ? findsNothing : findsWidgets,
+      );
     }
     await tester.enterText(field, '');
     await tester.pump();

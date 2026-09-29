@@ -1,3 +1,5 @@
+import 'support/workspace_tools.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show SemanticsAction;
@@ -11,10 +13,10 @@ import 'package:harness/state/harness_sessions.dart';
 import 'package:harness/state/pending_question.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/widgets/harness_session_manager.dart';
-import 'package:harness/widgets/pane_minimize.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
+import 'keymap_host_test.dart' show key;
 import 'support/restart_connection.dart';
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -69,7 +71,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
+    await openWorkspaceManagement(tester, 'harnesses');
     await tester.pumpAndSettle();
   }
 
@@ -154,6 +156,97 @@ void main() {
     );
   });
 
+  test(
+    'recent sorts by last use: a harness opened anywhere outranks a busier one',
+    () {
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({'id': 'busy', 'updatedAt': '2026-09-26T11:00:00Z'}),
+        // Quiet since nine, but somebody opened it at noon — in any client.
+        Agent.fromJson({
+          'id': 'opened',
+          'updatedAt': '2026-09-26T09:00:00Z',
+          'lastOpenedAt': '2026-09-26T12:00:00Z',
+        }),
+        // Opened long ago and busy since: the later of the two counts.
+        Agent.fromJson({
+          'id': 'worked',
+          'updatedAt': '2026-09-26T10:00:00Z',
+          'lastOpenedAt': '2026-09-26T08:00:00Z',
+        }),
+        const Agent(id: 'unknown', name: 'Unknown'),
+      ];
+      for (final id in ['busy', 'opened', 'worked', 'unknown']) {
+        app.rememberOpenedHarness('m', id);
+      }
+      expect(SessionSort.recent.label, 'Recently used');
+      expect(
+        visibleHarnessSessions(harnessSessions(app)).map((row) => row.agent.id),
+        ['opened', 'busy', 'worked', 'unknown'],
+      );
+      expect(
+        harnessSessions(app)
+            .singleWhere((row) => row.agent.id == 'opened')
+            .lastUsedAt,
+        DateTime.utc(2026, 9, 26, 12),
+      );
+    },
+  );
+
+  testWidgets('each row shows and says the time it is sorted by', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: _running.id,
+        name: _running.name,
+        engine: _running.engine,
+        sessionId: _running.sessionId,
+        terminalAvailable: true,
+        project: _project,
+        lastActivityAt: now.subtract(const Duration(hours: 3)),
+        lastOpenedAt: now.subtract(const Duration(minutes: 5)),
+      ),
+      _paused,
+    ];
+    await open(tester);
+    final id = agentDestinationId('m', 'a0');
+    final age = find.byKey(ValueKey('session-age:$id'));
+    expect(tester.widget<Text>(age).data, '· 5m');
+    expect(
+      tester
+          .widget<Tooltip>(
+            find.ancestor(of: age, matching: find.byType(Tooltip)).first,
+          )
+          .message,
+      startsWith('Last used '),
+    );
+    expect(
+      tester
+          .widget<Semantics>(find.byKey(ValueKey('session-open:$id')))
+          .properties
+          .value,
+      contains('Last used 5m ago'),
+    );
+    // A daemon with no time for it at all.
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(
+              ValueKey('session-open:${agentDestinationId('m', 'saved')}'),
+            ),
+          )
+          .properties
+          .value,
+      contains('Last use unknown'),
+    );
+    await tester.tap(find.byTooltip('Sort harnesses'));
+    await tester.pumpAndSettle();
+    expect(find.text('Recently used'), findsOneWidget);
+    expect(find.text('Recently active'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'displays remote cached tokens beneath context and leaves missing usage empty',
     (tester) async {
@@ -230,7 +323,7 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
+      await openWorkspaceManagement(tester, 'harnesses');
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
@@ -280,38 +373,6 @@ void main() {
       expect(find.text('Try another search or filter.'), findsNothing);
     },
   );
-
-  test('Genie geometry preserves endpoints and curves a narrowing neck without folding', () {
-    const size = Size(800, 600), target = Offset(740, -20);
-    expect(
-      paneMinimizeSlice(size, target, 0, 0),
-      const Rect.fromLTWH(0, 0, 800, 0),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 0, 1),
-      const Rect.fromLTWH(0, 600, 800, 0),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 1, 0).topLeft,
-      target - const Offset(11, 11),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 1, 1).bottomRight,
-      target + const Offset(11, 11),
-    );
-    final neck = paneMinimizeSlice(size, target, .45, 0);
-    final base = paneMinimizeSlice(size, target, .45, 1);
-    expect(neck.width, lessThan(base.width * .7));
-    for (var frame = 0; frame <= 60; frame++) {
-      double previous = -double.infinity;
-      for (var band = 0; band <= 48; band++) {
-        final slice = paneMinimizeSlice(size, target, frame / 60, band / 48);
-        expect(slice.top, greaterThanOrEqualTo(previous));
-        expect(slice.width, inInclusiveRange(22, 800));
-        previous = slice.top;
-      }
-    }
-  });
 
   test('inventory deduplicates views, searches context, and sorts deterministically', () async {
     await app.addAgentToSwarm('m', 'a0');
@@ -506,7 +567,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
+      await openWorkspaceManagement(tester, 'harnesses');
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -791,13 +852,9 @@ void main() {
         tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
       );
       await tester.pump();
-      final scope = tester.widget<PaneMinimizeScope>(
-        find.byType(PaneMinimizeScope),
-      );
-      await scope.close(app.focusedPane!);
-      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await tester.pump();
       expect(app.panes, isEmpty);
-      expect(scope.controller.paneId, isNull);
       expect(connection.stops, isEmpty);
     },
   );
@@ -845,10 +902,8 @@ void main() {
   );
 
   testWidgets(
-    'closing a pane animates into the manager without stopping its process',
+    'closing a pane removes it immediately without stopping its process',
     (tester) async {
-      final renderDir = Platform.environment['SESSION_MANAGER_RENDER_DIR'];
-      if (renderDir != null) await tester.runAsync(loadPreviewFonts);
       final live = terminal('a0', [])..agentName = 'Font styling review';
       live.terminal.write('Reviewing typography and spacing.\r\n\r\n');
       for (var i = 0; i < 20; i++) {
@@ -861,43 +916,15 @@ void main() {
       final pane = app.focusedPane!;
       final sibling = app.adoptSessionForTest(terminal('sibling', []));
       await mount(tester, app);
-      final scope = tester.widget<PaneMinimizeScope>(
-        find.byType(PaneMinimizeScope),
-      );
-      Future<void> frame(String name) async {
-        if (renderDir != null) {
-          await expectLater(
-            find.byType(MaterialApp),
-            matchesGoldenFile(Uri.file('$renderDir/minimize-$name.png')),
-          );
-        }
-      }
-
-      await frame('start');
-      final closing = scope.close(pane);
+      app.focusPane(pane.id);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 160));
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await tester.pump();
       expect(app.panes, [sibling]);
       expect(find.byKey(pane.cellKey), findsNothing);
-      expect(scope.controller.animation.value, greaterThan(0));
-      expect(
-        scope.controller.snapshot,
-        isNotNull,
-        reason: "The native snapshot drives the curved motion",
-      );
-      expect(find.byType(PaneMinimizeSnapshot), findsOneWidget);
-      await frame('neck');
-      await tester.pump(const Duration(milliseconds: 140));
-      await frame('travel');
-      await tester.pump(const Duration(milliseconds: 100));
-      await frame('arrival');
-      await tester.pump(const Duration(milliseconds: 160));
-      await closing;
-      await tester.pumpAndSettle();
-      expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
+      await openWorkspaceManagement(tester, 'harnesses');
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },

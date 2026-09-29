@@ -116,9 +116,9 @@ void main() {
     app.adoptSessionForTest(terminal('work', []));
   }
 
-  for (var completed = 1; completed <= 3; completed++) {
+  for (var completed = 0; completed <= 3; completed++) {
     testWidgets(
-      'returning welcome restores $completed completed steps with working actions',
+      'welcome has the same working actions with $completed saved steps',
       (tester) async {
         final storage = MemoryStore();
         final previous = WorkspaceOnboarding(storage: storage);
@@ -142,41 +142,33 @@ void main() {
           OnboardingStep.values.where(journey.completed),
           OnboardingStep.values.take(completed),
         );
-        if (completed < 3) {
-          expect(find.text('Harness like a boss.'), findsOneWidget);
-          for (final (index, step) in OnboardingStep.values.indexed) {
-            expect(
-              tester
-                  .widget<Text>(
-                    find.byKey(ValueKey('welcome-progress-${step.name}')),
-                  )
-                  .data,
-              index < completed ? '✓' : '○',
-            );
-          }
-        } else {
-          expect(find.text('Follow your curiosity.'), findsOneWidget);
-          expect(find.text('○'), findsNothing);
-          expect(find.text('✓'), findsNothing);
+        expect(find.text('Harness like a boss.'), findsOneWidget);
+        expect(find.text('○'), findsNothing);
+        expect(find.text('✓'), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        for (final hint in ['⌘N', '⌘P', '⌘I', '⌘M', '⌘S']) {
+          expect(find.text(hint), findsOneWidget);
         }
 
-        final destinations = completed < 3
-            ? ['agent.new', 'machines.list', 'models.list']
-            : ['agent.new', 'agent.open', 'app.store'];
+        final destinations = [
+          'agent.new',
+          'harnesses.list',
+          'models.list',
+          'machines.list',
+          'app.store',
+        ];
         for (final command in destinations) {
           await tap(tester, find.byKey(ValueKey('welcome-$command')));
           switch (command) {
             case 'agent.new':
               expect(find.byType(NewHarnessForm), findsOneWidget);
-            case 'machines.list':
-              expect(resourceScope('@'), findsOneWidget);
+            case 'harnesses.list':
+              expect(resourceScope(''), findsOneWidget);
             case 'models.list':
               expect(resourceScope(':'), findsOneWidget);
-            case 'agent.open':
-              expect(
-                find.byKey(const ValueKey('swarm-search-input')),
-                findsOneWidget,
-              );
+            case 'machines.list':
+              expect(resourceScope('@'), findsOneWidget);
             case 'app.store':
               expect(app.activeSwarm.isStore, isTrue);
           }
@@ -189,10 +181,8 @@ void main() {
         }
         for (final shortcut in [
           LogicalKeyboardKey.keyN,
-          if (completed == 3) ...[
-            LogicalKeyboardKey.keyP,
-            LogicalKeyboardKey.keyS,
-          ],
+          LogicalKeyboardKey.keyP,
+          LogicalKeyboardKey.keyS,
           LogicalKeyboardKey.keyM,
           LogicalKeyboardKey.keyI,
         ]) {
@@ -258,11 +248,11 @@ void main() {
           await tester.pumpAndSettle();
         }
 
-        await tap(tester, find.byKey(const ValueKey('welcome-models.list')));
-        expect(models, findsOneWidget);
+        await tap(tester, find.byKey(const ValueKey('welcome-harnesses.list')));
+        expect(resourceScope(''), findsOneWidget);
         await key(tester, LogicalKeyboardKey.keyM, cmd: true);
         await tester.pumpAndSettle();
-        expect(models, findsNothing);
+        expect(resourceScope(''), findsNothing);
         expect(machines, findsOneWidget);
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
         await tester.pumpAndSettle();
@@ -274,9 +264,9 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        await tap(tester, find.byKey(const ValueKey('welcome-machines.list')));
-        expect(machines, findsOneWidget);
-        await key(tester, LogicalKeyboardKey.escape);
+        await tap(tester, find.byKey(const ValueKey('welcome-app.store')));
+        expect(app.activeSwarm.isStore, isTrue);
+        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
         await tap(tester, find.byKey(const ValueKey('welcome-agent.new')));
         expect(find.byType(NewHarnessForm), findsOneWidget);
@@ -288,9 +278,7 @@ void main() {
     );
   }
 
-  testWidgets('Models shortcut and welcome hint follow a live remap', (
-    tester,
-  ) async {
+  testWidgets('Models shortcut follows a live remap', (tester) async {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
@@ -301,7 +289,6 @@ void main() {
     ]}''');
     await tester.pumpAndSettle();
     expect(find.byTooltip('Models ⌘U'), findsNothing);
-    expect(find.text('⌘U'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyI, cmd: true);
     expect(resourceScope(':'), findsNothing);
     await key(tester, LogicalKeyboardKey.keyU, cmd: true);
@@ -315,7 +302,13 @@ void main() {
       '> Open Models',
     );
     await tester.pumpAndSettle();
-    expect(find.text('Open Models'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('command:models.list')),
+        matching: find.text('Open Models'),
+      ),
+      findsOneWidget,
+    );
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(resourceScope(':'), findsOneWidget);
@@ -324,7 +317,7 @@ void main() {
   });
 
   testWidgets(
-    'completed welcome switches on New Tab and everyday clicks open their destinations',
+    'progress changes keep the same welcome on this and the next tab',
     (tester) async {
       await mount(tester);
       journey.sync(
@@ -334,14 +327,14 @@ void main() {
         modelsAvailable: true,
       );
       await tester.pumpAndSettle();
-      expect(find.text('✓'), findsNWidgets(3));
+      expect(find.text('✓'), findsNothing);
       expect(find.text('Harness like a boss.'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       await tester.pumpAndSettle();
-      expect(find.text('Follow your curiosity.'), findsOneWidget);
+      expect(find.text('Harness like a boss.'), findsOneWidget);
       expect(find.text('✓'), findsNothing);
-      await tap(tester, find.byKey(const ValueKey('welcome-agent.open')));
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+      await tap(tester, find.byKey(const ValueKey('welcome-harnesses.list')));
+      expect(resourceScope(''), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await tap(tester, find.byKey(const ValueKey('welcome-app.store')));
@@ -395,8 +388,13 @@ void main() {
         expect(journey.next, OnboardingStep.machines);
         await openWorkspaceTool(tester, 'machines');
         await selectResource(tester, 'machine:m');
-        await runResourceCommand(tester, 'Password / connection settings');
-        expect(find.text('This computer’s password'), findsOneWidget);
+        await tap(
+          tester,
+          find.byKey(
+            const ValueKey('resource-action:picker.resource_settings'),
+          ),
+        );
+        expect(resourceScope('@'), findsOneWidget);
         if (!hasPassword) {
           final field = find.byKey(const Key('remote-password-field'));
           expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
@@ -405,7 +403,7 @@ void main() {
             find.byKey(const Key('remote-password-confirm-field')),
             '123456',
           );
-          await tap(tester, find.text('Set password'));
+          await tap(tester, find.byKey(const ValueKey('machine-form:Save')));
         }
         expect(app.password, '123456');
         expect(find.text('Set password'), findsNothing);
@@ -419,52 +417,66 @@ void main() {
     );
   }
 
-  testWidgets('second computer connects then opens only the source harnesses', (
-    tester,
-  ) async {
-    const source = Machine(
-      machineId: 'source',
-      name: 'M2',
-      authMode: MachineAuthMode.remote,
-    );
-    app.machineStates['source'] = MachineState(source)
-      ..nodeOnline = true
-      ..needsLink = true
-      ..agents = const [
-        Agent(
-          id: 'existing',
-          name: 'Existing work',
-          engine: 'codex',
-          terminalAvailable: true,
-        ),
+  testWidgets(
+    'second computer connects inline, then its work opens from search',
+    (tester) async {
+      const source = Machine(
+        machineId: 'source',
+        name: 'M2',
+        authMode: MachineAuthMode.remote,
+      );
+      app.machineStates['source'] = MachineState(source)
+        ..nodeOnline = true
+        ..needsLink = true
+        ..agents = const [
+          Agent(
+            id: 'existing',
+            name: 'Existing work',
+            engine: 'codex',
+            terminalAvailable: true,
+          ),
+        ];
+      app.machines = [...app.machines, source];
+      app.stateOf('m')!.agents = const [
+        Agent(id: 'unrelated', name: 'Work on this computer', engine: 'codex'),
       ];
-    app.machines = [...app.machines, source];
-    app.stateOf('m')!.agents = const [
-      Agent(id: 'unrelated', name: 'Work on this computer', engine: 'codex'),
-    ];
-    await mount(tester);
-    expect(journey.next, OnboardingStep.machines);
-    await openWorkspaceTool(tester, 'machines');
-    await selectResource(tester, 'machine:source');
-    await runResourceCommand(tester, 'Link “M2”');
-    final field = find.byType(TextField);
-    await tester.enterText(field, 'wrong');
-    await key(tester, LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(find.text('Incorrect password. Try again.'), findsOneWidget);
-    await tester.enterText(field, '123456');
-    await key(tester, LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(app.connections, ['source']);
-    await key(tester, LogicalKeyboardKey.enter);
-    expect(resourceScope('@'), findsNothing);
-    expect(find.text('Search harnesses in M2'), findsOneWidget);
-    expect(find.text('Existing work'), findsWidgets);
-    expect(find.text('Work on this computer'), findsNothing);
-    expect(journey.completed(OnboardingStep.machines), isFalse);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
-  });
+      await mount(tester);
+      expect(journey.next, OnboardingStep.machines);
+      await openWorkspaceTool(tester, 'machines');
+      await selectResource(tester, 'machine:source');
+      await tap(
+        tester,
+        find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+      );
+      final field = find.byKey(const ValueKey('remote-password-connect-field'));
+      await tester.enterText(field, 'wrong');
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Incorrect password. Try again.'), findsOneWidget);
+      await tester.enterText(field, '123456');
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(app.connections, ['source']);
+      expect(resourceScope('@'), findsOneWidget);
+      // Connect hands focus to View, which lists that machine's harnesses.
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(resourceScope('@'), findsNothing);
+      expect(find.text('Existing work'), findsWidgets);
+      expect(find.text('Work on this computer'), findsNothing);
+      expect(app.panes, isEmpty);
+      await tester.enterText(resourceField, 'Existing work');
+      await tester.pumpAndSettle();
+      expect(find.text('Existing work'), findsWidgets);
+      expect(find.text('Work on this computer'), findsNothing);
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(app.panes.single.agentId, 'existing');
+      expect(journey.completed(OnboardingStep.machines), isFalse);
+      expect(tester.takeException(), isNull);
+      // Flush the scoped list's session-preview repaint debounce.
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'an offline source offers recovery before asking for its password',
@@ -489,8 +501,10 @@ void main() {
       app.stateOf('source')!.nodeOnline = true;
       app.notifyListeners();
       await tester.pumpAndSettle();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
-      expect(find.text('Link “M2”'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+        findsOneWidget,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpWidget(const SizedBox());
     },

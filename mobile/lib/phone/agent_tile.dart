@@ -62,7 +62,7 @@ class AgentTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  agent.name,
+                  agent.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -75,7 +75,7 @@ class AgentTile extends StatelessWidget {
                 StatusPill(summary: phoneAgentSummary(machine, agent)),
                 const SizedBox(height: 3),
                 AgentContextLine(
-                  project: machine.projectOf(agent),
+                  project: agent.project,
                   machineName: machine.machine.displayName,
                 ),
               ],

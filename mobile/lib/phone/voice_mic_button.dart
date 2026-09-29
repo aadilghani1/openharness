@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -21,9 +23,10 @@ import 'voice_mic_mode.dart';
 ///    the take away, and the face turns to a `×` to say so. No long-press:
 ///    that gesture is what records.
 ///
-/// ⚠️ **The swell is painted, never laid out.** The breathing ring scales past
-/// the button's box with [Clip.none] rather than growing it, so nothing around
-/// the button moves while it breathes.
+/// ⚠️ **It draws nothing past its circle.** What it is doing beyond its face —
+/// the halo, and the words when something went wrong — is drawn around it
+/// (`voice_bar_line.dart`), so the button's own box never grows and nothing
+/// around it moves.
 class VoiceMicButton extends StatefulWidget {
   const VoiceMicButton({
     super.key,
@@ -32,10 +35,21 @@ class VoiceMicButton extends StatefulWidget {
     this.onLongPress,
     this.onHoldStart,
     this.onHoldFinish,
-    this.onSlipChanged,
+    this.working = false,
+    this.level,
+    this.onSwipeDown,
   });
 
   final VoiceMicFace face;
+
+  /// The microphone's level while it listens — see [VoiceMicCore.level].
+  final ValueListenable<double>? level;
+
+  /// A swipe down on the mic: throws the take away. Null when there is no take to throw.
+  final VoidCallback? onSwipeDown;
+
+  /// The agent is working — see [VoiceMicCore.working].
+  final bool working;
 
   /// Null draws the button dimmed and dead.
   ///
@@ -56,21 +70,13 @@ class VoiceMicButton extends StatefulWidget {
   /// first, which throws the take away instead of sending it.
   final void Function({required bool cancelled})? onHoldFinish;
 
-  /// The thumb crossed in or out of the button mid-hold, so the row beside it
-  /// can say what letting go will now do.
-  ///
-  /// The button's own face already turns to a `×`, but the thumb is ON the
-  /// button and covering most of it — the words to the left are what somebody
-  /// can actually read at that moment.
-  final ValueChanged<bool>? onSlipChanged;
-
   /// The space this button asks of its parent's layout.
   ///
   /// ⚠️ **It no longer sets any row's height.** The mic floats over the terminal
   /// now (see `voice_mic_fab.dart`), so this is simply the box the `Positioned`
   /// sizes to — raising it costs the terminal nothing, and the hit area below
   /// already reaches well past it either way.
-  static const double extent = 60;
+  static const double extent = 80;
 
   /// What the finger may actually land on.
   ///
@@ -80,14 +86,9 @@ class VoiceMicButton extends StatefulWidget {
   /// [OverflowBox] is what allows a child bigger than its parent: the hit area
   /// reaches out over the terminal on every side, which has nothing tappable to
   /// collide with.
-  static const double touchExtent = 84;
-
-  /// How far the hit area spills past its slot on each side.
-  ///
-  /// What anything placed beside or above this button has to clear: the
-  /// overhang is painted over its neighbour and would swallow the neighbour's
-  /// presses. See the gap above the mic in `voice_mic_fab.dart`.
-  static const double touchOverhang = (touchExtent - extent) / 2;
+  /// The hit circle: the disc and a little more, never the 96pt it was — a tap on the agent's
+  /// prompt beside the mic must reach the terminal, not start a recording.
+  static const double touchExtent = 80;
 
   /// How far past [touchExtent] the thumb may stray and still count as "on" the
   /// button.
@@ -115,6 +116,12 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   /// first one's take.
   int? _holdPointer;
 
+  /// A finger is on the live mic, and the circle sinks a little under it.
+  bool _pressed = false;
+
+  /// How far down the finger has gone in a swipe on the mic.
+  double _swipe = 0;
+
   bool get _live => widget.onPressed != null;
 
   /// What to draw: the face given, unless a hold has been dragged off the
@@ -123,25 +130,35 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       ? VoiceMicFace.cancelling
       : widget.face;
 
-  bool get _lit => switch (_face) {
-    VoiceMicFace.starting ||
-    VoiceMicFace.listening ||
-    VoiceMicFace.cancelling ||
-    VoiceMicFace.retry => true,
-    VoiceMicFace.talk || VoiceMicFace.busy || VoiceMicFace.off => false,
-  };
+  /// Transcribing or sending: nothing to press, but not dead either.
+  ///
+  /// ⚠️ Kept apart from [_live] for the drawing only. Neither face has an
+  /// `onPressed`, and it is still what decides whether the button takes a
+  /// press — but dimming a button that is visibly working reads as "broken",
+  /// and its arc is the one thing saying the words are on their way.
+  bool get _working =>
+      _face == VoiceMicFace.busy || _face == VoiceMicFace.sending;
+
+  bool get _dead => !_live && !_working;
 
   String get _semanticLabel => switch (_face) {
-    VoiceMicFace.talk =>
+    VoiceMicFace.talk || VoiceMicFace.sent =>
       micHoldsToTalk ? 'Hold to talk to the harness' : 'Talk to the harness',
     VoiceMicFace.starting => 'Cancel',
-    VoiceMicFace.listening =>
-      micHoldsToTalk ? 'Release to send' : 'Done talking',
+    // ⚠️ One word while the mic is open: VoiceOver reads the label aloud, and a sentence read
+    // into an open microphone lands in the take. Cancel is an action (below), not an instruction.
+    VoiceMicFace.listening => micHoldsToTalk ? 'Release to send' : 'Send',
     VoiceMicFace.cancelling => 'Release to cancel',
-    VoiceMicFace.busy => 'Working',
+    VoiceMicFace.busy || VoiceMicFace.sending => 'Working',
     VoiceMicFace.retry => 'Send again',
     VoiceMicFace.off => 'Voice input is off',
   };
+
+  void _setPressed(bool value) {
+    if (value == _pressed) return;
+    _pressed = value;
+    if (mounted) setState(() {});
+  }
 
   /// Whether [point], in the hit area's own coordinates, still counts as on the
   /// button.
@@ -162,6 +179,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     if (!_live || _holdPointer != null) return;
     _holdPointer = event.pointer;
     _setSlipped(false);
+    _setPressed(true);
     HapticFeedback.lightImpact();
     widget.onHoldStart?.call();
   }
@@ -181,6 +199,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     _holdPointer = null;
     final cancelled = _slippedOff;
     _setSlipped(false);
+    _setPressed(false);
     widget.onHoldFinish?.call(cancelled: cancelled);
   }
 
@@ -190,6 +209,7 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
     if (event.pointer != _holdPointer) return;
     _holdPointer = null;
     _setSlipped(false);
+    _setPressed(false);
     widget.onHoldFinish?.call(cancelled: true);
   }
 
@@ -205,22 +225,14 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   void dispose() {
     if (_holdPointer != null) {
       final finish = widget.onHoldFinish;
-      final slipChanged = _slippedOff ? widget.onSlipChanged : null;
-      scheduleMicrotask(() {
-        slipChanged?.call(false);
-        finish?.call(cancelled: true);
-      });
+      scheduleMicrotask(() => finish?.call(cancelled: true));
     }
     super.dispose();
   }
 
-  /// ⚠️ Tells the row BEFORE rebuilding itself. The listener sits in an ancestor
-  /// that rebuilds this button, so calling it inside `setState` would report the
-  /// change from the middle of a build.
   void _setSlipped(bool value) {
     if (value == _slippedOff) return;
     _slippedOff = value;
-    widget.onSlipChanged?.call(value);
     if (mounted) setState(() {});
   }
 
@@ -238,6 +250,10 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   @override
   void didUpdateWidget(VoiceMicButton old) {
     super.didUpdateWidget(old);
+    // Gone dead under a finger — the terminal stopped taking input mid-press.
+    // The tap callbacks are dropped with it, so no tap-up will ever come to
+    // raise the circle again.
+    if (widget.onPressed == null && _holdPointer == null) _pressed = false;
     if (!micHoldsToTalk) return;
     if (old.face != VoiceMicFace.listening &&
         widget.face == VoiceMicFace.listening) {
@@ -248,20 +264,23 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    // VoiceOver keeps one-finger swipes for itself, so the swipe down that throws a take away
+    // never reached the mic: it is a Cancel action here, and the two-finger scrub (onDismiss).
+    final cancel = _face == VoiceMicFace.listening ? widget.onSwipeDown : null;
     return Semantics(
       button: true,
       enabled: _live,
       label: _semanticLabel,
       onLongPressHint: widget.onLongPress == null ? null : 'Choose language',
+      onDismiss: cancel,
+      customSemanticsActions: cancel == null
+          ? null
+          : {const CustomSemanticsAction(label: 'Cancel'): cancel},
       // ⚠️ **The slot is [VoiceMicButton.extent]; the hit area inside it is the
       // larger [VoiceMicButton.touchExtent], spilling out on every side.** The
       // [OverflowBox] is what allows a child bigger than its parent without the
       // parent growing — so the row, and the terminal above it, keep their
       // heights while the finger gets a target half again as wide.
-      //
-      // `Clip.none` on the stack matters for the same reason: the ring already
-      // paints past the core, and clipping to the slot would cut both it and
-      // the overflowing hit area back to nothing.
       child: SizedBox.square(
         dimension: VoiceMicButton.extent,
         child: OverflowBox(
@@ -272,17 +291,22 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
               dimension: VoiceMicButton.touchExtent,
               child: AnimatedOpacity(
                 duration: const Duration(milliseconds: 160),
-                opacity: _live ? 1 : 0.4,
-                child: Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    // ⚠️ Not while cancelling: the ring means "listening, carry
-                    // on talking", and leaving it breathing under a `×` would
-                    // say both things at once.
-                    if (_face == VoiceMicFace.listening) const VoiceMicRing(),
-                    VoiceMicCore(face: _face, lit: _lit),
-                  ],
+                opacity: _dead ? 0.4 : 1,
+                child: Center(
+                  // Sinks under the finger. Not while a hold is slid off: the
+                  // thumb is no longer on it, and the `×` it now wears is the
+                  // thing to read.
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 140),
+                    curve: Curves.easeOut,
+                    scale: _pressed && !_slippedOff ? 0.92 : 1,
+                    child: VoiceMicCore(
+                      face: _face,
+                      dead: _dead,
+                      working: widget.working,
+                      level: widget.level,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -308,6 +332,9 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       return GestureDetector(
         key: const ValueKey('voice-mic'),
         behavior: HitTestBehavior.opaque,
+        onTapDown: _live ? (_) => _setPressed(true) : null,
+        onTapUp: _live ? (_) => _setPressed(false) : null,
+        onTapCancel: _live ? () => _setPressed(false) : null,
         onTap: _live
             ? () {
                 HapticFeedback.lightImpact();
@@ -315,6 +342,22 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
               }
             : null,
         onLongPress: widget.onLongPress,
+        // A swipe down throws the take away — past the slop it is no tap, so nothing is sent.
+        onVerticalDragStart: widget.onSwipeDown == null
+            ? null
+            : (_) => _swipe = 0,
+        onVerticalDragUpdate: widget.onSwipeDown == null
+            ? null
+            : (details) => _swipe += details.delta.dy,
+        onVerticalDragEnd: widget.onSwipeDown == null
+            ? null
+            : (details) {
+                _setPressed(false);
+                if (_swipe > 24 || (details.primaryVelocity ?? 0) > 300) {
+                  HapticFeedback.mediumImpact();
+                  widget.onSwipeDown!();
+                }
+              },
         child: child,
       );
     }

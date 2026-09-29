@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agentNames.js'
+import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
@@ -16,6 +16,10 @@ const exec = promisify(execFile)
 describe('launch Git preparation', { timeout: 30_000 }, () => {
   let root: string, repo: string
   const git = async (...args: string[]) => (await exec('git', ['-C', repo, ...args])).stdout.trim()
+  /** The fixture builds its repos in the temp directory, outside the browsable home, so each read
+   *  names that root — exactly as the daemon names the workspaces its agents are running in. */
+  const read = (path: string, options: { refresh?: boolean } = {}) =>
+    readGitProject(path, { ...options, knownRoots: [root] })
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'harness-git-test-'))
     repo = join(root, 'project with spaces')
@@ -48,16 +52,44 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(encryptRpcResult('git_project_info_result')).toBe(true)
   })
 
+  it('never runs a program the repository names as its fsmonitor', async () => {
+    const marker = join(root, 'fsmonitor-ran')
+    const hook = join(root, 'fsmonitor.sh')
+    await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+    await git('config', 'core.fsmonitor', hook)
+    await read(repo)
+    await prepare('branch', 'refs/heads/feature')
+    await expect(readFile(marker)).rejects.toThrow()
+  })
+
   it('reads local and remote branches without switching or creating anything', async () => {
-    expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: 'main', branches: [
+    expect(await read(repo)).toMatchObject({ isGit: true, branch: 'main', branches: [
       { ref: 'refs/heads/feature', name: 'feature', remote: false },
       { ref: 'refs/heads/main', name: 'main', remote: false },
       { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
     ] })
     expect(await git('branch', '--show-current')).toBe('main')
     expect(await git('worktree', 'list', '--porcelain')).not.toContain('harness/')
-    expect(await readGitProject(root)).toMatchObject({ isGit: false })
-    expect(await readGitProject('relative/path')).toEqual({ error: 'INVALID_PATH' })
+    expect(await read(root)).toMatchObject({ isGit: false })
+    expect(await read('relative/path')).toEqual({ error: 'INVALID_PATH' })
+  })
+
+  it('runs git only inside the browsable home and the workspaces it was given', async () => {
+    // No known roots: the fixture's repo is in the temp directory, outside the home folder.
+    expect(await readGitProject(repo)).toEqual({ error: 'FORBIDDEN' })
+    expect(await readGitProject(repo, { knownRoots: [root] })).toMatchObject({ isGit: true })
+    // Named inside an allowed root, pointing outside it: the real path is what decides.
+    const outside = await mkdtemp(join(tmpdir(), 'harness-git-outside-'))
+    const allowed = await mkdtemp(join(tmpdir(), 'harness-git-allowed-'))
+    try {
+      await symlink(repo, join(allowed, 'link'))
+      expect(await readGitProject(join(allowed, 'link'), { knownRoots: [allowed] })).toEqual({ error: 'FORBIDDEN' })
+      // Gone, not refused: a deleted folder answers the way running git in it always did.
+      expect(await readGitProject(join(outside, 'gone'), { knownRoots: [outside] })).toEqual({ isGit: false, branches: [] })
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+      await rm(allowed, { recursive: true, force: true })
+    }
   })
 
   it('discovers a newly pushed branch without fetching objects, then fetches only on Start', async () => {
@@ -73,8 +105,8 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('push', 'origin', 'feat/toolbar-onboarding')
     await writeFile(join(clone, 'src', 'value'), 'unsaved local work')
     const refs = await there('show-ref')
-    expect((await readGitProject(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
-    const info = await readGitProject(clone, { refresh: true })
+    expect((await read(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
+    const info = await read(clone, { refresh: true })
     expect(info).toMatchObject({ refreshed: true, branch: 'main', branches: expect.arrayContaining([
       { ref: 'refs/remotes/origin/feat/toolbar-onboarding', name: 'origin/feat/toolbar-onboarding', remote: true },
     ]) })
@@ -91,7 +123,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('clone', '--bare', repo, remote)
     await git('remote', 'add', 'origin', join(root, 'missing.git'))
     await git('remote', 'add', 'upstream', remote)
-    const info = await readGitProject(repo, { refresh: true })
+    const info = await read(repo, { refresh: true })
     expect(info).toMatchObject({ refreshed: false, branches: expect.arrayContaining([
       { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
       { ref: 'refs/remotes/upstream/main', name: 'upstream/main', remote: true },
@@ -104,7 +136,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('clone', '--bare', repo, remote)
     await git('remote', 'add', 'origin', remote)
     await exec('git', ['-C', remote, 'branch', '-D', 'feature'])
-    const info = await readGitProject(repo, { refresh: true }) as { branches: Array<{ name: string }> }
+    const info = await read(repo, { refresh: true }) as { branches: Array<{ name: string }> }
     expect(info.branches.map(b => b.name)).toContain('feature')
     expect(info.branches.map(b => b.name)).not.toContain('origin/feature')
     expect(await git('show-ref', '--verify', 'refs/remotes/origin/feature')).toBeTruthy()
@@ -131,10 +163,57 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
     expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
     expect(worktreeFolderName('fix/login page')).toBe('loginpage')
-    expect(sessionBranchSlug('Worktree and branches organization')).toBe('worktree-and-branches-organization')
-    expect(sessionBranchSlug('✳ Fix: the login page — redirects twice?')).toBe('fix-the-login-page-redirects-twice')
-    expect(sessionBranchSlug('a'.repeat(30) + ' ' + 'b'.repeat(30))).toBe('a'.repeat(30))
-    expect(sessionBranchSlug('✳ ✳')).toBeNull()
+    // Two words when both carry the meaning.
+    expect(sessionBranchNames('Worktree and branches organization')).toEqual(['worktree-branches', 'worktree-branches-organization'])
+    expect(sessionBranchNames('Fix the harness list order')).toEqual(['harness-list', 'harness-list-order'])
+    expect(sessionBranchNames('Add dark mode to settings')).toEqual(['dark-mode', 'dark-mode-settings'])
+    expect(sessionBranchNames('Review and fix flaky tests')).toEqual(['flaky-tests'])
+    expect(sessionBranchNames('Portable harnesses, launch models')).toEqual(['portable-harnesses', 'portable-harnesses-launch'])
+    expect(sessionBranchNames('Release 0.3.1 notes')).toEqual(['release-notes'])
+    expect(sessionBranchNames('Café résumé')).toEqual(['cafe-resume'])
+    // One word when the second is generic, the two-word name kept for a clash.
+    expect(sessionBranchNames('✳ Fix: the login page — redirects twice?')).toEqual(['login', 'login-page', 'login-page-redirects'])
+    expect(sessionBranchNames('Onboarding experience')).toEqual(['onboarding', 'onboarding-experience'])
+    expect(sessionBranchNames('UI polish')).toEqual(['ui', 'ui-polish'])
+    // One word when that is all the title has.
+    expect(sessionBranchNames('Onboarding')).toEqual(['onboarding'])
+    expect(sessionBranchNames('Fix')).toEqual(['fix'])
+    expect(sessionBranchNames('0.3.1')).toEqual(['0-3', '0-3-1'])
+    expect(sessionBranchNames('a'.repeat(30) + ' ' + 'b'.repeat(30))).toEqual(['a'.repeat(24) + '-' + 'b'.repeat(24)])
+    // Real session titles from Claude Code, Codex and this repository's PRs (2026-09-25).
+    for (const [title, name] of [
+      ['Catch up on autonomous-grid', 'autonomous-grid'],
+      ['ok catch up on this landing page. we', 'landing'],
+      ['Look at my Chrome. Open the file, au', 'chrome'],
+      ['What time is it', 'time'],
+      ['Build simple Pacman game', 'pacman-game'],
+      ['Respond to greeting', 'greeting'],
+      ['Define GPU Pod concept', 'gpu-pod'],
+      ['Research roleplay app names', 'roleplay-app'],
+      ['Device stuck issue', 'device-stuck'],
+      ['Harness landing page redesign', 'harness-landing'],
+      ['Review inventory protection', 'inventory-protection'],
+      ['Remove Grid desktop app', 'grid-desktop'],
+      ['feat(cli): add a Requesty preset to saved APIs', 'requesty-preset'],
+      ['perf(desktop): redraw only terminal lines that changed', 'redraw-terminal'],
+      ['fix(cli): unlink a linked dsh on remove instead of rmSync', 'unlink-linked'],
+      ['feat(harnesses): add eight interactive experiences', 'interactive-experiences'],
+      ['feat(login): record whether a sign-in came from the terminal', 'sign-in'],
+      ['Study autonomous-code repo', 'autonomous-code'],
+      ['8-bit CPU Fibonacci on iCEBreaker', '8-bit'],
+      ['Restore split-right and split-down pane controls', 'split-right'],
+      ['App auto-opening extra tabs', 'app-auto'],
+      ['Explore print-in-place uses', 'print-place'],
+      ['desktop: an on-screen banner for the same two moments', 'desktop'],
+      ['Harness on-off switch', 'harness-switch'],
+      ['Simplify Cmd-P with single-line results', 'cmd-p'],
+      ['Give Harness Monitor its stacked-terminal identity', 'harness-monitor'],
+      ['ci: CI and release workflows', 'ci-release'],
+      ['catch up', 'catch'],
+    ] as const) expect(sessionBranchNames(title)[0], title).toBe(name)
+    expect(sessionBranchNames('The and of')).toEqual([])
+    expect(sessionBranchNames('✳ ✳')).toEqual([])
+    expect(sessionBranchNames(null)).toEqual([])
     const made = [await prepare('worktree'), await prepare('worktree')]
     expect(new Set(made).size).toBe(2)
     for (const path of made) {
@@ -153,7 +232,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
     expect(await current(made)).toBe('quiet-owl')
     expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
-    const info = await readGitProject(repo) as { branches: Array<{ name: string; harness?: true }> }
+    const info = await read(repo) as { branches: Array<{ name: string; harness?: true }> }
     expect(info.branches.filter(b => b.harness).map(b => b.name).sort()).toEqual(['fix/login', 'quiet-owl'])
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'bad..name' })).rejects.toMatchObject({ code: 'INVALID_BRANCH' })
@@ -174,17 +253,38 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
   it('names a made-up worktree branch after its session once, and never a pushed or chosen one', async () => {
     const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
     expect(await nameBranchAfterSession(path, null)).toBeNull()
-    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-and-branches-organization')
-    expect(await current(path)).toBe('worktree-and-branches-organization')
-    expect(await git('config', '--get', 'branch.worktree-and-branches-organization.harness')).toBe('created')
+    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-branches')
+    expect(await current(path)).toBe('worktree-branches')
+    expect(await git('config', '--get', 'branch.worktree-branches.harness')).toBe('created')
     expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
-    expect(await current(path)).toBe('worktree-and-branches-organization')
+    expect(await current(path)).toBe('worktree-branches')
+    // Taken, with no third word to add: a number.
     const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
-    expect(await nameBranchAfterSession(second, 'Worktree and branches organization')).toBe('worktree-and-branches-organization-2')
+    expect(await nameBranchAfterSession(second, 'Fix the worktree branches')).toBe('worktree-branches-2')
+    // A clash takes the fuller name, then a third word, then numbers the shortest.
+    const named = async (title: string, placeholders: string[]) => {
+      const out = []
+      for (const branchName of placeholders) {
+        const at = await prepare('worktree', 'refs/heads/feature', repo, { branchName, branchMode: 'placeholder' })
+        out.push(await nameBranchAfterSession(at, title))
+      }
+      return out
+    }
+    expect(await named('Fix the login page', ['keen-lynx', 'tidy-heron', 'rosy-finch']))
+      .toEqual(['login', 'login-page', 'login-2'])
+    expect(await named('Harness monitor DDOS requests', ['warm-ibis', 'glad-crane', 'bold-lark']))
+      .toEqual(['harness-monitor', 'harness-monitor-ddos', 'harness-monitor-2'])
+    // A repository's own names are never taken, whatever the title says.
+    // This repository has no `master`: only the reserved list keeps a session from taking it.
+    expect(await git('branch', '--list', 'master')).toBe('')
+    expect(await named('Master', ['sunny-moose'])).toEqual(['master-2'])
+    // Case does not tell names apart: on macOS `Deploy` and `deploy` are one ref file.
+    await git('update-ref', 'refs/remotes/origin/Deploy', 'main')
+    expect(await named('Deploy', ['noble-reef'])).toEqual(['deploy-2'])
     // A name a remote has is taken too.
     const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
-    await git('update-ref', 'refs/remotes/origin/onboarding-experience', 'main')
-    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience-2')
+    await git('update-ref', 'refs/remotes/origin/onboarding', 'main')
+    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience')
     const chosen = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/mine' })
     expect(await nameBranchAfterSession(chosen, 'Anything')).toBeNull()
     const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'sunny-owl', branchMode: 'placeholder' })
@@ -209,13 +309,13 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       id: session.sessionId, thread_name: 'Discuss configurable harness agents',
     }) + '\n')
     const title = namingTitle(engineSessionTitle(session, 'renaming... ⠴'), session)
-    expect(await nameBranchAfterSession(path, title)).toBe('discuss-configurable-harness-agents')
-    expect(await current(path)).toBe('discuss-configurable-harness-agents')
-    expect(await git('config', '--get', 'branch.discuss-configurable-harness-agents.harness')).toBe('created')
-    expect(await git('rev-parse', 'discuss-configurable-harness-agents')).toBe(await git('rev-parse', 'feature'))
+    expect(await nameBranchAfterSession(path, title)).toBe('configurable-harness')
+    expect(await current(path)).toBe('configurable-harness')
+    expect(await git('config', '--get', 'branch.configurable-harness.harness')).toBe('created')
+    expect(await git('rev-parse', 'configurable-harness')).toBe(await git('rev-parse', 'feature'))
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('work in progress')
     expect(await nameBranchAfterSession(path, 'A later conversation title')).toBeNull()
-    expect(await current(path)).toBe('discuss-configurable-harness-agents')
+    expect(await current(path)).toBe('configurable-harness')
   })
 
   it('checks out an existing branch as it is in a new worktree, once', async () => {
@@ -234,7 +334,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('remote', 'add', 'origin', origin)
     await git('fetch', '--quiet', 'origin')
     await git('remote', 'set-head', 'origin', 'main')
-    expect(await readGitProject(repo)).toMatchObject({ defaultRef: 'refs/remotes/origin/main' })
+    expect(await read(repo)).toMatchObject({ defaultRef: 'refs/remotes/origin/main' })
     await exec('git', ['clone', '--quiet', origin, upstream])
     const up = (...args: string[]) => exec('git', ['-C', upstream, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args])
     await writeFile(join(upstream, 'src', 'value'), 'pushed')
@@ -272,13 +372,13 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('reads a linked worktree as its repository, and a worktree started from one joins the same repository', async () => {
     const linked = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'harness/linked' })
-    const info = await readGitProject(join(linked, 'src'))
+    const info = await read(join(linked, 'src'))
     expect(info).toMatchObject({ isGit: true, branch: 'harness/linked', mainBranch: 'main' })
     expect(await realpath((info as { mainFolder: string }).mainFolder)).toBe(await realpath(join(repo, 'src')))
     const branches = (info as { branches: Array<{ name: string; worktree?: string }> }).branches
     expect(await realpath(branches.find(branch => branch.name === 'harness/linked')!.worktree!)).toBe(await realpath(linked))
     expect(await realpath(branches.find(branch => branch.name === 'main')!.worktree!)).toBe(await realpath(repo))
-    expect(await readGitProject(repo)).not.toHaveProperty('mainFolder')
+    expect(await read(repo)).not.toHaveProperty('mainFolder')
     expect(await prepare('worktree', 'refs/heads/main', linked, { branchName: 'harness/second' })).toBe(join(worktrees(), 'second'))
   })
 
@@ -321,7 +421,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     const empty = join(root, 'empty')
     await mkdir(empty)
     await exec('git', ['-C', empty, 'init', '-b', 'main'])
-    expect(await readGitProject(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
+    expect(await read(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
     await expect(prepareProjectFolder({ source: 'worktree', gitSource: empty }, options()))
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
@@ -349,7 +449,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('supports detached HEAD, default worktree names, and switching back to a local branch', async () => {
     await git('checkout', '--detach', 'HEAD')
-    expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: null })
+    expect(await read(repo)).toMatchObject({ isGit: true, branch: null })
     const path = await prepareGitProject(repo, { root, worktree: true })
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
     expect(path).toMatch(/\/worktrees\/project with spaces\/[a-z]+-[a-z]+(-\d+)?$/)
@@ -359,12 +459,12 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('distinguishes an unavailable Git executable from a non-Git folder', async () => {
     vi.stubEnv('PATH', join(root, 'missing-binaries'))
-    expect(await readGitProject(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
+    expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
   })
 
   it('reports unreadable refs instead of silently treating the repository as non-Git', async () => {
     await writeFile(join(repo, '.git', 'packed-refs'), 'invalid packed refs\n')
-    expect(await readGitProject(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
+    expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
   })
 
   it('rejects a subfolder that became a file on the selected branch', async () => {

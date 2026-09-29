@@ -1,10 +1,10 @@
-import 'dart:io' show Platform;
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
+import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -12,7 +12,9 @@ import '../shared/theme/workspace_bar_style.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
 import '../theme/app_theme.dart';
+import '../viewer/interactive_viewer.dart';
 import 'engine_identity.dart';
+import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
 
@@ -44,9 +46,11 @@ class WebPanePanel extends StatefulWidget {
     this.onToggleZoom,
     this.zoomed = false,
     this.compactHeader = false,
+    this.visible = true,
   });
 
   final AppNotifier notifier;
+  final bool visible;
   final TerminalPane pane;
 
   /// What the pane is called in its header ("3D Viewer"); see viewerPaneName.
@@ -71,7 +75,7 @@ class WebPanePanel extends StatefulWidget {
 
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
-  static bool get webviewAvailable => !kUnderTest && Platform.isMacOS;
+  static bool get webviewAvailable => !kUnderTest && RuntimePlatform.isMacOS;
 
   @override
   State<WebPanePanel> createState() => _WebPanePanelState();
@@ -79,6 +83,8 @@ class WebPanePanel extends StatefulWidget {
 
 class _WebPanePanelState extends State<WebPanePanel> {
   WebViewController? _controller;
+  InteractiveViewerSession? _remote;
+  String? _remoteIdentity;
   String? _loadedUrl;
   bool _loading = false;
   String? _failure;
@@ -89,7 +95,34 @@ class _WebPanePanelState extends State<WebPanePanel> {
   @override
   void initState() {
     super.initState();
+    _mountRemote();
     if (WebPanePanel.webviewAvailable) _mountController();
+  }
+
+  void _mountRemote() {
+    if (!kIsWeb) return;
+    final pane = widget.pane;
+    final identity = '${pane.machineId}/${pane.ownerAgentId}/${pane.url}';
+    if (_remoteIdentity == identity) return;
+    _remote?.dispose();
+    _remoteIdentity = identity;
+    final notifier = widget.notifier;
+    final machineId = pane.machineId, agentId = pane.ownerAgentId!;
+    _remote = InteractiveViewerSession(
+      (payload) => notifier.viewerSurface(machineId, agentId, payload),
+    );
+    pane.focusViewerInput = _focusRemote;
+  }
+
+  bool _focusRemote() => _remote?.focusInput?.call() ?? false;
+
+  @override
+  void dispose() {
+    if (widget.pane.focusViewerInput == _focusRemote) {
+      widget.pane.focusViewerInput = null;
+    }
+    _remote?.dispose();
+    super.dispose();
   }
 
   void _mountController() {
@@ -152,7 +185,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
     // while a viewer loads. WKWebView on macOS has no such setting (the plugin
     // throws UnimplementedError, seen live 2026-09-15 as a red pane), so only
     // platforms that do get it.
-    if (!Platform.isMacOS) {
+    if (!RuntimePlatform.isMacOS) {
       controller.setBackgroundColor(grid.AppPalette.windowBg);
     }
     controller.loadRequest(uri);
@@ -180,6 +213,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
   }
 
   void _reload() {
+    if (_remote case final remote?) {
+      remote.reload();
+      return;
+    }
     if (_controller == null) return;
     if (_loadedUrl != widget.pane.url) {
       _load();
@@ -193,6 +230,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
   @override
   void didUpdateWidget(WebPanePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _mountRemote();
     // The daemon named a different page — the newest artifact, a viewer
     // restarted on another port. Navigate in place; the tile stays.
     if (widget.pane.url != _loadedUrl) _load();
@@ -251,6 +289,13 @@ class _WebPanePanelState extends State<WebPanePanel> {
                         style: workspaceBarTextStyle(color: AppColors.text),
                       ),
                     ),
+                    if (widget.pane.ownerAgentId case final ownerId?)
+                      HarnessActivityMark(
+                        app: widget.notifier,
+                        machineId: widget.pane.machineId,
+                        agentId: ownerId,
+                        visible: widget.visible,
+                      ),
                     if (widget.verdict case final verdict?) ...[
                       Text(
                         '  ·  ',
@@ -284,7 +329,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
             // coverage:ignore-end
             _ViewerActions(
               zoomed: widget.zoomed,
-              onReload: _controller == null ? null : _reload,
+              onReload: _controller == null && _remote == null ? null : _reload,
               onZoom: widget.onToggleZoom,
               onClose: widget.onClose,
             ),
@@ -303,6 +348,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
         detail: error,
       );
     }
+    if (_remote case final remote?) return RemoteViewerSurface(session: remote);
     final controller = _controller;
     final url = widget.pane.url;
     if (controller == null) {
@@ -382,7 +428,7 @@ class _ViewerActions extends StatelessWidget {
         action('Reload viewer', LucideIcons.refreshCw, onReload),
         const SizedBox(width: 2),
         action(
-          zoomed ? 'Restore agents' : 'Zoom viewer',
+          zoomed ? 'Restore harnesses' : 'Zoom viewer',
           zoomed ? LucideIcons.minimize : LucideIcons.maximize,
           onZoom,
         ),

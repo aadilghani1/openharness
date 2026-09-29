@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/status_line_style.dart';
@@ -10,19 +12,57 @@ import 'workspace_bar_control.dart';
 
 typedef StatusLineLink = ({String label, VoidCallback? onPressed});
 
+List<double> workspaceStatusLineWidthsOf(
+  BuildContext context,
+  StatusLineParts parts,
+) {
+  final cell = workspaceBarCellSizeOf(context);
+  return [
+    for (final component in parts.components)
+      component.parts.segments.fold(
+            0.0,
+            (width, segment) =>
+                width +
+                workspaceBarTextSizeOf(context, segment.text).width +
+                (segment.branchSymbol ? cell.width * 2 : 0),
+          ) +
+          (parts.style.segmented
+              ? component.parts.segments.length * cell.width * 3
+              : 0),
+  ];
+}
+
+// Shorten a branch before squeezing machine/project. Below twelve cells the
+// ordinary shared cap takes over so no field can crowd out all the others.
+List<double> _fitContextWidths(
+  StatusLineParts parts,
+  List<double> natural,
+  double available,
+  double cell,
+) {
+  final widths = [...natural];
+  var excess = math.max(0.0, widths.fold(0.0, (a, b) => a + b) - available);
+  final components = parts.components;
+  for (var i = 0; i < widths.length; i++) {
+    if (components[i].field != StatusLineField.branch) continue;
+    final reduction = math.min(excess, math.max(0.0, widths[i] - cell * 12));
+    widths[i] -= reduction;
+    excess -= reduction;
+  }
+  return fitStatusLineWidths(widths, available);
+}
+
 /// Fields retain individual click targets even when a long branch is shortened.
 class WorkspaceStatusLine extends StatelessWidget {
   const WorkspaceStatusLine({
     super.key,
     required this.parts,
     required this.links,
-    required this.selection,
     required this.color,
     this.nextBackground,
   });
   final StatusLineParts parts;
   final Map<StatusLineField, StatusLineLink> links;
-  final Color selection;
   final bool color;
   final Color? nextBackground;
 
@@ -35,30 +75,15 @@ class WorkspaceStatusLine extends StatelessWidget {
     final cell = workspaceBarCellSizeOf(context);
     final height = workspaceBarControlHeight(context);
     final components = parts.components;
-    final widths = [
-      for (final component in components)
-        (() {
-          final painter = TextPainter(
-            text: TextSpan(
-              text: component.parts.segments.map((s) => s.text).join(),
-              style: workspaceBarTextStyle(),
-            ),
-            textDirection: TextDirection.ltr,
-            textScaler: TextScaler.noScaling,
-            maxLines: 1,
-          )..layout();
-          final width =
-              painter.width +
-              (parts.style.segmented
-                  ? component.parts.segments.length * cell.width * 3
-                  : 0);
-          painter.dispose();
-          return width;
-        })(),
-    ];
+    final widths = workspaceStatusLineWidthsOf(context, parts);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final fitted = fitStatusLineWidths(widths, constraints.maxWidth);
+        final fitted = _fitContextWidths(
+          parts,
+          widths,
+          constraints.maxWidth,
+          cell.width,
+        );
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -66,14 +91,16 @@ class WorkspaceStatusLine extends StatelessWidget {
               (() {
                 final component = components[i];
                 final link = links[component.field];
-                final body = SizedBox(
+                Widget body(BuildContext context, bool emphasized) => SizedBox(
                   width: fitted[i],
                   height: height,
                   child: Center(
                     child: StatusLine(
                       parts: component.parts,
+                      middleEllipsis: component.field == StatusLineField.branch,
                       color: color,
                       workspaceBar: true,
+                      emphasized: emphasized,
                       textAlign: TextAlign.left,
                       segmentOffset: component.offset,
                       nextBackground: i == components.length - 1
@@ -88,16 +115,15 @@ class WorkspaceStatusLine extends StatelessWidget {
                   ),
                 );
                 return link == null
-                    ? body
+                    ? body(context, false)
                     : WorkspaceBarControl(
                         key: ValueKey(
                           'workspace-context-${component.field!.name}',
                         ),
                         label: link.label,
                         tooltip: link.label,
-                        selection: selection,
                         onPressed: link.onPressed,
-                        child: body,
+                        builder: body,
                       );
               })(),
           ],

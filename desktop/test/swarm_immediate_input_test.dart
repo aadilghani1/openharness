@@ -36,7 +36,7 @@ void main() {
       'close pane',
       if (nativeEntry) 'close pane menu',
       'close tab',
-      'new tab',
+      'new swarm',
     ]) {
       testWidgets(
         '$action owns immediate input before a frame (native=$nativeEntry)',
@@ -106,7 +106,7 @@ void main() {
             }
             await tester.pump(const Duration(milliseconds: 10));
             expect(secondInput, isEmpty, reason: 'The old agent owns no input');
-            if (action == 'new tab') {
+            if (action == 'new swarm') {
               expect(app.panes, isEmpty);
               expect(app.swarms.first.panes, [first, second]);
               expect(app.swarms, hasLength(2));
@@ -137,6 +137,18 @@ void main() {
               expect(firstInput, isEmpty);
             } else {
               expect(app.focusedPane, same(first));
+              if (action == 'close tab') {
+                // The tab beside a closed one is shown, but the keys typed
+                // after the close wait on the tab strip until ⏎ goes in.
+                expect(app.tabStripFocused, isTrue);
+                expect(firstInput, isEmpty);
+                await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+                await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+                if (tester.testTextInput.hasAnyClients) {
+                  tester.testTextInput.enterText('next');
+                }
+                await tester.pump(const Duration(milliseconds: 10));
+              }
               expect(firstInput.expand((frame) => frame.bytes).toList(), [
                 27,
                 91,

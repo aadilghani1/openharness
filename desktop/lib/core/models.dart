@@ -4,6 +4,7 @@ library;
 import 'package:flutter/foundation.dart' show immutable;
 
 import 'runtime_model_name.dart';
+import 'agent_git_context.dart';
 
 enum MachineAuthMode { managed, remote, self, provider }
 
@@ -72,20 +73,34 @@ class SharedHarness {
     required this.name,
     this.engine,
     required this.expiresAt,
+    this.ownerPublicKey,
   });
   final String id, agentId, name;
   final String? engine;
   final DateTime expiresAt;
+  final String? ownerPublicKey;
   factory SharedHarness.fromJson(Map<String, dynamic> j) => SharedHarness(
     id: j['id'] as String,
     agentId: j['agentId'] as String,
     name: j['name'] as String,
     engine: j['engine'] as String?,
     expiresAt: DateTime.parse(j['expiresAt'] as String),
+    ownerPublicKey: j['ownerPublicKey'] as String?,
   );
 }
 
 /// Control-plane machine (GET /api/machines).
+/// Two spellings of the same machine or computer id.
+///
+/// The backend stores a computer id with its dashes stripped
+/// (`d11a1f3bca2a44e9…`) while `~/.harness/computer-id` — which is what the
+/// daemon serves under while signed out, and therefore what a tile made then is
+/// keyed by — keeps them (`d11a1f3b-ca2a-44e9-…`). The same id, written two
+/// ways, and a plain `==` between them never matches. Anything comparing an id
+/// that crossed that boundary has to come through here.
+bool sameMachineId(String a, String b) =>
+    a.replaceAll('-', '').toLowerCase() == b.replaceAll('-', '').toLowerCase();
+
 class Machine {
   final String machineId;
 
@@ -218,7 +233,7 @@ class ForkedFrom {
     final name = raw['name'];
     return ForkedFrom(
       agentId: agentId,
-      name: name is String && name.isNotEmpty ? name : 'an agent',
+      name: name is String && name.isNotEmpty ? name : 'a harness',
     );
   }
 }
@@ -291,6 +306,9 @@ class Agent {
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
 
+  /// Effort reported with [modelName], never inferred from a model default.
+  final String? modelEffort;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -302,11 +320,44 @@ class Agent {
   /// the daemon when it built the launch and carried on every frame, so it is right after a
   /// reconnect or a restart without anything being replayed.
   final GridWebSearch? gridWebSearch;
+
+  /// Where [gridModel] is served — the endpoint the engine was handed (a grid's relay, or a saved
+  /// API such as `https://openrouter.ai/api`). Null with no [gridModel], or from an older daemon.
+  final String? gridBaseUrl;
+
+  /// How the daemon's picture has the grid this agent's model is on (`grid.state`), or null when
+  /// it did not say — an agent on its own login, or an older daemon. Asleep or waking is what puts
+  /// the "Starting up…" chip on its pane between a message and the first answer.
+  final GridSectionState? gridState;
+
+  /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
+  final GridNote? gridNote;
   final String? parentAgentId;
   final AgentProject? project;
+  final AgentGitContext? gitContext;
+  AgentProject? get displayProject =>
+      gitContext?.displayProject(project) ?? project;
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
+
+  /// When a person last opened or focused this harness in ANY client, as the
+  /// owning daemon recorded it (`lastOpenedAt`, stamped by `agent_update
+  /// {opened: true}`). Null when never opened, or from a daemon that predates
+  /// the field.
+  final DateTime? lastOpenedAt;
+
+  /// What harness lists sort by: the later of [lastActivityAt] and
+  /// [lastOpenedAt], so a harness someone just looked at rises even while it
+  /// is quiet. The order is global — every client and machine reads the same
+  /// daemon stamps.
+  DateTime? get lastUsedAt {
+    final activity = lastActivityAt;
+    final opened = lastOpenedAt;
+    if (activity == null) return opened;
+    if (opened == null) return activity;
+    return opened.isAfter(activity) ? opened : activity;
+  }
 
   /// Cached conversation usage reported by this agent's owning machine.
   final int? tokensUsed;
@@ -386,11 +437,17 @@ class Agent {
     this.engineIconHint,
     this.codexHome,
     this.modelName,
+    this.modelEffort,
     this.gridModel,
     this.gridWebSearch,
+    this.gridBaseUrl,
+    this.gridState,
+    this.gridNote,
     this.parentAgentId,
     this.project,
+    this.gitContext,
     this.lastActivityAt,
+    this.lastOpenedAt,
     this.tokensUsed,
     this.tokensUpdatedAt,
     this.outputStats,
@@ -501,26 +558,35 @@ class Agent {
     final usage = j['tokenUsage'];
     final total = usage is Map ? usage['totalTokens'] : null;
     final validTokens = total is int && total >= 0 && total <= 9007199254740991;
+    final model = runtimeModelDetails(
+      j['selectedModel'],
+      agentId: j['id'] as String,
+      engine: _safeEngine(j['engine']),
+    );
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
-      name: j['name'] as String? ?? 'agent',
+      name: j['name'] as String? ?? 'harness',
       title: _safeLabel(j['title']),
       engine: _safeEngine(j['engine']),
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
-      modelName: runtimeModelName(
-        j['selectedModel'],
-        agentId: j['id'] as String,
-        engine: _safeEngine(j['engine']),
-      ),
+      modelName: model?.name,
+      modelEffort: model?.effort,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
+      gridBaseUrl: _safeUrl(grid?['baseUrl']),
+      gridState: GridSectionState.parse(grid?['state']),
+      gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
+      gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
+          : null,
+      lastOpenedAt: j['lastOpenedAt'] is String
+          ? DateTime.tryParse(j['lastOpenedAt'] as String)
           : null,
       tokensUsed: validTokens ? total : null,
       tokensUpdatedAt:
@@ -556,44 +622,55 @@ class Agent {
     );
   }
 
-  Agent copyWith({String? name, String? status, bool? terminalAvailable}) =>
-      Agent(
-        id: id,
-        sessionId: sessionId,
-        name: name ?? this.name,
-        title: title,
-        engine: engine,
-        engineDisplayName: engineDisplayName,
-        engineIconHint: engineIconHint,
-        codexHome: codexHome,
-        modelName: modelName,
-        gridModel: gridModel,
-        gridWebSearch: gridWebSearch,
-        parentAgentId: parentAgentId,
-        project: project,
-        lastActivityAt: lastActivityAt,
-        tokensUsed: tokensUsed,
-        tokensUpdatedAt: tokensUpdatedAt,
-        outputStats: outputStats,
-        status: status ?? this.status,
-        launchState: launchState,
-        launchError: launchError,
-        launchDetail: launchDetail,
-        terminalAvailable: terminalAvailable ?? this.terminalAvailable,
-        terminalUnavailableReason: terminalUnavailableReason,
-        dsh: dsh,
-        dshName: dshName,
-        viewerUrl: viewerUrl,
-        viewerError: viewerError,
-        viewerName: viewerName,
-        verdict: verdict,
-        forkedFrom: forkedFrom,
-        forkable: forkable,
-        resumeMode: resumeMode,
-        permissionMode: permissionMode,
-        bypassPermission: bypassPermission,
-        namedAgent: namedAgent,
-      );
+  Agent copyWith({
+    String? name,
+    AgentGitContext? gitContext,
+    String? status,
+    bool? terminalAvailable,
+    DateTime? lastOpenedAt,
+  }) => Agent(
+    id: id,
+    sessionId: sessionId,
+    name: name ?? this.name,
+    title: title,
+    engine: engine,
+    engineDisplayName: engineDisplayName,
+    engineIconHint: engineIconHint,
+    codexHome: codexHome,
+    modelName: modelName,
+    modelEffort: modelEffort,
+    gridModel: gridModel,
+    gridWebSearch: gridWebSearch,
+    gridBaseUrl: gridBaseUrl,
+    gridState: gridState,
+    gridNote: gridNote,
+    parentAgentId: parentAgentId,
+    project: project,
+    gitContext: gitContext ?? this.gitContext,
+    lastActivityAt: lastActivityAt,
+    lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
+    tokensUsed: tokensUsed,
+    tokensUpdatedAt: tokensUpdatedAt,
+    outputStats: outputStats,
+    status: status ?? this.status,
+    launchState: launchState,
+    launchError: launchError,
+    launchDetail: launchDetail,
+    terminalAvailable: terminalAvailable ?? this.terminalAvailable,
+    terminalUnavailableReason: terminalUnavailableReason,
+    dsh: dsh,
+    dshName: dshName,
+    viewerUrl: viewerUrl,
+    viewerError: viewerError,
+    viewerName: viewerName,
+    verdict: verdict,
+    forkedFrom: forkedFrom,
+    forkable: forkable,
+    resumeMode: resumeMode,
+    permissionMode: permissionMode,
+    bypassPermission: bypassPermission,
+    namedAgent: namedAgent,
+  );
 
   /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
   /// one word. Not checked against this build's own list — the daemon that
@@ -651,6 +728,14 @@ class Agent {
       return null;
     }
     return raw;
+  }
+
+  static String? _safeUrl(Object? raw) {
+    if (raw is! String || raw.isEmpty || raw.length > 2048) return null;
+    final uri = Uri.tryParse(raw);
+    return uri != null && (uri.scheme == 'https' || uri.scheme == 'http')
+        ? raw
+        : null;
   }
 
   static String? _safeLabel(Object? raw) {
@@ -1048,7 +1133,104 @@ class GridModel {
   /// sends only the own grid's list, which the retarget then targets as it always did.
   final String? grid;
 
-  const GridModel({required this.id, required this.node, this.grid});
+  /// Set when every computer serving this row seems offline — see [GridModelUnavailable]. Null
+  /// for every other row, and always from a daemon that predates it.
+  final GridModelUnavailable? unavailable;
+
+  const GridModel({
+    required this.id,
+    required this.node,
+    this.grid,
+    this.unavailable,
+  });
+}
+
+/// Why a listed model will not answer, as the daemon labels a row (`unavailable`, sent only to a
+/// client that asked with `rowState: true`).
+///
+/// Only `offline` is a reason this build knows: every computer serving the row read offline twice,
+/// a minute apart. The row is labelled, never removed — the daemon may be wrong about a computer
+/// that is merely asleep, and a move onto it is the person's call. A reason this build has not
+/// heard of is no claim at all, the rule [GridSectionState] follows.
+class GridModelUnavailable {
+  /// The computer's name as the Machines list shows it.
+  final String machine;
+
+  /// When it was first read offline, or null when the daemon did not say.
+  final DateTime? since;
+
+  const GridModelUnavailable({required this.machine, this.since});
+
+  static GridModelUnavailable? fromWire(Object? raw) {
+    if (raw is! Map || raw['reason'] != 'offline') return null;
+    final machine = Agent._safeLabel(raw['machine']);
+    if (machine == null) return null;
+    final since = raw['since'];
+    return GridModelUnavailable(
+      machine: machine,
+      since: since is String ? DateTime.tryParse(since) : null,
+    );
+  }
+}
+
+/// What came of the last explicit wake of a section that did not end in models (`wakeOutcome`).
+///
+/// A wake that shows models leaves nothing — the section is simply awake with them. The daemon
+/// keeps an outcome until a later read finds the section awake with a model, or ten minutes pass.
+enum GridWakeOutcome {
+  /// The section could not be started; it will start on the next message.
+  notStarted,
+
+  /// It started, and nobody is serving a model on it.
+  nobodyServing;
+
+  static GridWakeOutcome? parse(Object? raw) => switch (raw) {
+    'not_started' => GridWakeOutcome.notStarted,
+    'nobody_serving' => GridWakeOutcome.nobodyServing,
+    _ => null,
+  };
+}
+
+/// Why an agent's model will not answer right now, as the daemon notes it on the agent's frame
+/// (`grid.note`): [GridNoteOffline] or [GridNoteNotServed].
+///
+/// Absent when there is nothing to say; the daemon re-pushes the agent when it clears, and never
+/// notes an agent on Auto (no model).
+sealed class GridNote {
+  /// The model the agent is on, as the daemon named it in the note.
+  final String model;
+
+  const GridNote(this.model);
+
+  /// Read defensively: a reason this build does not know, or a note missing the names its
+  /// sentence needs, is no note at all.
+  static GridNote? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final model = Agent._safeLabel(raw['model']);
+    if (model == null) return null;
+    final machine = Agent._safeLabel(raw['machine']);
+    return switch (raw['reason']) {
+      'not_served' => GridNoteNotServed(model),
+      'offline' when machine != null => GridNoteOffline(
+        model,
+        machine: machine,
+      ),
+      _ => null,
+    };
+  }
+}
+
+/// Every computer serving the agent's model seems offline.
+final class GridNoteOffline extends GridNote {
+  /// The computer, as the Machines list names it.
+  final String machine;
+
+  const GridNoteOffline(super.model, {required this.machine});
+}
+
+/// The latest list (an awake read, or the sleep record) no longer has the agent's model.
+final class GridNoteNotServed extends GridNote {
+  const GridNoteNotServed(super.model);
 }
 
 /// Which `grid` a machine would run, as its daemon reports beside the model list (`gridCli`).
@@ -1090,6 +1272,10 @@ enum GridSectionState {
     'unknown' => GridSectionState.unknown,
     _ => null,
   };
+
+  /// Asleep, or on its way up: a message sent now waits for it to start.
+  bool get resting =>
+      this == GridSectionState.asleep || this == GridSectionState.waking;
 }
 
 /// The picker's whole answer: which grid was asked, and what it offers.
@@ -1102,7 +1288,7 @@ class GridSection {
   final List<GridModel> models;
 
   /// How the grid answered the daemon's last look — see [GridSectionState]. Null from an older
-  /// daemon, and nothing here draws it yet.
+  /// daemon, which draws the section as it always was.
   final GridSectionState? state;
 
   /// When the grid was last seen awake, or null.
@@ -1111,6 +1297,10 @@ class GridSection {
   /// How old [models] is, in seconds, or null when nothing is known.
   final int? lastKnownAge;
 
+  /// What came of the last explicit wake that showed no models — see [GridWakeOutcome]. Null
+  /// otherwise, and always from a daemon that predates it.
+  final GridWakeOutcome? wakeOutcome;
+
   const GridSection({
     required this.name,
     required this.own,
@@ -1118,6 +1308,7 @@ class GridSection {
     this.state,
     this.seenAt,
     this.lastKnownAge,
+    this.wakeOutcome,
   });
 }
 
@@ -1174,6 +1365,7 @@ class GridModels {
                 id: m['id'] is String ? m['id'] as String : '',
                 node: m['node'] is String ? m['node'] as String : '',
                 grid: grid,
+                unavailable: GridModelUnavailable.fromWire(m['unavailable']),
               ),
             )
             .where((m) => m.id.isNotEmpty)
@@ -1195,6 +1387,7 @@ class GridModels {
             lastKnownAge: known is num && known.isFinite && known >= 0
                 ? known.round()
                 : null,
+            wakeOutcome: GridWakeOutcome.parse(g['wakeOutcome']),
           );
         })
         .toList();

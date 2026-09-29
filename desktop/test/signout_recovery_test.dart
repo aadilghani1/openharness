@@ -16,6 +16,7 @@ import 'package:harness/terminal/terminal_session.dart';
 
 import 'support/real_fonts.dart';
 import 'swarm_state_test.dart' show MemoryStore;
+import 'support/guest_app.dart';
 
 class SignOutFixture extends CliLogin {
   final attempts = <Completer<void>>[];
@@ -28,7 +29,7 @@ class SignOutFixture extends CliLogin {
   }
 
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl}) async {
+  Future<void> login({required void Function(String) onAuthorizeUrl, SignInQrListener? qr}) async {
     logins++;
     throw StateError('Fixture login stopped before any external work.');
   }
@@ -58,21 +59,21 @@ Widget signOutHost(
   );
 }
 
-AppNotifier signOutApp(SignOutFixture cli, {bool local = false}) => AppNotifier(
-  config: AppConfig.dev,
-  configStore: null,
-  authSession: AuthSession(storage: MemoryStore()),
-  cliLogin: cli,
-  localManualFixture: local
-      ? const LocalManualFixture(
-          apiBaseUrl: 'http://127.0.0.1:1',
-          apiKey: 'fixture',
-          machineId: 'fixture',
-          machineName: 'Fixture',
-          setupToken: 'fixture',
-        )
-      : null,
-)..status = AppStatus.authenticated;
+GuestTestApp signOutApp(SignOutFixture cli, {bool local = false}) =>
+    GuestTestApp(
+      config: AppConfig.dev,
+      configStore: null,
+      authSession: AuthSession(storage: MemoryStore()),
+      cliLogin: cli,
+      localManualFixture: local
+          ? const LocalManualFixture(
+              apiBaseUrl: 'http://127.0.0.1:1',
+              apiKey: 'fixture',
+              machineId: 'fixture',
+              machineName: 'Fixture',
+            )
+          : null,
+    )..status = AppStatus.authenticated;
 
 void main() {
   setUpAll(() async {
@@ -98,7 +99,8 @@ void main() {
       cli.attempts.single.complete();
       await first;
       await second;
-      expect(app.status, AppStatus.unauthenticated);
+      expect(app.status, AppStatus.authenticated);
+      expect(app.isGuest, isTrue);
       await app.login();
       expect(cli.logins, 1);
     },
@@ -112,7 +114,21 @@ void main() {
       addTearDown(app.dispose);
       await app.logout();
       expect(cli.attempts, isEmpty);
+      expect(app.daemonGates, 0);
       expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  test(
+    'expiry of a development fixture never starts the real daemon',
+    () async {
+      final app = signOutApp(SignOutFixture(), local: true);
+      addTearDown(app.dispose);
+      app.expireSessionForTest('Fixture expired.');
+      await Future<void>.delayed(Duration.zero);
+      expect(app.daemonGates, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.sessionExpired, isTrue);
     },
   );
 

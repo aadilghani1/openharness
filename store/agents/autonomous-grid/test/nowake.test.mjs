@@ -3,7 +3,7 @@
 // the last reading on screen, and a hidden page stops listening.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -12,37 +12,10 @@ import { assemble, createCollector } from '../lib/telemetry.mjs';
 import { initializeWorkspace } from '../lib/connect.mjs';
 import { createViewer } from '../viewer.mjs';
 import { config, device, reads, remoteNodes } from './fixtures.mjs';
+import { awakeVerbs, fakeGrid, logged, READS, verbOf } from './fakes.mjs';
 
 const temporary = async t => { const dir=await mkdtemp(join(tmpdir(),'grid-nowake-'));t.after(()=>rm(dir,{recursive:true,force:true}));return dir; };
-const READS = ['engines','models','stats'];
 const asleepEnvelope = JSON.stringify({error:{code:'grid_asleep',message:'Grid test-grid is asleep: this grid is resting',status:503}});
-
-/** A fake `grid` of one version, answering each verb from `verbs` and logging every argv it saw. An
- *  "old" one refuses `--no-wake` exactly as argparse does: a usage line on stderr and exit 2. */
-async function fakeGrid(dir, name, { rejectsNoWake = false, verbs = {} }, log) {
-  const file = join(dir, name), plan = join(dir, `${name}.json`);
-  await writeFile(plan, JSON.stringify({ rejectsNoWake, verbs }));
-  await writeFile(file, `#!/usr/bin/env node
-const fs=require('fs');const plan=JSON.parse(fs.readFileSync(${JSON.stringify(plan)},'utf8'));
-const argv=process.argv.slice(2);const log=${JSON.stringify(log)};
-fs.appendFileSync(log,JSON.stringify({binary:${JSON.stringify(name)},argv})+'\\n');
-if(plan.rejectsNoWake&&argv.includes('--no-wake')){process.stderr.write('usage: grid [-h] [--remote | --local] {models,engines,stats,info} ...\\ngrid: error: unrecognized arguments: --no-wake\\n');process.exit(2);}
-const verb=argv.find(a=>!a.startsWith('-'))||'';const turn=plan.verbs[verb];
-if(!turn){process.stdout.write('[]');process.exit(0);}
-if(turn.stdout!==undefined)process.stdout.write(typeof turn.stdout==='string'?turn.stdout:JSON.stringify(turn.stdout));
-if(turn.stderr)process.stderr.write(turn.stderr);process.exit(turn.exit??0);
-`, { mode: 0o755 });
-  return file;
-}
-const awakeVerbs = {
-  use:{stdout:{mode:'remote',active:'test-grid'}}, ls:{stdout:[{grid:'test-grid',type:'permissioned-public'}]},
-  info:{stdout:{grid:'test-grid',type:'permissioned-public',status:'running',grid_url:'https://relay.example'}},
-  engines:{stdout:remoteNodes}, models:{stdout:reads.models.value}, stats:{stdout:reads.stats.value}, 'device-info':{stdout:device},
-};
-// One line per call, APPENDED: the viewer runs several \`grid\` reads at once, and a read-modify-write of
-// one JSON document crashed a fake that caught it half written — which read as the grid being down.
-const logged = async log => (await readFile(log,'utf8').catch(()=>'')).split('\n').filter(Boolean).map(line=>JSON.parse(line));
-const verbOf = argv => argv.find(a=>!a.startsWith('-'));
 
 test('gridJson carries the refusal code a program branches on, and tells an old grid from a failure',async t=>{
   const dir=await temporary(t),log=join(dir,'calls.json');
@@ -75,9 +48,11 @@ test('a grid too old for --no-wake leaves the last reading, stale, and is never 
   assert.equal(first.nodes.length,earlier.nodes.length);assert.ok(first.nodes.every(n=>n.stale));
   assert.match(first.notice,/^Test workstation is being updated — showing the reading from \d{2}:\d{2}$/);
   assert.equal(first.readingFrom,'2026-09-24T08:05:00Z');
+  assert.equal(first.sources.stats,undefined,'the refused read is told once, as the notice — not beside it as a raw usage line');
+  assert.equal(first.sources.engines?.error,first.notice);
   assert.ok(!first.events.some(e=>e.kind==='offline'));
   const firstCalls=(await logged(log)).filter(c=>READS.includes(verbOf(c.argv)));
-  assert.deepEqual(firstCalls.map(c=>verbOf(c.argv)),['engines'],'one refused read, then nothing — no retry and no models/stats');
+  assert.deepEqual(firstCalls.map(c=>verbOf(c.argv)),['stats'],'one refused read, then nothing — no retry and no engines/models');
 
   process.env.HARNESS_GRID_BIN=current;
   const second=await collect();
@@ -123,10 +98,10 @@ test('the first reading after a sleep does not call a node that has not rejoined
   assert.ok(!woken.events.some(e=>e.kind==='offline'),'a cold wake is not every other engine leaving');
 });
 
-test('a member grid is asleep when engines answers grid_asleep, and models and stats are skipped',async t=>{
+test('a member grid is asleep when its first grid read answers grid_asleep, and nothing else is asked',async t=>{
   const dir=await temporary(t),log=join(dir,'calls.json');
   const verbs={...awakeVerbs,info:{stdout:{grid:'test-grid',type:'domain-restricted',status:null,grid_url:'https://relay.example'}},
-    engines:{stderr:`${asleepEnvelope}\nGrid test-grid is asleep: this grid is resting\n`,exit:1}};
+    stats:{stderr:`${asleepEnvelope}\nGrid test-grid is asleep: this grid is resting\n`,exit:1}};
   const binary=await fakeGrid(dir,'grid-0.3.49',{verbs},log);
   const workspace=join(dir,'ws');await atomicJson(join(workspace,'grid-fleet.json'),{...config,machines:[{...config.machines[0],gridBinary:binary}]});
   const earlier=assemble(config,reads,null,'2026-09-24T08:05:00Z');
@@ -135,9 +110,9 @@ test('a member grid is asleep when engines answers grid_asleep, and models and s
   assert.equal(snapshot.status,'asleep');assert.equal(snapshot.pollIntervalMs,30_000);
   assert.ok(snapshot.nodes.length>0&&snapshot.nodes.every(n=>n.stale));
   assert.ok(!snapshot.events.some(e=>e.kind==='offline'));
-  assert.equal(snapshot.sources.engines?.ok,true,'asleep is an answer, not a failed read');
+  assert.equal(snapshot.sources.stats?.ok,true,'asleep is an answer, not a failed read');
   const read=(await logged(log)).map(c=>c.argv).filter(a=>READS.includes(verbOf(a)));
-  assert.deepEqual(read,[['--remote','engines','test-grid','--no-wake','--json']]);
+  assert.deepEqual(read,[['--remote','stats','test-grid','--no-wake','--json']]);
 });
 
 test('the viewer books its next read 30 s out while the grid is asleep, and at its own interval otherwise',async t=>{

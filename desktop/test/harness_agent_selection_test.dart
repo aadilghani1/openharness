@@ -204,7 +204,7 @@ void main() {
     expect(box.query, isEmpty);
     expect(box.advancedOpen, isFalse);
     box.setFolder('/work/custom');
-    choose(box, NewHarnessField.harness, NewHarnessController.codingId);
+    choose(box, NewHarnessField.harness, 'codex');
     expect(box.project.folder, '/work/custom');
   });
 
@@ -603,7 +603,7 @@ void main() {
         folder: '/work/scene',
       );
       addTearDown(box.dispose);
-      choose(box, NewHarnessField.harness, NewHarnessController.codingId);
+      choose(box, NewHarnessField.harness, 'codex');
       expect(box.harnessId, isNull);
       box.focusField(NewHarnessField.agent);
       expect(box.options.any((row) => row.id == 'opencode'), isTrue);
@@ -676,7 +676,7 @@ void main() {
     ('compact', const Size(600, 720)),
   ]) {
     testWidgets(
-      '$layout form keeps Harness Agent Machine Project visible and expands Advanced inline',
+      '$layout form keeps Options collapsed and chooses a specialized agent inline',
       (tester) async {
         final renderDir = Platform.environment['HARNESS_LAUNCH_RENDER_DIR'];
         if (renderDir != null) await tester.runAsync(loadPreviewFonts);
@@ -708,7 +708,7 @@ void main() {
                     controller: box,
                     onClose: () {},
                     onCreated: () {},
-                    onNeedsForm: () => fail('Advanced must stay inline'),
+                    onNeedsForm: () => fail('Settings must stay inline'),
                   ),
                 ),
               ),
@@ -716,14 +716,7 @@ void main() {
           ),
         );
         await tester.pump();
-        for (final row in [
-          'harness',
-          'agent',
-          'model',
-          'machine',
-          'project',
-          'branch',
-        ]) {
+        for (final row in ['agent', 'project']) {
           expect(
             find.byKey(ValueKey('new-harness-field-$row')).hitTestable(),
             findsOneWidget,
@@ -733,11 +726,14 @@ void main() {
           find.byKey(const ValueKey('new-harness-field-worktree')),
           findsNothing,
         );
-        await tester.tap(
-          find.byKey(const ValueKey('new-harness-field-harness')),
-        );
+        await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
         await tester.pump();
-        expect(find.text('Browse Harness Store…'), findsOneWidget);
+        expect(
+          box.options.any(
+            (option) => option.id == NewHarnessController.storeId,
+          ),
+          isTrue,
+        );
         if (renderDir != null) {
           await expectLater(
             find.byType(MaterialApp),
@@ -746,15 +742,17 @@ void main() {
             ),
           );
         }
-        await openLaunchRow(tester, 'agent');
+        await typeHarnessQuery(tester, 'Blender');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
-        expect(find.text('Browse Harness Store…'), findsNothing);
+        expect(find.text('Browse Harness Store'), findsNothing);
         expect(box.options.map((row) => row.id).toSet(), {'codex', 'claude'});
-        await openLaunchRow(tester, 'advanced');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
+        await openLaunchRow(tester, 'advanced');
         expect(
           find.byKey(const ValueKey('new-harness-field-machine')),
-          findsOneWidget,
+          findsNothing,
         );
         expect(
           find.byKey(const ValueKey('new-harness-field-approvals')),

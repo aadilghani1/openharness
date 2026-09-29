@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -278,7 +279,7 @@ void main() {
       var rows = cache.read(app, []);
       expect(
         rows.singleWhere((row) => row.isSwarm).detail,
-        'Tab · 2 harnesses · 1 project · 2 machines',
+        'Swarm · 2 harnesses · 1 project · 2 machines',
       );
       expect(rows.where((row) => row.agentId == 'a0'), hasLength(2));
       expect(rows.singleWhere((row) => row.isSwarm).title, 'Release work');
@@ -286,7 +287,7 @@ void main() {
       rows = cache.read(app, []);
       expect(
         rows.singleWhere((row) => row.isSwarm).detail,
-        'Tab · 3 harnesses · 2 projects · 2 machines',
+        'Swarm · 3 harnesses · 2 projects · 2 machines',
       );
 
       app.newSwarm();
@@ -334,11 +335,11 @@ void main() {
       final cache = SwarmSearchCatalog();
       expect(
         cache.read(app, projects).singleWhere((row) => row.isSwarm).detail,
-        'Tab · 2 harnesses · 1 project · 1 machine',
+        'Swarm · 2 harnesses · 1 project · 1 machine',
       );
       expect(
         cache.read(app, []).singleWhere((row) => row.isSwarm).detail,
-        'Tab · 2 harnesses · 1 machine',
+        'Swarm · 2 harnesses · 1 machine',
       );
     },
   );
@@ -364,8 +365,8 @@ void main() {
   testWidgets(
     'Cmd O renders one harness result and opens it from a tab-name alias',
     (tester) async {
-      final app = createApp();
-      final machine = app.machineStates['m']!..nodeOnline = true;
+      final app = createApp(connected: true);
+      final machine = app.machineStates['m']!;
       machine.agents = const [
         Agent(
           id: 'a0',

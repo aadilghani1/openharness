@@ -256,22 +256,24 @@ void main() {
   testWidgets(
     'observed subscription model updates live and advertises local switching on hover',
     (tester) async {
-      Future<void> mount(String? model, {String? local}) => tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: GridModelPicker(
-                notifier: notifier,
-                machineId: 'local',
-                engineLabel: 'codex',
-                subscriptionModel: model,
-                currentModel: local,
-                paneHeader: true,
+      Future<void> mount(String? model, {String? local, String? effort}) =>
+          tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: GridModelPicker(
+                    notifier: notifier,
+                    machineId: 'local',
+                    engineLabel: 'codex',
+                    subscriptionModel: model,
+                    subscriptionEffort: effort,
+                    currentModel: local,
+                    paneHeader: true,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      );
+          );
       await mount('GPT-6 Astra');
       expect(find.text('GPT-6 Astra'), findsOneWidget);
       final hover = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -296,17 +298,22 @@ void main() {
         of: control,
         matching: find.byType(ColoredBox),
       );
-      expect(fill, findsOneWidget);
-      expect(tester.getSize(fill).height, 28);
       expect(
-        tester.widget<ColoredBox>(fill).color,
-        tester
-            .widget<WorkspaceBarControl>(control)
-            .selection
-            .withValues(alpha: .5),
+        fill,
+        findsNothing,
+        reason: 'hover emphasizes text without filling the model control',
       );
+      expect(
+        tester.widget<Text>(find.text('GPT-6 Astra')).style!.fontWeight,
+        FontWeight.bold,
+      );
+      expect(tester.getSize(control).height, 28);
       await hover.moveTo(Offset.zero);
       await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.text('GPT-6 Astra')).style!.fontWeight,
+        FontWeight.normal,
+      );
       await mount('GPT-5.6 Sol');
       expect(find.text('GPT-5.6 Sol'), findsOneWidget);
       expect(find.text('GPT-6 Astra'), findsNothing);
@@ -318,10 +325,16 @@ void main() {
       expect(subscription.selected, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await mount('GPT-5.6 Sol', local: 'Local-Exact-Name');
+      await mount('GPT-5.6 Sol', effort: 'max');
+      expect(find.text('GPT-5.6 Sol · Max'), findsOneWidget);
+      await mount('GPT-5.6 Sol', effort: 'low');
+      expect(find.text('GPT-5.6 Sol · Low'), findsOneWidget);
+      expect(find.text('GPT-5.6 Sol · Max'), findsNothing);
+      await mount('GPT-5.6 Sol', local: 'Local-Exact-Name', effort: 'low');
       expect(find.text('Local-Exact-Name'), findsOneWidget);
+      expect(find.text('Local-Exact-Name · Low'), findsNothing);
       expect(find.text('GPT-5.6 Sol'), findsNothing);
-      await mount(null);
+      await mount(null, effort: 'low');
       expect(find.text('OpenAI'), findsOneWidget);
     },
   );

@@ -22,6 +22,25 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
   per-line array is allocated only once a linked cell is written. Regressions:
   the `OSC 8 hyperlinks` group in `test/terminal_links_test.dart`.
 
+- **Pane-local wheel coordinates** (`lib/src/terminal_view.dart`). Convert the
+  pointer's global position to renderer-local coordinates before constructing
+  alternate-screen mouse-wheel reports. Offset panes otherwise report the
+  wrong cell (often clamped to the bottom/right edge), so a TUI can receive a
+  wheel event over its prompt instead of its scrollable content. Regression:
+  `test/swarm_terminal_scroll_test.dart` checks every four-pane preset, exact
+  emitted coordinates, and normal-buffer history scrolling.
+
+- **Browser accessibility input and editor switching**
+  (`lib/src/ui/custom_text_edit.dart`). The browser's text-input strategy needs
+  an editable semantics node when accessibility is enabled. The custom adapter
+  now publishes its editing value and focus through one such node, while the
+  enclosing `Focus` omits duplicate semantics. That prevents switching between
+  terminal and remote-viewer editors from deactivating the new DOM editor.
+  Read-only surfaces stay read-only; native input uses its existing path.
+  `semanticLabel` lets the viewer reuse the IME adapter. Validation includes
+  the native input regressions and `desktop/scripts/check-workspace.cjs`, which
+  checks actual received terminal bytes and remote viewer input after switching.
+
 - **Linux clipboard and Meta keys leave shell editing intact**
   (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
   `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard

@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -154,6 +155,22 @@ Future<void> _mount(
 }
 
 void main() {
+  Future<void> chooseProject(WidgetTester tester) async {
+    await openLaunchRow(tester, 'agent');
+    await typeHarnessQuery(tester, 'Codex');
+    await key(tester, LogicalKeyboardKey.enter);
+    await openLaunchRow(tester, 'project');
+    await tester.tap(
+      find.byKey(
+        ValueKey('new-harness-option-${NewHarnessController.newProjectId}'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.enter);
+    await typeHarnessQuery(tester, 'first-project');
+    await key(tester, LogicalKeyboardKey.enter);
+  }
+
   setUp(() {
     newHarnessOpensInBox = true;
   });
@@ -170,7 +187,7 @@ void main() {
         addTearDown(journey.dispose);
         await _mount(tester, app, onboarding: journey);
         expect(find.text('Harness like a boss.'), findsOneWidget);
-        expect(find.text('○'), findsNWidgets(3));
+        expect(find.text('○'), findsNothing);
         expect(app.panes, isEmpty);
 
         if (keyboard) {
@@ -182,6 +199,7 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         expect(app.launches, isEmpty);
         expect(journey.completed(OnboardingStep.harnesses), isFalse);
+        await chooseProject(tester);
         if (keyboard) {
           await startHarness(tester);
         } else {
@@ -191,7 +209,7 @@ void main() {
         }
         await tester.pumpAndSettle();
         expect(app.launches, hasLength(1));
-        expect(app.launches.single.project?.isGenerated, isTrue);
+        expect(app.launches.single.project?.folderName, 'first-project');
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byType(TerminalView), findsOneWidget);
         expect(
@@ -219,8 +237,16 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
         expect(find.byType(WorkspaceWelcome), findsOneWidget);
-        expect(find.text('✓'), findsOneWidget);
-        expect(find.text('○'), findsNWidgets(2));
+        expect(find.text('Harness like a boss.'), findsOneWidget);
+        for (final mark in ['✓', '○']) {
+          expect(
+            find.descendant(
+              of: find.byType(WorkspaceWelcome),
+              matching: find.text(mark),
+            ),
+            findsNothing,
+          );
+        }
         expect(app.launches, hasLength(1));
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
@@ -239,6 +265,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     final start = find.byKey(const ValueKey('new-harness-field-start'));
+    await chooseProject(tester);
     await startHarness(tester);
     await tester.pump();
     expect(find.text('Starting harness…'), findsOneWidget);
@@ -260,11 +287,13 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(NewHarnessForm), findsNothing);
-    expect(find.text('○'), findsNWidgets(3));
+    expect(find.text('Harness like a boss.'), findsOneWidget);
+    expect(find.text('○'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pumpAndSettle();
     app.creation = null;
+    await chooseProject(tester);
     await tester.tap(start);
     await tester.pumpAndSettle();
     expect(app.launches, hasLength(2));
@@ -553,7 +582,7 @@ void main() {
             ),
           );
           expect(tester.takeException(), isNull);
-          final tab = find.text('⌘Y  New Tab');
+          final tab = find.text('⌘Y  New Swarm');
           expect(tab, findsOneWidget);
           await tester.tap(tab);
           expect(

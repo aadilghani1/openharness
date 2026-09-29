@@ -105,20 +105,18 @@ describe('local model discovery and lifecycle', () => {
     expect(JSON.stringify(snapshot)).not.toContain('test-only-token')
   })
 
-  it('paginates all compatible models and does not fetch incompatible trailing pages', async () => {
-    request.mockImplementation(async (_url, init) => {
-      const page = JSON.parse(String(init?.body)).page
-      return response({ models: [card(`org/Model${page}-GGUF`)], runnable_total: 2, pagination: { page, total_pages: 7 } })
-    })
+  it('fetches only the first ranked page of popular models, like grid catalog', async () => {
+    request.mockResolvedValue(response({ models: [card('org/Model1-GGUF'), card('org/Model2-GGUF')], pagination: { page: 1, total_pages: 7 } }))
     expect((await service.list('home')).models).toHaveLength(2)
-    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toMatchObject({ browse: true, page: 1, page_size: 50 })
   })
 
-  it('rejects catalog pagination that repeats a page', async () => {
+  it('returns the first page as-is without looping pages or a pagination notice', async () => {
     request.mockResolvedValue(response({ models: [card()], runnable_total: 100, pagination: { page: 1, total_pages: 7 } }))
-    // Fresh Response objects (bodies are single-consumption).
-    request.mockImplementation(async () => response({ models: [card()], runnable_total: 100, pagination: { page: 1, total_pages: 7 } }))
-    expect((await service.list('home')).notice).toContain('incomplete')
+    const snapshot = await service.list('home')
+    expect(snapshot.models).toHaveLength(1)
+    expect(snapshot.notice).toBeFalsy()
   })
 
   it('downloads, loads and verifies without another user step', async () => {
@@ -132,6 +130,34 @@ describe('local model discovery and lifecycle', () => {
     expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
+  })
+
+  // grid-reads-without-waking issue 03: the reply test is an inference THROUGH the grid, so on a sleeping
+  // grid it starts it — and the platform then keeps it up for hours. A stray Start on a model that is
+  // already serving has nothing to check.
+  it('Start on a model already serving at the last read skips the reply test', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models[0].state).toBe('running')
+    request.mockClear(); calls.length = 0
+
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+
+    // Nothing that reads through the grid with its credential: no reply test, no `info --env` for its
+    // key, no signed-in `engines` for the served window — and nothing started.
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(false)
+    expect(calls.filter(args => args.includes('--env') || args.includes('engines') || args.includes('join'))).toEqual([])
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
+  it('Start on a model this computer holds but that was not serving at the last read runs the reply test, as before', async () => {
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'] }], advertise_as: [] }))
+    expect((await service.list('home', true)).models[0].state).not.toBe('running')
+
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+    expect(calls.some(args => args.includes('join'))).toBe(false)
   })
 
   it('uses an already downloaded complete file, and Stop retains it', async () => {
@@ -343,7 +369,7 @@ describe('local model discovery and lifecycle', () => {
   })
 
   it('encrypts inventory and lifecycle requests and responses', () => {
-    for (const type of ['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
+    for (const type of ['grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       expect(encryptDownFrame(type)).toBe(true); expect(encryptRpcResult(`${type}_result`)).toBe(true)
     }
   })
@@ -393,18 +419,14 @@ describe('local model discovery and lifecycle', () => {
     expect(String(request.mock.calls[0][0])).toBe(`${base ?? 'https://api-grid.autonomous.ai'}/v1/grid/catalog`)
   })
 
-  it.each(['http failure', 'missing rows', 'empty intermediate page', 'unbounded pages'])('handles a catalog %s without inventing compatibility', async scenario => {
-    request.mockImplementation(async (_url, init) => {
-      const page = JSON.parse(String(init?.body)).page
-      return scenario === 'http failure' ? new Response('private detail', { status: 401 })
-        : response(scenario === 'missing rows' ? { error: 'private detail' }
-          : { models: scenario === 'empty intermediate page' ? [] : [card()], pagination: { page, total_pages: 101 } })
-    })
+  it.each(['http failure', 'missing rows'])('handles a catalog %s without inventing compatibility', async scenario => {
+    request.mockImplementation(async () =>
+      scenario === 'http failure' ? new Response('private detail', { status: 401 })
+        : response({ error: 'private detail' }))
     const snapshot = await service.list('home')
     expect(snapshot.models).toEqual([])
     expect(snapshot.notice).toBeTruthy()
     expect(JSON.stringify(snapshot)).not.toContain('private detail')
-    expect(request.mock.calls.length).toBeLessThanOrEqual(100)
   })
 
   it('supports an unpaginated catalog, prefers a useful small download, and skips unfitted versions', async () => {
@@ -1060,5 +1082,48 @@ describe("a model is labelled with the machine's name as Harness shows it", () =
     await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
     expect(joined()).not.toContain('--name')
     expect((await named.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+})
+
+
+describe('download without starting', () => {
+  it('stores the weights without waking a grid, installing an engine, or sending a prompt', async () => {
+    gridState = 'asleep'
+    const result = await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(result.operation).toMatchObject({ action: 'download', phase: 'done' })
+    expect(calls.filter(args => args[0] === 'pull')).toHaveLength(1)
+    expect(calls.some(args => args.includes('sync') || args.includes('join') || args.includes('start') || args.includes('install'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(false)
+    expect(gridState).toBe('asleep')
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
+    expect((await service.list('home')).supportsDownload).toBe(true)
+  })
+
+  it('a download request for a running model never runs another reply test', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    calls.length = 0; request.mockClear()
+    const result = await service.act('home', 'org/Small-GGUF', 'download'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(serving).toBe(true)
+    expect(calls.some(args => args.includes('join') || args.includes('pull') || args.includes('sync'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(false)
+  })
+
+  it('keeps failed downloads retryable and starts only after a separate Start', async () => {
+    downloadFails = true
+    const first = await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(first.operation?.phase).toBe('failed')
+    expect(serving).toBe(false)
+    downloadFails = false
+    await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(serving).toBe(false)
+    const pulls = calls.filter(args => args[0] === 'pull').length
+    await service.act('home', 'org/Small-GGUF', 'start')
+    await service.settled()
+    expect(serving).toBe(true)
+    expect(calls.filter(args => args[0] === 'pull')).toHaveLength(pulls)
   })
 })

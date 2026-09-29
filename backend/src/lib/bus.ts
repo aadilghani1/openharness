@@ -288,12 +288,28 @@ export async function setAgentPresence(machineId: string, managerId: string, ttl
 }
 
 export async function getAgentPresence(machineId: string): Promise<string | null> {
+  return (await presenceValue(machineId)) ?? null
+}
+
+/** The presence key's value, or undefined when the store could not be read (logged). */
+async function presenceValue(machineId: string): Promise<string | null | undefined> {
   try {
     return await pub.get(presenceKey(machineId))
   } catch (err) {
-    logger.error('[bus] getAgentPresence failed', err, { machineId })
-    return null
+    logger.error('[bus] presence read failed', err, { machineId })
+    return undefined
   }
+}
+
+/**
+ * Whether the machine's daemon is connected: true present, false absent — and null when the presence store
+ * could not be READ, which [getAgentPresence] folds into "absent". A reader that turns absence into a
+ * verdict (the machine list's `offline`, which a daemon labels models "seems offline" by) must not also
+ * turn an outage of this store into one.
+ */
+export async function readAgentPresence(machineId: string): Promise<boolean | null> {
+  const value = await presenceValue(machineId)
+  return value === undefined ? null : !!value
 }
 
 /** One MGET for a whole machine list (the watchers seed N machines at once). Missing/failed → null. */
@@ -558,6 +574,22 @@ export async function consumeNewIdQuota(kind: NewIdKind, userId: string): Promis
   }
 }
 
+/**
+ * A plain fixed-window limiter: at most [limit] calls per [windowSec] for [key]. Fails OPEN — a Redis
+ * blip must not lock people out of signing in — and says so in the log.
+ */
+export async function consumeRateLimit(key: string, limit: number, windowSec: number): Promise<boolean> {
+  if (limit <= 0) return true
+  try {
+    const k = `rl:${key}:${Math.floor(Date.now() / 1000 / windowSec)}`
+    const [[, n]] = (await pub.multi().incr(k).expire(k, windowSec).exec()) as [[unknown, number], [unknown, number]]
+    return n <= limit
+  } catch (err) {
+    logger.error('[bus] consumeRateLimit failed — allowing', err, { key })
+    return true
+  }
+}
+
 // ── device presence (is a paired device's socket currently connected?) ─────────────────────────────
 // One key PER DEVICE (`device:{deviceId}:conn`) — a user with many devices has one independent key,
 // refresh loop and supersede scope per device. The VALUE is the connection's own token so that when
@@ -650,6 +682,35 @@ export function publishDeskChanged(userId: string, msg: DeskChangedMsg): Promise
 
 export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) => void): Promise<() => void> {
   return addSub(deskChannel(userId), cb as Cb)
+}
+
+// Per-USER trust-group invalidation: a member was vouched for or removed on the account's group board
+// (routes/groupBoard.ts). Every device of the account re-reads the board and syncs: a hint only — what a
+// device believes comes from the signatures on the board, never from this frame.
+export interface GroupChangedMsg { revision: number }
+
+const groupChannel = (userId: string): string => `group:${userId}`
+
+export function publishGroupChanged(userId: string, msg: GroupChangedMsg): Promise<number> {
+  return safePublish(groupChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeGroupChanged(userId: string, cb: (msg: GroupChangedMsg) => void): Promise<() => void> {
+  return addSub(groupChannel(userId), cb as Cb)
+}
+
+// Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as
+// the desk and a separate channel, so a desk change never re-fetches the zoo and the other way round.
+export interface ZooChangedMsg { revision: number }
+
+const zooChannel = (userId: string): string => `zoo:${userId}`
+
+export function publishZooChanged(userId: string, msg: ZooChangedMsg): Promise<number> {
+  return safePublish(zooChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeZooChanged(userId: string, cb: (msg: ZooChangedMsg) => void): Promise<() => void> {
+  return addSub(zooChannel(userId), cb as Cb)
 }
 
 export interface DeviceE2eePairMsg {

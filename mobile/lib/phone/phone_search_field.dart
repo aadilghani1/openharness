@@ -4,19 +4,13 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'composing_keyboard.dart';
-import 'phone_search_controller.dart';
 
-/// The search page's whole header: one bar, with the way out inside it.
+/// A field over a list it filters — the All harnesses page and the branch picker: one rimmed bar,
+/// the rim lit while it has the keyboard, and a clear button once there is something to clear.
 ///
-/// Drawn here rather than through [PhoneHeader]: the page has no title. The
-/// field IS the header, because nothing else on the screen is worth the 32pt
-/// line a large title would take from the results.
-///
-/// The way back is a chevron at the bar's leading edge rather than a "Cancel"
-/// beside it. The word cost the field a fifth of the screen's width to say what
-/// the edge swipe, Android's back button and the chevron every other page wears
-/// already say; the chevron takes the place of the magnifier, which the hint
-/// text made redundant.
+/// ⚠️ **It never takes the keyboard on the way in.** Both lists are worth reading before anything
+/// is typed — most repositories have a handful of branches and the answer is on screen already —
+/// and a keyboard raised as the page appears would bury half of what the person opened it to see.
 class PhoneSearchField extends StatelessWidget {
   const PhoneSearchField({
     super.key,
@@ -24,9 +18,7 @@ class PhoneSearchField extends StatelessWidget {
     required this.focus,
     required this.onChanged,
     required this.onClear,
-    this.onBack,
-    this.autofocus = true,
-    this.hintText = kPhoneSearchHint,
+    required this.hintText,
   });
 
   final TextEditingController controller;
@@ -34,26 +26,7 @@ class PhoneSearchField extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
-  /// The chevron inside the bar. Null leaves it out, for a field that is not the
-  /// page's whole header — [AgentsListPage] has a [PhoneHeader] of its own above
-  /// it, whose back band is the way out, and a second chevron under the first
-  /// would be two ways back stacked one over the other.
-  final VoidCallback? onBack;
-
-  /// Whether the field takes the keyboard as it appears.
-  ///
-  /// True on [PhoneSearchPage], which exists only to be typed into. False where
-  /// the field sits over a list worth reading first: raising the keyboard there
-  /// would bury half of what the person opened the screen to look at.
-  final bool autofocus;
-
-  /// What the empty field says it can do.
-  ///
-  /// ⚠️ **It names all four kinds, and that is the point.** It used to read
-  /// "Search agents", which was true and was also the whole reason nobody on the
-  /// phone knew that `>`, `#`, `@` and `?` existed — the desktop teaches its
-  /// modes here and only here. The controller narrows it once a mode is open
-  /// ("Search projects…"), so the long form is only ever read on an empty box.
+  /// What the empty field says it searches.
   final String hintText;
 
   @override
@@ -87,18 +60,12 @@ class PhoneSearchField extends StatelessWidget {
         ),
         child: Row(
           children: [
-            if (onBack != null)
-              _BackButton(onTap: onBack!)
-            else
-              // The chevron's place, so the text starts on the same vertical
-              // whether or not the bar carries one.
-              const SizedBox(width: 14),
+            const SizedBox(width: 14),
             Expanded(
               child: _QueryInput(
                 controller: controller,
                 focus: focus,
                 onChanged: onChanged,
-                autofocus: autofocus,
                 hintText: hintText,
               ),
             ),
@@ -110,49 +77,17 @@ class PhoneSearchField extends StatelessWidget {
   }
 }
 
-/// The bar's full height and a thumb's width, not the glyph's: the chevron sits
-/// against the bar's rounded edge, where a miss is the easiest to make.
-class _BackButton extends StatelessWidget {
-  const _BackButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: 'Back',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: SizedBox(
-          width: 40,
-          height: 44,
-          child: Icon(
-            LucideIcons.chevronLeft300,
-            size: 22,
-            color: AppPalette.textPrimary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _QueryInput extends StatelessWidget {
   const _QueryInput({
     required this.controller,
     required this.focus,
     required this.onChanged,
-    required this.autofocus,
     required this.hintText,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onChanged;
-  final bool autofocus;
   final String hintText;
 
   @override
@@ -161,7 +96,6 @@ class _QueryInput extends StatelessWidget {
     return TextField(
       controller: controller,
       focusNode: focus,
-      autofocus: autofocus,
       onChanged: onChanged,
       // The list is already filtered by the time a key is released; there is
       // nothing left for the return key to submit, so it stays a plain "done"
@@ -179,10 +113,20 @@ class _QueryInput extends StatelessWidget {
       // — and a capital forced onto the first letter of one is a wrong query.
       textCapitalization: TextCapitalization.none,
       // With the decoration's padding zeroed below, the field is exactly one line
-      // tall inside a 44pt box; this is what centres that line on the chevron
-      // beside it instead of letting it sit on the box's top edge.
+      // tall inside its 44pt box; this is what centres that line in the box
+      // instead of letting it sit on the box's top edge.
       textAlignVertical: TextAlignVertical.center,
-      style: TextStyle(color: AppPalette.textPrimary, fontSize: 16),
+      // ⚠️ The face the placeholder and every row under it are in — the terminal's. Left to
+      // TextField, what is typed took the theme's sans and the query changed typeface the moment
+      // the first key landed.
+      style: TextStyle(
+        fontFamily: DefaultTextStyle.of(context).style.fontFamily,
+        fontFamilyFallback: DefaultTextStyle.of(context)
+            .style
+            .fontFamilyFallback,
+        color: AppPalette.textPrimary,
+        fontSize: 16,
+      ),
       cursorColor: AppPalette.accentOnSurface,
       decoration: InputDecoration(
         isDense: true,
@@ -201,15 +145,15 @@ class _QueryInput extends StatelessWidget {
         focusedErrorBorder: InputBorder.none,
         disabledBorder: InputBorder.none,
         // The theme also fills these, and both would draw on top of the box: a
-        // `surfaceContainerHighest` fill over the rim's own, and Material's
-        // phone-sized padding over the 44pt height set above.
+        // `surfaceContainerHighest` fill over the box's own, and Material's
+        // phone-sized padding over the box's height.
         filled: false,
         contentPadding: EdgeInsets.zero,
         constraints: const BoxConstraints(),
         hintText: hintText,
-        // A size down from the query's own 16pt: the hint spells out four modes
-        // and has to survive a 390pt screen without ellipsing the last of them.
-        hintStyle: TextStyle(color: AppPalette.textFaint, fontSize: 13),
+        // A size down from the query's own 16pt. Set when the hint spelled out
+        // four modes on a 390pt screen, and kept.
+        hintStyle: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
       ),
     );
   }

@@ -1,9 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/models.dart';
-import '../models/api_connections_panel.dart';
+import '../core/test_run.dart';
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/keymap.dart';
+import '../models/api_connections_controller.dart'
+    show ApiModels, contextWindowLabel;
 import '../models/model_search_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -14,25 +19,30 @@ import '../state/swarm_search.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
-import 'link_machine_dialog.dart';
-import 'link_machine_screen.dart';
-import 'machine_actions.dart';
-import 'machines_manager.dart' show showMachineRenameDialog;
-import 'link_another_machine_dialog.dart';
+import 'machine_picker_form.dart';
+import 'api_picker_form.dart';
 import 'swarm_search_preview.dart';
 import 'swarm_preview_scroll.dart';
+import 'terminal_text_action.dart';
+import 'key_hints.dart';
 
 const resourcePickerCommands = {
   'picker.resource_toggle',
   'picker.resource_more',
   'picker.resource_rename',
   'picker.resource_settings',
+  'picker.resource_connect',
   'picker.resource_link',
   'picker.resource_add_api',
   'picker.resource_remove',
   'picker.resource_filter',
   'picker.resource_sort',
   'picker.refresh',
+  'picker.model_download',
+  'picker.model_start',
+  'picker.model_stop',
+  'picker.machine_app',
+  'picker.machine_cli',
 };
 
 /// Shortcuts act on the current result without moving focus out of search.
@@ -59,7 +69,7 @@ class _ResourceAction {
   final String? hint;
 }
 
-/// A read-only preview; named commands operate on the selected resource.
+/// Resource details and management share the picker’s keyboard and selection.
 /// All mutations use their existing controllers and account/session checks.
 class SwarmResourcePreview extends StatefulWidget {
   const SwarmResourcePreview({
@@ -68,7 +78,6 @@ class SwarmResourcePreview extends StatefulWidget {
     required this.controls,
     required this.onChoose,
     required this.onRefocus,
-    required this.onManageModels,
     required this.onModalChanged,
     required this.onCommands,
   });
@@ -76,7 +85,6 @@ class SwarmResourcePreview extends StatefulWidget {
   final SearchPreviewControls controls;
   final ValueChanged<SwarmSearchSelection> onChoose;
   final VoidCallback onRefocus;
-  final Future<void> Function() onManageModels;
   final ValueChanged<bool> onModalChanged;
   final VoidCallback onCommands;
 
@@ -91,6 +99,154 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   final _pending = <String>{};
   final _errors = <String, String>{};
   late SwarmPreviewScrollController _scroll;
+  final _actionFocus = FocusNode(debugLabel: 'Resource controls');
+  final _buttonFocus = <String, FocusNode>{};
+  Timer? _resourceTimer;
+  String? _focusedResource;
+  bool _readingResources = false;
+  MachinePickerFormKind? _machineForm;
+  String? _formResource;
+  var _formKey = GlobalKey<MachinePickerFormState>();
+  final _messages = <String, String>{};
+  bool _apiFormOpen = false, _apiRemoving = false;
+  String? _apiResource, _apiConnectionId;
+  var _apiFormKey = GlobalKey<ApiPickerFormState>();
+  bool get _editingApi => _apiFormOpen && _apiResource == row?.id;
+
+  bool get _machineSetup =>
+      row?.isCreate == true && widget.search.isMachineMode;
+  bool get _isManagement =>
+      row?.isMachine == true || row?.isModel == true || _machineSetup;
+  bool get _editingMachine => _machineForm != null && _formResource == row?.id;
+
+  void _editMachine(MachinePickerFormKind kind) {
+    setState(() {
+      _formKey = GlobalKey<MachinePickerFormState>();
+      _machineForm = kind;
+      _formResource = row?.id;
+    });
+  }
+
+  void _closeMachineForm(String? message) {
+    if (!mounted) return;
+    setState(() {
+      if (message != null && row != null) _messages[row!.id] = message;
+      _machineForm = null;
+      _formResource = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusActions();
+    });
+  }
+
+  void _addMachine() {
+    final search = widget.search;
+    search.setQuery('@');
+    final index = search.rows.indexWhere((row) => row.isCreate);
+    if (index >= 0) search.move(index - search.cursor);
+    widget.onRefocus();
+  }
+
+  bool _isOnline(MachineState machine) =>
+      machine.nodeOnline != false &&
+      !machine.needsLink &&
+      machine.connectionStatus == ConnectionStatus.connected;
+
+  /// Scope the picker to this machine's harnesses — the same list Enter on
+  /// a project/machine group opens, so Rename/Delete are not the only doors.
+  void _viewMachine() {
+    final selected = row;
+    if (selected == null || !widget.search.scopeToGroup(selected.id)) return;
+    widget.onRefocus();
+  }
+
+  void _focusActions({bool last = false}) {
+    final selectedId = row?.id;
+    if (selectedId == null) return;
+    void focus() {
+      if (!mounted || row?.id != selectedId) return;
+      final actions = _visibleActions()
+          .where((a) => a.onPressed != null)
+          .toList();
+      final action = last ? actions.lastOrNull : actions.firstOrNull;
+      final node = action == null ? _actionFocus : _buttonFocus[action.command];
+      (node ?? _actionFocus).requestFocus();
+      if (node?.context case final context?) Scrollable.ensureVisible(context);
+    }
+
+    if (widget.search.hasPreview) {
+      focus();
+    } else {
+      widget.search.togglePreview();
+      WidgetsBinding.instance.addPostFrameCallback((_) => focus());
+    }
+  }
+
+  bool _traverseActions(bool forward, {bool stay = false}) {
+    if (row == null ||
+        widget.search.showsTypeHints ||
+        !widget.search.supportsPreview) {
+      return false;
+    }
+    if (!_actionFocus.hasFocus) {
+      _focusActions(last: !forward);
+      return true;
+    }
+    final actions = _visibleActions()
+        .where((a) => a.onPressed != null)
+        .toList();
+    final index = actions.indexWhere(
+      (a) => _buttonFocus[a.command]?.hasFocus == true,
+    );
+    final next = index < 0
+        ? (forward ? 0 : actions.length - 1)
+        : index + (forward ? 1 : -1);
+    if (next < 0 || next >= actions.length) {
+      if (!stay) widget.onRefocus();
+    } else {
+      final node = _buttonFocus[actions[next].command]!;
+      node.requestFocus();
+      if (node.context case final context?) Scrollable.ensureVisible(context);
+    }
+    return true;
+  }
+
+  void _searchChanged() {
+    if (_apiFormOpen && _apiResource != row?.id) {
+      _apiFormOpen = false;
+      _apiResource = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onRefocus();
+      });
+    }
+    if (_machineForm != null && _formResource != row?.id) {
+      // A click/query change closes the old editor before any later reply.
+      _machineForm = null;
+      _formResource = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onRefocus();
+      });
+    }
+    if (_actionFocus.hasFocus && _focusedResource != row?.id) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onRefocus();
+      });
+    }
+  }
+
+  Future<void> _readResources() async {
+    if (_readingResources ||
+        !widget.search.isMachineMode ||
+        !app.inForeground) {
+      return;
+    }
+    _readingResources = true;
+    try {
+      await widget.search.refreshMachineResources();
+    } finally {
+      _readingResources = false;
+    }
+  }
 
   @override
   void initState() {
@@ -98,6 +254,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     _scroll = _scrollController();
     widget.controls.dispatch = _dispatch;
     widget.controls.commands = _commands;
+    widget.search.addListener(_searchChanged);
+    if (!kUnderTest) {
+      _resourceTimer = Timer.periodic(
+        const Duration(seconds: 10),
+        (_) => unawaited(_readResources()),
+      );
+    }
   }
 
   SwarmPreviewScrollController _scrollController() =>
@@ -110,6 +273,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   void didUpdateWidget(SwarmResourcePreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.search != widget.search) {
+      oldWidget.search.removeListener(_searchChanged);
+      widget.search.addListener(_searchChanged);
       _scroll.dispose();
       _scroll = _scrollController();
     }
@@ -119,11 +284,97 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   void dispose() {
     widget.controls.dispatch = null;
     widget.controls.commands = null;
+    widget.search.removeListener(_searchChanged);
+    _resourceTimer?.cancel();
+    _actionFocus.dispose();
+    for (final node in _buttonFocus.values) {
+      node.dispose();
+    }
     _scroll.dispose();
     super.dispose();
   }
 
   bool _dispatch(String command) {
+    if (widget.search.isCommandMode || widget.search.isHelpMode) {
+      // Command previews are read-only. Keep Tab from stepping results or
+      // focusing resource controls that are not displayed in this scope.
+      return command == 'picker.complete' || command == 'picker.complete_back';
+    }
+    if (command == 'picker.complete' || command == 'picker.complete_back') {
+      if (row == null || widget.search.showsTypeHints) return false;
+      _switchPane();
+      return true;
+    }
+    if (_editingApi &&
+        widget.search.managing &&
+        _apiFormKey.currentState?.handle(command) == true) {
+      return true;
+    }
+    if (_editingMachine &&
+        widget.search.managing &&
+        _formKey.currentState?.handle(command) == true) {
+      return true;
+    }
+    if (command == 'picker.resource_add_api' && widget.search.isModelMode) {
+      _editApi(null);
+      return true;
+    }
+    if (command == 'picker.focus_actions') {
+      _focusPane();
+      return row != null;
+    }
+    if (_actionFocus.hasFocus &&
+        (command == 'picker.next' || command == 'picker.previous')) {
+      return _traverseActions(command == 'picker.next', stay: true);
+    }
+    if (command == 'picker.cancel') {
+      if (!_actionFocus.hasFocus) return false;
+      widget.onRefocus();
+      return true;
+    }
+    if (command == 'picker.accept') {
+      if (_actionFocus.hasFocus) {
+        if (_focusedResource != row?.id) {
+          widget.onRefocus();
+          return true;
+        }
+        final action = _visibleActions()
+            .where((a) => _buttonFocus[a.command]?.hasFocus == true)
+            .firstOrNull;
+        action?.onPressed?.call();
+        return true;
+      }
+      if (widget.search.canSelectModel(row) ||
+          widget.search.isModelDownloadsRow(row) ||
+          widget.search.canExpandApi(row)) {
+        _open();
+        return true;
+      }
+      if (widget.search.isModelMode) {
+        if (row != null && widget.search.canGetModel(row)) {
+          final selected = row!;
+          unawaited(_run(() => widget.search.getModel(selected)));
+        }
+        if (row?.isCreate == true) _editApi(null);
+        // Model rows perform Use/Get directly; unavailable rows stay put.
+        return true;
+      }
+      if (_isManagement) {
+        if (row?.isMachine == true && app.stateOf(row!.machineId!) == null) {
+          return false;
+        }
+        _focusPane();
+        return true;
+      }
+    }
+    if (model?.local case final local?
+        when command == 'picker.resource_toggle') {
+      command = local.canStop
+          ? 'picker.model_stop'
+          : local.downloaded
+          ? 'picker.model_start'
+          : 'picker.model_download';
+    }
     if (command == 'picker.resource_more') {
       widget.onCommands();
       return true;
@@ -140,22 +391,40 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     return true;
   }
 
+  void _focusPane() {
+    if (_editingApi) {
+      _apiFormKey.currentState?.focus();
+    } else if (_editingMachine) {
+      _formKey.currentState?.focus();
+    } else {
+      _focusActions();
+    }
+  }
+
+  void _switchPane() {
+    if (widget.search.managing) {
+      widget.onRefocus();
+    } else {
+      _focusPane();
+    }
+  }
+
   List<_ResourceAction> _filterActions() => [
     if (widget.search.activityFirst && widget.search.scopePrefix.isEmpty) ...[
       for (final filter in SessionFilter.values)
         _ResourceAction(
           switch (filter) {
-            SessionFilter.all => 'Show all sessions',
-            SessionFilter.needsInput => 'Show sessions needing input',
-            SessionFilter.running => 'Show running sessions',
-            SessionFilter.paused => 'Show paused sessions',
+            SessionFilter.all => 'Show all harnesses',
+            SessionFilter.needsInput => 'Show harnesses needing input',
+            SessionFilter.running => 'Show running harnesses',
+            SessionFilter.paused => 'Show paused harnesses',
           },
           () => widget.search.setSessionFilter(filter),
           command: 'picker.filter.${filter.name}',
         ),
       for (final sort in SessionSort.values)
         _ResourceAction(
-          'Sort sessions: ${sort.label}',
+          'Sort harnesses: ${sort.label}',
           () => widget.search.setSessionSort(sort),
           command: 'picker.sort.${sort.name}',
         ),
@@ -163,11 +432,14 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   ];
 
   List<SwarmDestination> _commands() => [
-    for (final action in [
-      ..._actions(),
-      ..._secondaryActions(),
-      ..._filterActions(),
-    ])
+    for (final action in {
+      for (final action in [
+        ..._secondaryActions(),
+        ..._filterActions(),
+        ..._actions(),
+      ])
+        action.command: action,
+    }.values)
       if (action.onPressed != null &&
           action.command != 'picker.accept' &&
           action.command != 'picker.resource_filter' &&
@@ -177,6 +449,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           title:
               {
                     'picker.resource_toggle',
+                    'picker.resource_view',
                     'picker.resource_rename',
                     'picker.resource_settings',
                     'picker.resource_remove',
@@ -211,19 +484,6 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       _pending.remove(id);
       if (error != null) _errors[id] = error;
     });
-  }
-
-  Future<void> _dialog(Future<void> Function() action) async {
-    widget.onModalChanged(true);
-    try {
-      await _run(() async {
-        await action();
-        return null;
-      });
-    } finally {
-      widget.onModalChanged(false);
-      if (mounted) widget.onRefocus();
-    }
   }
 
   void _open() {
@@ -280,31 +540,199 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     _run(() async {
       final catalog = widget.search.models!;
       await Future.wait([
-        catalog.manager.refresh(force: true),
+        catalog.refresh(force: true),
         catalog.manager.apis.refresh(),
         catalog.subscriptions.refresh(),
       ]);
-      return catalog.manager.error ?? catalog.manager.apis.error;
+      return model?.controller?.error ??
+          catalog.manager.error ??
+          catalog.manager.apis.error;
     }),
   );
+
+  void _refreshMachines() => unawaited(
+    _run(() async {
+      await app.retryMachines();
+      await widget.search.refreshMachineResources();
+      return app.machineListError;
+    }),
+  );
+
+  List<_ResourceAction> _visibleActions() => [
+    ..._actions(),
+    if (!_isManagement && row?.isCreate != true && _commands().isNotEmpty)
+      _ResourceAction(
+        'Actions…',
+        widget.onCommands,
+        command: 'picker.resource_more',
+      ),
+  ];
+
+  Widget _actionButtons() {
+    final target = row?.id;
+    final cell = terminalCellSizeOf(context);
+    final controls = Focus(
+      focusNode: _actionFocus,
+      onFocusChange: (focused) {
+        _focusedResource = focused ? row?.id : null;
+        widget.search.setManaging(focused);
+      },
+      child: Wrap(
+        key: const ValueKey('swarm-search-resource-actions'),
+        spacing: cell.width * 2,
+        runSpacing: cell.height,
+        children: [
+          for (final action in _visibleActions())
+            TerminalTextAction(
+              key: ValueKey('resource-action:${action.command}'),
+              focusNode: _buttonFocus.putIfAbsent(
+                action.command,
+                () => FocusNode(debugLabel: action.label),
+              ),
+              label: action.label,
+              padding: EdgeInsets.zero,
+              onPressed: action.onPressed == null
+                  ? null
+                  : () {
+                      if (row?.id != target) return;
+                      // Resolve again so stale widgets cannot operate on an old resource.
+                      final current = _visibleActions()
+                          .where((a) => a.command == action.command)
+                          .firstOrNull;
+                      current?.onPressed?.call();
+                    },
+            ),
+        ],
+      ),
+    );
+    void next() => _traverseActions(true, stay: true);
+    void previous() => _traverseActions(false, stay: true);
+    if (KeymapTheme.of(context) != null) {
+      return KeymapRegion(
+        contextKind: KeymapContext.picker,
+        actions: {
+          ...?KeymapRegion.of(context)?.actions,
+          'picker.next': next,
+          'picker.previous': previous,
+          'picker.control_next': next,
+          'picker.control_previous': previous,
+        },
+        child: controls,
+      );
+    }
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.arrowRight): next,
+        const SingleActivator(LogicalKeyboardKey.arrowDown): next,
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): previous,
+        const SingleActivator(LogicalKeyboardKey.arrowUp): previous,
+      },
+      child: controls,
+    );
+  }
+
+  Widget _controlHints() {
+    String? key(String command) => effectiveCommandHint(
+      context,
+      command,
+      contextKind: KeymapContext.picker,
+    )?.replaceAll('⇥', 'Tab').replaceAll('↵', 'Enter');
+    final managing = widget.search.managing;
+    final starting =
+        widget.search.usingModelId != null &&
+        widget.search.usingModelId == row?.modelId;
+    final hints = [
+      if (managing &&
+          key('picker.control_previous') != null &&
+          key('picker.control_next') != null)
+        '${key('picker.control_previous')}/${key('picker.control_next')} move',
+      if (starting)
+        'Starting…'
+      else if (key('picker.accept') case final enter?
+          when managing ||
+              row?.isModel != true ||
+              widget.search.canSelectModel(row) ||
+              widget.search.canGetModel(row) ||
+              widget.search.isModelDownloadsRow(row) ||
+              widget.search.canExpandApi(row))
+        '$enter ${managing
+            ? 'select'
+            : widget.search.canSelectModel(row)
+            ? 'Use'
+            : widget.search.canGetModel(row)
+            ? 'Get'
+            : widget.search.isModelDownloadsRow(row) || widget.search.canExpandApi(row)
+            ? widget.search.actionLabel(row)
+            : _isManagement
+            ? _machineSetup
+                  ? 'setup'
+                  : 'Manage'
+            : widget.search.actionLabel(row)}',
+      if (key('picker.complete') case final tab?) '$tab pane',
+      if (key('picker.cancel') case final escape? when managing || starting)
+        '$escape ${starting ? 'cancel' : 'back'}',
+    ];
+    final cell = terminalCellSizeOf(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
+      ),
+      child: Text(
+        hints.join('  ·  '),
+        key: const ValueKey('resource-control-hints'),
+        style: terminalContentStyle(color: theme.muted),
+      ),
+    );
+  }
 
   List<_ResourceAction> _actions() {
     final search = widget.search;
     final selected = row;
     final busy = _pending.contains(selected?.id ?? search.title);
+    if (search.isModelDownloadsRow(selected)) {
+      return [
+        _ResourceAction(
+          search.modelDownloadsVisible ? 'Hide catalog' : 'Get models',
+          _open,
+          command: 'picker.accept',
+        ),
+      ];
+    }
     if (selected?.isCreate == true) {
+      if (search.isMachineMode) {
+        return [
+          _ResourceAction(
+            'App',
+            () => _editMachine(MachinePickerFormKind.app),
+            command: 'picker.machine_app',
+          ),
+          _ResourceAction(
+            'CLI',
+            () => _editMachine(MachinePickerFormKind.cli),
+            command: 'picker.machine_cli',
+          ),
+        ];
+      }
+      if (search.isModelMode) {
+        return [
+          _ResourceAction(
+            'Add',
+            busy ? null : () => _editApi(null),
+            command: 'picker.accept',
+          ),
+        ];
+      }
       return [
         _ResourceAction(
           selected!.title.replaceFirst('New ', 'Create '),
           busy ? null : _open,
           command: 'picker.accept',
         ),
-        if (search.isModelMode)
-          _ResourceAction(
-            'Add API',
-            () => _editApi(null),
-            command: 'picker.resource_add_api',
-          ),
       ];
     }
     if (search.isStoreMode) {
@@ -318,78 +746,122 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
     if (search.isModelMode) {
       final catalog = search.models!;
-      final entry = model;
-      final local = entry?.local;
-      final api = entry?.api;
-      return [
-        if (local != null) ...[
+      final local = model?.local;
+      final api = model?.api;
+      final owner = model?.controller ?? catalog.manager;
+      if (local != null) {
+        final enabled =
+            !busy &&
+            !owner.busy &&
+            owner.inventoryAvailable &&
+            owner.machine?.connectionStatus == ConnectionStatus.connected &&
+            owner.machine?.needsLink == false &&
+            (owner.targetMachineId == null ||
+                owner.machine?.isOffline == false);
+        final stop = local.canStop;
+        final get = !stop && !local.downloaded;
+        final action = stop
+            ? 'stop'
+            : get
+            ? 'download'
+            : 'start';
+        return [
           _ResourceAction(
-            'Open Model Manager',
-            busy ? null : () => unawaited(_dialog(widget.onManageModels)),
+            stop
+                ? 'Stop'
+                : get
+                ? 'Get'
+                : 'Use',
+            enabled &&
+                    (stop ||
+                        (get
+                            ? local.canStart
+                            : search.canSelectModel(selected)))
+                ? !stop && !get
+                      ? _open
+                      : () => unawaited(
+                          _run(() async {
+                            await owner.control(
+                              local,
+                              get && !owner.supportsDownload ? 'start' : action,
+                            );
+                            return owner.error;
+                          }),
+                        )
+                : null,
+            command: 'picker.model_$action',
+          ),
+        ];
+      }
+      if (model?.apiModel != null) {
+        return [
+          _ResourceAction(
+            'Use',
+            !busy && search.canSelectModel(selected) ? _open : null,
             command: 'picker.accept',
           ),
-          _ResourceAction(
-            catalog.manager.operationFor(local)?.active == true ||
-                    catalog.manager.pendingId == local.id
-                ? catalog.localStatus(local)
-                : local.canStop
-                ? 'Stop'
-                : local.downloaded
-                ? 'Start'
-                : 'Download and start',
-            busy ||
-                    catalog.manager.busy ||
-                    !catalog.manager.inventoryAvailable ||
-                    (!local.canStart && !local.canStop)
-                ? null
-                : () => unawaited(
-                    _run(() async {
-                      await catalog.manager.toggle(local);
-                      return catalog.manager.error;
-                    }),
-                  ),
-            command: 'picker.resource_toggle',
-            hint: local.canStop ? 'Free memory; keep the download.' : null,
-          ),
-        ] else if (api != null)
+        ];
+      }
+      if (api != null) {
+        return [
+          if (search.canExpandApi(selected))
+            _ResourceAction(
+              search.actionLabel(selected),
+              _open,
+              command: 'picker.accept',
+            ),
           _ResourceAction(
             'Edit',
-            () => _editApi(api.id),
-            command: 'picker.accept',
-          )
-        else
-          _ResourceAction(
-            'Open Model Manager',
-            busy ? null : () => unawaited(_dialog(widget.onManageModels)),
-            command: 'picker.accept',
+            busy ? null : () => _editApi(api.id),
+            command: 'picker.resource_settings',
           ),
+          ..._secondaryActions().where(
+            (a) => a.command == 'picker.resource_remove',
+          ),
+        ];
+      }
+      if (model?.subscription != null) {
+        return [
+          _ResourceAction(
+            'Refresh',
+            busy ? null : _refreshModels,
+            command: 'picker.refresh',
+          ),
+        ];
+      }
+      return [
+        _ResourceAction(
+          'Use',
+          !busy && search.canSelectModel(selected) ? _open : null,
+          command: 'picker.accept',
+        ),
       ];
     }
     if (selected?.isMachine == true) {
       final machine = app.stateOf(selected!.machineId!);
       if (machine == null) return [];
+      final secondary = _secondaryActions();
       return [
-        _ResourceAction(
-          'Open sessions on',
-          busy ? null : _open,
-          command: 'picker.accept',
-        ),
+        if (_isOnline(machine))
+          _ResourceAction(
+            'View',
+            _viewMachine,
+            command: 'picker.resource_view',
+          ),
+        ...secondary.where((a) => a.command == 'picker.resource_connect'),
+        ...secondary.where((a) => a.command == 'picker.resource_settings'),
         if (!machine.machine.isShared)
           _ResourceAction(
             'Rename',
-            busy
-                ? null
-                : () => unawaited(
-                    _dialog(
-                      () => showMachineRenameDialog(
-                        context,
-                        app,
-                        selected.machineId!,
-                        machine.machine.displayName,
-                      ),
-                    ),
-                  ),
+            busy ? null : () => _editMachine(MachinePickerFormKind.rename),
             command: 'picker.resource_rename',
+          ),
+        ...secondary.where((a) => a.command == 'picker.resource_remove'),
+        if (app.machineListError != null)
+          _ResourceAction(
+            'Retry',
+            busy ? null : _refreshMachines,
+            command: 'picker.refresh',
           ),
       ];
     }
@@ -431,29 +903,40 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ];
   }
 
-  void _editApi(String? id) {
+  void _editApi(String? id, {bool removing = false}) {
     final catalog = widget.search.models;
     if (catalog == null) return;
-    unawaited(
-      _dialog(() async {
-        await showDialog<void>(
-          context: context,
-          builder: (context) => Dialog(
-            child: SizedBox(
-              width: 520,
-              child: SingleChildScrollView(
-                child: ApiConnectionsPanel(
-                  controller: catalog.manager.apis,
-                  query: '',
-                  initialConnectionId: id,
-                  onEditingChanged: (_) {},
-                ),
-              ),
-            ),
-          ),
-        );
-      }),
-    );
+    setState(() {
+      _apiFormKey = GlobalKey<ApiPickerFormState>();
+      _apiResource = row?.id;
+      _apiConnectionId = id;
+      _apiRemoving = removing;
+      _apiFormOpen = true;
+    });
+  }
+
+  void _closeApiForm(String? id) {
+    if (!mounted) return;
+    setState(() {
+      _apiFormOpen = false;
+      _apiResource = null;
+    });
+    // The editor owned the keys, and a removed widget reports no focus change: hand them back to
+    // the list, or arrows keep acting for a pane that is no longer there.
+    widget.search.setManaging(false);
+    if (id?.isNotEmpty == true) {
+      final search = widget.search;
+      if (!search.rows.any((row) => row.modelId == 'model:api:$id')) {
+        search.setQuery(':');
+      }
+      final index = search.rows.indexWhere(
+        (row) => row.modelId == 'model:api:$id',
+      );
+      if (index >= 0) search.move(index - search.cursor);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onRefocus();
+    });
   }
 
   List<_ResourceAction> _secondaryActions() {
@@ -483,82 +966,35 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             command: 'picker.resource_settings',
           ),
           _ResourceAction(
-            'Remove API connection…',
-            () => unawaited(
-              _dialog(() async {
-                final remove = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: Text('Remove ${api.name}?'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('Remove'),
-                      ),
-                    ],
-                  ),
-                );
-                if (remove == true && mounted) {
-                  final controller = search.models!.manager.apis;
-                  if (!await controller.remove(api.id) && mounted) {
-                    setState(
-                      () => _errors[selected!.id] =
-                          controller.error ?? 'Could not remove API.',
-                    );
-                  }
-                }
-              }),
-            ),
+            'Delete',
+            () => _editApi(api.id, removing: true),
             command: 'picker.resource_remove',
           ),
         ],
       ] else if (selected?.isMachine == true && machine != null) ...[
-        if (machine.needsLink && machine.nodeOnline != false)
+        if (!machine.isLocalMachine &&
+            machine.needsLink &&
+            machine.nodeOnline != false)
           _ResourceAction(
-            'Link',
-            busy
-                ? null
-                : () => unawaited(
-                    _dialog(
-                      () => showLinkMachineScreenDialog(
-                        context,
-                        app,
-                        selected!.machineId!,
-                      ),
-                    ),
-                  ),
+            'Connect',
+            busy ? null : () => _editMachine(MachinePickerFormKind.connect),
             command: 'picker.resource_connect',
           ),
         if (machine.isLocalMachine && !machine.machine.isShared)
           _ResourceAction(
-            'Password / connection settings',
-            () => unawaited(_dialog(() => showLinkMachineDialog(context, app))),
+            'Password',
+            () => _editMachine(MachinePickerFormKind.password),
             command: 'picker.resource_settings',
           ),
         if (!machine.isLocalMachine && !machine.machine.isShared)
           _ResourceAction(
-            'Remove from account…',
-            () => unawaited(
-              _dialog(
-                () => confirmDeleteMachine(
-                  context,
-                  app,
-                  machineId: machine.machine.machineId,
-                  displayName: machine.machine.displayName,
-                ),
-              ),
-            ),
+            'Delete',
+            () => _editMachine(MachinePickerFormKind.delete),
             command: 'picker.resource_remove',
           ),
         _ResourceAction(
-          'Link another machine',
-          () => unawaited(
-            _dialog(() => showLinkAnotherMachineDialog(context, app)),
-          ),
+          'Add machine',
+          _addMachine,
           command: 'picker.resource_link',
         ),
         _ResourceAction(
@@ -614,99 +1050,292 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   Widget _modelPreview() {
     final catalog = widget.search.models!;
+    if (widget.search.isModelDownloadsRow(row)) {
+      return _details([
+        'Get models',
+        'Browse models available to download on your machines.',
+      ], controls: true);
+    }
     final entry = model;
     if (entry == null) {
       return _details([
         catalog.manager.scanning ? 'Finding models…' : 'No matching models',
-        ?catalog.manager.error,
       ]);
     }
+    final cell = terminalCellSizeOf(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
     final local = entry.local;
+    final owner = entry.controller ?? catalog.manager;
+    final operation = local == null ? null : owner.operationFor(local);
+    final pending = local != null && owner.pendingId == local.id;
+    final opActive = operation?.active == true;
+    // API entries have their own dedicated preview; keep main's dispatch.
+    if (entry.api != null) return _apiPreview(entry);
+
+    String bytesLabel(double? bytes) {
+      if (bytes == null) return '—';
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+
+    String windowLabel(double? seconds) {
+      if (seconds == null) return '—';
+      if (seconds > 0 && seconds % 86400 == 0) {
+        return '${(seconds / 86400).toInt()}d';
+      }
+      if (seconds > 0 && seconds % 3600 == 0) {
+        return '${(seconds / 3600).toInt()}h';
+      }
+      return '${(seconds / 60).round()}m';
+    }
+
+    // The status word is the catalog's own [localStatus] so the pane and the
+    // list row can never disagree (both come from the same [_refresh] snapshot);
+    // no re-derivation from a possibly-stale operation on the pane side.
+    final statusWord = local != null
+        ? catalog.localStatus(local, controller: owner)
+        : entry.status;
+
+    // Suitability against this machine's usable memory, per plan §5. Only local
+    // models carry a "fits this machine" meaning; shared/api/subscription nodes
+    // have no per-node memory here, so fit is left out for them.
+    final memory = owner.memoryBytes;
+    String? fitsLabel() {
+      final size = local?.sizeBytes;
+      if (memory == null || local == null || size == null) return null;
+      if (size <= memory) {
+        final gb = (memory / (1024 * 1024 * 1024)).toStringAsFixed(0);
+        return '✓ fits $gb GB';
+      }
+      return 'needs ${(size / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB';
+    }
+
+    Widget labelValue(String label, String value) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: cell.height * .6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            SizedBox(
+              width: cell.width * 9,
+              child: Text(
+                label,
+                style: terminalContentStyle(color: theme.muted),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                style: terminalContentStyle(color: theme.foreground),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget errorLine(String text) {
+      return Padding(
+        padding: EdgeInsets.only(top: cell.height),
+        child: Text(text, style: terminalContentStyle(color: theme.yellow)),
+      );
+    }
+
+    return ListView(
+      controller: _scroll,
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
+      ),
+      children: [
+        Text(
+          entry.name,
+          style: terminalContentStyle(color: theme.foreground)
+              .copyWith(fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: cell.height),
+        Text(statusWord, style: terminalContentStyle(color: theme.foreground)),
+        if (widget.search.modelUseErrorId == entry.id &&
+            widget.search.modelUseError != null)
+          errorLine(widget.search.modelUseError!),
+        SizedBox(height: cell.height),
+        labelValue(
+          'Machine',
+          entry.node ?? (entry.source == 'Local' ? 'This Mac' : entry.source),
+        ),
+        if (local != null) ...[
+          if (fitsLabel() case final fits?) labelValue('Fits', fits),
+          labelValue('Size', bytesLabel(local.sizeBytes)),
+          labelValue('Quant', local.quant ?? '—'),
+          if (local.running && local.tokensPerSecond != null)
+            labelValue(
+              'Speed',
+              '${local.tokensPerSecond!.toStringAsFixed(1)} tok/s',
+            ),
+          if (local.running &&
+              local.requests != null &&
+              local.windowSeconds != null)
+            labelValue(
+              'Window',
+              '${local.requests!.toInt()} req / ${windowLabel(local.windowSeconds)}',
+            ),
+          if (local.resting)
+            labelValue('State', 'Resting until your next message'),
+          if (!local.downloaded &&
+              !owner.supportsDownload &&
+              local.canStart &&
+              !pending &&
+              !opActive)
+            errorLine(
+              'Downloads and starts on ${entry.node ?? 'this machine'}.',
+            ),
+        ],
+        if (entry.api case final api?) ...[
+          labelValue('Host', api.baseUrl),
+          labelValue('Key', api.keyEnv),
+        ],
+        if (entry.subscription case final subscription?) ...[
+          ...((subscription['details'] as List?) ?? const [])
+              .map((d) => '$d')
+              .where((d) => d != entry.status)
+              .take(3)
+              .map((d) => labelValue('Detail', d)),
+        ],
+        labelValue('Source', entry.source),
+        if (widget.search.modelUseReason(row) case final reason?
+            when reason != 'No active harness' &&
+                reason != entry.status &&
+                reason != 'Tools only' &&
+                reason != 'Download first')
+          errorLine(switch (reason) {
+            'Claude only' => 'Use this subscription in a Claude harness.',
+            'Codex only' => 'Use this subscription in a Codex harness.',
+            'Other account' =>
+              'This account is not signed in on the harness’s machine.',
+            'Not serving' => 'Not serving on ${entry.node ?? 'its host'}.',
+            _ => reason,
+          }),
+        if (entry.own && local == null && owner.scanning)
+          errorLine('Finding model controls…'),
+        if (!identical(owner, catalog.manager)) ...[
+          if (owner.machine?.connectionStatus != ConnectionStatus.connected)
+            errorLine('Connect to ${entry.node} to manage its models.')
+          else if (owner.error case final err?)
+            errorLine(err),
+        ],
+        if (operation?.error case final err?) errorLine(err),
+        if (catalog.manager.error case final err?) errorLine(err),
+        SizedBox(height: cell.height),
+        _actionButtons(),
+      ],
+    );
+  }
+
+  static const _kDetailLabelColumns = 9;
+
+  /// A saved API, or one of its models: a summary line, then labelled facts, then what it is for.
+  Widget _apiPreview(ModelSearchEntry entry) {
+    final api = entry.api!;
+    final listed = widget.search.models!.manager.apis.models[api.id];
+    final model = entry.apiModel;
+    if (model != null) {
+      final reason = widget.search.modelUseReason(row);
+      return _details([
+        entry.name,
+        [
+          api.name,
+          if (model.contextWindow case final window?)
+            '${contextWindowLabel(window)} context',
+        ].join(' · '),
+        '',
+        if (model.name case final name?) ('Name', name),
+        ('Via', '${api.name} · ${api.host}'),
+        '',
+        if (reason == null)
+          'Use runs this harness on it, with the key saved on '
+              '${widget.search.models!.manager.apis.hostLabel}.'
+        else if (reason == 'Other machine')
+          'Its key is saved on ${widget.search.models!.manager.apis.hostLabel}, '
+              'so only the harnesses there can run on it.'
+        else
+          reason,
+      ], controls: true);
+    }
+    final count = listed?.models.length ?? 0;
+    // One line for what the API is for: a harness runs on its models (Use), or harness agents call
+    // it (Tools) — fal.ai, Replicate, and any API that lists no models a coding agent can run on.
+    final summary = !api.servesModels || count > 0
+        ? null
+        : switch (listed) {
+            ApiModels(loading: true) => 'Loading models…',
+            ApiModels(error: _?) => 'Models unavailable',
+            _ => null,
+          };
     return _details([
       entry.name,
-      [entry.source, entry.node].whereType<String>().join(' · '),
+      ['API', ?summary].join(' · '),
       '',
-      entry.status,
-      if (local != null) ...[
-        if (local.sizeBytes case final size?)
-          '${(size / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB download',
-        ?local.quant,
-        if (local.running && local.tokensPerSecond != null)
-          '${local.tokensPerSecond!.toStringAsFixed(1)} tokens/sec',
-        if (local.running &&
-            local.requests != null &&
-            local.windowSeconds != null)
-          '${local.requests!.toInt()} requests / ${local.windowSeconds!.toInt()} sec',
-        ?catalog.manager.operationFor(local)?.error,
-        ?catalog.manager.error,
-      ],
-      if (entry.api case final api?) ...[
-        api.baseUrl,
-        api.keyEnv,
-        'Available to harness tools on this computer.',
-      ],
-      if (entry.subscription case final subscription?) ...[
-        if ('${subscription['account'] ?? ''}'.isNotEmpty)
-          'Account ${subscription['account']}',
-        ...((subscription['details'] as List?) ?? const [])
-            .map((detail) => '$detail')
-            .where((detail) => detail != entry.status),
-      ],
-    ]);
+      ('URL', api.baseUrl),
+      if (count > 0)
+        (
+          'Use',
+          'pick one of its $count ${count == 1 ? 'model' : 'models'} to run a harness on it',
+        )
+      else if (summary == null)
+        (
+          'Tools',
+          'harness agents on this computer can call it with the saved key',
+        ),
+      if (listed?.error case final error?) ...['', error],
+    ], controls: true);
   }
 
-  Widget _machineDetails() {
-    final cell = terminalCellSizeOf(context);
-    final theme = terminalThemeFor(
-      grid.AppTheme.palette.value,
-      terminalThemeStore.value,
-    );
+  Widget _machinePreview() {
     final machine = app.stateOf(row!.machineId!);
-    final online =
-        machine != null &&
-        machine.nodeOnline != false &&
-        !machine.needsLink &&
-        machine.connectionStatus == ConnectionStatus.connected;
-    final resources = online
+    if (machine == null) return _details([row!.title, 'Unavailable']);
+    final resources = _isOnline(machine)
         ? widget.search.machineResources[row!.machineId]
         : null;
-    final cpu = resources?.cpuPercent;
-    final used = resources?.memoryUsedBytes;
-    final total = resources?.memoryTotalBytes;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        cell.width * 2,
-        cell.height,
-        cell.width * 2,
-        0,
-      ),
-      child: Text(
-        [
-          machine?.nodeOnline == false
-              ? 'Offline'
-              : machine?.needsLink == true
-              ? 'Link required'
-              : online
-              ? 'Connected'
-              : 'Offline',
-          if (machine?.machine.isShared == true) 'View only',
-          if (cpu != null) 'CPU ${cpu.round()}%',
-          if (used != null && total != null)
-            'RAM ${(used / (1024 * 1024 * 1024)).toStringAsFixed(1)} / ${(total / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB',
-        ].join(' · '),
-        style: terminalContentStyle(
-          color: theme.foreground.withValues(alpha: .54),
-        ),
-      ),
-    );
+    final status = machine.nodeOnline == false
+        ? 'Offline'
+        : machine.needsLink
+        ? 'Link required'
+        : switch (machine.connectionStatus) {
+            ConnectionStatus.connected => 'Connected',
+            ConnectionStatus.connecting => 'Connecting',
+            ConnectionStatus.reconnecting => 'Reconnecting',
+            ConnectionStatus.disconnected => 'Offline',
+          };
+    return _details([
+      row!.title,
+      [
+        status,
+        if (machine.isLocalMachine) 'This computer',
+        if (machine.machine.isShared) 'View only',
+      ].join(' · '),
+      '',
+      if (resources?.cpuPercent case final cpu?) 'CPU ${cpu.round()}%',
+      if (resources?.memoryUsedBytes != null &&
+          resources?.memoryTotalBytes != null)
+        'RAM ${(resources!.memoryUsedBytes! / (1024 * 1024 * 1024)).toStringAsFixed(1)} / ${(resources.memoryTotalBytes! / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB',
+      '${machine.agents.length} ${machine.agents.length == 1 ? 'harness' : 'harnesses'}',
+      ?app.machineListError,
+      ?_messages[row!.id],
+    ], controls: true);
   }
 
-  Widget _details(List<String> lines) {
+  /// The preview's lines: the first is the title, `''` is a blank row, and a `(label, value)`
+  /// pair is a labelled row — [_kDetailLabelColumns] columns of label, the value wrapping beside it.
+  Widget _details(List<Object> lines, {bool controls = false}) {
     final cell = terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
+    final muted = terminalContentStyle(color: theme.muted);
     return ListView(
       controller: _scroll,
       padding: EdgeInsets.symmetric(
@@ -715,17 +1344,31 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       ),
       children: [
         for (var i = 0; i < lines.length; i++)
-          if (lines[i].isEmpty)
-            SizedBox(height: cell.height)
-          else
-            Text(
-              lines[i],
-              style: terminalContentStyle(
-                color: i == 0
-                    ? theme.foreground
-                    : theme.foreground.withValues(alpha: .54),
-              ),
+          switch (lines[i]) {
+            '' => SizedBox(height: cell.height),
+            (final String label, final String value) => Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: cell.width * _kDetailLabelColumns,
+                  child: Text(label, style: muted),
+                ),
+                Expanded(
+                  child: Text(
+                    value,
+                    style: terminalContentStyle(color: theme.foreground),
+                  ),
+                ),
+              ],
             ),
+            final line => Text(
+              '$line',
+              style: i == 0
+                  ? terminalContentStyle(color: theme.foreground)
+                  : muted,
+            ),
+          },
+        if (controls) ...[SizedBox(height: cell.height), _actionButtons()],
       ],
     );
   }
@@ -743,12 +1386,37 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         vertical: cell.height,
       ),
       children: [
-        Text(
-          '>  harnesses\n@  machines\n#  projects\n:  models\n*  store',
+        Column(
           key: const ValueKey('swarm-search-type-hints'),
-          style: terminalContentStyle(
-            color: theme.foreground.withValues(alpha: .54),
-          ),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final (prefix, label) in [
+              ('@', 'machines'),
+              ('#', 'projects'),
+              (':', 'models'),
+              ('*', 'store'),
+              ('>', 'commands'),
+            ])
+              TextButton(
+                key: ValueKey('swarm-search-scope:$prefix'),
+                onPressed: () {
+                  widget.search.setQuery('$prefix ');
+                  widget.onRefocus();
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.muted,
+                  textStyle: terminalContentStyle(),
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: const RoundedRectangleBorder(),
+                ),
+                child: SizedBox(
+                  height: cell.height,
+                  child: Text('$prefix  $label'),
+                ),
+              ),
+          ],
         ),
       ],
     );
@@ -767,6 +1435,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         terminalThemeStore,
       ]),
       builder: (context, _) {
+        if (widget.search.isCommandMode || widget.search.isHelpMode) {
+          return SwarmSearchPreview(
+            key: const ValueKey('swarm-search-preview'),
+            search: widget.search,
+            terminal: true,
+          );
+        }
         final cell = terminalCellSizeOf(context);
         final theme = terminalThemeFor(
           grid.AppTheme.palette.value,
@@ -775,6 +1450,21 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (widget.search.isModelMode &&
+                widget.search.models?.manager.error != null)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  cell.width * 2,
+                  cell.height,
+                  cell.width * 2,
+                  0,
+                ),
+                child: Text(
+                  'Local models · ${widget.search.models!.manager.error}',
+                  key: const ValueKey('local-model-inventory-notice'),
+                  style: terminalContentStyle(color: theme.yellow),
+                ),
+              ),
             if (_pending.contains(row?.id))
               Padding(
                 padding: EdgeInsets.fromLTRB(
@@ -785,9 +1475,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                 ),
                 child: Text(
                   'Working…',
-                  style: terminalContentStyle(
-                    color: theme.foreground.withValues(alpha: .54),
-                  ),
+                  style: terminalContentStyle(color: theme.muted),
                 ),
               ),
             if (_errors[row?.id] case final error?)
@@ -801,16 +1489,33 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                   style: terminalContentStyle(color: theme.yellow),
                 ),
               ),
-            if (row?.isMachine == true) _machineDetails(),
             Expanded(
-              child: widget.search.showsTypeHints
+              child: _editingApi
+                  ? ApiPickerForm(
+                      key: _apiFormKey,
+                      controller: widget.search.models!.manager.apis,
+                      connectionId: _apiConnectionId,
+                      removing: _apiRemoving,
+                      onClose: _closeApiForm,
+                      onFocusChanged: widget.search.setManaging,
+                      onSwitchPane: _switchPane,
+                    )
+                  : _editingMachine
+                  ? MachinePickerForm(
+                      key: _formKey,
+                      app: app,
+                      kind: _machineForm!,
+                      machineId: row?.machineId,
+                      onClose: _closeMachineForm,
+                      onFocusChanged: widget.search.setManaging,
+                      onSwitchPane: _switchPane,
+                    )
+                  : widget.search.showsTypeHints
                   ? _typeHints()
                   : row?.isCreate == true
                   ? _details([
-                      widget.search.createDescription,
-                      if (widget.search.isModelMode)
-                        ?widget.search.models?.manager.error,
-                    ])
+                      ...widget.search.createDescription.split('\n'),
+                    ], controls: _machineSetup)
                   : widget.search.isStoreMode
                   ? _details([
                       if (row?.storeId case final id?) ...[
@@ -824,6 +1529,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                       ] else
                         'No matching store entries',
                     ])
+                  : row?.isMachine == true
+                  ? _machinePreview()
                   : widget.search.isModelMode
                   ? _modelPreview()
                   : SwarmSearchPreview(
@@ -832,6 +1539,22 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                       terminal: true,
                     ),
             ),
+            if (row != null &&
+                !widget.search.showsTypeHints &&
+                !_editingMachine &&
+                !_editingApi) ...[
+              if (!_isManagement)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    cell.width * 2,
+                    cell.height,
+                    cell.width * 2,
+                    0,
+                  ),
+                  child: _actionButtons(),
+                ),
+              if (KeyHints.visibleOf(context)) _controlHints(),
+            ],
           ],
         );
       },

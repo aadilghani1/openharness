@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:collection/collection.dart' show compareNatural;
 
+import '../models/api_connections_controller.dart' show ApiConnection, ApiModel;
 import '../models/model_search_catalog.dart';
 import '../core/dsh_catalog.dart';
 import '../core/machine_resources.dart';
+import '../core/models.dart' show ConnectionStatus, GridModels, GridModel;
 
 import 'app_state.dart';
 import 'harness_placement.dart';
@@ -11,6 +15,8 @@ import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
 import 'harness_sessions.dart';
+import 'search_when.dart';
+import 'session_content_search.dart';
 
 const kSwarmSearchHint = 'Search harnesses';
 const kHarnessPickerHint = kSwarmSearchHint;
@@ -58,6 +64,7 @@ class SwarmSearchController extends ChangeNotifier {
     this.offersCreate = false,
     this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
+    this.noteFor,
     this._placement,
     this._split,
     bool previewInitiallyVisible = true,
@@ -68,17 +75,230 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
+    if (activityFirst && history == null && !navigating) {
+      _content = SessionContentSearch(
+        machines: () => app.searchableMachineIds,
+        ask: (machineId, words, when) =>
+            app.searchSessions(machineId, words, when: when),
+      )..addListener(_contentChanged);
+    }
     _refresh();
     app.addListener(_refresh);
     projects?.addListener(_refresh);
     models?.addListener(_modelsChanged);
+    app.gridPictures.addListener(_modelChoicesChanged);
     app.sessionPreviews.addListener(_previewChanged);
   }
 
   final AppNotifier app;
   final List<String> recent;
+
+  /// A line the box answers a query with, shown as the first row and never
+  /// taken by Return (the daemons' easter words: `xyzzy`).
+  final String? Function(String query)? noteFor;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
+  bool modelDownloadsVisible = false;
+  bool isModelDownloadsRow(SwarmDestination? row) =>
+      isModelMode && row?.id == 'model:downloads';
+
+  /// Saved APIs whose models are shown under them. An API such as OpenRouter lists hundreds, so
+  /// they stay folded until Enter on the API's row — or a search that matches them.
+  final expandedApis = <String>{};
+
+  /// [row] is a saved API's own row (not one of its models).
+  bool isApiRow(SwarmDestination? row) {
+    final entry = models?.entries[row?.modelId];
+    return entry?.api != null && entry?.apiModel == null;
+  }
+
+  /// [row] is one of a saved API's models, listed under the API's row.
+  bool isApiModelRow(SwarmDestination? row) =>
+      models?.entries[row?.modelId]?.apiModel != null;
+
+  /// Whether [row]'s API has its models shown under it, and the words at the end of its row: how
+  /// many models it lists, or that it is for tools. Null for any other row.
+  ({bool open, String hint})? apiRowState(SwarmDestination? row) {
+    if (!isModelMode || !isApiRow(row)) return null;
+    final api = models!.entries[row!.modelId]!.api!;
+    final listed = models!.manager.apis.models[api.id];
+    final count = listed?.models.length ?? 0;
+    return (
+      // Open while any of its models is listed under it: unfolded, or found by a search.
+      open: rows.any(
+        (shown) =>
+            models!.entries[shown.modelId]?.apiModel != null &&
+            models!.entries[shown.modelId]!.api!.id == api.id,
+      ),
+      hint: !api.servesModels
+          ? 'Tools'
+          : listed?.loading == true && count == 0
+          ? 'Loading…'
+          : count > 0
+          ? '$count ${count == 1 ? 'model' : 'models'}'
+          : 'Tools',
+    );
+  }
+
+  /// Enter on [row] shows or hides its API's models: it lists some, or is still reading them.
+  bool canExpandApi(SwarmDestination? row) {
+    if (!isModelMode || !isApiRow(row)) return false;
+    final api = models!.entries[row!.modelId]!.api!;
+    final listed = models!.manager.apis.models[api.id];
+    return api.servesModels &&
+        listed != null &&
+        (listed.models.isNotEmpty || listed.loading);
+  }
+
+  /// The API model [row] offers the focused harness, or null when it cannot run on it: only a
+  /// harness on the machine the APIs are saved on (this computer, in the desktop app), where the
+  /// key is kept, on an engine that can be re-pointed.
+  ({ApiConnection api, ApiModel model})? selectableApiModel(
+    SwarmDestination? row,
+  ) {
+    if (!isModelMode || modelSelectionEngine == null) return null;
+    final entry = models?.entries[row?.modelId];
+    final api = entry?.api, model = entry?.apiModel;
+    if (api == null || model == null || !api.servesModels) return null;
+    if (_modelChoices?.canRunLocally(modelSelectionEngine) == false) {
+      return null;
+    }
+    final machine = app.stateOf(_modelSelectionMachineId ?? '');
+    if (machine == null ||
+        machine.machine.machineId != models!.manager.apis.machineId ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      return null;
+    }
+    return (api: api, model: model);
+  }
+
+  late final _showDownloadsRow = SwarmDestination(
+    id: 'model:downloads',
+    modelId: 'model:downloads',
+    title: '[ Get models ]',
+    detail: '',
+    swarmId: null,
+    current: false,
+  );
+  late final _hideDownloadsRow = SwarmDestination(
+    id: 'model:downloads',
+    modelId: 'model:downloads',
+    title: '[ Hide catalog ]',
+    detail: '',
+    swarmId: null,
+    current: false,
+  );
+
+  ModelSearchSection modelSection(SwarmDestination row) => row.isCreate
+      ? ModelSearchSection.apis
+      : models?.entries[row.modelId]?.section ?? ModelSearchSection.local;
+
+  String? modelRowAction(SwarmDestination row) {
+    final entry = models?.entries[row.modelId];
+    if (entry == null) return null;
+    return canSelectModel(row)
+        ? 'Use'
+        : canGetModel(row)
+        ? 'Get'
+        : null;
+  }
+
+  /// The live status word for a model row (no glyph), shown inline in the list
+  /// so you can see Running/Downloaded/usage at a glance. Derives the word from
+  /// the same catalogue [ModelSearchCatalog.localStatus] the preview uses, so
+  /// the list and the pane can never disagree.
+  String? modelRowStatus(SwarmDestination row) {
+    final catalog = models;
+    final entry = catalog?.entries[row.modelId];
+    if (entry == null || catalog == null) return null;
+    // An API's model says what Enter does on it — Use, when this pane can run on it, else nothing.
+    // Its entry's status is only the API's name, which the row it sits under already shows.
+    if (entry.apiModel != null) return modelRowAction(row);
+    final local = entry.local;
+    final owner = entry.controller ?? catalog.manager;
+    return local != null
+        ? catalog.localStatusWord(local, controller: owner)
+        : entry.status;
+  }
+
+  /// Whether the model row is live right now (running, or a download/start/stop
+  /// in progress). Drives the green status colour in the list.
+  bool modelRowLive(SwarmDestination row) {
+    final catalog = models;
+    final entry = catalog?.entries[row.modelId];
+    if (entry == null || catalog == null) return false;
+    final local = entry.local;
+    final op = local == null
+        ? null
+        : (entry.controller ?? catalog.manager).operationFor(local);
+    return op?.active == true || (local?.running ?? false);
+  }
+
+  bool canGetModel(SwarmDestination? row) {
+    if (!isModelMode) return false;
+    final entry = models?.entries[row?.modelId];
+    final owner = entry?.controller;
+    return entry?.needsDownload == true &&
+        entry?.local?.canStart == true &&
+        owner != null &&
+        owner.inventoryAvailable &&
+        !owner.busy &&
+        owner.machine?.connectionStatus == ConnectionStatus.connected &&
+        owner.machine?.needsLink == false &&
+        (owner.targetMachineId == null || owner.machine?.isOffline == false);
+  }
+
+  Future<String?> getModel(SwarmDestination row) async {
+    if (!canGetModel(row)) return null;
+    final entry = models!.entries[row.modelId]!;
+    final owner = entry.controller!;
+    await owner.control(
+      entry.local!,
+      owner.supportsDownload ? 'download' : 'start',
+    );
+    return owner.error;
+  }
+
+  String? modelUseReason(SwarmDestination? row) {
+    final entry = models?.entries[row?.modelId];
+    if (entry == null || canSelectModel(row)) return null;
+    if (modelSelectionEngine == null) return 'No active harness';
+    if (entry.subscription case final subscription?) {
+      if (subscription['engine'] != modelSelectionEngine) {
+        return subscription['engine'] == 'claude'
+            ? 'Claude only'
+            : 'Codex only';
+      }
+      if (subscription['status'] == 'Not signed in') return 'Not signed in';
+      return 'Other account';
+    }
+    if (entry.apiModel != null) {
+      final machine = app.stateOf(_modelSelectionMachineId ?? '');
+      if (machine != null &&
+          machine.machine.machineId != models!.manager.apis.machineId) {
+        return 'Other machine';
+      }
+      return 'Not available to this harness';
+    }
+    if (entry.api != null) return canExpandApi(row) ? null : 'Tools only';
+    if (entry.gridModel?.unavailable != null) return 'Offline';
+    if (entry.needsDownload) return 'Download first';
+    if (entry.local case final local?) {
+      final owner = entry.controller!;
+      if (owner.operationFor(local)?.active == true) return entry.status;
+      if (owner.machine?.isOffline == true ||
+          owner.machine?.connectionStatus != ConnectionStatus.connected ||
+          owner.machine?.needsLink == true) {
+        return 'Connect host';
+      }
+      if (!local.running && !local.canStart && local.canStop) {
+        return 'Not serving';
+      }
+      if (owner.busy) return 'Host busy';
+    }
+    return 'Not available to this harness';
+  }
+
   final SwarmNavigationHistory? history;
 
   /// Availability is read from workspace state and rechecked at activation.
@@ -97,10 +317,269 @@ class SwarmSearchController extends ChangeNotifier {
   /// Open Harness filters by latest activity; commands and splits keep relevance order.
   final bool activityFirst;
 
+  /// When this opening began: the list's ages are measured from it.
+  final DateTime openedAt = DateTime.now();
+  final _activity = <String, DateTime?>{};
+
+  /// A row's last activity as it was when this opening first listed it. The
+  /// list keeps the order and ages it opened with while agents work on:
+  /// rows moving under the cursor as someone arrowed through them was the
+  /// confusing part. The next opening reads activity afresh.
+  DateTime? activityOf(SwarmDestination row) =>
+      _activity.putIfAbsent(row.id, () => row.lastActivityAt);
+
   /// Cmd-P starts without a choice; typing or navigating activates a result.
   final bool selectOnEmptyQuery;
-  bool get setupLayout => activityFirst && !isCommandMode && !isHelpMode;
+  // Prefixes change the catalog, never the Cmd-P dialog's layout.
+  bool get setupLayout => activityFirst;
+  bool managing = false;
+  String? modelSelectionEngine;
+  String? _modelSelectionMachineId;
+  GridModels? _modelChoices;
+  String? usingModelId;
+  String? modelUseErrorId, modelUseError;
+  Timer? _modelUseTimer;
+  Completer<void>? _modelUseWait;
+
+  void setModelSelection(
+    String? engine,
+    GridModels? choices, {
+    String? machineId,
+  }) {
+    modelSelectionEngine = engine;
+    _modelSelectionMachineId = machineId;
+    _modelChoices = choices;
+    notifyListeners();
+  }
+
+  void _modelChoicesChanged() {
+    if (_disposed || _modelSelectionMachineId == null) return;
+    final choices = app.gridPictures[_modelSelectionMachineId!];
+    if (choices == null || identical(choices, _modelChoices)) return;
+    _modelChoices = choices;
+    notifyListeners();
+  }
+
+  GridModel? selectableGridModel(SwarmDestination? row) {
+    if (!isModelMode ||
+        modelSelectionEngine == null ||
+        _modelChoices?.canRunLocally(modelSelectionEngine) != true) {
+      return null;
+    }
+    final entry = models?.entries[row?.modelId];
+    if (entry?.local case final local?) {
+      if (!local.running ||
+          entry!.controller?.operationFor(local)?.active == true) {
+        return null;
+      }
+    }
+    final offered = entry?.gridModel;
+    if (offered == null || offered.unavailable != null) return null;
+    for (final section in _modelChoices!.sections) {
+      if (section.name != offered.grid && !(section.own && entry!.own)) {
+        continue;
+      }
+      for (final candidate in section.models) {
+        if (candidate.id.toLowerCase() == offered.id.toLowerCase() &&
+            candidate.unavailable == null) {
+          return GridModel(
+            id: candidate.id,
+            node: candidate.node,
+            grid: section.name,
+            unavailable: candidate.unavailable,
+          );
+        }
+      }
+    }
+    return null;
+  }
+
+  bool canSelectModel(SwarmDestination? row) {
+    if (!isModelMode || modelSelectionEngine == null || row?.isModel != true) {
+      return false;
+    }
+    final entry = models?.entries[row!.modelId];
+    final subscription = entry?.subscription;
+    if (subscription != null) {
+      final machine = app.stateOf(_modelSelectionMachineId ?? '');
+      if (machine == null || subscription['engine'] != modelSelectionEngine) {
+        return false;
+      }
+      final available = models!.subscriptions.subscriptionFor(
+        modelSelectionEngine!,
+        local: machine.isLocalMachine,
+        machineName: machine.machine.displayName,
+      );
+      return available != null &&
+          available['status'] != 'Not signed in' &&
+          available['account'] == subscription['account'];
+    }
+    return selectableGridModel(row) != null ||
+        selectableApiModel(row) != null ||
+        canStartModelForUse(row);
+  }
+
+  bool canStartModelForUse(SwarmDestination? row) {
+    if (!isModelMode ||
+        modelSelectionEngine == null ||
+        _modelChoices?.reachable != true ||
+        _modelChoices?.canRunLocally(modelSelectionEngine) != true) {
+      return false;
+    }
+    final entry = models?.entries[row?.modelId];
+    final owner = entry?.controller;
+    final model = entry?.local;
+    return model != null &&
+        owner != null &&
+        entry!.own &&
+        model.downloaded &&
+        !model.running &&
+        model.canStart &&
+        owner.inventoryAvailable &&
+        !owner.busy &&
+        owner.machine?.connectionStatus == ConnectionStatus.connected &&
+        owner.machine?.needsLink == false &&
+        owner.machine?.isOffline == false;
+  }
+
+  /// Explicit Enter on installed weights starts once, then waits for the host
+  /// and the pane's serving picture before selecting. Closing the picker only
+  /// cancels the pending switch; the daemon continues its start operation.
+  Future<GridModel?> startModelForUse(
+    SwarmDestination row, {
+    required bool Function() stillCurrent,
+    Duration timeout = const Duration(minutes: 3),
+  }) async {
+    if (usingModelId != null || !canStartModelForUse(row)) return null;
+    final entry = models!.entries[row.modelId]!;
+    final owner = entry.controller!;
+    final modelId = entry.local!.id;
+    final host = owner.machine;
+    final deadline = DateTime.now().add(timeout);
+    usingModelId = row.modelId;
+    modelUseErrorId = modelUseError = null;
+    notifyListeners();
+    bool current() =>
+        !_disposed && stillCurrent() && identical(owner.machine, host);
+    void fail(String message) {
+      modelUseErrorId = row.modelId;
+      modelUseError = message;
+    }
+
+    try {
+      await owner.control(entry.local!, 'start');
+      while (current()) {
+        if (host?.connectionStatus != ConnectionStatus.connected ||
+            host?.needsLink == true ||
+            host?.isOffline == true) {
+          fail('Reconnect to ${entry.node} to use this model.');
+          return null;
+        }
+        final model = owner.localModels
+            .where((model) => model.id == modelId)
+            .firstOrNull;
+        final operation = model == null ? null : owner.operationFor(model);
+        if (operation?.failed == true || (owner.error != null && !owner.busy)) {
+          fail(
+            operation?.error ??
+                owner.error ??
+                'Could not start this model. Try again.',
+          );
+          return null;
+        }
+        if (model?.running == true && operation?.active != true) {
+          await models!.manager.refresh(force: true);
+          if (!current()) return null;
+          final machineId = _modelSelectionMachineId;
+          if (machineId != null) {
+            final picture = await app.readGridPicture(machineId);
+            if (!current()) return null;
+            _modelChoices = picture;
+          }
+          final selected = selectableGridModel(row);
+          if (selected != null) return selected;
+        }
+        if (DateTime.now().isAfter(deadline)) {
+          fail(
+            'The model is still starting. Try Enter again when it is ready.',
+          );
+          return null;
+        }
+        _modelUseWait = Completer<void>();
+        _modelUseTimer = Timer(const Duration(seconds: 2), () {
+          if (_modelUseWait?.isCompleted == false) _modelUseWait!.complete();
+        });
+        await _modelUseWait!.future;
+        _modelUseWait = null;
+        _modelUseTimer = null;
+        if (!current()) return null;
+        await owner.refresh();
+      }
+    } catch (_) {
+      if (current()) fail('Could not use this model. Try again.');
+    } finally {
+      if (!_disposed) {
+        usingModelId = null;
+        notifyListeners();
+      }
+    }
+    return null;
+  }
+
+  void setManaging(bool value) {
+    if (_disposed || managing == value) return;
+    managing = value;
+    notifyListeners();
+  }
+
   final bool commandsOnly;
+
+  /// Open Harness also asks every machine's session index what was said in
+  /// each conversation; its hits join the ranking as they arrive.
+  SessionContentSearch? _content;
+
+  /// Whether somebody moved through the results since the query changed:
+  /// until then, rows arriving from a machine keep the best one selected.
+  bool _chosen = false;
+
+  /// The query the machines' session indexes last answered, or null before
+  /// any answer: whether what was said has been searched yet.
+  String? get contentAnswered => _content?.answered;
+
+  /// What a machine's session index found in this row's conversation for the
+  /// current query, when that is how the row matched.
+  SessionContentHit? contentHitFor(String rowId) =>
+      _contentQuery.isEmpty ? null : _content?.hitsFor(_contentQuery)[rowId];
+
+  /// When the query says to look ("dial last week"), and its words without
+  /// that: Open Harness only, where a time narrows to what was worked on then.
+  ({String words, SearchWhen? when}) get _read {
+    final content = _content;
+    final query = _contentQuery;
+    return content == null || query.isEmpty
+        ? (words: matchQuery, when: null)
+        : content.read(query);
+  }
+
+  /// The words matched against names and highlighted: the query less any time.
+  String get wordsQuery => _read.words;
+
+  /// The words sent to the session indexes: plain harness search only.
+  String get _contentQuery =>
+      isCommandMode || isHelpMode || isGroupMode || isModelMode || isStoreMode
+      ? ''
+      : matchQuery;
+
+  void _contentChanged() {
+    if (_disposed) return;
+    if (!_chosen) {
+      cursor = 0;
+      _selectedId = null;
+    }
+    _filter();
+    notifyListeners();
+  }
+
   SessionFilter sessionFilter = SessionFilter.all;
   SessionSort sessionSort = SessionSort.recent;
   final machineResources = <String, MachineResources>{};
@@ -211,33 +690,18 @@ class SwarmSearchController extends ChangeNotifier {
       : isHelpMode
       ? '?'
       : '';
-  String get prompt => scopePrefix.isEmpty ? '>' : scopePrefix;
-  String get inputQuery =>
-      isGroupMode || isModelMode || isStoreMode ? matchQuery : query;
-
-  /// Prefix keystrokes change the prompt. The editable field holds only the
-  /// search text, so clearing it does not silently change the selected type.
-  void editQuery(String value) {
-    if (RegExp(r'^[@#:*?]').hasMatch(value)) {
-      setQuery(value);
-    } else if (isCommandMode || isHelpMode) {
-      setQuery(value);
-    } else if (value.startsWith('>') && !isCommandMode) {
-      setQuery(value.substring(1).trimLeft());
-    } else {
-      setQuery(scopePrefix.isEmpty ? value : '$scopePrefix$value');
-    }
-  }
-
   String get createLabel => isMachineMode
-      ? 'New Machine'
+      ? 'Add machine'
       : isModelMode
-      ? 'New Model'
+      ? '[ Add ]'
       : 'New Harness';
   String get createDescription => isMachineMode
-      ? 'Set up or link another computer.'
+      ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n3. Set its password.\n\nThen select it here and Connect.'
       : isModelMode
-      ? 'Add a local model or connect an API.'
+      ? 'Add an API key\n\n'
+            'OpenRouter or a Custom API: Use its models to run a harness.\n'
+            'fal.ai or Replicate: harness agents can call it as a tool.\n\n'
+            'The key stays on this computer.'
       : 'Choose a harness, machine, and project.';
   SwarmGroupScope? _groupScope;
   bool get canGoBack => _groupScope != null;
@@ -260,6 +724,7 @@ class SwarmSearchController extends ChangeNotifier {
     cursor = 0;
     _selectedId = null;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
     return true;
   }
@@ -299,7 +764,8 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool _previewVisible;
   bool get previewVisible => _previewVisible;
-  bool get supportsPreview => !isCommandMode && !isHelpMode && history == null;
+  bool get supportsPreview =>
+      history == null && (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
       selected != null &&
@@ -382,6 +848,7 @@ class SwarmSearchController extends ChangeNotifier {
     _selectedId = draft.selectedId;
     cursor = 0;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 
@@ -523,11 +990,25 @@ class SwarmSearchController extends ChangeNotifier {
       };
 
   String actionLabel(SwarmDestination? row) => row?.isCreate == true
-      ? row!.title
+      ? isModelMode
+            ? 'Add'
+            : row!.title
+      : isModelDownloadsRow(row)
+      ? modelDownloadsVisible
+            ? 'Hide catalog'
+            : 'Get models'
+      : canExpandApi(row)
+      ? expandedApis.contains(models!.entries[row!.modelId]!.api!.id)
+            ? 'Hide models'
+            : 'Show models'
+      : canSelectModel(row)
+      ? 'Use'
+      : canGetModel(row)
+      ? 'Get'
       : row?.isModel == true
-      ? models?.entries[row!.modelId]?.api != null
-            ? 'Edit connection'
-            : 'Open Model Manager'
+      ? 'Unavailable'
+      : setupLayout && row?.isMachine == true
+      ? 'Manage'
       : row?.isStoreEntry == true
       ? 'Open in Store'
       : row?.pickerQuery != null
@@ -612,6 +1093,20 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// With a time in the query, the rows worked on then: last active in it, or
+  /// vouched for by a machine that saw a turn in it.
+  List<SwarmDestination> _within(List<SwarmDestination> rows) {
+    final when = _read.when;
+    if (when == null) return rows;
+    final hits = _content?.hitsFor(_contentQuery) ?? const {};
+    bool then(DateTime? at) =>
+        at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
+    return [
+      for (final row in rows)
+        if (hits.containsKey(row.id) || then(activityOf(row))) row,
+    ];
+  }
+
   void refreshCommands() {
     if (!isCommandMode) return;
     _filter();
@@ -684,7 +1179,7 @@ class SwarmSearchController extends ChangeNotifier {
             swarmId: original?.swarmId,
             paneId: original?.paneId,
             previewKey: original?.previewKey,
-            lastActivityAt: session.lastActiveAt,
+            lastActivityAt: session.agent.lastActivityAt,
             current: original?.current ?? false,
             searchFields: [
               ...?original?.fields,
@@ -785,6 +1280,29 @@ class SwarmSearchController extends ChangeNotifier {
                         (query.isNotEmpty && row.agentId != null)),
               )
               .toList();
+    if (isModelMode && matchQuery.trim().isEmpty && !modelDownloadsVisible) {
+      // Always surface the top few catalog models (in grid-ranking order) so the
+      // picker opens with them already in view; the rest stay hidden until
+      // "Get models" is pressed.
+      final topCatalog = candidates
+          .where((row) => models?.entries[row.modelId]?.needsDownload == true)
+          .take(5)
+          .map((row) => row.id)
+          .toSet();
+      candidates = candidates
+          .where(
+            (row) =>
+                models?.entries[row.modelId]?.needsDownload != true ||
+                topCatalog.contains(row.id),
+          )
+          .toList();
+    }
+    if (isModelMode && matchQuery.trim().isEmpty) {
+      candidates = candidates.where((row) {
+        final entry = models?.entries[row.modelId];
+        return entry?.apiModel == null || expandedApis.contains(entry!.api!.id);
+      }).toList();
+    }
     if (scopedBranch case final branch?) {
       candidates = candidates.where((row) {
         final machine = app.stateOf(row.machineId ?? '');
@@ -801,6 +1319,29 @@ class SwarmSearchController extends ChangeNotifier {
         ..._heldRows.values.where((row) => !present.contains(row.id)),
       ];
     }
+    // Conversations Harness did not start, found by what was said in them: a
+    // row only while a search matches one, never in the list as it opens.
+    if (byActivity &&
+        _contentQuery.isNotEmpty &&
+        scopedBranch == null &&
+        _groupScope == null &&
+        split == null) {
+      final present = {for (final row in candidates) row.id};
+      candidates = [
+        ...candidates,
+        for (final hit
+            in _content?.hitsFor(_contentQuery).values ??
+                const <SessionContentHit>[])
+          if (hit.external case final external?
+              when !present.contains(hit.destinationId))
+            externalSessionDestination(
+              hit,
+              external,
+              machineLabel:
+                  app.stateOf(hit.machineId)?.machine.displayName ?? '',
+            ),
+      ];
+    }
     total = candidates.length;
     rows = isCommandMode
         ? _recentFirst(rankSwarmDestinations(availableCommands, commandQuery))
@@ -815,10 +1356,14 @@ class SwarmSearchController extends ChangeNotifier {
           )
         : byActivity
         ? rankSwarmDestinationsByActivity(
-            candidates,
-            matchQuery,
+            _within(candidates),
+            wordsQuery,
             recent: recent,
             previews: app.sessionPreviews,
+            activityOf: activityOf,
+            contentHits: _contentQuery.isEmpty
+                ? null
+                : _content?.hitsFor(_contentQuery),
           )
         : rankSwarmDestinations(
             candidates,
@@ -836,6 +1381,28 @@ class SwarmSearchController extends ChangeNotifier {
         final aOpen = a.members.any(open.contains);
         final bOpen = b.members.any(open.contains);
         if (aOpen != bOpen) return aOpen ? -1 : 1;
+        final name = compareNatural(
+          a.title.toLowerCase(),
+          b.title.toLowerCase(),
+        );
+        return name != 0 ? name : a.id.compareTo(b.id);
+      });
+    }
+    if (isMachineMode && matchQuery.trim().isEmpty) {
+      int priority(SwarmDestination row) {
+        final machine = app.stateOf(row.machineId!);
+        if (machine == null) return 3;
+        if (machine.isLocalMachine) return 1;
+        if (machine.isOffline) return 3;
+        if (machine.needsLink) return 0;
+        return machine.connectionStatus == ConnectionStatus.disconnected
+            ? 3
+            : 2;
+      }
+
+      rows.sort((a, b) {
+        final group = priority(a).compareTo(priority(b));
+        if (group != 0) return group;
         final name = compareNatural(
           a.title.toLowerCase(),
           b.title.toLowerCase(),
@@ -906,12 +1473,78 @@ class SwarmSearchController extends ChangeNotifier {
       ];
       // When creation is available, keep its row outside the result order.
       rows =
-          resultsFromBottom ||
-              navigating ||
-              placement != null ||
-              query.trim().isEmpty
+          !isMachineMode &&
+              (resultsFromBottom ||
+                  navigating ||
+                  placement != null ||
+                  query.trim().isEmpty)
           ? [?create, ...found]
           : [...found, ?create];
+    }
+    if (isModelMode) {
+      if (matchQuery.trim().isEmpty &&
+          models?.entries.values.any((entry) => entry.needsDownload) == true) {
+        rows = [
+          ...rows,
+          modelDownloadsVisible ? _hideDownloadsRow : _showDownloadsRow,
+        ];
+      }
+      // An API's models are listed under its row, as a group: a search that matches a model and not
+      // its API still shows the API above it, and the models of two APIs never interleave.
+      final shown = {for (final row in rows) row.modelId};
+      for (final row in [...rows]) {
+        final entry = models?.entries[row.modelId];
+        final heading = entry?.apiModel == null
+            ? null
+            : models!.entries['model:api:${entry!.api!.id}']?.destination;
+        if (heading != null && shown.add(heading.modelId)) rows.add(heading);
+      }
+      final apiOrder = {
+        for (final (index, row) in (models?.rows ?? const []).indexed)
+          if (isApiRow(row)) models!.entries[row.modelId]!.api!.id: index,
+      };
+      int apiGroup(SwarmDestination row) =>
+          apiOrder[models?.entries[row.modelId]?.api?.id] ?? 0;
+      final order = {for (final (index, row) in rows.indexed) row.id: index};
+      rows.sort((a, b) {
+        final section = modelSection(a).index.compareTo(modelSection(b).index);
+        if (section != 0) return section;
+        if (modelSection(a) != ModelSearchSection.local) {
+          final create = (a.isCreate ? 1 : 0).compareTo(b.isCreate ? 1 : 0);
+          if (create != 0) return create;
+          if (modelSection(a) == ModelSearchSection.apis && !a.isCreate) {
+            final group = apiGroup(a).compareTo(apiGroup(b));
+            if (group != 0) return group;
+            final heading = (isApiRow(a) ? 0 : 1).compareTo(
+              isApiRow(b) ? 0 : 1,
+            );
+            if (heading != 0) return heading;
+          }
+          return order[a.id]!.compareTo(order[b.id]!);
+        }
+        // The downloads toggle sorts AFTER the catalog rows (rank 2), so the
+        // always-visible top catalog models sit above the "[ Get models ]" row.
+        final installed = (models?.entries[a.modelId]?.localRank ?? 3)
+            .compareTo(models?.entries[b.modelId]?.localRank ?? 3);
+        return installed != 0
+            ? installed
+            : order[a.id]!.compareTo(order[b.id]!);
+      });
+    }
+    if (!isCommandMode && !isHelpMode) {
+      if (noteFor?.call(query) case final note?) {
+        rows = [
+          SwarmDestination(
+            id: 'note:${query.trim().toLowerCase()}',
+            title: note,
+            detail: '',
+            swarmId: null,
+            current: false,
+            isNote: true,
+          ),
+          ...rows,
+        ];
+      }
     }
     // The parent stays above its children visually, but Enter after a query
     // still targets the best match, including an agent nested under that parent.
@@ -954,7 +1587,11 @@ class SwarmSearchController extends ChangeNotifier {
       if (first >= 0) cursor = first;
     }
     _selectedId = selected?.id;
-    matchCount = rows.where((row) => !row.isCreate).length;
+    matchCount = rows
+        .where(
+          (row) => !row.isCreate && !row.isNote && !isModelDownloadsRow(row),
+        )
+        .length;
   }
 
   /// With nothing typed, the commands run lately lead, newest first; the rest
@@ -981,7 +1618,9 @@ class SwarmSearchController extends ChangeNotifier {
     if (isStoreMode) _refreshStore();
     cursor = 0;
     _selectedId = null;
+    _chosen = false;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 
@@ -998,6 +1637,7 @@ class SwarmSearchController extends ChangeNotifier {
     if (rows.isEmpty) return;
     cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
+    _chosen = true;
     notifyListeners();
   }
 
@@ -1016,6 +1656,47 @@ class SwarmSearchController extends ChangeNotifier {
   SwarmSearchSelection? submit([SwarmDestination? row]) {
     final destination = row ?? selected;
     if (destination == null || !canSubmit(destination)) return null;
+    if (canExpandApi(destination)) {
+      final api = models!.entries[destination.modelId]!.api!;
+      final opening = expandedApis.add(api.id);
+      if (!opening) expandedApis.remove(api.id);
+      _filter();
+      final index = opening
+          ? rows.indexWhere(
+              (row) =>
+                  row.modelId?.startsWith(apiModelRowId(api.id, '')) == true,
+            )
+          : rows.indexWhere((row) => row.id == destination.id);
+      if (index >= 0) {
+        cursor = index;
+        _selectedId = selected!.id;
+      }
+      notifyListeners();
+      return null;
+    }
+    if (isModelDownloadsRow(destination)) {
+      modelDownloadsVisible = !modelDownloadsVisible;
+      _filter();
+      if (modelDownloadsVisible) {
+        final index = rows.indexWhere(
+          (row) => models?.entries[row.modelId]?.needsDownload == true,
+        );
+        if (index >= 0) {
+          cursor = index;
+          _selectedId = selected!.id;
+        }
+      }
+      notifyListeners();
+      return null;
+    }
+    if (destination.isModel &&
+        !canSelectModel(destination) &&
+        !canGetModel(destination)) {
+      return null;
+    }
+    if (setupLayout && (destination.isMachine || destination.isModel)) {
+      return SwarmSearchSelection(destination);
+    }
     if (isGroupMode && destination.isGroup) {
       final group = _catalog
           .where((row) => row.id == destination.id && row.isGroup)
@@ -1053,10 +1734,48 @@ class SwarmSearchController extends ChangeNotifier {
     );
   }
 
+  /// Read live state at activation too: a rendered row can outlive a disconnect.
+  String? sessionUnavailable(SwarmDestination? row) {
+    if (row?.external case final external?) {
+      // Short: it is a row's note. The preview says what to do about it. Its
+      // preview's answer is the fresher, when there is one.
+      final previewed = app.sessionTails.read((
+        machineId: row!.machineId ?? '',
+        sessionId: external.sessionId,
+      ));
+      if (external.open || previewed?.openElsewhere == true) {
+        // One in a terminal can be moved here: opening it asks how.
+        final where = previewed?.openIn ?? external.openIn;
+        if (where == 'terminal') return null;
+        if (where == 'harness') return 'Already in Harness';
+        if (where == 'maybe') return 'May be open in a terminal';
+        if (external.origin == 'terminal') {
+          // A machine that predates taking over; or no terminal holds it now.
+          return where == null ? 'Open in another terminal' : 'Open in an app';
+        }
+        return 'Open in the ${external.originLabel}';
+      }
+      final machine = app.stateOf(row.machineId ?? '');
+      return machine == null || machine.nodeOnline == false
+          ? 'Its machine is offline.'
+          : null;
+    }
+    if (!setupLayout || row?.agentId == null) return null;
+    final machine = app.stateOf(row!.machineId!);
+    final agent = machine?.agents
+        .where((agent) => agent.id == row.agentId)
+        .firstOrNull;
+    return harnessSessionUnavailable(machine, agent);
+  }
+
   bool canSubmit(SwarmDestination? row) =>
-      sessionFilter == SessionFilter.needsInput &&
-          _unavailableAttentionIds.contains(row?.id)
+      row?.isNote == true ||
+          sessionUnavailable(row) != null ||
+          sessionFilter == SessionFilter.needsInput &&
+              _unavailableAttentionIds.contains(row?.id)
       ? false
+      : isModelDownloadsRow(row)
+      ? true
       : row?.pickerQuery != null
       ? isHelpMode && _commandIds.contains(row!.id)
       : row?.isModel == true
@@ -1088,28 +1807,43 @@ class SwarmSearchController extends ChangeNotifier {
   bool alreadyHere(SwarmDestination row) =>
       adding && row.agentId != null && _presentIds.contains(row.id);
 
-  bool canAdd(SwarmDestination? row) =>
-      !navigating &&
-      history == null &&
-      row != null &&
-      !row.isCommand &&
-      !row.isModel &&
-      !row.isStoreEntry &&
-      row.closedId == null &&
-      (placement == null || row.agentId != null) &&
-      (placement != null && alreadyHere(row) ||
-          _hasMissing(row) &&
-              (split == null || row.agentId != null) &&
-              (split == null || app.isPaneSplitCurrent(split!)) &&
-              (placement == HarnessPlacement.newTab ||
-                  app.swarms.any(
-                    (swarm) =>
-                        swarm.id == targetId &&
-                        !swarm.isStore &&
-                        !swarm.isOrchestrator &&
-                        swarm.panes.length + _missingCount(row) <=
-                            AppNotifier.maxPanes,
-                  )));
+  bool canAdd(SwarmDestination? row) => row?.external != null
+      // A conversation Harness did not start becomes a new harness: room for
+      // one more pane, or a tab of its own.
+      ? !navigating &&
+            history == null &&
+            split == null &&
+            sessionUnavailable(row) == null &&
+            (placement == HarnessPlacement.newTab ||
+                app.swarms.any(
+                  (swarm) =>
+                      swarm.id == targetId &&
+                      !swarm.isStore &&
+                      !swarm.isOrchestrator &&
+                      swarm.panes.length < AppNotifier.maxPanes,
+                ))
+      : !navigating &&
+            history == null &&
+            row != null &&
+            sessionUnavailable(row) == null &&
+            !row.isCommand &&
+            !row.isModel &&
+            !row.isStoreEntry &&
+            row.closedId == null &&
+            (placement == null || row.agentId != null) &&
+            (placement != null && alreadyHere(row) ||
+                _hasMissing(row) &&
+                    (split == null || row.agentId != null) &&
+                    (split == null || app.isPaneSplitCurrent(split!)) &&
+                    (placement == HarnessPlacement.newTab ||
+                        app.swarms.any(
+                          (swarm) =>
+                              swarm.id == targetId &&
+                              !swarm.isStore &&
+                              !swarm.isOrchestrator &&
+                              swarm.panes.length + _missingCount(row) <=
+                                  AppNotifier.maxPanes,
+                        )));
 
   SwarmSearchSelection? addHere() => adding || isGroupMode || isHelpMode
       ? submit()
@@ -1128,19 +1862,60 @@ class SwarmSearchController extends ChangeNotifier {
       : row.closedId != null
       ? 'Reopen'
       : row.isSwarm && !row.isStore && row.members.length != 1
-      ? 'Go to Tab'
+      ? 'Go to Swarm'
       : 'Open Harness';
 
   @override
   void dispose() {
     _disposed = true;
+    _content?.removeListener(_contentChanged);
+    _content?.dispose();
+    _modelUseTimer?.cancel();
+    if (_modelUseWait?.isCompleted == false) _modelUseWait!.complete();
     app.removeListener(_refresh);
     projects?.removeListener(_refresh);
     models?.removeListener(_modelsChanged);
+    app.gridPictures.removeListener(_modelChoicesChanged);
     app.sessionPreviews.removeListener(_previewChanged);
     _previewPage.dispose();
     _previewLine.dispose();
     _resultPage.dispose();
     super.dispose();
   }
+}
+
+/// A Cmd-P row for a conversation Harness did not start, from the hit that
+/// found it: its title (or what was first asked), the engine and where it ran.
+SwarmDestination externalSessionDestination(
+  SessionContentHit hit,
+  ExternalSessionRef external, {
+  String machineLabel = '',
+}) {
+  final engine = external.engineName;
+  final folder =
+      external.cwd.split('/').where((part) => part.isNotEmpty).lastOrNull ??
+      external.cwd;
+  final detail = [
+    engine,
+    external.originLabel,
+    folder,
+    'not in Harness',
+  ].join(' · ');
+  return SwarmDestination(
+    id: hit.destinationId,
+    title: external.title.isEmpty ? 'Untitled conversation' : external.title,
+    detail: detail,
+    terminalDetail: [
+      detail,
+      if (machineLabel.isNotEmpty) machineLabel,
+    ].join(' · '),
+    lastActivityAt: hit.lastAt ?? hit.at,
+    swarmId: null,
+    current: false,
+    machineId: hit.machineId,
+    machineLabel: machineLabel,
+    engine: external.engine,
+    external: external,
+    searchFields: [folder, external.cwd, engine],
+  );
 }

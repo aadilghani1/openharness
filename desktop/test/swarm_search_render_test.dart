@@ -104,7 +104,8 @@ void main() {
         expect(search.targetId, target.id);
         if (add) {
           expect(search.alreadyHere(rows.single), isTrue);
-          expect(search.canSubmit(rows.single), isTrue);
+          expect(search.canSubmit(rows.single), isFalse);
+          expect(search.sessionUnavailable(rows.single), 'Offline');
           expect(search.actionLabel(rows.single), 'Focus pane');
         } else {
           expect(rows.map((row) => row.swarmId).toSet(), {
@@ -253,7 +254,11 @@ void main() {
         )
         .search!;
     final previous = search.selected!.id;
-    final visibleRows = find.byType(InkWell).evaluate().toSet();
+    final visibleRows = find.byType(InkWell).evaluate().where((element) {
+      final key = element.widget.key;
+      return key is ValueKey<String> && key.value.startsWith('agent:');
+    }).toSet();
+    expect(visibleRows, isNotEmpty);
     var fields = 0;
     var rows = 0;
     debugOnRebuildDirtyWidget = (element, _) {
@@ -403,7 +408,7 @@ void main() {
   testWidgets('Add header and cached rows respond when capacity changes', (
     tester,
   ) async {
-    final app = createApp();
+    final app = createApp(connected: true);
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a69', input));
     await mount(tester, app);

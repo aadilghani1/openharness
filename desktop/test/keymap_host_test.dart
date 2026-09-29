@@ -119,7 +119,7 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+h', 'cmd+shift+k', 'cmd+u']) {
+    for (final retired in ['cmd+shift+h', 'cmd+shift+k', 'cmd+u', 'cmd+y']) {
       expect(command(retired), isNull, reason: retired);
     }
     expect(command('cmd+alt+left'), isNull);
@@ -127,6 +127,27 @@ void main() {
     expect(command('ctrl+n', KeymapContext.picker), 'picker.next');
     expect(command('cmd+t', KeymapContext.picker), 'swarm.new');
     expect(command('cmd+['), 'navigation.back');
+  });
+
+  test('Models uses Cmd I and respects a saved pane shortcut', () {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    expect(map.hint('models.list'), '⌘I');
+    expect(harnessCommandById['pane.last']!.keys, isEmpty);
+    map.apply('''{"bindings":[
+      {"keys":"cmd+semicolon","command":"pane.last"},
+      {"keys":"cmd+y","command":"models.list"}
+    ]}''');
+    for (final context in KeymapContext.values) {
+      expect(
+        map.current.match(context, [KeyStroke.parse('cmd+semicolon')]).command,
+        'pane.last',
+      );
+      expect(
+        map.current.match(context, [KeyStroke.parse('cmd+y')]).command,
+        'models.list',
+      );
+    }
   });
 
   test(

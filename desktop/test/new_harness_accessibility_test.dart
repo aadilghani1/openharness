@@ -22,6 +22,10 @@ void main() {
     addTearDown(() => newHarnessOpensInBox = false);
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final map = MemoryKeymap();
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a0', input));
@@ -41,10 +45,11 @@ void main() {
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller
           .field,
-      NewHarnessField.agent,
+      NewHarnessField.harness,
     );
     expect(input, isEmpty);
     // Pointer users can open the same choices and return to field navigation.
+    await key(tester, LogicalKeyboardKey.escape);
     await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
     await tester.pump();
     expect(harnessChoicesActive(tester), isTrue);
@@ -56,7 +61,9 @@ void main() {
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
     await key(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.model);
+    expect(box.field, NewHarnessField.harness);
+    await key(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.projectMenu);
     expect(input, isEmpty);
     semantics.dispose();
     await tester.pumpWidget(const SizedBox());

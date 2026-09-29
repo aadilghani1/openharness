@@ -7,9 +7,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// Where an agent IS: the folder it was started in, the branch that folder is on, and the machine
 /// running it — `autonomous-harness · ⑂ main · MacBookPro2021.local`.
 ///
-/// The same three facts, in the same order, as the desktop's pane header
-/// (`widgets/terminal_pane_header.dart`), so an agent recognised on one screen is recognised on the
-/// other. A name alone stops identifying anything the moment somebody has two `main` agents, which
+/// The same three facts, in the same order, as the desktop's pane header, so an agent recognised
+/// on one screen is recognised on the other. A name alone stops identifying anything the moment somebody has two `main` agents, which
 /// on a phone — where the Agents tab mixes every machine into one list — happens immediately.
 ///
 /// ⚠️ **Two flexible halves, not one line of text.** A phone row leaves this about 240pt, and the
@@ -22,36 +21,38 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// with the folder and is cut first when that half runs out. It is the least use in *finding* an
 /// agent, and the terminal page names it in full once one is open.
 class AgentContextLine extends StatelessWidget {
-  const AgentContextLine({
-    super.key,
-    required this.project,
-    required this.machineName,
-  });
+  const AgentContextLine({super.key, required this.project, this.machineName});
 
   /// Null on a daemon too old to report it, and until the first agent snapshot binds one. The line
   /// then names the machine alone rather than holding a gap open where the folder would be.
   final AgentProject? project;
 
-  final String machineName;
+  /// Null where the machine is already named above the row — the add-agent sheet groups its rows
+  /// under a heading per machine, and a name repeated on every row there is only width lost to the
+  /// folder and branch.
+  final String? machineName;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final branch = project?.branchLabel;
+    final branch = project?.shownBranch;
+    final machineName = this.machineName;
     final place = <InlineSpan>[
-      if (project != null) TextSpan(text: project!.folder),
-      if (project != null && branch != null) _separator,
+      if (project != null) TextSpan(text: project!.label),
+      // No `·` before the branch: its icon is the separator, as everywhere.
+      if (project != null && branch != null) const TextSpan(text: '  '),
       if (branch != null) ...[_branchMark, TextSpan(text: branch)],
     ];
     return Row(
       children: [
         if (place.isNotEmpty) Flexible(child: _line(place)),
-        Flexible(
-          child: _line([
-            if (place.isNotEmpty) _separator,
-            TextSpan(text: machineName),
-          ]),
-        ),
+        if (machineName != null)
+          Flexible(
+            child: _line([
+              if (place.isNotEmpty) _separator,
+              TextSpan(text: machineName),
+            ]),
+          ),
       ],
     );
   }

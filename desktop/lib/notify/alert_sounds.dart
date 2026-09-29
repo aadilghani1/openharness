@@ -8,10 +8,13 @@ import 'package:flutter/services.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 
-/// What an alert is FOR. The two moments worth interrupting someone over.
+/// What happened on a harness while the person was looking elsewhere.
 enum AlertKind {
   /// An agent finished its turn. The work you were waiting on is on screen.
   done('Glass'),
+
+  /// A turn ended with an error. Keep the existing turn-end sound.
+  failed('Glass'),
 
   /// An agent stopped and is waiting on a person — a question, a permission.
   /// Nothing moves until somebody answers, which is why it is the more
@@ -26,26 +29,21 @@ enum AlertKind {
   final String sound;
 }
 
-/// Whether this computer plays a sound when an agent finishes or gets stuck.
+/// An on/off preference kept in the app's own store.
 ///
-/// OFF by default. An app that makes a noise nobody asked for is a bad guest,
-/// and a swarm is many agents: the first thing a new user would hear is a
-/// sound they did not choose, from a window they may not be looking at. It is
-/// one switch away in Settings ▸ Notifications for anybody who wants it.
-class AlertSoundStore extends ValueNotifier<bool> {
-  AlertSoundStore({LocalKeyValueStore? storage})
+/// OFF by default, and only the exact string `on` switches it on — a truncated
+/// or hand-edited file lands on the default, so a damaged store cannot start
+/// interrupting somebody who never asked. Every alert switch follows that rule,
+/// so it is written once.
+abstract class OnOffPreference extends ValueNotifier<bool> {
+  OnOffPreference(this._key, {LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared,
       super(false);
 
-  static const _key = 'app_alert_sounds';
-
+  final String _key;
   final LocalKeyValueStore _storage;
   Future<void>? _save;
 
-  /// Read the saved choice. Tolerant: a missing or hand-edited value lands on
-  /// the default rather than throwing, the same rule the appearance store
-  /// follows. Only the exact string `on` switches it on, so a truncated file
-  /// cannot start making noises nobody asked for.
   Future<void> load() async {
     try {
       value = (await _storage.read(_key)) == 'on';
@@ -67,41 +65,23 @@ class AlertSoundStore extends ValueNotifier<bool> {
   }
 }
 
+/// Whether this computer plays a sound when an agent finishes or gets stuck.
+///
+/// OFF by default. An app that makes a noise nobody asked for is a bad guest,
+/// and a swarm is many agents: the first thing a new user would hear is a
+/// sound they did not choose, from a window they may not be looking at. It is
+/// one switch away in Settings ▸ Notifications for anybody who wants it.
+class AlertSoundStore extends OnOffPreference {
+  AlertSoundStore({super.storage}) : super('app_alert_sounds');
+}
+
 /// Whether a banner appears in the window when an agent finishes or gets stuck.
 ///
 /// OFF by default, like the sound. Both are interruptions, and an app that
 /// interrupts without being asked is a bad guest whichever sense it reaches
 /// for. One switch each in Settings ▸ Notifications.
-class ScreenAlertStore extends ValueNotifier<bool> {
-  ScreenAlertStore({LocalKeyValueStore? storage})
-    : _storage = storage ?? HarnessFileStore.shared,
-      super(false);
-
-  static const _key = 'app_screen_alerts';
-
-  final LocalKeyValueStore _storage;
-  Future<void>? _save;
-
-  /// Only the exact string `on` switches it on — a truncated or hand-edited
-  /// file lands on the default, so a damaged store cannot start interrupting
-  /// somebody who never asked. The same rule [AlertSoundStore] follows.
-  Future<void> load() async {
-    try {
-      value = (await _storage.read(_key)) == 'on';
-    } catch (_) {
-      value = false;
-    }
-  }
-
-  Future<void> set(bool on) {
-    if (value == on) return _save ?? Future.value();
-    value = on;
-    final pending = (_save ?? Future.value()).then(
-      (_) => _storage.write(_key, on ? 'on' : 'off'),
-    );
-    _save = pending;
-    return pending;
-  }
+class ScreenAlertStore extends OnOffPreference {
+  ScreenAlertStore({super.storage}) : super('app_screen_alerts');
 }
 
 /// The stores the app reads, loaded at start-up beside the other preferences.
@@ -127,15 +107,15 @@ class AlertSounds {
   final MethodChannel _channel;
   final DateTime Function() now;
 
-  /// The least time between two sounds of the same kind.
+  /// The least time between two plays of the same sound.
   ///
   /// A swarm is many agents, and a batch of them finishing together is the
   /// ordinary case rather than the rare one — without this it is a burst of
-  /// beeps that says nothing more than one beep would. Per KIND, so an agent
+  /// beeps that says nothing more than one beep would. Per sound, so an agent
   /// finishing never swallows the more urgent "somebody is waiting on you".
   final Duration gap;
 
-  final _lastPlayed = <AlertKind, DateTime>{};
+  final _lastPlayed = <String, DateTime>{};
 
   /// Ask for a sound. Silent when the feature is off, and when the same kind
   /// played within [gap].
@@ -146,9 +126,9 @@ class AlertSounds {
   void play(AlertKind kind) {
     if (!store.value) return;
     final at = now();
-    final last = _lastPlayed[kind];
+    final last = _lastPlayed[kind.sound];
     if (last != null && at.difference(last) < gap) return;
-    _lastPlayed[kind] = at;
+    _lastPlayed[kind.sound] = at;
     unawaited(
       _channel
           .invokeMethod<void>('playAlert', {'sound': kind.sound})

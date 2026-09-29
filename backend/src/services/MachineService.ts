@@ -2,7 +2,7 @@ import type { Machine } from '@prisma/client'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { selectManagerId } from '../lib/managers.js'
 import { provisionViaManager } from '../lib/provision.js'
-import { getAgentPresence, clearAgentPresence, publishDown, publishDeviceMachineListChanged, pub, consumeNewIdQuota } from '../lib/bus.js'
+import { getAgentPresence, readAgentPresence, clearAgentPresence, publishDown, publishDeviceMachineListChanged, pub, consumeNewIdQuota } from '../lib/bus.js'
 import { randomUUID } from 'node:crypto'
 import { generateApiKey, machineIdFromKey } from '../utils/crypto.js'
 import { assertMachineId, isMachineId } from '../utils/slug.js'
@@ -236,7 +236,9 @@ async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { statu
 }
 
 /** Remote agents have no agent_nodes row — their liveness is the adapter's presence key
- *  (`agent:{id}:mgr`, set by /api/adapter-ws while the machine is connected). Patch `info` in place. */
+ *  (`agent:{id}:mgr`, set by /api/adapter-ws while the machine is connected). Patch `info` in place.
+ *  A presence read that FAILED is `unknown`, never `offline`: a daemon takes `offline` as evidence and
+ *  labels that computer's models "seems offline" (grid-reads-without-waking issue 03). */
 async function applyRemoteStatus(
   bindings: Machine[],
   plans: Map<string, PlanInfo>,
@@ -245,8 +247,9 @@ async function applyRemoteStatus(
   const remote = bindings.filter((b) => plans.get(b.machineId)?.authMode === 'remote')
   await Promise.all(
     remote.map(async (b) => {
-      const online = !!(await getAgentPresence(b.machineId))
-      info.set(b.machineId, { status: online ? 'running' : 'offline', engine: 'claude' })
+      const present = await readAgentPresence(b.machineId)
+      const status = present === null ? 'unknown' : present ? 'running' : 'offline'
+      info.set(b.machineId, { status, engine: 'claude' })
     }),
   )
 }
@@ -621,6 +624,10 @@ export const machineService = {
       await prisma.machine.update({ where: { machineId: machineId }, data: { deletedAt: new Date() } }).catch(() => { /* already gone */ })
       await publishDeviceMachineListChanged(binding.userId, { reason: 'deleted' }).catch(() => { /* best effort */ })
     }
+
+    // A machine signed in by a phone's approval holds a daemon session of its own; it ends with the machine.
+    const { revokeMachineSessions } = await import('../lib/harnessSession.js')
+    await revokeMachineSessions(machineId).catch(() => { /* best effort — the socket is refused anyway */ })
 
     if (binding.managerId === '') {
       // Remote agents have no node/container — just drop presence so the list goes offline immediately.

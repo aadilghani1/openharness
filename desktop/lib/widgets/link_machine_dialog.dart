@@ -13,7 +13,11 @@ import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 
 /// This computer's incoming password and, separately, its outgoing links.
-Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
+Future<void> showLinkMachineDialog(
+  BuildContext context,
+  AppNotifier notifier, {
+  bool passwordOnly = false,
+}) {
   final keymap = KeymapTheme.of(context, listen: false);
   return showAppDialog<void>(
     context: context,
@@ -21,7 +25,10 @@ Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
     veilBlur: 0,
     veilTint: Colors.transparent,
     builder: (_) {
-      final dialog = _LinkMachineDialog(notifier: notifier);
+      final dialog = _LinkMachineDialog(
+        notifier: notifier,
+        passwordOnly: passwordOnly,
+      );
       return keymap == null
           ? dialog
           : KeymapProvider(keymap: keymap, child: dialog);
@@ -32,8 +39,12 @@ Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
 enum _Page { password, clear, links, unlink }
 
 class _LinkMachineDialog extends StatefulWidget {
-  const _LinkMachineDialog({required this.notifier});
+  const _LinkMachineDialog({
+    required this.notifier,
+    required this.passwordOnly,
+  });
   final AppNotifier notifier;
+  final bool passwordOnly;
   @override
   State<_LinkMachineDialog> createState() => _LinkMachineDialogState();
 }
@@ -450,7 +461,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
     focusNode: first ? _actionFocus : null,
     onPressed: action,
     style: TextButton.styleFrom(
-      foregroundColor: danger ? Colors.orangeAccent : Colors.white70,
+      foregroundColor: danger ? boxErrorText : boxText(.70),
       textStyle: boxMonoStyle(),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       minimumSize: const Size(0, 30),
@@ -493,7 +504,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
               heightFactor: 1,
               child: Text(
                 confirm ? '   again >' : 'password >',
-                style: boxMonoStyle(color: Colors.white70),
+                style: boxMonoStyle(color: boxText(.70)),
               ),
             ),
           ),
@@ -554,7 +565,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
       if (_editing) ...[
         Text(
           'Use this password on the other machine to link to this computer.',
-          style: boxMonoStyle(color: Colors.white70),
+          style: boxMonoStyle(color: boxText(.70)),
         ),
         const SizedBox(height: 12),
         _field(confirm: false),
@@ -579,14 +590,14 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
         const SizedBox(height: 8),
         Text(
           'On the other machine: Link machine → select this computer → enter its password.',
-          style: boxMonoStyle(color: Colors.white70),
+          style: boxMonoStyle(color: boxText(.70)),
         ),
         if (_status!.fingerprint case final fingerprint?) ...[
           const SizedBox(height: 12),
           Text('fingerprint', style: boxMonoStyle(color: kBoxFaint)),
           SelectableText(
             fingerprint,
-            style: boxMonoStyle(color: Colors.white70),
+            style: boxMonoStyle(color: boxText(.70)),
           ),
         ],
         if (_status!.setAt case final date?)
@@ -619,22 +630,24 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
           style: boxMonoStyle(color: kBoxFaint),
         ),
       ],
-      const SizedBox(height: 12),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: _button(
-          'Links from this computer…',
-          _busy ? null : _links,
-          key: const Key('remote-password-links-button'),
+      if (!widget.passwordOnly) ...[
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _button(
+            'Links from this computer…',
+            _busy ? null : _links,
+            key: const Key('remote-password-links-button'),
+          ),
         ),
-      ),
+      ],
     ];
   }
 
   List<Widget> _linksBody() => [
     Text(
       'Machines this computer can connect to.',
-      style: boxMonoStyle(color: Colors.white70),
+      style: boxMonoStyle(color: boxText(.70)),
     ),
     const SizedBox(height: 8),
     Align(
@@ -681,7 +694,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
         clear
             ? 'Prevent new links using this password? Existing links and sessions stay connected.'
             : 'Remove this computer’s saved link to ${_name(_unlinkTarget!)}? A new connection will need that machine’s password.',
-        style: boxMonoStyle(color: Colors.white70),
+        style: boxMonoStyle(color: boxText(.70)),
       ),
       const SizedBox(height: 14),
       Wrap(

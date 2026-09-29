@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
-import 'package:harness_mobile/phone/terminal_header.dart';
+import 'package:harness_mobile/phone/terminal_title.dart';
 import 'package:harness_mobile/phone/terminal_key_bar.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -82,6 +83,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     final before = tester.getSize(find.byType(TerminalView));
     resizes.clear();
+    // The title over the terminal's top rows, where a tap lands on it.
+    expect(find.byType(TerminalTitle).hitTestable(), findsOneWidget);
 
     // Back into the scrollback, then forward again: the forward push is what
     // sends the header away.
@@ -93,7 +96,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     // Folded: the header is no longer where a tap would land on it.
-    expect(find.byType(TerminalHeader).hitTestable(), findsNothing);
+    expect(find.byType(TerminalTitle).hitTestable(), findsNothing);
     expect(tester.getSize(find.byType(TerminalView)), before);
     // The slide is over; a resize owed to it would be on its way by now.
     await tester.pump(const Duration(seconds: 1));
@@ -116,7 +119,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     resizes.clear();
 
-    await tester.tap(find.byKey(const ValueKey('terminal-search')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     // The search field's keyboard slides up, and the page shrinks above it.
     tester.view.viewInsets = const FakeViewPadding(bottom: 900);
@@ -153,7 +159,20 @@ void main() {
       expect(find.byType(TerminalActionColumn), findsOneWidget);
     }
 
-    await tester.tap(find.byKey(const ValueKey('terminal-search')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    // Find opens on the recent agents; a tap on its field is what starts a
+    // search and brings the keyboard.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(TtyField),
+        matching: find.byType(TextField),
+      ),
+    );
     await tester.pump();
     addTearDown(tester.view.resetViewInsets);
     for (final inset in const [300.0, 600.0, 900.0]) {
@@ -173,7 +192,15 @@ void main() {
     // inset it reports falls over ~0.5s — past the end of search's fade. Every
     // frame, through the fade AND after it, shows the terminal search opened
     // over; releasing it with the fade let the falling inset raise its key bar.
-    await tester.tap(find.bySemanticsLabel('Back'));
+    //
+    // Find is flung shut to the left, the way it came in — the one close that
+    // leaves with the keyboard still up. From the list: the prompt keeps a
+    // sideways drag for moving its caret.
+    await tester.flingFrom(
+      tester.getCenter(find.byType(PhoneSearchResults)),
+      const Offset(-300, 0),
+      2000,
+    );
     await tester.pump();
     for (var ms = 0; ms <= 700; ms += 16) {
       tester.view.viewInsets = FakeViewPadding(
@@ -184,6 +211,7 @@ void main() {
     }
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(PhoneSearchResults), findsNothing);
+    expect(find.byType(TtyField), findsNothing);
     expectUntouched();
     expect(resizes, isEmpty);
   });

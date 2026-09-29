@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,6 +33,10 @@ void main() {
         expect(tester.widget<TextField>(_input).controller!.text, '>');
         expect(
           find.textContaining('run command', findRichText: true),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('swarm-search-preview')),
           findsOneWidget,
         );
         expect(find.widgetWithText(ListTile, 'Agent 0'), findsNothing);
@@ -75,7 +80,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: selected, matching: find.text('Add to this tab')),
+      find.descendant(of: selected, matching: find.text('Add to this swarm')),
       findsOneWidget,
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -264,8 +269,7 @@ void main() {
   testWidgets('Open reuses a session and hands the terminal its next key', (
     tester,
   ) async {
-    final app = createApp();
-    app.machineStates['m']!.nodeOnline = true;
+    final app = createApp(connected: true);
     final frames = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', frames));
     final original = app.activeSwarm;

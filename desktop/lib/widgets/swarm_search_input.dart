@@ -30,10 +30,10 @@ class SwarmSearchInput extends StatelessWidget {
     this.fillColor,
     this.trailing,
     this.height,
+    this.cursorWidth,
     this.prompt,
     this.terminal = false,
     this.bios = false,
-    this.onEmptyBackspace,
   });
 
   final Key inputKey;
@@ -56,16 +56,15 @@ class SwarmSearchInput extends StatelessWidget {
   /// The input's height, when it is not the start page's 56 or 64: New
   /// Harness sizes its agent search to the tiles under it.
   final double? height;
+  final double? cursorWidth;
 
   /// The typed text and the hint; the search glyph grows with it.
   double get fontSize => bios ? terminalFontStore.size : grid.AppType.monoSize;
   final String? prompt;
 
   /// Plain monospace input in a TerminalBox, without a decorative search glyph.
-  /// The active resource prefix can be rendered separately as [prompt].
   final bool terminal;
   final bool bios;
-  final VoidCallback? onEmptyBackspace;
 
   @override
   Widget build(BuildContext context) {
@@ -74,16 +73,7 @@ class SwarmSearchInput extends StatelessWidget {
       // Command mode changes with the editor value. Result highlights do not,
       // so arrow navigation must not rebuild the text field.
       listenable: controller,
-      builder: (context, _) => Actions(
-        actions: {
-          if (onEmptyBackspace != null)
-            DeleteCharacterIntent: _ScopeBackspaceAction(
-              controller,
-              onEmptyBackspace!,
-            ),
-        },
-        child: _buildInput(context),
-      ),
+      builder: (context, _) => _buildInput(context),
     );
   }
 
@@ -115,9 +105,7 @@ class SwarmSearchInput extends StatelessWidget {
               : 12,
         ),
       ),
-      borderSide: outlined
-          ? BorderSide(color: Colors.white.withValues(alpha: .10))
-          : BorderSide.none,
+      borderSide: outlined ? BorderSide(color: boxInk(.10)) : BorderSide.none,
     );
     final field = TextField(
       key: inputKey,
@@ -129,9 +117,9 @@ class SwarmSearchInput extends StatelessWidget {
       onTapAlwaysCalled: true,
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
-      style: terminalStyle ? style : grid.AppType.mono(color: Colors.white),
+      style: terminalStyle ? style : grid.AppType.mono(color: boxText(1)),
       cursorColor: bios ? theme.cursor : grid.AppPalette.swarmAccent,
-      cursorWidth: bios ? cell.width : 2,
+      cursorWidth: cursorWidth ?? (bios ? cell.width : 2),
       cursorRadius: Radius.zero,
       cursorOpacityAnimates: !bios,
       autocorrect: !bios,
@@ -140,9 +128,7 @@ class SwarmSearchInput extends StatelessWidget {
       decoration: bios
           ? InputDecoration(
               hintText: hint,
-              hintStyle: style.copyWith(
-                color: theme.foreground.withValues(alpha: .54),
-              ),
+              hintStyle: style.copyWith(color: theme.muted),
               hintMaxLines: 1,
               isDense: true,
               isCollapsed: true,
@@ -157,7 +143,7 @@ class SwarmSearchInput extends StatelessWidget {
               hintText: hint,
               hintStyle: terminalStyle
                   ? style.copyWith(color: kBoxFaint)
-                  : grid.AppType.mono(color: Colors.white60),
+                  : grid.AppType.mono(color: boxText(.60)),
               hintMaxLines: 1,
               prefixIcon: prompt != null
                   ? Padding(
@@ -177,11 +163,7 @@ class SwarmSearchInput extends StatelessWidget {
                     )
                   : terminal
                   ? null
-                  : Icon(
-                      Icons.search,
-                      size: fontSize + 4,
-                      color: Colors.white60,
-                    ),
+                  : Icon(Icons.search, size: fontSize + 4, color: boxText(.60)),
               prefixIconConstraints: BoxConstraints(
                 minWidth: prompt != null
                     ? 36
@@ -201,7 +183,7 @@ class SwarmSearchInput extends StatelessWidget {
                             TextButton(
                               onPressed: onClose,
                               style: TextButton.styleFrom(
-                                foregroundColor: Colors.white60,
+                                foregroundColor: boxText(.60),
                                 minimumSize: const Size(36, 28),
                               ),
                               child: Text(
@@ -237,51 +219,40 @@ class SwarmSearchInput extends StatelessWidget {
               focusedBorder: terminalStyle ? InputBorder.none : border,
             ),
     );
-    if (!bios) return field;
+    // Keep the field at the same depth when a prefix switches layouts so the
+    // existing EditableText and its platform input connection can be retained.
     return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: cell.width * 2,
-        vertical: cell.height,
-      ),
+      // Keep the editable text aligned with result titles, without a separate
+      // prompt. Resource prefixes are ordinary text in the controller.
+      padding: bios
+          ? EdgeInsets.fromLTRB(
+              cell.width * (prompt == null ? 4 : 2),
+              cell.height,
+              cell.width * 2,
+              cell.height,
+            )
+          : EdgeInsets.zero,
       child: SizedBox(
-        height: cell.height,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            SizedBox(
-              width: cell.width * 2,
-              child: Text(
-                prompt ?? '>',
-                key: const ValueKey('swarm-search-prompt'),
-                textAlign: TextAlign.center,
-                style: style,
-              ),
-            ),
-            Expanded(child: field),
-          ],
-        ),
+        height: bios ? cell.height : null,
+        child: bios && prompt != null
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  SizedBox(
+                    width: cell.width * 2,
+                    child: Text(
+                      prompt!,
+                      key: const ValueKey('swarm-search-prompt'),
+                      textAlign: TextAlign.center,
+                      style: style,
+                    ),
+                  ),
+                  Expanded(child: field),
+                ],
+              )
+            : field,
       ),
     );
-  }
-}
-
-/// EditableText handles Backspace before an ancestor shortcut can see it.
-/// Override its editing action only for an empty, non-composing query.
-class _ScopeBackspaceAction extends Action<DeleteCharacterIntent> {
-  _ScopeBackspaceAction(this.controller, this.clearScope);
-  final TextEditingController controller;
-  final VoidCallback clearScope;
-
-  @override
-  Object? invoke(DeleteCharacterIntent intent) {
-    final value = controller.value;
-    if (!intent.forward &&
-        value.text.isEmpty &&
-        (!value.composing.isValid || value.composing.isCollapsed)) {
-      clearScope();
-      return null;
-    }
-    return callingAction?.invoke(intent);
   }
 }

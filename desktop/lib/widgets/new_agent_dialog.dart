@@ -899,7 +899,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         elevation: 4,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(3),
-          side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+          side: BorderSide(color: boxInk(.24)),
         ),
         title: Text(_title),
         titleTextStyle: boxMonoStyle(color: kBoxFaint),
@@ -1064,14 +1064,12 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                           horizontal: 12,
                           vertical: 8,
                         ),
-                        backgroundColor: Colors.white.withValues(alpha: .08),
-                        foregroundColor: Colors.white,
+                        backgroundColor: boxInk(.08),
+                        foregroundColor: boxText(1),
                         textStyle: boxMonoStyle(),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(2),
-                          side: BorderSide(
-                            color: Colors.white.withValues(alpha: .24),
-                          ),
+                          side: BorderSide(color: boxInk(.24)),
                         ),
                         disabledForegroundColor: _submitting
                             ? grid.AppPalette.textPrimary
@@ -1083,11 +1081,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const SizedBox(
+                                  SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(
-                                      color: Colors.white,
+                                      color: boxText(1),
                                       strokeWidth: 2,
                                     ),
                                   ),

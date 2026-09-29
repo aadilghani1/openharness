@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart' show compareNatural;
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -18,10 +19,8 @@ class AgentEntry {
   String get machineId => machine.machine.machineId;
   String get machineName => machine.machine.displayName;
 
-  /// The folder this agent works in, as [AgentContextLine] names it. Through [MachineState.projectOf]
-  /// rather than `agent.project` directly: a locally launched agent carries its project on the
-  /// machine's own side, and a row reading the field alone shows nothing for exactly those agents.
-  AgentProject? get project => machine.projectOf(agent);
+  /// The folder this agent works in, as [AgentContextLine] names it.
+  AgentProject? get project => agent.project;
 
   /// Whether this agent is blocked on an answer from the person holding the phone.
   bool get isWaiting => machine.blockedAgents.containsKey(agent.id);
@@ -31,11 +30,18 @@ class AgentEntry {
   /// Whether a tap can land on this agent — it has a terminal, or it is saved
   /// work a resume can bring back ([AppNotifier.resumeAgent]).
   ///
+  /// ⚠️ **Stopped is not enough: its machine has to be able to bring it back**
+  /// ([Agent.canPauseAndResume]), the desktop's `canOpen`. Stopped work it
+  /// cannot was offered as a tap that could only ever end in "no supported
+  /// saved conversation to resume" — and work it can, greyed out, was the
+  /// phone reading an older, stricter rule than the machine.
+  ///
   /// ⚠️ **Not `terminalAvailable` alone.** A stopped agent has no terminal and
   /// never will until something restarts it, so the bare flag sorted every one
   /// of them to the bottom of every list and made them untappable — which,
   /// before the app asked for them at all, was invisible. It is visible now.
-  bool get isOpenable => agent.terminalAvailable || agent.isStopped;
+  bool get isOpenable =>
+      agent.terminalAvailable || (agent.isStopped && agent.canPauseAndResume);
 
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
@@ -111,6 +117,34 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
       _firstWhere(a.isOpenable, b.isOpenable) ??
       _newestFirst(a.lastActiveAt, b.lastActiveAt),
 );
+
+/// The order the desktop's Harness Monitor lists harnesses in, "Recent" — so a list the phone
+/// opens on reads top to bottom as the monitor on the laptop beside it does.
+///
+/// ⚠️ **The machine's own `updatedAt`, never [AgentEntry.lastActiveAt].** That one folds in turns
+/// THIS phone happened to see, which the desktop never saw — two lists sorted on two different
+/// clocks drift apart on exactly the agents somebody is watching. `updatedAt` reaches both apps in
+/// the same frames, so both sort on one clock. An agent with none sorts last, as it does there.
+///
+/// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
+/// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
+int compareMonitorOrder(AgentEntry a, AgentEntry b) {
+  // When the conversation last MOVED — the true time (the owner: "use conversation last move, not
+  // last open"). Opening a harness on some app is not work on it, and sorting it up for that put a
+  // glance above the harness that actually just did something.
+  final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
+  );
+  if (activity != 0) return activity;
+  final name = compareNatural(
+    a.agent.displayName.toLowerCase(),
+    b.agent.displayName.toLowerCase(),
+  );
+  if (name != 0) return name;
+  return '${a.machineId}/${a.agent.id}'.compareTo(
+    '${b.machineId}/${b.agent.id}',
+  );
+}
 
 /// -1 when only [a] holds, 1 when only [b] does, null on a tie — so comparators chain with `??`.
 int? _firstWhere(bool a, bool b) => a == b ? null : (a ? -1 : 1);

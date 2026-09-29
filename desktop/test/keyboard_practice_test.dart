@@ -78,7 +78,9 @@ void main() {
         for (final binding in map.current.bindingsFor(context)) {
           if (binding.command == 'navigation.command_bar' ||
               binding.command == 'app.debug' ||
-              harnessCommandById[binding.command]?.hidden == true) {
+              harnessCommandById[binding.command]?.hidden == true ||
+              // The daemon's exist only while daemons are on (off here).
+              !harnessCommandActive(binding.command!)) {
             continue;
           }
           expect(
@@ -96,6 +98,15 @@ void main() {
         lessons.any((l) => l.command == 'agent.stop' && l.bindings.isEmpty),
         isTrue,
       );
+      expect(lessons.any((l) => l.command == 'app.daemon_talk'), isFalse);
+      daemonCommandsActive.value = true;
+      addTearDown(() => daemonCommandsActive.value = false);
+      expect(
+        keyboardLessons(map).any((l) => l.command == 'app.daemon_talk'),
+        isTrue,
+        reason: 'with daemons on, ⌘⌥T is practised too',
+      );
+      daemonCommandsActive.value = false;
       expect(
         lessons.any((l) => l.command == 'navigation.command_bar'),
         isFalse,
@@ -117,13 +128,13 @@ void main() {
       await configured.mount(tester, app, map);
       await command(tester, 'Keyboard practice');
       expect(filter, findsOneWidget);
-      await openLesson(tester, 'New Tab');
+      await openLesson(tester, 'New Swarm');
       await key(tester, LogicalKeyboardKey.keyW, cmd: true);
-      expect(find.textContaining('That is Close Tab'), findsOneWidget);
+      expect(find.textContaining('That is Close Swarm'), findsOneWidget);
       expect(app.swarms, [original]);
       expect(original.panes, panes);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      expect(find.text('[x] New Tab'), findsOneWidget);
+      expect(find.text('[x] New Swarm'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await openLesson(tester, 'Stop Harness');
       await tester.enterText(
@@ -155,22 +166,22 @@ void main() {
       '''{"bindings":[{"keys":"cmd+t","command":null},{"keys":"ctrl+x ctrl+t","command":"swarm.new"}]}''',
     );
     await tester.pumpWidget(MaterialApp(home: KeyboardPractice(keymap: map)));
-    await openLesson(tester, 'New Tab');
+    await openLesson(tester, 'New Swarm');
     expect(find.text('Press ctrl-X ctrl-T'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-    expect(find.text('[x] New Tab'), findsNothing);
+    expect(find.text('[x] New Swarm'), findsNothing);
     await key(tester, LogicalKeyboardKey.keyX, ctrl: true);
     await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
-    expect(find.text('[x] New Tab'), findsOneWidget);
+    expect(find.text('[x] New Swarm'), findsOneWidget);
     map.apply('''{"bindings":[{"keys":"cmd+t","command":null}]}''');
     await tester.pump();
     expect(find.byKey(const ValueKey('practice-command')), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('practice-command')),
-      'New Tab',
+      'New Swarm',
     );
     await key(tester, LogicalKeyboardKey.enter);
-    expect(find.text('[x] New Tab'), findsOneWidget);
+    expect(find.text('[x] New Swarm'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -202,7 +213,7 @@ void main() {
           home: KeyboardPractice(keymap: map, storage: storage),
         ),
       );
-      await openLesson(tester, 'New Tab');
+      await openLesson(tester, 'New Swarm');
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       storage.pending!.complete(jsonEncode([earlier.id]));
       await tester.pumpAndSettle();
@@ -224,7 +235,7 @@ void main() {
     'practice buttons activate from the keyboard in both lesson contexts',
     (tester) async {
       await tester.pumpWidget(const MaterialApp(home: KeyboardPractice()));
-      for (final query in ['New Tab', 'Next result']) {
+      for (final query in ['New Swarm', 'Next result']) {
         await openLesson(tester, query);
         final buttonText = find.descendant(
           of: find.byKey(const ValueKey('practice-back')),
@@ -349,7 +360,7 @@ void main() {
           capture(tester, boundary, '$name-${size.width.toInt()}');
 
       await snap('practice-list');
-      await openLesson(tester, 'New Tab');
+      await openLesson(tester, 'New Swarm');
       await snap('practice-key');
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       await tester.pumpAndSettle();

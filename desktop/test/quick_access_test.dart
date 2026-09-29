@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/harness_placement.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -16,6 +18,63 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test('machine order prioritizes connection opportunities and preserves selection', () {
+    final app = createApp();
+    seedMixedAgents(app);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.localOnly = true;
+    for (final (id, name, online) in [
+      ('new10', 'Rig 10', true),
+      ('new2', 'Rig 2', true),
+      ('offline', 'AAA offline', false),
+    ]) {
+      app.machineStates[id] =
+          MachineState(
+              Machine(
+                machineId: id,
+                name: name,
+                authMode: MachineAuthMode.remote,
+              ),
+            )
+            ..nodeOnline = online
+            ..needsLink = true;
+    }
+    final search = SwarmSearchController(
+      app,
+      const [],
+      adding: true,
+      offersCreate: true,
+      activityFirst: true,
+    )..setQuery('@');
+    addTearDown(search.dispose);
+    expect(search.rows.map((row) => row.machineId), [
+      'new2',
+      'new10',
+      'm',
+      'studio',
+      'offline',
+      'build',
+      null,
+    ]);
+    expect(search.selected!.machineId, 'new2');
+    app.machineStates['new2']!
+      ..needsLink = false
+      ..connectionStatus = ConnectionStatus.connected;
+    app.notifyListeners();
+    expect(search.rows.map((row) => row.machineId), [
+      'new10',
+      'm',
+      'studio',
+      'new2',
+      'offline',
+      'build',
+      null,
+    ]);
+    expect(search.selected!.machineId, 'new2');
+    search.setQuery('@AAA offline');
+    expect(search.selected!.machineId, 'offline');
+  });
+
   test('Cmd-P never creates harnesses in root or scoped session lists', () {
     final app = createApp();
     seedMixedAgents(app);
@@ -39,7 +98,12 @@ void main() {
       search.setQuery(query);
       expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
       expect(search.selected!.isCreate, isFalse);
-      expect(search.submit(), isNull);
+      if (query.startsWith('@')) {
+        expect(search.submit()!.destination.isMachine, isTrue);
+        search.scopeToGroup(search.selected!.id);
+      } else {
+        expect(search.submit(), isNull);
+      }
       expect(search.canGoBack, isTrue);
       expect(search.rows, isNotEmpty);
       expect(search.rows.any((row) => row.isCreate), isFalse);
@@ -98,7 +162,7 @@ void main() {
       expect(search.rows.single.commandId, 'app.store');
       expect(search.createTask, isNull);
       search.setQuery('@ Office');
-      expect(search.rows.first.title, 'New Machine');
+      expect(search.rows.last.title, 'Add machine');
       expect(
         search.rows.where((row) => !row.isCreate).single.isMachine,
         isTrue,
@@ -226,11 +290,11 @@ void main() {
         expect(search.rows.every((row) => row.agentId != null), isTrue);
         expect(app.swarms, hasLength(tabs));
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, 'openharness');
+        expect(field.controller!.text, '# openharness');
         expect(search.isProjectMode, isTrue);
         await type('? @');
         await key(tester, LogicalKeyboardKey.enter);
-        expect(field.controller!.text, isEmpty);
+        expect(field.controller!.text, '@ ');
         expect(search.isMachineMode, isTrue);
         await type('@ Office');
         await key(tester, LogicalKeyboardKey.enter);
@@ -240,16 +304,16 @@ void main() {
               .every((row) => row.machineId == 'studio'),
           isTrue,
         );
-        expect(field.focusNode!.hasFocus, isTrue);
+        expect(search.managing, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, 'Office');
+        expect(field.controller!.text, '@ Office');
         expect(search.isMachineMode, isTrue);
         await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         expect(
           find.byKey(const ValueKey('resource-command-input')),
           findsOneWidget,
         );
-        expect(field.controller!.text, 'Office');
+        expect(field.controller!.text, '@ Office');
         await key(tester, LogicalKeyboardKey.escape);
         expect(field.focusNode!.hasFocus, isTrue);
         await type('? >');

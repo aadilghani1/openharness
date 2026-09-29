@@ -12,6 +12,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
@@ -136,6 +137,7 @@ void main() {
                     widget.key == const ValueKey('workspace-status-bar') ||
                     widget.key == const ValueKey('terminal-pane-title') ||
                     widget.key == const ValueKey('viewer-pane-title') ||
+                    widget is ActivityMark ||
                     widget is PaneHeaderActions,
               ),
               matching: find.byWidget(element.widget),
@@ -264,6 +266,10 @@ void main() {
     'tabs, welcome, and setup screens follow terminal zoom while general UI keeps its scale',
     (tester) async {
       final app = createApp();
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       final map = MemoryKeymap();
       addTearDown(app.dispose);
       addTearDown(map.dispose);
@@ -288,17 +294,15 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       final box = checkText(tester, atLeast: 1);
-      expect(
-        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
-        18,
+      final start = find.descendant(
+        of: find.byKey(const ValueKey('new-harness-field-start')),
+        matching: find.text('New Harness'),
       );
+      expect(tester.widget<Text>(start).style!.fontSize, 18);
       selectFont(22);
       await tester.pumpAndSettle();
       expectSameSizes(box, checkText(tester, atLeast: 1));
-      expect(
-        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
-        22,
-      );
+      expect(tester.widget<Text>(start).style!.fontSize, 22);
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyP,

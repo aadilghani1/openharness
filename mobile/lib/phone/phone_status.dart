@@ -1,6 +1,5 @@
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/terminal/terminal_session.dart';
 
 /// How a phone status line is coloured. The widgets turn this into a palette colour, so the
 /// rules below stay testable without a theme.
@@ -110,82 +109,4 @@ PhoneSummary phoneAgentSummary(MachineState machine, Agent agent) {
     label: agent.engineDisplayName ?? agent.engine ?? 'Agent',
     tone: PhoneTone.quiet,
   );
-}
-
-/// The terminal's own state, for the header over it. No session yet reads as attaching: the
-/// page opens before the pane has one.
-/// [takerName]: who took the terminal, when known ([phoneTakerName]) — the
-/// dot's tooltip then says "Taken over by Mac mini" rather than just that it was.
-PhoneSummary phoneSessionSummary(
-  TerminalSession? session, {
-  String? takerName,
-}) {
-  // ⚠️ Checked BEFORE the status, because a watcher's status is `controlling` — it holds a live
-  // stream and renders every byte; what it does not hold is the terminal. "Live" would promise a
-  // prompt that ignores typing. See [TerminalSession.watching].
-  if (session != null && session.watching) {
-    return (label: 'Watching', tone: PhoneTone.attention);
-  }
-  return switch (session?.status) {
-    null || TerminalSessionStatus.opening => (
-      label: 'Attaching…',
-      tone: PhoneTone.busy,
-    ),
-    TerminalSessionStatus.resyncing => (
-      label: 'Resyncing…',
-      tone: PhoneTone.busy,
-    ),
-    TerminalSessionStatus.controlling => (label: 'Live', tone: PhoneTone.good),
-    TerminalSessionStatus.takenOver => (
-      label: takerName == null ? 'Taken over' : 'Taken over by $takerName',
-      tone: PhoneTone.attention,
-    ),
-    TerminalSessionStatus.error => (label: 'Disconnected', tone: PhoneTone.bad),
-    TerminalSessionStatus.closed => (label: 'Closed', tone: PhoneTone.quiet),
-  };
-}
-
-/// Who took this session's terminal, by the fleet's current name for their
-/// machine when this phone knows it, else the name they declared; null while
-/// nobody has, or when the daemon did not say (an older one, or a taker that
-/// did not introduce itself).
-String? phoneTakerName(
-  TerminalSession? session,
-  String? Function(String machineId) resolveMachine,
-) => session?.status == TerminalSessionStatus.takenOver
-    ? session?.takenOverBy?.label(resolveMachine)
-    : null;
-
-/// The one line under the header while another client drives this terminal —
-/// the desktop's banner, at phone size. Null in every other state.
-String? phoneTakeoverNotice(TerminalSession? session, String? takerName) =>
-    session?.status == TerminalSessionStatus.takenOver
-    ? '${takerName ?? 'Another app'} took control of this terminal'
-    : null;
-
-/// The way back into a session this device is not driving, or is no longer
-/// driving — and what the button offers to do about it.
-///
-/// `null` while the session is fine, or still coming up: there is nothing to
-/// reclaim from "Attaching…", and a button that only ever means "wait" is one
-/// the person learns to ignore.
-///
-/// The desktop puts the same two words on the same two states, in the tile
-/// header it draws (`widgets/terminal_panel.dart`); a phone hides that header
-/// and draws its own, which is how the way out went missing here.
-PhoneSummary? phoneReclaimAction(TerminalSession? session) {
-  // A watcher is the ordinary way onto an agent another app is driving: output is already on
-  // screen, and this is the button that asks for the keyboard. See [TerminalSession.watching].
-  if (session != null && session.watching) {
-    return (label: 'Take control', tone: PhoneTone.attention);
-  }
-  return switch (session?.status) {
-    TerminalSessionStatus.takenOver => (
-      label: 'Take control',
-      tone: PhoneTone.attention,
-    ),
-    TerminalSessionStatus.error ||
-    TerminalSessionStatus.closed => (label: 'Reconnect', tone: PhoneTone.bad),
-    _ => null,
-  };
 }

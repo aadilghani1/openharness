@@ -10,6 +10,7 @@ import {
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
 import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
+import { isHarnessAccessToken } from './harnessTokenFormat.js'
 
 /** Internal identity attached to authenticated backend requests and user WebSockets. */
 export interface AuthUser {
@@ -17,6 +18,12 @@ export interface AuthUser {
   email: string
   role: string
   autonomousEnv: AutonomousEnvironment
+  /** Set when the token is one Harness issued itself (lib/harnessSession.ts), not an Autonomous one. */
+  harnessSessionId?: string
+  /** Which kind of Harness session: a phone's ('viewer') or a machine's ('daemon'). */
+  harnessSessionKind?: 'viewer' | 'daemon'
+  /** Daemon sessions: the computer the phone approved this machine sign-in for. */
+  harnessComputerId?: string
 }
 
 export interface SsoProfile {
@@ -164,6 +171,9 @@ function accessTokenMetadata(token: string): { name?: string; roles?: string[] }
 
 /** Validate the token, mirror the external identity, then return the app's internal user identity. */
 /**
+ * @param allowHarnessSession Accept a Harness-issued token (lib/harnessSession.ts). FALSE where the
+ *   caller connects AS a machine — a phone's session is a viewer's, never a daemon's.
+ *
  * @param enforceEnv Gate the caller on the account plane their user row is stamped with. TRUE for the
  *   web, which can be pointed at either plane and must not let the two identities cross.
  *
@@ -179,8 +189,34 @@ function accessTokenMetadata(token: string): { name?: string; roles?: string[] }
 export async function authenticateAccessToken(
   token: string,
   autonomousEnv: AutonomousEnvironment = 'prod',
-  { enforceEnv = true }: { enforceEnv?: boolean } = {},
+  {
+    enforceEnv = true,
+    allowHarnessSession = true,
+    allowDaemonSessionFor,
+  }: {
+    enforceEnv?: boolean
+    allowHarnessSession?: boolean
+    /**
+     * Where `allowHarnessSession` is false (the machine sockets): still accept a DAEMON session —
+     * a machine a phone signed in by approving its QR — when it was approved for exactly this
+     * computer. A phone's viewer session stays refused.
+     */
+    allowDaemonSessionFor?: string
+  } = {},
 ): Promise<AuthUser> {
+  // A sign-in Harness issued itself — a phone signed in by scanning a computer's QR, or a machine a
+  // phone approved. It names its user outright, so there is no account plane to choose and nothing to
+  // ask the account service. Loaded on first use: that module holds Redis, which connects on import.
+  if (isHarnessAccessToken(token)) {
+    if (!allowHarnessSession && !allowDaemonSessionFor) throw new SsoAuthError('This connection needs an Autonomous sign-in', 'INVALID_TOKEN')
+    const { authenticateHarnessAccessToken } = await import('./harnessSession.js')
+    const user = await authenticateHarnessAccessToken(token)
+    if (!allowHarnessSession) {
+      const own = user.harnessSessionKind === 'daemon' && !!user.harnessComputerId && user.harnessComputerId === allowDaemonSessionFor
+      if (!own) throw new SsoAuthError('This connection needs an Autonomous sign-in', 'INVALID_TOKEN')
+    }
+    return user
+  }
   const profile = await profileCache.resolve(token, autonomousEnv, () => fetchSsoProfile(token, autonomousEnv))
   const metadata = accessTokenMetadata(token)
   const email = normalizeUserEmail(profile.email)

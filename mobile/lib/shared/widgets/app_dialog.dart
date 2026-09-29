@@ -18,6 +18,8 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/app_theme.dart' show AppFont;
+
 /// How far the app blurs what sits behind a dialog.
 ///
 /// ⚠️ Bounded on purpose. A terminal is high-contrast text on a dark ground,
@@ -25,11 +27,65 @@ import 'package:flutter/services.dart';
 /// become a grey haze that looks like a rendering fault rather than depth. 7
 /// is where a line behind the panel is unmistakably gone while the window
 /// still reads as the window.
-const double kDialogVeilBlur = 7;
+///
+/// ⚠️ **Zero on the phone: no blur at all.** A blur re-reads and filters the
+/// whole screen behind it on every frame that screen changes — behind a sheet
+/// that is a streaming terminal, so every frame. The phone is meant to feel
+/// instant; the tint alone sets the depth. Every veil that multiplies by this
+/// (dialogs, sheets, Find) turns its filter off at zero.
+const double kDialogVeilBlur = 0;
 
 /// Shared dark backdrop for dialogs and centered pickers. Terminal output
 /// stays in the background while the active surface has the user's attention.
 const Color kDialogVeilTint = Color(0xE6000000);
+
+/// How dark the page goes behind a sheet — a step past the `black54` Material
+/// draws — with the page blurred at [kDialogVeilBlur] under it.
+///
+/// Far short of [kDialogVeilTint]: a sheet covers only part of the window and
+/// leaves the page above it in view, so the blur takes the page's text away and
+/// the tint only has to set the depth. One figure for the search sheet and for
+/// every `showPhoneSheet` sheet, so the sheets over a terminal all stand on the
+/// same veil.
+const double kSheetVeilOpacity = 0.64;
+
+/// The corner of a dialog's controls — its field and the buttons under it —
+/// so the two read as one set.
+const double kDialogControlRadius = 12;
+
+/// A dialog's action button at a thumb's size: 46 tall, 16pt, on
+/// [kDialogControlRadius].
+///
+/// One pair of measures for every dialog laid out as a card with its actions
+/// side by side along the bottom — the rename dialog, the phone's
+/// confirmations — so none of them sizes its own.
+///
+/// Built on the app's filled button, so everything this leaves unsaid — the
+/// shrink-wrapped tap target, the hover overlay — is still the theme's.
+ButtonStyle appDialogButtonStyle({
+  required Color background,
+  required Color foreground,
+  Color? disabledBackground,
+  Color? disabledForeground,
+}) => FilledButton.styleFrom(
+  backgroundColor: background,
+  foregroundColor: foreground,
+  disabledBackgroundColor: disabledBackground,
+  disabledForegroundColor: disabledForeground,
+  minimumSize: const Size.fromHeight(46),
+  padding: const EdgeInsets.symmetric(horizontal: 12),
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(kDialogControlRadius),
+  ),
+  // `ButtonStyle.textStyle` does not inherit the family from the text theme —
+  // see `_buttonTextStyle` in the theme — so it is named here too.
+  textStyle: TextStyle(
+    fontFamily: AppFont.sans,
+    fontFamilyFallback: AppFont.sansFallback,
+    fontSize: 16,
+    fontWeight: AppFont.semibold,
+  ),
+);
 
 /// The app's dialog barrier: a blur, then a tint, then whatever opened.
 ///
@@ -160,14 +216,24 @@ class _DismissOnEscape extends StatelessWidget {
         // not every dialog focuses something of its own — so the scope takes
         // focus itself when nothing else claims it.
         //
-        // ⚠️ `Focus`, not `FocusScope`. Both autofocus, and a descendant that
-        // also autofocuses (the model picker's search field) wins either way —
-        // but a `FocusScope` additionally becomes the dialog's focus ROOT,
-        // which changes where traversal wraps and what `unfocus` falls back
-        // to. Nothing here wants to move those; this only needs to be a node
-        // in the chain that holds focus when no descendant asks for it.
+        // ⚠️ **A `FocusScope`, not a `Focus`, and the difference is the
+        // dialog's own field.** An autofocus is only granted to a scope that
+        // has no focused child yet, and the first one asked wins. A plain
+        // `Focus` here asks the ROUTE's scope, and it asks first — an
+        // ancestor registers during build, while a `TextField` registers its
+        // autofocus a frame later — so it took the route's focus and every
+        // autofocusing field inside was refused: the rename dialog opened
+        // with no caret and no keyboard, its name selected for a first key
+        // that could not reach it. As a scope of its own, this node holds
+        // focus only until something inside asks: a field's autofocus goes to
+        // THIS scope, which has no focused child, and is granted.
+        //
+        // Being a scope also makes it where traversal wraps and where an
+        // `unfocus` lands; it wraps the whole dialog, so both visit exactly
+        // what the route's own scope would, and a field that lets go leaves
+        // focus inside the `Shortcuts`, where Escape still works.
         // `skipTraversal` keeps it out of the tab order it is not a stop in.
-        child: Focus(autofocus: true, skipTraversal: true, child: child),
+        child: FocusScope(autofocus: true, skipTraversal: true, child: child),
       ),
     );
   }
