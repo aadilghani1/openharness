@@ -83,6 +83,7 @@ export interface HookServerHandlers {
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
   onTurnStart?: (body: { sessionId: string }) => void
+  onPromptSubmitted?: (agentId: string, prompt: string) => void
   onToolStart?: (body: {
     sessionId: string
     toolUseId: string
@@ -140,6 +141,9 @@ export interface HookServerHandlers {
   /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
    *  local write, so CSRF-guarded like a rename. */
   onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** The account's Experimental switches, proxied with the daemon's own identity. */
+  onExperimentalRead?: () => Promise<PairOutcome>
+  onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
   /** GET /api/zoo — the account's daemons and eggs (daemons/README.md); proxied like the desk. */
   onZooRead?: () => Promise<PairOutcome>
   /** POST /api/zoo/ops — habits, hatches, pair and nickname, applied on the backend (its routes/zoo.ts),
@@ -156,7 +160,7 @@ const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
   'engine', 'launcherId', 'sessionId', 'transcriptPath', 'cwd', 'source', 'tmuxPane', 'title', 'model',
   'cliVersion', 'runtimeHints', 'callerPid', 'hookEvent', 'pluginVersion', 'reason', 'status', 'toolUseId',
-  'toolName', 'input',
+  'toolName', 'input', 'prompt',
 ])
 
 function optionalBoundedString(value: unknown, max: number): boolean {
@@ -172,6 +176,7 @@ function optionalBoundedJson(value: unknown, max: number): boolean {
 function validHookBody(value: unknown): value is BoundHookBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const body = value as Record<string, unknown>
+  if (body.prompt !== undefined && (typeof body.prompt !== 'string' || Buffer.byteLength(body.prompt) > 128 * 1024)) return false
   if (Object.keys(body).some((field) => !HOOK_BODY_FIELDS.has(field))) return false
   if (body.engine !== undefined && (typeof body.engine !== 'string' || !ENGINES.includes(body.engine as AgentEngine))) return false
   if (!optionalBoundedString(body.launcherId, 200)
@@ -245,6 +250,7 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
 }
 
 type BoundHookBody = RegisterInput & {
+  prompt?: string
   sessionId?: string
   reason?: string
   status?: string
@@ -467,7 +473,7 @@ export function startHookServer(
       // whose SessionStart the adapter missed still shows up on its first prompt).
       if (req.method === 'POST' && url === '/api/hook/session-start') {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: RegisterInput
+        let body: BoundHookBody
         try {
           const parsed = JSON.parse(await readBody(req)) as unknown
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
@@ -525,6 +531,9 @@ export function startHookServer(
           json(200, { pending: true })
           void awaitHermesKind(body, handlers)
           return
+        }
+        if (body.hookEvent === 'UserPromptSubmit') {
+          handlers.onPromptSubmitted?.(processAgent.agentId, body.prompt ?? '')
         }
         let result = registry.register(body)
         if (!result && body.transcriptPath && !existsSync(body.transcriptPath)) {
@@ -721,6 +730,17 @@ export function startHookServer(
         let body: unknown
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onDeskOps!(body)); return
+      }
+      if (req.method === 'GET' && url === '/api/experimental-settings') {
+        if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onExperimentalRead); return
+      }
+      if (req.method === 'PATCH' && url === '/api/experimental-settings') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onExperimentalWrite) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
       if (req.method === 'GET' && url === '/api/zoo') {
         if (!handlers.onZooRead) { json(503, { error: 'UNAVAILABLE' }); return }

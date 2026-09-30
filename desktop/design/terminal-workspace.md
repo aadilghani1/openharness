@@ -1,5 +1,8 @@
 # Terminal workspace design system
 
+Use the [product terminology](../../docs/terminology.md): a swarm groups harnesses;
+a harness is one running agent session.
+
 Harness should feel like a terminal workspace, from its tab bar to its welcome
 page, dialogs, and contextual controls. **Text first. Keyboard first. Fixed
 cells.** Use this document for new workspace surfaces and visual reviews.
@@ -17,9 +20,15 @@ Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
 of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
-inside the same picker. The top bar keeps focused model, machine, and project links plus `+` for New
-Tab. Leave global search in Cmd-P and the app menu. Keep descriptive tooltips
-and accessible names.
+inside the same picker. The top row keeps swarms, `+`, a plain search icon, the
+notification bell, and the rounded Harness Store button. When enabled in
+Experimental settings, the illustrated daemon sits after Store at the far right;
+its hover portrait is a deliberate artwork exception to text-first chrome. The bottom row holds focused
+machine/repo/branch/PR links on the left and the model selector on the right.
+Keep descriptive tooltips and accessible names. Search and bell are deliberate
+icon exceptions; the bell shows a count only when there is something to see.
+Store restores its colorful polymath mark and a quiet filled pill. The bottom
+context has no separate background or divider.
 
 There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
 customization as well as before it. The same action should retain its name and
@@ -41,7 +50,7 @@ typing Shift is unnecessary. From a live harness pane, Enter uses a served or
 downloaded model for that pane, starting installed weights when necessary; Tab
 switches between the list and controls. In Cmd-N, Tab switches between fields
 and their choices. Up/Down navigates the active pane and Enter activates.
-Cmd-P's model scope uses the same behavior. Cmd-T opens a tab, Cmd-W closes a tab, and
+Cmd-P's model scope uses the same behavior. Cmd-T opens a swarm, Cmd-W closes a swarm, and
 Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates,
 Space toggles, and Escape backs out or dismisses.
 
@@ -52,7 +61,7 @@ text shows a hand cursor and bold text on hover, press, and keyboard focus.
 Preserve the underlying colors, including filled status segments. Reserve both
 text weights during layout so emphasis never shifts neighboring controls.
 Resting controls stay unboxed, except the optional Share action: its flat
-primary accent fill makes collaboration visible at the top-right corner.
+primary accent fill makes collaboration visible in the bottom row, before the model.
 Settings → Experimental → Share button enables it; it is off by default.
 Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
@@ -82,21 +91,36 @@ actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet
 
-First launch uses the same New Tab page as every later visit: “Harness like a
-boss.” followed by five clickable shortcuts: Start an agent, Manage all your
-agents, Deploy a local model, Manage all your machines, and Build beyond code.
+First launch uses the same New Swarm page as every later visit: “Harness like a
+boss.” followed by five clickable shortcuts: Start a harness, Manage all your
+harnesses, Deploy a local model, Manage all your machines, and Build beyond code.
 Resolve the shortcut hints from the live keymap; unbound actions remain clickable.
 Keep this page independent of onboarding progress; no checklist or automatic dialog.
 
-![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
+![Shared first-launch and New Swarm welcome](images/workspace-welcome.png)
 
 Use terminal foreground, background, muted text, and selection colors. Workspace
 dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,
 rounded action pills, and redundant headings. Tabs use concise text labels, with
 selection conveyed by background rather than bold type.
 
+The selected pane stays at full contrast; other panes receive a 30% neutral-gray
+veil (`#9D9D9D`) over their header and content, lifting dark backgrounds while
+softening text. In the default Graphite palette, inactive backgrounds render as
+`#404040` (RGB 64, 64, 64). Selection follows the existing click and keyboard
+focus actions. Keep the current pane clear while a menu or the tab strip
+temporarily owns keyboard focus. A single or zoomed pane stays clear.
+Waiting-question borders paint above the veil, at full strength.
+This is a paint treatment: retain terminal state and let the first click reach
+the pane underneath.
+
+![Selected center pane at full contrast, with synthetic terminal content](images/workspace-pane-focus.png)
+
 Status layouts and terminal palettes are separate choices. **Plain** always uses
-the terminal foreground, including PR status. Shell layouts use the terminal's
+the terminal foreground for context text. PR state icons keep their distinct
+green/purple/red/gray colors when Color is on, including in Plain. In Powerline
+layouts, that state color fills the final joined block, with contrasting icon
+and number inside. Shell layouts use the terminal's
 ANSI colors. The named Pastel Powerline, Catppuccin Powerline, Tokyo Night, and
 Gruvbox Rainbow presets carry their own status-only colors, resolved in the
 shared status formatter for both Flutter and AppKit. Color off makes any preset
@@ -107,7 +131,7 @@ status, or progress to decorate a theme.
 ## Make context useful
 
 Show the focused pane's model, machine, compact project name, branch, and PR in the
-shared app bar. A dependent viewer uses its owner's context. Keep internal
+bottom status bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across

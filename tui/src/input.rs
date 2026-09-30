@@ -848,8 +848,8 @@ pub fn run(app: &mut App, command: &str) {
         "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
         "broadcast" => {
             let n = app.tab().panes().len();
-            if n == 0 { app.say("No harnesses in this tab", theme::MUTED); return }
-            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "", false)
+            if n == 0 { app.say("No harnesses in this swarm", theme::MUTED); return }
+            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this swarm.", "", false)
         }
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
@@ -872,7 +872,7 @@ pub fn run(app: &mut App, command: &str) {
             prompt(app, PromptKind::RenameHarness { machine, agent }, "Rename Harness", "New name", "", &name, false)
         }
         "tab" => app.new_tab(),
-        "rename-tab" => { let name = app.tab().name.clone(); prompt(app, PromptKind::RenameTab, "Rename Tab", "Tab name", "", &name, false) }
+        "rename-tab" => { let name = app.tab().name.clone(); prompt(app, PromptKind::RenameTab, "Rename Swarm", "Swarm name", "", &name, false) }
         "close-tab" => { let i = app.active; app.close_tab(i) }
         "next-tab" => { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) }
         "prev-tab" => { let n = app.tabs.len(); let i = (app.active + n - 1) % n; app.select_tab(i) }
@@ -1047,6 +1047,9 @@ fn harness_preview(picker: &mut Picker) {
 
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).
 pub fn refill(app: &mut App) {
+    // A delayed search/catalog reply may arrive after the picker has closed. It must not
+    // consume a command prompt, confirmation or copy mode that replaced that picker.
+    if !matches!(app.modal, Some(Modal::Picker { .. })) { return }
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take() {
         let was = picker.current_id();
         if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout) { fill(app, &kind, &mut picker) }
@@ -3148,6 +3151,21 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn delayed_picker_refresh_preserves_the_replacement_modal() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Key { template: String::new() }, ":", "split-window")));
+        refill(&mut app);
+        assert!(matches!(&app.modal, Some(Modal::Prompt(p)) if p.value == "split-window"));
+        app.modal = Some(Modal::Confirm { prompt: "kill pane?".into(), command: "kill-pane".into(), key: 'y', enter_yes: false });
+        refill(&mut app);
+        assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+        app.modal = Some(Modal::Copy { pane: 1 });
+        refill(&mut app);
+        assert!(matches!(app.modal, Some(Modal::Copy { pane: 1 })));
+    }
 
     #[test]
     fn prompt_words_as_tmuxs() {

@@ -11,6 +11,7 @@ import '../terminal/terminal_theme_store.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
+import '../core/runtime_model_name.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
 import '../shared/theme/app_type.dart';
@@ -85,6 +86,9 @@ class GridModelPicker extends StatefulWidget {
   /// Observed subscription model for the label. Does not select a Local row.
   final String? subscriptionModel;
 
+  /// Effort observed with [subscriptionModel]; never carried onto a Local row.
+  final String? subscriptionEffort;
+
   /// Whether the agent can search the web on [currentModel], as the daemon decided when it built
   /// the launch. Shown as a subtitle under the current Local row and in the control's tooltip —
   /// only for the two degraded values; `on` and null (nothing said) show nothing. Read only when
@@ -113,6 +117,7 @@ class GridModelPicker extends StatefulWidget {
     this.onRunLocalModel,
     this.currentModel,
     this.subscriptionModel,
+    this.subscriptionEffort,
     this.webSearch,
     this.engineLabel,
     this.compact = false,
@@ -518,7 +523,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     TerminalFontScope.watch(context);
     if (widget.menuOnly) return const SizedBox.shrink();
     final sentence = _webSearchSentence;
-    final current =
+    final model =
         widget.currentModel ??
         widget.subscriptionModel ??
         switch (widget.engineLabel?.toLowerCase()) {
@@ -527,6 +532,12 @@ class _GridModelPickerState extends State<GridModelPicker> {
           'opencode' => 'OpenCode',
           _ => 'Model',
         };
+    final current = modelLabelWithEffort(
+      model,
+      widget.currentModel == null && widget.subscriptionModel != null
+          ? widget.subscriptionEffort
+          : null,
+    );
     final label = _expecting ? 'Switching…' : current;
     if (widget.paneHeader) {
       final theme = terminalThemeFor(
@@ -792,7 +803,7 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel>
             padding: const EdgeInsets.only(bottom: 2),
             child: Tooltip(
               message: [
-                'Where this agent runs',
+                'Where this harness runs',
                 ?offlineSentence,
                 ?widget.subtitleFor(model),
               ].join('\n'),

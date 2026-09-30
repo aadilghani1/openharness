@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startHookServer, type HookServerHandlers, chooseHookAgent, knownTranscriptFor } from './hookServer.js'
-import type { RegisteredSession } from './lib/registry.js'
+import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { CommandBarService } from './lib/commandBar.js'
@@ -63,6 +63,23 @@ async function start(overrides: Partial<HookServerHandlers> = {}) {
 }
 
 describe('process-owned hook server', () => {
+  it('attributes prompt text only after resolving the actual engine process', async () => {
+    const entry = { engine: 'claude', agentId: 'agent-scope', sessionId: 'session-scope', runtimes: [{ backend: 'tmux', paneId: '%41' }] } as RegisteredSession
+    const onPromptSubmitted = vi.fn()
+    const resolveHookAgent = vi.fn(async () => null as RegisteredSession | null)
+    const registration = vi.spyOn(registry, 'register').mockReturnValue({ entry, isNew: false, evicted: null, rebound: null, orphaned: null })
+    try {
+      const { base, headers } = await start({ onPromptSubmitted, resolveHookAgent })
+      const submit = () => fetch(`${base}/api/hook/session-start`, { method: 'POST', headers, body: JSON.stringify({
+        engine: 'claude', sessionId: entry.sessionId, tmuxPane: '%41', hookEvent: 'UserPromptSubmit', prompt: 'ask a peer\nfor evidence',
+      }) })
+      await submit()
+      expect(onPromptSubmitted).not.toHaveBeenCalled()
+      resolveHookAgent.mockResolvedValue(entry)
+      expect((await submit()).status).toBe(200)
+      expect(onPromptSubmitted).toHaveBeenCalledExactlyOnceWith('agent-scope', 'ask a peer\nfor evidence')
+    } finally { registration.mockRestore() }
+  })
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })
@@ -251,6 +268,22 @@ describe('the desk proxy', () => {
 
     const bad = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
     expect(bad.status).toBe(400)
+  })
+})
+
+describe('account Experimental settings proxy', () => {
+  it('reads through the account proxy and guards writes with the local header', async () => {
+    const snapshot = { accountId: 'owner', revision: 0, features: { focus_bar_creature: false, share_button: false } }
+    const write = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { ...snapshot, echo: body } } }))
+    const { base } = await start({ onExperimentalRead: async () => ({ status: 200, body: { success: true, data: snapshot } }), onExperimentalWrite: write })
+    expect((await (await fetch(`${base}/api/experimental-settings`)).json())).toEqual({ success: true, data: snapshot })
+    const body = { accountId: 'owner', feature: 'share_button', enabled: true }
+    expect((await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).status).toBe(403)
+    expect(write).not.toHaveBeenCalled()
+    const saved = await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
+    expect(saved.status).toBe(200)
+    expect(write).toHaveBeenCalledExactlyOnceWith(body)
+    expect((await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'x-adapter-local': '1' }, body: '{bad' })).status).toBe(400)
   })
 })
 

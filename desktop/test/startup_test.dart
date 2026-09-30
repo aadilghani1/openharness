@@ -7,7 +7,6 @@ import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/snapshot_store.dart';
 import 'package:harness/core/startup.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
@@ -47,7 +46,6 @@ void main() {
   late TerminalThemeStore scheme;
   late AppearancePrefsStore appearance;
   late HarnessStats stats;
-  late ExperimentalFeaturesStore experiments;
 
   setUp(() async {
     dir = await Directory.systemTemp.createTemp('harness-startup-');
@@ -57,7 +55,6 @@ void main() {
     scheme = TerminalThemeStore(storage: storage);
     appearance = AppearancePrefsStore(storage: storage);
     stats = HarnessStats(store: statsStorage);
-    experiments = ExperimentalFeaturesStore(storage: storage);
   });
 
   tearDown(() async {
@@ -65,14 +62,12 @@ void main() {
     scheme.dispose();
     appearance.dispose();
     stats.dispose();
-    experiments.dispose();
     await dir.delete(recursive: true);
   });
 
   test('a relaunch restores appearance and counters before returning', () async {
     // Every store, including stats, uses only this test's temporary directory.
     // Write through the real setters so the persisted formats are exercised.
-    await experiments.set(ExperimentalFeature.focusBarCreature, true);
     await font.setFamily(TerminalFontChoice.menlo);
     await font.setSize(17);
     await scheme.set(TerminalThemeChoice.tango);
@@ -89,8 +84,6 @@ void main() {
     await stats.flush();
 
     final reopened = HarnessFileStore(directory: storage.directory);
-    final nextExperiments = ExperimentalFeaturesStore(storage: reopened);
-    addTearDown(nextExperiments.dispose);
     final nextFont = TerminalFontStore(storage: reopened);
     final nextScheme = TerminalThemeStore(storage: reopened);
     final nextAppearance = AppearancePrefsStore(storage: reopened);
@@ -109,13 +102,8 @@ void main() {
       alertSounds: AlertSoundStore(storage: storage),
       screenAlerts: ScreenAlertStore(storage: storage),
       desktopNotifications: DesktopNotificationStore(storage: storage),
-      experimentalFeatures: nextExperiments,
     );
 
-    expect(
-      nextExperiments.enabled(ExperimentalFeature.focusBarCreature),
-      isTrue,
-    );
     expect(nextFont.family, TerminalFontChoice.menlo);
     expect(nextFont.size, 17);
     expect(nextScheme.value, TerminalThemeChoice.tango);
@@ -142,9 +130,7 @@ void main() {
       alertSounds: AlertSoundStore(storage: storage),
       screenAlerts: ScreenAlertStore(storage: storage),
       desktopNotifications: DesktopNotificationStore(storage: storage),
-      experimentalFeatures: experiments,
     );
-    expect(experiments.enabled(ExperimentalFeature.focusBarCreature), isFalse);
     expect(font.family, TerminalFontChoice.defaultForPlatform);
     expect(font.size, terminalFontSize);
     expect(scheme.value, TerminalThemeChoice.fallback);
@@ -178,7 +164,6 @@ void main() {
         alertSounds: AlertSoundStore(storage: storage),
         screenAlerts: ScreenAlertStore(storage: storage),
         desktopNotifications: DesktopNotificationStore(storage: storage),
-        experimentalFeatures: experiments,
       ).then((_) => finished = true);
 
       expect(fontStorage.requests, [
@@ -254,7 +239,6 @@ void main() {
       alertSounds: AlertSoundStore(storage: storage),
       screenAlerts: ScreenAlertStore(storage: storage),
       desktopNotifications: DesktopNotificationStore(storage: storage),
-      experimentalFeatures: experiments,
     ).then((_) => finished = true);
     broken.ready.completeError(const FileSystemException('unreadable'));
     await Future<void>.delayed(Duration.zero);

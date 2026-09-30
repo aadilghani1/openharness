@@ -42,11 +42,22 @@ typedef AgentWorkPr = ({
   DateTime at,
   String? state,
   DateTime? checkedAt,
+  DateTime? createdAt,
+  DateTime? updatedAt,
+  DateTime? mergedAt,
+  DateTime? closedAt,
   String? title,
   String? headBranch,
   String? baseBranch,
   String? headRepository,
 });
+
+DateTime? pullRequestTime(AgentWorkPr pr) => switch (pr.state) {
+  'Merged' => pr.mergedAt,
+  'Closed' => pr.closedAt,
+  'Open' || 'Draft' => pr.updatedAt ?? pr.createdAt,
+  _ => null,
+};
 
 typedef AgentBranchRow = ({
   String branch,
@@ -148,10 +159,10 @@ class AgentGitContext {
   String get explanation => recentWork != null
       ? 'Branch in the most recent confirmed work location${recentWorkAt == null ? '.' : ' · ${localWorkTime(recentWorkAt!)}'}'
       : switch (state) {
-          'multiple' => 'Branches checked out for this session.',
+          'multiple' => 'Branches checked out for this harness.',
           'uncertain' || 'unavailable' =>
             'Git is unavailable. Showing saved branches and pull requests.',
-          _ => 'Branch checked out for this session.',
+          _ => 'Branch checked out for this harness.',
         };
 
   AgentProject? displayProject(AgentProject? launch) {
@@ -285,6 +296,10 @@ class AgentGitContext {
         at: at,
         state: state,
         checkedAt: date(row['checkedAt']),
+        createdAt: state != null ? date(result['createdAt']) : null,
+        updatedAt: state != null ? date(result['updatedAt']) : null,
+        mergedAt: state != null ? date(result['mergedAt']) : null,
+        closedAt: state != null ? date(result['closedAt']) : null,
         title: result is Map ? label(result['title'], 512) : null,
         headBranch: result is Map ? label(result['headBranch'], 256) : null,
         baseBranch: result is Map ? label(result['baseBranch'], 256) : null,

@@ -12,6 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
@@ -24,6 +25,8 @@ import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
+import 'package:harness/widgets/workspace_pull_request_label.dart';
+import 'package:harness/shared/theme/pull_request_icon.dart';
 import 'package:harness/widgets/pull_request_badge.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -111,7 +114,20 @@ void main() {
     if (Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'] !=
         null) {
       await loadRealFonts();
+      await (FontLoader('packages/lucide_icons_flutter/Lucide')..addFont(
+            rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
+          ))
+          .load();
       if (Platform.isMacOS) {
+        await (FontLoader('Apple Symbols')..addFont(
+              Future.value(
+                ByteData.sublistView(
+                  await File('/System/Library/Fonts/Apple Symbols.ttf')
+                      .readAsBytes(),
+                ),
+              ),
+            ))
+            .load();
         final bytes = ByteData.sublistView(
           await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
         );
@@ -185,9 +201,9 @@ void main() {
           findsNothing,
         );
         if (native) {
-          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra');
+          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra · High');
         } else {
-          expect(find.text('GPT-6 Astra'), findsOneWidget);
+          expect(find.text('GPT-6 Astra · High'), findsOneWidget);
           expect(find.text('Fable'), findsNothing);
           await captureControls(tester, 'focused-model');
           expect(
@@ -201,12 +217,12 @@ void main() {
         app.focusPane(first.id);
         await tester.pump();
         if (native) {
-          expect(updates.last['focusedModel']['text'], 'Fable');
+          expect(updates.last['focusedModel']['text'], 'Fable · High');
           await activate(second.id, 'a1');
           expect(find.text('Local-Test-Model'), findsNothing);
           await activate(first.id, 'a0');
         } else {
-          expect(find.text('GPT-6 Astra'), findsNothing);
+          expect(find.text('GPT-6 Astra · High'), findsNothing);
           await tester.tap(selectors);
         }
         await tester.pumpAndSettle();
@@ -320,7 +336,7 @@ void main() {
 
   for (final native in [false, true]) {
     testWidgets(
-      'focused PR uses every selected theme without duplicate pane lookups (native=$native)',
+      'focused PR stays compact beside every theme without duplicate lookups (native=$native)',
       (tester) async {
         final updates = <Map>[];
         const channel = MethodChannel('harness/swarm_tabs');
@@ -349,6 +365,7 @@ void main() {
             name: 'Feature',
             engine: 'codex',
             modelName: 'GPT-6 Astra',
+            modelEffort: 'max',
             terminalAvailable: true,
             project: AgentProject(
               name: 'repo',
@@ -369,11 +386,12 @@ void main() {
           await tester.pump();
           if (native) {
             final pr = updates.last['pullRequest'] as Map;
-            expect(pr['text'], '#298 Merged');
+            expect(pr['text'], '#298');
+            expect(pr['label'], '#298 Merged');
+            expect(pr['iconAsset'], pullRequestIconAsset('Merged'));
+            expect(pr['iconColor'], 0xffbc8cff);
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
             expect(pr['segmented'], style.segmented);
-            expect(pr['roundedEnd'], style.roundedEnd);
-            // PR follows the context: it must not restart a rounded capsule.
             expect(pr['roundedStart'], isFalse);
             final context = updates.last['focusedContext'] as Map;
             final fields = context['fields'] as List;
@@ -419,11 +437,15 @@ void main() {
             );
           } else {
             final badge = find.byKey(const ValueKey('workspace-pull-request'));
-            final rendered = tester.widget<StatusLine>(
-              find.descendant(of: badge, matching: find.byType(StatusLine)),
+            final rendered = tester.widget<WorkspacePullRequestLabel>(
+              find.descendant(
+                of: badge,
+                matching: find.byType(WorkspacePullRequestLabel),
+              ),
             );
-            expect(rendered.parts.style, style);
-            expect(rendered.parts.text, '#298 Merged');
+            expect(rendered.number, 298);
+            expect(rendered.state, 'Merged');
+            expect(rendered.style, style);
             for (final width in [520.0, 1280.0]) {
               tester.view.physicalSize = Size(width, 800);
               await tester.pump(const Duration(milliseconds: 100));
@@ -437,20 +459,6 @@ void main() {
                     ? closeTo(contextRight, .01)
                     : greaterThan(contextRight),
               );
-              if (style.segmented) {
-                final ribbon = find.descendant(
-                  of: badge,
-                  matching: find.byType(CustomPaint),
-                );
-                expect(
-                  tester.getRect(ribbon).left,
-                  closeTo(tester.getRect(badge).left, .01),
-                );
-                expect(
-                  tester.getRect(ribbon).right,
-                  closeTo(tester.getRect(badge).right, .01),
-                );
-              }
             }
             final controls = find.descendant(
               of: find.byKey(const ValueKey('workspace-status-bar')),
@@ -471,11 +479,31 @@ void main() {
               final target = find.byKey(ValueKey(key));
               await mouse.moveTo(tester.getCenter(target));
               await tester.pump();
-              final lines = find.descendant(
-                of: target,
-                matching: find.byType(StatusLine),
-              );
-              expect(tester.widget<StatusLine>(lines).emphasized, isTrue);
+              if (key == 'workspace-pull-request') {
+                expect(
+                  tester
+                      .widget<WorkspacePullRequestLabel>(
+                        find.descendant(
+                          of: target,
+                          matching: find.byType(WorkspacePullRequestLabel),
+                        ),
+                      )
+                      .emphasized,
+                  isTrue,
+                );
+              } else {
+                expect(
+                  tester
+                      .widget<StatusLine>(
+                        find.descendant(
+                          of: target,
+                          matching: find.byType(StatusLine),
+                        ),
+                      )
+                      .emphasized,
+                  isTrue,
+                );
+              }
               expect(
                 find.descendant(of: target, matching: find.byType(ColoredBox)),
                 findsNothing,
@@ -500,11 +528,7 @@ void main() {
                       .emphasized,
                   isFalse,
                 );
-                await captureControls(
-                  tester,
-                  'bar-hover-${style.name}',
-                  height: 100,
-                );
+                await captureControls(tester, 'bar-hover-${style.name}');
               }
             }
             await mouse.removePointer();
@@ -521,7 +545,7 @@ void main() {
             '1:Release',
           );
         } else {
-          expect(find.text('1:Release'), findsOneWidget);
+          expect(find.text('Release'), findsOneWidget);
         }
         app.newSwarm();
         await tester.pump();
@@ -665,7 +689,9 @@ void main() {
         expect(workspaceTabNames(restored)[office.id], expected);
         expect(restored.swarms.any((tab) => tab.id == term.id), isFalse);
         expect(
-          restored.swarms.singleWhere((tab) => tab.id == office.id).nameIsCustom,
+          restored.swarms
+              .singleWhere((tab) => tab.id == office.id)
+              .nameIsCustom,
           custom,
         );
       },
@@ -915,7 +941,7 @@ void main() {
   });
 
   testWidgets(
-    'compact tabs sit to the left of one focused context and switch workspaces',
+    'top navigation and bottom context stay separate while switching workspaces',
     (tester) async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -924,16 +950,26 @@ void main() {
       app.newSwarm();
       app.adoptSessionForTest(terminal('a1', []));
       await mount(tester, app);
-      expect(find.text('1:code'), findsOneWidget);
-      expect(find.text('2:code'), findsOneWidget);
+      expect(find.text('code'), findsNWidgets(2));
+      expect(find.text('1:'), findsOneWidget);
+      expect(find.text('2:'), findsOneWidget);
       final context = find.byKey(const ValueKey('workspace-pane-context'));
       expect(
-        tester.getRect(context).left,
-        greaterThan(tester.getRect(find.text('2:code')).right),
+        tester.getRect(context).top,
+        greaterThan(
+          tester.getRect(find.byKey(ValueKey(app.activeSwarmId))).bottom,
+        ),
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
       final barControls = find.byType(WorkspaceBarControl);
-      final bar = find.byKey(const ValueKey('workspace-status-bar'));
+      final bar = find.byKey(const ValueKey('workspace-tab-bar'));
+      final footer = tester.getRect(
+        find.byKey(const ValueKey('workspace-status-bar')),
+      );
+      expect(footer.bottom, 800);
+      expect(footer.height, 37.5);
+      expect(tester.getRect(context).center.dy, footer.center.dy);
+      expect(footer.contains(tester.getRect(context).center), isTrue);
       for (final element in barControls.evaluate()) {
         final control = element.widget as WorkspaceBarControl;
         final rect = tester.getRect(find.byWidget(control));
@@ -954,9 +990,14 @@ void main() {
           expect(tester.getRect(fill).bottom, tester.getRect(bar).bottom);
         }
       }
-      expect(tester.getSize(secondTab).width, lessThan(150));
-      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
-      for (final old in ['harnesses', 'machines', 'models', 'store', 'help']) {
+      expect(
+        tester.getSize(secondTab).width,
+        lessThan(workspaceBarCellSizeOf(tester.element(secondTab)).width * 12),
+        reason: 'short tab labels keep their compact width in a roomy window',
+      );
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
+      for (final old in ['harnesses', 'machines', 'models', 'help']) {
         expect(find.byKey(ValueKey('swarm-$old-button')), findsNothing);
       }
       expect(
@@ -966,7 +1007,7 @@ void main() {
         ),
         findsNothing,
       );
-      await tester.tap(find.text('1:code'));
+      await tester.tap(find.byKey(ValueKey(first.id)));
       await tester.pump(const Duration(milliseconds: 350));
       expect(app.activeSwarm, same(first));
       final originalFont = terminalFontStore.value;
@@ -986,7 +1027,7 @@ void main() {
           expect(tester.getRect(context).right, lessThan(width));
         }
       }
-      await captureControls(tester, 'unified-search-toolbar', height: 100);
+      await captureControls(tester, 'workspace-bottom-bar');
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

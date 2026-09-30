@@ -43,6 +43,64 @@ void main() {
   });
   tearDown(() => brain.dispose());
 
+  test('recent conversation survives a window restart, scoped to account and individual', () async {
+    brain.bindConversation('account:one', 'tim-one');
+    await Future<void>.delayed(Duration.zero);
+    brain.receive('daemon_say', {
+      'id': 'saved-reply',
+      'mood': 'say',
+      'from': 'pair',
+      'line': 'Hello.',
+      'reply': 'Our first little conversation.',
+      'companionUid': 'tim-one',
+    });
+    await brain.flushConversation();
+    final next = DaemonBrain(send: (_, _) => true, storage: storage);
+    addTearDown(next.dispose);
+    next.bindConversation('account:one', 'tim-one');
+    await Future<void>.delayed(Duration.zero);
+    expect(next.talk.single.text, 'Our first little conversation.');
+    next.bindConversation('account:one', 'gnu-one');
+    await Future<void>.delayed(Duration.zero);
+    expect(next.talk, isEmpty);
+    next.bindConversation('account:two', 'tim-one');
+    await Future<void>.delayed(Duration.zero);
+    expect(next.talk, isEmpty);
+  });
+
+  test(
+    'full replies stay out of status text and never cross companion identities',
+    () {
+      brain.bindConversation('account:one', 'tim-one');
+      final reply = {
+        'id': 'chat-one',
+        'mood': 'say',
+        'from': 'pair',
+        'line': 'A short hello.',
+        'reply': 'A longer answer.\n\nWith a second paragraph.',
+        'companionUid': 'tim-one',
+        'actions': [
+          {'key': 'y', 'label': 'approve'},
+        ],
+      };
+      final spoken = <DaemonSay>[];
+      brain.said.listen(spoken.add);
+      brain.receive('daemon_say', reply);
+      brain.receive('daemon_say', reply);
+      expect(brain.talk, [
+        (you: false, text: 'A longer answer.\n\nWith a second paragraph.'),
+      ]);
+      expect(spoken.first.line, 'A short hello.');
+      expect(spoken.first.actions, isEmpty);
+      brain.bindConversation('account:one', 'gnu-one');
+      expect(brain.talk, isEmpty);
+      brain.receive('daemon_say', reply);
+      expect(brain.talk, isEmpty);
+      brain.bindConversation('account:two', 'tim-one');
+      expect(brain.pairAgentId, isNull);
+    },
+  );
+
   test('daemon_state: every machine, the +n, asks and what it did', () {
     expect(brain.active, isFalse);
     brain.receive('daemon_state', {
@@ -379,7 +437,7 @@ void main() {
     brain.talkTo('hello?');
     expect(brain.talkError, 'harnessd is not reachable.');
     expect(changes, greaterThan(4));
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < DaemonBrain.talkKept + 10; i++) {
       brain.talkTo('$i');
     }
     expect(brain.talk, hasLength(DaemonBrain.talkKept));

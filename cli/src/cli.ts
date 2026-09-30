@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
 import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -42,6 +43,7 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
+import { CableFleet } from './cable/cableFleet.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivity } from './cable/terminalActivity.js'
 
@@ -53,6 +55,7 @@ import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, writeSafeModeMarker } from './lib/daemonSafeMode.js'
+import { awakeTimeout } from './lib/sleepAware.js'
 import {
   BIND_WAIT_MS, connectFailure, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady,
 } from './lib/daemonLaunch.js'
@@ -205,6 +208,7 @@ import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, Questio
 import { teamWriteHold } from './teams/preflight.js'
 import { TeamError } from './teams/model.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
+import { AgentNotifications } from './lib/agentNotifications.js'
 import {
   setSummaryPoolDeviceConnected,
   shutdownSummaryPool,
@@ -316,7 +320,7 @@ function terminalHintMachineName(): string {
 
 // The dial's session, held at module scope for the same reason `backendRef` is: shutdown() is defined
 // before the wiring that creates it, and the port has to be released on the way out.
-let cableRef: CableSession | null = null
+let cableRef: CableFleet | null = null
 /** The same object the session holds — module scope so the recap gates can ask which machine is selected
  *  without threading it through every constructor between here and there. */
 let cableHostRef: DaemonCableHost | null = null
@@ -417,13 +421,13 @@ Machine:
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
+  harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
-                               every session, live or stopped (--limit=N, --json)
-  harness channel --help       consult agents in a tab and read shared collaboration history
+                               every harness, live or stopped (--limit=N, --json)
+  harness channel --help       consult agents in a swarm and read shared collaboration history
   harness team --help          advanced team commands and correlated agent replies
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
@@ -1738,7 +1742,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
   const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
   /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
-  let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
+  let pairTalk: (text: string, companionUid?: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
@@ -1942,7 +1946,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const title = engineSessionTitle(session, terminals.titleFor(session, titles))
       if (!title) continue
       const before = projectDisplayName(session)
-      const updated = registry.updateTitle(session.sessionId, title)
+      // Fall back to the agent id: a terminal that became an engine harness (e.g. opencode typed
+      // into a New Terminal) has no engine session id — nothing fired a session-start hook — but its
+      // pane title is still readable and should still rename the harness.
+      const updated = registry.updateTitle(session.sessionId || session.agentId, title)
       if (!updated) continue
       const after = projectDisplayName(updated)
       if (after !== before) {
@@ -2098,6 +2105,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
+    onScopedInput: (id, bytes, tabId, pasted) => backend.swarmPromptScopes.raw(id, bytes, tabId, pasted),
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
@@ -2528,6 +2536,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   ): Promise<boolean> =>
     attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
   const input: SessionInputController = new SessionInputController({
+    beforeSubmit: (id, text, tabId, deliveryId) => backend.swarmPromptScopes.prepare(id, text, tabId, deliveryId),
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
@@ -2684,6 +2693,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  const agentNotifications = new AgentNotifications()
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
     capture: captureTerminal,
@@ -2697,7 +2707,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
         dbSessionId: sessionId,
-        payload: { requestId, questions: shaped },
+        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId) },
       }
       backend.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
@@ -2723,6 +2733,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
+      agentNotifications.answered(sessionId, requestId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -2783,6 +2794,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return role?.role === 'worker' || (role?.role === 'director' && role.busy)
   }
   const mirror = new CommanderMirror({
+    notifications: agentNotifications,
+    notifyWithoutDevice: true,
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
     hasDevice: () => deviceIsWatching(),        // device-gate the LLM recap (mirror node)
@@ -3078,6 +3091,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
+        if (!opts?.resumed && !opts?.replay) backend.swarmPromptScopes.started(agentId, event.payload.userMessage, 'transcript', registry.bySession(sessionId)?.engine)
         deviceInput.onTurnStarted(agentId, event.payload.userMessage)
         autonomousDeviceService?.turnStarted(agentId)
         startHeartbeat(sessionId)
@@ -3124,7 +3138,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (learnFrom && daemons.on() && !isTerminalEngine(learnFrom.engine)) {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
-    mirror.ingest(events, sessionId)
+    mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
@@ -3205,6 +3219,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
+    backend.swarmPromptScopes.forget(doomed?.agentId ?? sessionId)
     input.forget(doomed?.agentId ?? sessionId)
     deviceInput.forget(doomed?.agentId ?? sessionId)
     if (!opts.keepAgent) detachDsh(announceId)
@@ -3223,7 +3238,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => { input.forget(agentId); deviceInput.forget(agentId) },
+    forgetInput: agentId => { backend.swarmPromptScopes.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -3467,6 +3482,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
+      backend.swarmPromptScopes.forget(previousOwner.agentId)
       input.forget(previousOwner.agentId)
       deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
@@ -3611,6 +3627,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDormant: async (agent, reason) => {
       if (!agent.active) return
       invalidateTerminalControl(agent.agentId)
+      backend.swarmPromptScopes.forget(agent.agentId)
       input.forget(agent.agentId)
       deviceInput.forget(agent.agentId)
       if (agent.sessionId) {
@@ -3730,8 +3747,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // generated models, kept under the data folder, served to windows (`daemon_plate_get`, Unix socket) and
   // phones (`pair_plate_get`, sealed). Idle, and nothing on disk touched, while daemons are off.
   const plates = new PlateService({ dir: join(env.ADAPTER_DATA_DIR, 'pair', 'plates') })
+  const companionZoo = new CompanionZoo()
   let zooPair: { known: boolean; pair: string | null; name: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
   let guestPair: string | null = null
+  let guestCompanion: CompanionIdentity | null = null
   let guestAutonomy: Autonomy | null = null
   let guestConsent = false
   // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
@@ -3753,6 +3772,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   onZooRead = (result) => {
     if (result.status === 200) {
       const zoo = (result.body.data as { zoo?: { autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
+      companionZoo.observe(zoo, Date.now(), (result.body.data as { revision?: number } | undefined)?.revision)
       // The zoo holds individuals and `paired` names one by uid; the brain speaks as its species.
       const paired = pairedIndividual(zoo)
       const pair = paired && isRosterDaemon(paired.id) ? paired : null
@@ -3765,6 +3785,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A uid not seen before is a hatch: its art is drawn now, before a window asks (idle while daemons are off).
       plates.observeZoo(zoo)
     } else if (result.status === 401) {
+      companionZoo.reset()
       zooPair = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
     }
     applyPair()
@@ -3971,6 +3992,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return null
     },
     onRegistered: handleRegistered,
+    onPromptSubmitted: (id, text) => backend.swarmPromptScopes.started(id, text, 'hook', registry.byAgent(id)?.engine),
     onSessionEnd,
     // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
     // adapter only learned of a turn from Stop, and emitted turn_started+turn_ended in the same
@@ -4266,9 +4288,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
     onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
+    onExperimentalRead: () => proxyBackend('GET', '/api/experimental-settings'),
+    onExperimentalWrite: (body) => proxyBackend('PATCH', '/api/experimental-settings', body),
     // The account's zoo — see backend routes/zoo.ts. Same shape as the desk: read and ops proxied,
-    // everyone else's changes heard as `zoo_changed`. Signed out, proxyBackend answers 401 NOT_SIGNED_IN
-    // and a guest keeps its zoo locally until it seeds this one.
+    // everyone else's changes heard as `zoo_changed`. The backend requires the account's creature
+    // opt-in. Signed out, proxyBackend answers 401 NOT_SIGNED_IN.
     // Killed on this computer (lib/daemonsSwitch.ts): a 404 DAEMONS_OFF without asking, which a window reads
     // exactly as the server's own 404 — daemons hidden. Otherwise verbatim, and the switch learns from it.
     onZooRead: () => zooProxy.read(),
@@ -4444,7 +4468,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       journal: (payload) => pairSensor.journal(payload),
       harnesses: () => pairSensor.snapshot().harnesses,
     },
-    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon(),
+      pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null },
     autonomy: () => pairAutonomy(),
     tokenMatches: (candidate) => pairToken.matches(candidate),
     voice: pairVoice,
@@ -4462,6 +4487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
+    pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4479,8 +4505,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
@@ -4504,7 +4530,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     now: Date.now,
   })
-  pairTalk = (text) => pairHarness.talk(text)
+  pairTalk = (text, uid) => pairHarness.talk(text, uid)
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
   // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
@@ -4576,11 +4602,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
-    onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
+    onGuestPair: (daemonId, identity) => {
+      guestPair = isRosterDaemon(daemonId) ? daemonId : null
+      const parsed = readCompanionIdentity(identity)
+      guestCompanion = parsed?.id === guestPair ? parsed : null
+      applyPair()
+    },
     onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
-    talk: (text) => pairTalk(text),
+    talk: (text, uid) => pairTalk(text, uid),
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -4591,6 +4622,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   onDaemonsChanged = (on) => {
     plates.setOn(on)
+    if (!on) { companionZoo.reset(); guestCompanion = null }
     if (on) {
       // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
       // everything off within the tick (before the rest of the file is read), and any other change asks for
@@ -4680,7 +4712,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The window looked at a harness, so the dial's drawer row for it is stale.
     // The dial's own tap already reaches the window (`agent.open`); this is the
     // return leg, and the pair is what keeps the badge and the pill equal.
-    onAgentSeen: (agentId) => { void cableRef?.agentSeen(agentId) },
+    onAgentSeen: (agentId, readToken) => { void cableRef?.agentSeen(agentId, readToken) },
     // Agents the window has a tile for. A finished turn on one of these is
     // already in front of the person, so the dial updates its tile in silence
     // rather than beeping about something being looked at.
@@ -4860,12 +4892,26 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // backend.onMessage.
     //
     // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
-    // registry, so a remote agent lands as "This agent is no longer available" — an error about an agent
+    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
     // that is alive and answering on another machine. sendTurn is the fork that already knows the
     // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
     // one the dial has been using for every voice turn.
     // A window that connects after the dial did has missed the `dial_status` that announced it.
     dialStatus: () => cableHostRef?.currentDialStatus() ?? { attached: false },
+    /*
+     * A window changing a device's settings. Addressed by the fleet's id, so a second robot on the same
+     * desk is not dragged along — every other cable command broadcasts on purpose (they all show the
+     * same desktop), but a preference belongs to the glass it was set on.
+     *
+     * Nothing is answered here. The device replies to its own `settings.set` with the values it now
+     * holds, and that reaches the window as an ordinary `dial_status`.
+     */
+    onDialSettings: (id, patch) => {
+      void cableRef?.setSettings(id, patch as Parameters<NonNullable<typeof cableRef>['setSettings']>[1])
+        .then(result => {
+          if (!result.ok) console.log(`[cable] settings for ${id || 'no device'}: ${result.error}`)
+        })
+    },
     openQuestions: () => [...openQuestions.values()],
     onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
       const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
@@ -6294,7 +6340,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
     const target = { ...session }
     const current = () => operationCurrent() && sameRestartTarget(target)
-    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The agent changed or stopped during restart.' } as const
+    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' } as const
     if (!current()) return changed
     // Both branches below `cd` into the row's folder before they exec, and both have already killed
     // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
@@ -6383,7 +6429,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   })
 
-  const submitAgent = (id: string, content: string, deliveryId?: string): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, tabId?: string): void => {
     const record = registry.resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -6396,9 +6442,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    input.submit(record?.agentId ?? sessionId, adapted, deliveryId)
+    input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
   }
-  backend.onMessage = (id, content, deliveryId) => submitAgent(id, content, deliveryId)
+  backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   backend.readChannelDesk = async () => {
     const response = await proxyBackend('GET', '/api/tab-channels')
@@ -6685,6 +6731,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
+    // Zoo selection is visual identity; it does not require consent to watch terminal activity.
+    // Guest identity is only a fallback while signed out, never another account's cached choice.
+    companion: () => daemons.on() ? (zooPair.known ? zooPair.pair : readAuthSession() ? null : guestPair) : null,
+    companionIdentity: () => daemons.on() ? (zooPair.known ? companionZoo.identity : readAuthSession() ? null : guestCompanion) : null,
+    companionMilestone: () => daemons.on() ? companionZoo.milestone : null,
     activityText: async (agentId) => {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
@@ -6724,6 +6775,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // than opening a tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
       backend.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
+    notificationRead: (machineId, agentId, readToken) =>
+      backend.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: async (agentId) => {
@@ -6759,7 +6812,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (existsSync(legacyDialLog)) {
     try { writeFileSync(legacyDialLog, `moved to ${join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log')}\n`) } catch { /* best effort */ }
   }
-  const cable = new CableSession(cableHost, new DialLog(env.HARNESS_LOGS_DIR))
+  const cable = new CableFleet(CableSession, cableHost, env.HARNESS_LOGS_DIR, DialLog,
+    { serials: process.env.HARNESS_DIAL_SERIALS?.split(',').map(s => s.trim()).filter(Boolean) })
   cableRef = cable
 
   const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
@@ -7955,9 +8009,11 @@ const enterSafeMode = (err: unknown): void => {
   // Bounded on purpose. A cause that has since cleared — tmux not yet on PATH after a reboot, a lock
   // file, a port held for a moment — would otherwise leave the machine wedged in a state nobody
   // respawns over, because not-ready is exactly what stops the app trying again.
+  // Counted in AWAKE time: a plain timer spent a closed lid on this clock and exited the daemon on the
+  // first loop turn after the wake, taking every local terminal with it (see lib/sleepAware.ts).
   if (env.ADAPTER_SAFE_MODE_MS > 0) {
-    setTimeout(() => leave(`no fix arrived within ${Math.round(env.ADAPTER_SAFE_MODE_MS / 60_000)}m — letting a clean start try`, 1),
-      env.ADAPTER_SAFE_MODE_MS).unref?.()
+    awakeTimeout(() => leave(`no fix arrived within ${Math.round(env.ADAPTER_SAFE_MODE_MS / 60_000)}m — letting a clean start try`, 1),
+      env.ADAPTER_SAFE_MODE_MS)
   }
 }
 

@@ -1,10 +1,13 @@
 // The Flutter status bar's geometry, for comparing the bar with daemons off
-// against the current main bar without daemons (0e4724cd, including Share)
+// against the bar without daemons (including Share and harness activity marks)
 // (test/fixtures/status_bar_before_daemons.json).
 //
 // Only what both versions have is read, so the same code measures either:
 // every control in the bar (tabs, the new-tab button, the model picker) and
 // the focused pane's context, in the default test font.
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -44,14 +47,20 @@ Future<Map<String, List<List<double>>>> measureStatusBar(
     await tester.pump(const Duration(milliseconds: 100));
     final bar = find.byKey(const ValueKey('workspace-status-bar'));
     out['${width.toInt()}'] = [
+      box(tester.getRect(find.byKey(const ValueKey('workspace-tab-bar')))),
       box(tester.getRect(bar)),
-      for (final element
-          in find
-              .descendant(of: bar, matching: find.byType(WorkspaceBarControl))
-              .evaluate())
+      for (final element in find.byType(WorkspaceBarControl).evaluate())
         box(tester.getRect(find.byWidget(element.widget))),
       box(tester.getRect(find.byKey(const ValueKey('workspace-pane-context')))),
     ];
+  }
+  // Explicit regeneration for intentional bar layout changes; normal test runs
+  // only compare the checked-in fixture.
+  final capture = Platform.environment['HARNESS_STATUS_BAR_CAPTURE_PATH'];
+  if (capture != null) {
+    File(
+      capture,
+    ).writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(out)}\n');
   }
   return out;
 }

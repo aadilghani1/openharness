@@ -7,6 +7,7 @@ import 'package:archive/archive.dart' show ZLibDecoder;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
+import '../core/sleep_aware.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
@@ -148,6 +149,11 @@ class TerminalSession extends ChangeNotifier {
   String? engineId;
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
+
+  /// Set by the view receiving input. Capture it with the bytes, before any async send.
+  String? inputTabId;
+  String? _bufferedInputTabId;
+  bool _swarmInput = false;
   final Duration resyncTimeout;
   final bool readOnly;
 
@@ -270,6 +276,7 @@ class TerminalSession extends ChangeNotifier {
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
   Timer? _heartbeat;
+  int _heartbeatTick = 0;
   DateTime? _lastStreamActivityAt;
   Timer? _ackTimer;
   Timer? _inputTimer;
@@ -464,7 +471,7 @@ class TerminalSession extends ChangeNotifier {
     // Armed unconditionally (not just on reopen attempts): a `terminal_open` sent through a silently
     // stale relay session never gets ANY reply — nothing else would ever notice or recover from that.
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(
+    _resyncTimer = SleepAwareTimer(
       resyncTimeout,
       () => unawaited(_handleOpenTimeout(openPayload, generation)),
     );
@@ -491,7 +498,7 @@ class TerminalSession extends ChangeNotifier {
     }
     if (sent) {
       _resyncTimer?.cancel();
-      _resyncTimer = Timer(
+      _resyncTimer = SleepAwareTimer(
         resyncTimeout,
         () => unawaited(_handleOpenTimeout(openPayload, generation)),
       );
@@ -554,16 +561,19 @@ class TerminalSession extends ChangeNotifier {
         // Which kind of stream came back. A watcher renders the terminal and
         // may not type into it; the band says who has it and offers to ask.
         watching = payload['readOnly'] == true;
+        _swarmInput = payload['swarmInput'] == true;
         // The claim is spent here: from now on this session holds the lease,
         // and every later open of its own rests on holding it rather than on a
         // gesture nobody has made since. See [takeover].
         if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
-        _heartbeat = Timer.periodic(
-          const Duration(seconds: 5),
-          (_) => unawaited(_sendHeartbeat()),
-        );
+        _heartbeatTick = 0;
+        _heartbeat = Timer.periodic(const Duration(seconds: 5), (timer) {
+          final slept = sleptSinceTick(timer, _heartbeatTick);
+          _heartbeatTick = timer.tick;
+          unawaited(_sendHeartbeat(afterSleep: slept));
+        });
         _armInitialKeyframeWatchdog();
         return true;
       case 'terminal_keyframe':
@@ -998,12 +1008,13 @@ class TerminalSession extends ChangeNotifier {
   /// the injection from there: it adapts slash commands to the pane's engine and retries the
   /// submit Enter. A client typing bytes can do neither — which is exactly how Codex ended up
   /// holding a composed line unsent, its Enter arriving in the same read as the text.
-  Future<bool> sendComposerText(String text) async {
+  Future<bool> sendComposerText(String text, {String? tabId}) async {
     if (!acceptsInput) return false;
     final content = text.trimRight();
     if (content.trim().isEmpty) return false;
     return send('message', {
       'content': content,
+      'tabId': ?(tabId ?? inputTabId),
       'agentId': agentId,
       'mode': 'auto',
     });
@@ -1026,7 +1037,7 @@ class TerminalSession extends ChangeNotifier {
   ///
   /// The caller must check [MachineState.terminalPasteRawAvailable] first: an older CLI does not know
   /// this binary kind at all, so sending it there would silently go nowhere.
-  Future<bool> pasteText(String text) async {
+  Future<bool> pasteText(String text, {String? tabId}) async {
     if (!acceptsInput) return false;
     // Forwarded verbatim, including a stray 0x03 — same as _onTerminalOutput/sendComposerText.
     if (text.isEmpty) return false;
@@ -1035,6 +1046,7 @@ class TerminalSession extends ChangeNotifier {
     final generation = _generation;
     final frame = TerminalBinaryFrame(
       kind: TerminalBinaryKind.paste,
+      tabId: _swarmInput ? (tabId ?? inputTabId) : null,
       streamId: currentStreamId,
       // Unused server-side (a paste is one self-contained unit, not part of the ordered keystroke
       // stream `input`'s seq guards) — kept at 0 rather than threading a second counter for a field
@@ -1200,6 +1212,11 @@ class TerminalSession extends ChangeNotifier {
 
   void _onTerminalOutput(String data) {
     if (!acceptsInput || data.isEmpty) return;
+    final origin = _swarmInput ? inputTabId : null;
+    if (_inputBytes.isNotEmpty && _bufferedInputTabId != origin) {
+      unawaited(_flushInput());
+    }
+    _bufferedInputTabId = origin;
     final bytes = utf8.encode(data);
     final isBoundary =
         data.contains('\r') ||
@@ -1244,6 +1261,7 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     final bytes = List<int>.from(_inputBytes);
+    final origin = _bufferedInputTabId;
     _inputBytes.clear();
     _lastInputFlushAt = inputClockForTest();
     final currentStreamId = streamId;
@@ -1278,6 +1296,7 @@ class TerminalSession extends ChangeNotifier {
         final end = min(offset + kInputFrameMaxBytes, bytes.length);
         final frame = TerminalBinaryFrame(
           kind: TerminalBinaryKind.input,
+          tabId: origin,
           streamId: currentStreamId,
           seq: _inputSeq++,
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),
@@ -1465,8 +1484,12 @@ class TerminalSession extends ChangeNotifier {
     }
   }
 
-  Future<void> _sendHeartbeat() async {
+  Future<void> _sendHeartbeat({bool afterSleep = false}) async {
     if (status != TerminalSessionStatus.controlling || streamId == null) return;
+    // The first beat after the computer slept: the stream was quiet because nobody here was running,
+    // not because it died. Its silence is measured afresh from now — the daemon carries the lease over
+    // the same gap — instead of declaring TERMINAL_STREAM_TIMEOUT and throwing away typed input.
+    if (afterSleep) _lastStreamActivityAt = _now();
     final generation = _generation;
     final sent = await send('terminal_alive', {'streamId': streamId});
     if (!sent && _isCurrent(generation)) {
@@ -1503,7 +1526,7 @@ class TerminalSession extends ChangeNotifier {
 
   void _armInitialKeyframeWatchdog() {
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(resyncTimeout, () {
+    _resyncTimer = SleepAwareTimer(resyncTimeout, () {
       if (streamId != null && _expectedSeq == null) {
         unawaited(_requestResync('TERMINAL_KEYFRAME_TIMEOUT'));
       }
@@ -1538,7 +1561,7 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(resyncTimeout, () {
+    _resyncTimer = SleepAwareTimer(resyncTimeout, () {
       if (_resyncRequested && streamId == currentStream) {
         unawaited(_sendResyncAttempt());
       }
@@ -1594,7 +1617,7 @@ class TerminalSession extends ChangeNotifier {
   }
 
   void transportLost([
-    String message = 'Connection lost. Select the agent to reconnect.',
+    String message = 'Connection lost. Select the harness to reconnect.',
   ]) {
     // `takenOver` is a deliberate dead end (see `_paneNeedsAttach`): only the user's own retry
     // may reopen a stream someone else claimed. A WS hiccup must not quietly overwrite that into

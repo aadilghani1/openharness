@@ -1,5 +1,5 @@
 // The daemon's face: moods in the README's order, blinks only as answers,
-// work frames stepped by agent events, the tally beside the slot, and the
+// work frames stepped by agent events, activity details, and the
 // interruption rules for its one line. Every test runs in fake time and ends
 // with no timer left: nothing runs on its own.
 import 'dart:convert';
@@ -62,6 +62,7 @@ void main() {
     String id = 'tim',
     String version = '2.0',
     bool shiny = false,
+    bool illustrations = false,
     Zoo? custom,
     DaemonRoster? roster,
     LocalKeyValueStore? settingsStore,
@@ -92,7 +93,12 @@ void main() {
     });
     zoo = ZooController(storage: storage, now: clock.call, roster: roster);
     settings = DaemonSettings(storage: settingsStore);
-    face = DaemonFace(zoo, now: clock.call, settings: settings);
+    face = DaemonFace(
+      zoo,
+      now: clock.call,
+      settings: settings,
+      animateIllustrations: illustrations,
+    );
     addTearDown(() {
       face.dispose();
       settings.dispose();
@@ -129,7 +135,11 @@ void main() {
     await tester.pump();
     expect(face.visible, isTrue);
     expect(face.glyph, r'\_(  )_/');
-    expect(face.tally, '', reason: 'before the first hatch the slot is the egg');
+    expect(
+      face.cell.length,
+      10,
+      reason: 'the first egg uses the same fixed slot',
+    );
   });
 
   testWidgets('moods follow the README precedence', (tester) async {
@@ -197,8 +207,9 @@ void main() {
     expect(face.autonomy, 'act-on-key');
   });
 
-  testWidgets('a brain line carries its detail, harness, speaker and setting',
-      (tester) async {
+  testWidgets('a brain line carries its detail, harness, speaker and setting', (
+    tester,
+  ) async {
     await mount(tester);
     face.sayFromBrain(
       DaemonSay.fromJson({
@@ -258,15 +269,15 @@ void main() {
     await settle(tester);
   });
 
-  testWidgets('a finished turn: ack blink, done for 3 s, a labeled count by the '
-      'slot and no line', (tester) async {
+  testWidgets('a finished turn: ack blink, done for 3 s, activity details '
+      'and no line', (tester) async {
     await mount(tester);
     face.sync(const DaemonWatch(turns: {'m': 4}));
     expect(face.mood, DaemonMood.idle, reason: 'a first count is a baseline');
     face.sync(const DaemonWatch(turns: {'m': 5}));
     expect(face.mood, DaemonMood.done);
     expect(face.voice, isNull, reason: 'a finished turn never takes over');
-    expect(face.tally, '1 done');
+    expect(face.doneCount, 1);
     expect(face.lid, isNull);
     await pass(tester, const Duration(milliseconds: 170));
     expect(face.lid, '-');
@@ -277,10 +288,10 @@ void main() {
     expect(face.mood, DaemonMood.idle);
     face.sync(const DaemonWatch(turns: {'m': 7}));
     expect(face.mood, DaemonMood.idle, reason: 'the 20 s cooldown');
-    expect(face.tally, '3 done', reason: 'every finish counts');
+    expect(face.doneCount, 3, reason: 'every finish counts');
     expect(face.detail, contains('3 finished since you looked'));
     face.seen();
-    expect(face.tally, '', reason: 'cleared when you look');
+    expect(face.doneCount, 0, reason: 'cleared when you look');
     await pass(tester, const Duration(seconds: 20));
     face.sync(const DaemonWatch(turns: {'m': 8}));
     expect(face.mood, DaemonMood.done);
@@ -303,7 +314,7 @@ void main() {
         focus: 'm/a1',
       ),
     );
-    expect(face.tally, '1 done', reason: 'only the one you were not looking at');
+    expect(face.doneCount, 1, reason: 'only the one you were not looking at');
     face.sync(
       const DaemonWatch(
         turns: {'m': 2},
@@ -655,10 +666,17 @@ void main() {
     expect(face.glyph, r'\_(/\)_/');
     expect(face.label, 'Egg');
     expect(face.detail, '1 of 3 habits');
-    expect(face.tooltip, contains('Finish a turn in a harness, and any 2 more.'));
+    expect(
+      face.tooltip,
+      contains('Finish a turn in a harness, and any 2 more.'),
+    );
     zoo.habit('find');
     zoo.habit('store');
-    expect(face.glyph, r"\_(*')_/", reason: 'without a finished turn, two count');
+    expect(
+      face.glyph,
+      r"\_(*')_/",
+      reason: 'without a finished turn, two count',
+    );
     expect(face.detail, '2 of 3 habits');
     zoo.habit('turn');
     expect(face.glyph, r'\_(oo)_/');
@@ -680,15 +698,35 @@ void main() {
     expect(zoo.zoo.eggs.single.kind, 'turn');
     expect(face.glyph, r'\_(oo)_/');
     expect(face.voice, isNull, reason: 'an egg is not an interruption');
-    expect(face.tally, '1 egg');
+    expect(face.eggsWaiting, 1);
     expect(face.tooltip, contains(r'\_(oo)_/ x1 waiting'));
     await pass(tester, const Duration(seconds: 3));
     expect(face.glyph, ',(o o),', reason: 'the daemon comes back');
-    expect(face.tally, '1 egg', reason: 'the egg still waits');
+    expect(face.eggsWaiting, 1, reason: 'the egg still waits');
     await zoo.hatch(zoo.zoo.eggs.single.id);
-    expect(face.tally, '', reason: 'opened');
+    expect(face.eggsWaiting, 0, reason: 'opened');
     await pass(tester, const Duration(seconds: 6));
   });
+
+  testWidgets(
+    'illustrated idle and finite boop clocks stop in quiet and the background',
+    (tester) async {
+      await mount(tester, illustrations: true);
+      final initial = face.artFrame;
+      await pass(tester, const Duration(milliseconds: 210));
+      expect(face.artFrame, isNot(initial));
+      face.boop();
+      await pass(tester, const Duration(milliseconds: 520));
+      expect(face.artFrame, 3);
+      face.setEnvironment(foreground: false, reduceMotion: false);
+      await pass(tester, const Duration(hours: 8));
+      expect(face.artFrame, 0);
+      face.setEnvironment(foreground: true, reduceMotion: true);
+      await pass(tester, const Duration(seconds: 2));
+      expect(face.artFrame, 0);
+      face.setEnvironment(foreground: false, reduceMotion: false);
+    },
+  );
 
   testWidgets('a level-up is a slow blink and no line', (tester) async {
     await mount(tester, version: '0.1');
@@ -859,9 +897,7 @@ void main() {
   });
 
   testWidgets('say is the pair answering you: dim, at once; auto is what it '
-      'did: done, dim, and counted as a line nobody asked for', (
-    tester,
-  ) async {
+      'did: done, dim, and counted as a line nobody asked for', (tester) async {
     await mount(tester);
     face.sayFromBrain(
       const DaemonSay(
@@ -901,43 +937,41 @@ void main() {
     await settle(tester);
   });
 
-  testWidgets('completed turns and unhatched eggs have distinct labels', (
-    tester,
-  ) async {
-    await mount(
-      tester,
-      custom: Zoo(
-        daemons: [ZooDaemon(id: 'gnu', hatched: '', egg: 'first')],
-        pair: 'gnu',
-        firstEgg: true,
-        eggs: const [
-          ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
-          ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
-        ],
-      ),
-    );
-    face.sync(const DaemonWatch(doneCount: 1));
-    expect(face.tally, '1 done, 2 eggs');
-    face.setPointerInside(true);
-    face.sync(const DaemonWatch(doneCount: 1234));
-    expect(face.tally, '999+ done, 2 eggs');
-    final heldCells = face.tallyCells;
-    expect(face.tooltip, contains('1234'));
-    expect(face.detail, contains('1234 finished'));
-    face.seen();
-    expect(
-      face.tally,
-      '2 eggs',
-      reason: 'looking clears work, never unhatched eggs',
-    );
-    expect(face.tallyCells, heldCells, reason: 'hover keeps the click target still');
-    face.setPointerInside(false);
-    expect(face.tallyCells, '2 eggs'.length);
-    face.setPointerInside(true);
-    zoo.bind(null);
-    expect(face.tallyCells, 0, reason: 'off reserves no space');
-    await settle(tester);
-  });
+  testWidgets(
+    'activity details and waiting eggs keep the same ten-cell sprite',
+    (tester) async {
+      await mount(
+        tester,
+        custom: Zoo(
+          daemons: [ZooDaemon(id: 'gnu', hatched: '', egg: 'first')],
+          pair: 'gnu',
+          firstEgg: true,
+          eggs: const [
+            ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
+            ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
+          ],
+        ),
+      );
+      face.sync(const DaemonWatch(doneCount: 1));
+      final cell = face.cell;
+      expect(cell.length, 10);
+      expect(face.doneCount, 1);
+      expect(face.eggsWaiting, 2);
+      face.sync(const DaemonWatch(doneCount: 1234));
+      expect(face.cell, cell);
+      expect(face.tooltip, contains('1234'));
+      expect(face.detail, contains('1234 finished'));
+      face.seen();
+      expect(
+        face.eggsWaiting,
+        2,
+        reason: 'looking clears work, never unhatched eggs',
+      );
+      expect(face.doneCount, 0);
+      expect(face.cell, cell);
+      await settle(tester);
+    },
+  );
 
   testWidgets('the brain counts finished turns everywhere; a look clears it '
       'and tells the brain', (tester) async {
@@ -950,10 +984,10 @@ void main() {
         doneLast: ['api@office finished: tests pass.'],
       ),
     );
-    expect(face.tally, '3 done');
+    expect(face.doneCount, 3);
     expect(face.tooltip, contains('api@office finished: tests pass.'));
     face.seen();
-    expect(face.tally, '');
+    expect(face.doneCount, 0);
     expect(told, 1);
     face.seen();
     expect(told, 1, reason: 'nothing left to clear');
@@ -962,11 +996,11 @@ void main() {
     face.setEnvironment(foreground: false, reduceMotion: false);
     await pass(tester, const Duration(minutes: 1));
     face.setEnvironment(foreground: true, reduceMotion: false);
-    expect(face.tally, '2 done');
+    expect(face.doneCount, 2);
     await pass(tester, const Duration(seconds: 3));
-    expect(face.tally, '2 done');
+    expect(face.doneCount, 2);
     await pass(tester, const Duration(seconds: 2));
-    expect(face.tally, '');
+    expect(face.doneCount, 0);
     expect(told, 2);
     await settle(tester);
   });

@@ -121,7 +121,7 @@ void main() {
             await chord(tester, LogicalKeyboardKey.keyP, shift: true);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
-              '> New Tab',
+              '> New Swarm',
             );
             await tester.pump();
             await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -228,7 +228,7 @@ void main() {
           expect(tab['id'], office.id);
           expect(tab['label'], '1:office');
         } else {
-          expect(find.text('1:office'), findsOneWidget);
+          expect(find.text('office'), findsOneWidget);
         }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
@@ -398,7 +398,7 @@ void main() {
       expect(input.single.streamId, 'stream-a1');
       expect(String.fromCharCodes(input.single.bytes), 'x');
       await activate('rename', {'id': second});
-      expect(find.text('Rename Tab'), findsOneWidget);
+      expect(find.text('Rename Swarm'), findsOneWidget);
       final name = tester.widget<TextField>(find.byType(TextField));
       expect(name.focusNode!.hasPrimaryFocus, isTrue);
       tester.testTextInput.enterText('Keyboard work');

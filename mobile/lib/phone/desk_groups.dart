@@ -154,7 +154,8 @@ List<DeskTabFilter> deskTabFilters(
 /// way, and the desk syncs only names a person chose (`nameIsCustom`); writing a
 /// derived one would turn it into a chosen one on every computer.
 String deskTabName(DeskTab tab, Agent? first) {
-  if (tab.nameIsCustom || first == null) return tab.name;
+  if (tab.nameIsCustom) return tab.name;
+  if (first == null) return Swarm.normalizeName(tab.name);
   final name = first.displayName;
   return name == kUntitledPane ? Swarm.defaultName : name;
 }

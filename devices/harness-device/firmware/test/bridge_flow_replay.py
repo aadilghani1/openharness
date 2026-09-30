@@ -53,8 +53,11 @@ static void audio_notify_done(void) {} // no real speaker or audio hardware in t
         extra += 'assert(!decoder.corrupt_frames && !decoder.discarded_bytes && !s_bad && !s_unknown && s_last_rx_us);scene_take();\n'
         extra += f'assert(active()->busy=={str(wanted["busy"]).lower()});assert(result_visible()=={str(wanted["recap"]).lower()});\n'
         extra += 'assert(!strcmp(active()->tool,' + json.dumps(wanted['status']) + '));\n'
-        if wanted['status']:
-            extra += 'bool found=false;for(int r=0;r<scene.count;r++) if(scene.runs[r].arc==2 && !strcmp(scene.runs[r].text,' + json.dumps(wanted['status']) + ')) {assert(scene.runs[r].fg==FG);found=true;}assert(found);\n'
+        extra += 'assert(title_is(active()->name));char bell[24];unsigned unread=notice_unread();if(unread)snprintf(bell,sizeof bell,HT_BELL \" %u\",unread);else bell[0]=0;assert(status_is(bell));\n'
+        display_status = wanted.get('display_status', wanted['status'])
+        if display_status:
+            extra += 'fake_ms+=3400;surface_tick(fake_ms);scene_take();\n'
+            extra += 'bool found=false;for(int r=0;r<scene.count;r++) if(scene.runs[r].arc==1 && !strcmp(scene.runs[r].text,' + json.dumps(display_status) + ')) {assert(scene.runs[r].fg==FG);found=true;}assert(found);\n'
         extra += 'uint16_t pixels[466],bg=(uint16_t)((scene.background<<8)|(scene.background>>8));unsigned ink=0;uint32_t hash=2166136261u;for(int y=0;y<466;y++) {ht_raster(&scene,(ht_rect_t){0,y,466,1},pixels);for(int x=0;x<466;x++){ink+=pixels[x]!=bg;hash=(hash^pixels[x])*16777619u;}}assert(ink>100 && ink<466*466/2);\n'
         extra += 'if(c==0){printf("bridge flow: %s rendered hash=%08x ink=%u PASS\\n",' + json.dumps(trace['id']) + ',hash,ink);const char *dir=getenv("HABITAT_PREVIEW_DIR");if(dir)portrait(dir,' + json.dumps('bridge-' + trace['id']) + ');}\n'
         extra += '}\n}\n'

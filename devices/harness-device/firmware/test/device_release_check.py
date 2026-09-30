@@ -57,7 +57,7 @@ def main():
                          if p.is_file() and '__pycache__' not in p.parts
                          and p.suffix in {'.c', '.h', '.inc', '.py', '.sh', '.ts', '.mts', '.mjs'})
         # The installed repair can use a standalone parser. Include its bytes too.
-        for helper in re.findall(r'[\'"](\./device-activity[^\'\"]+)[\'"]',
+        for helper in re.findall(r'[\'"](\./device-(?:activity|usb-fleet)[^\'\"]+)[\'"]',
                                  args.bundle.read_text()):
             files.add((args.bundle.parent / helper).resolve(strict=True))
         return {str(p): fingerprint(p) for p in sorted(files)}

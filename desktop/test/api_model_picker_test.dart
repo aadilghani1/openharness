@@ -277,6 +277,24 @@ void main() {
           ),
         );
         expect(picker.modelRowAction(picker.selected!), 'Use');
+        // The end of its row says what Enter does on it — never the API's name, which heads it.
+        final rowId = apiModelRowId(
+          'openrouter',
+          'anthropic/claude-sonnet-4.6',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(ValueKey('model-row-status:$rowId')))
+              .data,
+          'Use',
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey('swarm-search-line:$rowId')),
+            matching: find.text('OpenRouter'),
+          ),
+          findsNothing,
+        );
         expect(find.text('OpenRouter · 1M context'), findsOneWidget);
         expect(find.text('Anthropic: Claude Sonnet 4.6'), findsOneWidget);
         expect(app.moves, isEmpty);

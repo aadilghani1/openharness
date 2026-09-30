@@ -1,5 +1,5 @@
 // Real-font review captures of the daemon: the status slot in every mood and
-// nest stage (with its tally, a shiny `*`, alerts and replies), the hatch
+// nest stage (with a shiny `*`, alerts and replies), the hatch
 // reveal's frames and rarity tells (drop init's plates at the reveal size),
 // and the panel (the zoo's box back with a portrait plate, the card, a calm
 // unreachable machine, light themes). Always checks that nothing overflows;
@@ -18,17 +18,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/daemons/daemon_brain.dart';
 import 'package:harness/daemons/daemon_face.dart';
-import 'package:harness/daemons/plates.dart';
-import 'package:harness/daemons/render.dart';
+import 'package:harness/daemons/illustrated_art.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
-import 'package:harness/core/models.dart' show CurrentUserProfile, ConnectionStatus;
+import 'package:harness/core/models.dart'
+    show CurrentUserProfile, ConnectionStatus;
 import 'package:harness/core/agent_git_context.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/swarm_catalog.dart' show SwarmProjectStore;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/workspace_bar_style.dart';
@@ -38,10 +39,12 @@ import 'package:harness/terminal/terminal_typography.dart';
 import 'package:harness/widgets/daemon_hatch.dart';
 import 'package:harness/widgets/daemon_panel.dart';
 import 'package:harness/widgets/daemon_slot.dart';
+import 'package:harness/widgets/daemon_illustration.dart';
+import 'package:harness/widgets/daemon_art_gallery.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
-import 'package:harness/settings/experimental_features.dart';
+import 'support/experimental_settings.dart';
 import 'support/real_fonts.dart';
 import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
@@ -217,6 +220,16 @@ Future<void> _capture(
     await act();
     await tester.pump(settle);
   }
+  // Bitmap decoding is real async work, outside the test's fake clock. Wait
+  // for the displayed providers so a passing capture cannot hide an empty
+  // portrait while the small, already-cached slot happens to be ready.
+  final images = find.byType(Image).evaluate().toList();
+  await tester.runAsync(() async {
+    for (final element in images) {
+      await precacheImage((element.widget as Image).image, element);
+    }
+  });
+  await tester.pump();
   expect(tester.takeException(), isNull, reason: name);
   final output = _output;
   if (output == null) return;
@@ -287,7 +300,90 @@ Widget _bar(
 void main() {
   setUpAll(_fonts);
 
-  testWidgets('status slot: nest stages, versions, moods, tally and voice', (
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    for (final species in IllustratedArt.species) {
+      testWidgets('artwork gallery: $species ${brightness.name}', (
+        tester,
+      ) async {
+        await _capture(
+          tester,
+          'gallery-$species-${brightness.name}',
+          const Size(480, 680),
+          brightness: brightness,
+          (context) => Padding(
+            padding: const EdgeInsets.all(20),
+            child: DaemonArtGallery(onBack: () {}),
+          ),
+          act: () async {
+            await tester.tap(find.byKey(ValueKey('daemon-gallery-$species')));
+          },
+        );
+        final art = tester.widget<DaemonIllustration>(
+          find.byKey(const ValueKey('daemon-gallery-portrait')),
+        );
+        expect(art.art.stem, '${species}_adult_idle');
+        final next = tester.widget<TextButton>(
+          find.byKey(const ValueKey('daemon-gallery-next')),
+        );
+        expect(
+          next.style!.foregroundColor!.resolve({}),
+          currentTerminalTheme().foreground,
+        );
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
+  }
+
+  testWidgets(
+    'Zoo artwork gallery wraps with keys and preserves the collection',
+    (tester) async {
+      final face = await _face(tester, _paired('tim', version: '0.1'));
+      face.settings.tab = 'zoo';
+      final before = jsonEncode(face.zoo.zoo.toJson());
+      var closed = false;
+      await _capture(
+        tester,
+        'gallery-narrow',
+        const Size(360, 760),
+        (context) => DaemonPanel(
+          face: face,
+          onClose: () => closed = true,
+          onHatch: (_) => fail('No hatching'),
+          onCommand: (_) => fail('No commands'),
+          shortcut: (_) => null,
+        ),
+        act: () async {
+          tester
+              .widget<TextButton>(find.byKey(const ValueKey('daemon-gallery')))
+              .onPressed!();
+        },
+      );
+      expect(find.text('Tim · 1 of 10'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(find.text('Beastie · 10 of 10'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(find.text('Tim · 1 of 10'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('daemon-gallery-stage')));
+      await tester.tap(find.byKey(const ValueKey('daemon-gallery-expression')));
+      await tester.pump();
+      final preview = tester.widget<DaemonIllustration>(
+        find.byKey(const ValueKey('daemon-gallery-portrait')),
+      );
+      expect(preview.art.stem, 'tim_baby_work');
+      expect(jsonEncode(face.zoo.zoo.toJson()), before);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(DaemonArtGallery), findsNothing);
+      expect(find.text('Tim · Hatchling'), findsOneWidget);
+      expect(closed, isFalse);
+      expect(jsonEncode(face.zoo.zoo.toJson()), before);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('status slot: nest stages, versions, moods and voice', (
     tester,
   ) async {
     final rows = <(String, DaemonFace)>[];
@@ -359,7 +455,7 @@ void main() {
       'gopher shiny',
       await _face(tester, _paired('gopher', shiny: true)),
     ));
-    // Finished turns: a count beside the slot, never a line.
+    // Finished turns: the face reacts without adding a count or a line.
     final done = await _face(tester, _paired('tim'));
     done
       ..sync(const DaemonWatch(turns: {'m': 0}))
@@ -573,38 +669,20 @@ void main() {
       if (frame.stage == HatchStage.card) {
         expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
       }
-      // Drop init hatches plates: at the reveal size, still in a capture.
       if (frame.stage == HatchStage.colour ||
           frame.stage == HatchStage.silhouette) {
-        final plate = daemonPlates.frame(
-          id,
-          PlateSize.reveal,
-          '0.1',
-          DaemonMood.idle,
-        );
-        final shown = tester.widget<Text>(
-          find.byKey(
-            ValueKey(
-              frame.stage == HatchStage.silhouette
-                  ? 'daemon-hatch-silhouette'
-                  : 'daemon-hatch-portrait',
-            ),
+        final stage = find.byKey(
+          ValueKey(
+            frame.stage == HatchStage.silhouette
+                ? 'daemon-hatch-silhouette'
+                : 'daemon-hatch-colour',
           ),
         );
-        final text = shown.textSpan?.toPlainText() ?? shown.data!;
-        // The hatchling stands inside the open shell; the shell hides its
-        // bottom rows, while its upper rows keep the baked portrait.
-        final visible = plate.where((r) => r.trim().isNotEmpty).take(5);
-        for (final row in visible) {
-          expect(
-            text,
-            contains(
-              frame.stage == HatchStage.silhouette
-                  ? silhouette(row).trim()
-                  : row.trim(),
-            ),
-          );
-        }
+        expect(stage, findsOneWidget);
+        expect(
+          find.descendant(of: stage, matching: find.byType(DaemonIllustration)),
+          isNot(findsNothing),
+        );
       }
       await tester.pumpWidget(const SizedBox());
     });
@@ -697,6 +775,13 @@ void main() {
       null,
     ),
     (
+      'panel-tim-hatchling',
+      _paired('tim', version: '0.1', serial: 1),
+      Brightness.dark,
+      const DaemonWatch(),
+      null,
+    ),
+    (
       'panel-tim-zoo-box',
       _paired(
         'tim',
@@ -772,7 +857,9 @@ void main() {
       await _capture(
         tester,
         name,
-        const Size(520, 1100),
+        name == 'panel-tim-hatchling'
+            ? const Size(360, 760)
+            : const Size(520, 1100),
         brightness: brightness,
         act: tap == null
             ? null
@@ -805,6 +892,20 @@ void main() {
         ),
       );
       expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
+      if (name == 'panel-tim-hatchling') {
+        expect(find.text('Tim · Hatchling'), findsOneWidget);
+        expect(find.text('Collection · 1 of 9 discovered'), findsOneWidget);
+        expect(find.byKey(const ValueKey('daemon-panel-lore')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('daemon-panel-individuals')),
+          findsNothing,
+        );
+        await tester.tap(find.byKey(const ValueKey('daemon-details')));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('daemon-panel-lore')), findsOneWidget);
+        expect(face.zoo.zoo.daemons, hasLength(1));
+        expect(face.zoo.paired?.version, '0.1');
+      }
       if (name == 'panel-two-tims') {
         expect(find.textContaining('pip the tim'), findsWidgets);
         expect(find.textContaining('dot the tim'), findsOneWidget);
@@ -832,27 +933,21 @@ void main() {
       }
       if (name == 'panel-tim-zoo-box') {
         expect(find.text('[ ? ]'), findsNWidgets(6));
-        expect(find.text('1.0'), findsOneWidget);
+        expect(find.text('Young'), findsOneWidget);
         expect(find.textContaining('28/40'), findsOneWidget);
         // Drop init only: unix and tty are on hold, so no shelf, silhouette
         // or count of theirs shows.
         expect(
-          find.textContaining('drop 1 init  3/9  +secret'),
+          find.textContaining('Collection · 3 of 9 discovered + secret'),
           findsOneWidget,
         );
         expect(find.textContaining('unix'), findsNothing);
         expect(find.textContaining('tty'), findsNothing);
         expect(find.byKey(const ValueKey('daemon-zoo-tmux')), findsNothing);
-        // tim 2.0's portrait plate, frame 0 (a capture has Reduce Motion).
-        final shown = tester.widget<Text>(
+        final shown = tester.widget<DaemonIllustration>(
           find.byKey(const ValueKey('daemon-portrait')),
         );
-        expect(
-          shown.textSpan!.toPlainText(),
-          daemonPlates
-              .frame('tim', PlateSize.portrait, '2.0', DaemonMood.idle)
-              .join('\n'),
-        );
+        expect(shown.art.stem, 'tim_adult_idle');
       }
       if (name == 'panel-away-calm') {
         expect(face.mood, DaemonMood.idle, reason: 'asleep is not a failure');
@@ -990,7 +1085,11 @@ void main() {
     );
     expect(find.text('api@office Bash: npm test'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-answer-y')), findsWidgets);
-    expect(find.text('3 done'), findsOneWidget);
+    expect(
+      find.text('3 done'),
+      findsNothing,
+      reason: 'finished turns affect the face without adding a bar count',
+    );
     await tester.pumpWidget(const SizedBox());
     for (final (_, face) in rows) {
       face.sync(const DaemonWatch());
@@ -1317,7 +1416,7 @@ void main() {
       act: () => settle(tester),
       (context) => panelFor(context, face, brain),
     );
-    expect(find.text('1:now*'), findsOneWidget);
+    expect(find.text('1 Now'), findsOneWidget);
     expect(find.text('<tim> start codex in ~/code/api?'), findsOneWidget);
     expect(find.text('codex@laptop'), findsOneWidget, reason: 'the harness');
     expect(
@@ -1353,7 +1452,7 @@ void main() {
       const Size(560, 1250),
       (context) => panelFor(context, face, brain),
     );
-    expect(find.text('2:zoo*'), findsOneWidget);
+    expect(find.text('2 Zoo'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-portrait')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-panel-zoo')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
@@ -1414,7 +1513,7 @@ void main() {
       const Size(560, 1300),
       (context) => panelFor(context, face, brain),
     );
-    expect(find.text('4:settings*'), findsOneWidget);
+    expect(find.text('4 Settings'), findsOneWidget);
     expect(find.text('(*) suggest'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-panel-floor')), findsOneWidget);
     expect(
@@ -1858,21 +1957,10 @@ void main() {
           ),
           findsOneWidget,
         );
-        // The held frame is tim 2.0's reveal plate (done), on the morph's
-        // canvas.
-        final shown = tester.widget<Text>(
+        final shown = tester.widget<DaemonIllustration>(
           find.byKey(const ValueKey('daemon-hatch-portrait')),
         );
-        final plate = daemonPlates.frame(
-          'tim',
-          PlateSize.reveal,
-          '2.0',
-          DaemonMood.done,
-        );
-        expect(
-          shown.textSpan!.toPlainText().split('\n').map((r) => r.trim()),
-          plate.map((r) => r.trim()),
-        );
+        expect(shown.art.stem, 'tim_adult_done');
       }
       await tester.pumpWidget(const SizedBox());
     });
@@ -1944,19 +2032,26 @@ void main() {
   }
 
   for (final width in [640.0, 1280.0]) {
-    testWidgets('experimental creature preview panel at ${width.toInt()}', (tester) async {
+    testWidgets('experimental account creature panel at ${width.toInt()}', (
+      tester,
+    ) async {
       final app = createApp();
       addTearDown(app.dispose);
       seedStatusBarWorkspace(app);
-      app.currentUser = const CurrentUserProfile(id: 'preview', email: 'preview@example.test');
+      app.currentUser = const CurrentUserProfile(
+        id: 'preview',
+        email: 'preview@example.test',
+      );
       final zoo = ZooController();
       addTearDown(zoo.dispose);
-      final remote = FakeZooTransport(available: false);
-      final experiments = ExperimentalFeaturesStore(storage: MemoryStore());
+      final remote = FakeZooTransport();
+      final experiments = MemoryExperimentalFeaturesStore(
+        storage: MemoryStore(),
+      );
       addTearDown(experiments.dispose);
       await _capture(
         tester,
-        'experimental-preview-panel-${width.toInt()}',
+        'experimental-account-panel-${width.toInt()}',
         Size(width, 620),
         (context) => SwarmScreen(
           notifier: app,
@@ -1975,23 +2070,36 @@ void main() {
           await tester.pump();
         },
       );
-      expect(find.byKey(const ValueKey('daemon-preview-label')), findsOneWidget);
-      expect(remote.batches, isEmpty);
+      expect(find.byKey(const ValueKey('daemon-preview-label')), findsNothing);
+      expect(zoo.isAccount, isTrue);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 11));
     });
   }
 
-  for (final (native, width) in [(false, 640.0), (false, 1280.0), (true, 1280.0)]) {
-    testWidgets('creature counts separate from Git at $width native=$native', (tester) async {
+  for (final (native, width) in [
+    (false, 640.0),
+    (false, 1280.0),
+    (true, 1280.0),
+  ]) {
+    testWidgets('creature alone beside Git at $width native=$native', (
+      tester,
+    ) async {
       final appearance = appearancePrefsStore.value;
       appearancePrefsStore.value = appearance.copyWith(
-        prompt: const PromptPrefs(statusStyle: StatusLineStyle.powerlevel10kRainbow),
+        prompt: const PromptPrefs(
+          statusStyle: StatusLineStyle.powerlevel10kRainbow,
+        ),
       );
       addTearDown(() => appearancePrefsStore.value = appearance);
       final app = createApp();
       addTearDown(app.dispose);
       seedStatusBarWorkspace(app);
+      final experiments = MemoryExperimentalFeaturesStore(
+        storage: MemoryStore(),
+      );
+      addTearDown(experiments.dispose);
+      await experiments.set(ExperimentalFeature.focusBarCreature, true);
       final git = gitFixture(branch: 'continue-daemons');
       final project = git['current'] as Map<String, dynamic>;
       git['state'] = 'multiple';
@@ -1999,7 +2107,12 @@ void main() {
       git['checkouts'] = [
         project,
         for (var i = 0; i < 3; i++)
-          {...project, 'cwd': '/fixture-$i', 'root': '/fixture-$i', 'branch': 'work-$i'},
+          {
+            ...project,
+            'cwd': '/fixture-$i',
+            'root': '/fixture-$i',
+            'branch': 'work-$i',
+          },
       ];
       git['recentWork'] = {'project': project, 'at': '2026-09-27T13:00:00Z'};
       final machine = app.stateOf('m')!;
@@ -2012,25 +2125,36 @@ void main() {
       final zoo = ZooController(storage: _Memory());
       addTearDown(zoo.dispose);
       final remote = FakeZooTransport()
-        ..zoo = _paired('gnu', version: '0.1', eggs: const [
-          ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
-          ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
-        ]);
+        ..zoo = _paired(
+          'gnu',
+          version: '0.1',
+          eggs: const [
+            ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
+            ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
+          ],
+        );
       const channel = MethodChannel('harness/swarm_tabs');
       Map<String, dynamic>? state;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'update') state = Map<String, dynamic>.from(call.arguments as Map);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') {
+          state = Map<String, dynamic>.from(call.arguments as Map);
+        }
         if (call.method == 'daemonState') state?['daemon'] = call.arguments;
         return null;
       });
       addTearDown(() async {
         await tester.pumpWidget(const SizedBox());
         await tester.pump();
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        );
       });
       await _capture(
         tester,
-        'creature-counts-${width.toInt()}-${native ? 'native' : 'flutter'}',
+        'creature-only-${width.toInt()}-${native ? 'native' : 'flutter'}',
         Size(width, 240),
         (_) => SwarmScreen(
           notifier: app,
@@ -2038,31 +2162,51 @@ void main() {
           projectStore: SwarmProjectStore(),
           zoo: zoo,
           zooTransport: remote,
+          experimentalFeatures: experiments,
           daemonClock: () => tester.binding.clock.now(),
         ),
         act: () async {
           app.notifyListeners();
           await tester.pump();
-          await app.handleMachineEventForTest('m', {'type': 'turn_ended', 'agentId': 'a0'});
+          await app.handleMachineEventForTest('m', {
+            'type': 'turn_ended',
+            'agentId': 'a0',
+          });
           await tester.pump(const Duration(milliseconds: 3100));
         },
       );
       if (native) {
-        expect((state!['daemon'] as Map)['tally'], '1 done, 2 eggs');
+        final daemon = state!['daemon'] as Map;
+        expect((daemon['cell'] as String).length, 10);
+        expect(daemon.containsKey('tally'), isFalse);
+        expect(daemon.containsKey('tallyCells'), isFalse);
         if (_output case final output?) {
           await tester.runAsync(() async {
-            await File('$output/creature-counts-native.json').writeAsString(jsonEncode(state));
-            await File('$output/catalog.json').writeAsString(jsonEncode([
-              {'id': 'creature-counts-native', 'label': 'Git branches | creature | completed turns and unhatched eggs'},
-            ]));
+            await File('$output/creature-only-native.json')
+                .writeAsString(jsonEncode(state));
+            await File('$output/catalog.json').writeAsString(
+              jsonEncode([
+                {
+                  'id': 'creature-only-native',
+                  'label': 'Git branches | creature',
+                },
+              ]),
+            );
           });
         }
       } else {
-        final count = find.byKey(const ValueKey('daemon-slot-tally'));
-        expect(tester.widget<Text>(count).data, '1 done, 2 eggs');
-        expect(tester.getRect(find.byKey(const ValueKey('daemon-slot-glyph'))).right,
-            lessThanOrEqualTo(tester.getRect(count).left));
-        expect(tester.getRect(count).right, lessThanOrEqualTo(width));
+        final slot = find.byKey(const ValueKey('daemon-slot'));
+        expect(
+          find.descendant(
+            of: slot,
+            matching: find.byWidgetPredicate(
+              (w) => w is DaemonIllustration || w is Text,
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.getRect(slot).width, 44);
+        expect(tester.getRect(slot).right, lessThanOrEqualTo(width));
       }
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 11));
@@ -2097,6 +2241,13 @@ void main() {
           ..revision = 1;
         final switchOn = ValueNotifier(preview);
         addTearDown(switchOn.dispose);
+        final experiments = MemoryExperimentalFeaturesStore(
+          storage: MemoryStore(),
+        );
+        addTearDown(experiments.dispose);
+        if (!guest) {
+          await experiments.set(ExperimentalFeature.focusBarCreature, true);
+        }
         await _capture(
           tester,
           'workspace-bar-$name-${width.toInt()}',
@@ -2108,6 +2259,7 @@ void main() {
             zoo: zoo,
             zooTransport: remote,
             daemonsPreview: switchOn,
+            experimentalFeatures: experiments,
           ),
           settle: const Duration(milliseconds: 200),
         );

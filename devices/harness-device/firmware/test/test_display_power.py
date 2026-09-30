@@ -29,6 +29,10 @@ code = r'''
 #include <setjmp.h>
 static atomic_bool asleep, force_frame;
 static atomic_uint last_activity;
+static atomic_uint requested_brightness = 40;
+#define ESP_LOGI(...) ((void)0)
+static int esp_lcd_panel_co5300_set_brightness(int p, unsigned level) { (void)p; assert(level <= 100); return 0; }
+static void ht_illustrated_prepare(ht_scene_t *scene) { (void)scene; }
 static ht_scene_t scenes[2];
 static bool painted;
 static void (*power_cb)(bool);
@@ -68,7 +72,10 @@ static void display_lock(void) {
 }
 static void display_unlock(void) {}
 static void habitat_tick(void) { ticks++; }
-static bool habitat_scene_take(ht_scene_t *out) { (void)out; return false; }
+static bool habitat_scene_take(ht_scene_t *out) { (void)out; return mode==4 || mode==5; }
+static unsigned receipts;
+static uint32_t habitat_scene_receipt(void) { return mode==4 || mode==5 ? 77 : 0; }
+static void habitat_scene_presented(uint32_t receipt) { assert(receipt==77 && panel_on && frames>0); receipts++; }
 static uint32_t habitat_next_wake_ms(void) { return 1000; }
 static int esp_lcd_panel_disp_on_off(int p, bool on) {
     (void)p; panel_on=on;
@@ -97,13 +104,15 @@ code += r'''
 static void run(int which, uint32_t now, uint32_t activity, bool sleep, unsigned loops) {
     mode=which; clock_ms=now; atomic_store(&last_activity,activity);
     atomic_store(&asleep,sleep); atomic_store(&force_frame,false);
-    memset(scenes,0,sizeof scenes); painted=true; panel_on=true; power_cb=power;
+    memset(scenes,0,sizeof scenes); painted=mode!=4; panel_on=true; receipts=0; power_cb=power;
     frames=ticks=waits=locks=sleeps=wakes=full_frames=notifications=0;
     stop_after=loops;
     if (!setjmp(finished)) render_task(NULL);
     assert(waits==loops);
 }
 int main(void) {
+    run(4,1000,1000,false,1); assert(frames==1 && receipts==1);
+    run(5,1000,1000,true,1); assert(!frames && !receipts);
     // A wake between power sampling and force-frame consumption must survive.
     run(1,1000,1000,true,2);
     assert(!display_is_asleep() && panel_on && wakes==1);

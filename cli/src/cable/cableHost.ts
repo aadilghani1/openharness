@@ -1,3 +1,4 @@
+import type { CompanionIdentity, CompanionMilestone } from './companionIdentity.js'
 // Everything the cable session needs from the rest of the daemon, in one place.
 //
 // The session owns the protocol and nothing else; this owns the answers. Keeping them apart is what lets
@@ -9,6 +10,7 @@
 // as the very `commander_event` cards the WiFi device receives — teed at the socket rather than emitted
 // again here, so the two device surfaces cannot drift.
 import { join } from 'node:path'
+import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
 
 import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
 import { registry, projectDisplayName, type RegisteredSession } from '../lib/registry.js'
@@ -35,6 +37,9 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
+  companion?: () => string | null
+  companionIdentity?: () => CompanionIdentity | null
+  companionMilestone?: () => CompanionMilestone | null
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
@@ -66,6 +71,7 @@ export interface CableHostWiring {
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
    */
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
+  notificationRead?: (machineId: string, agentId: string, readToken: string) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
   /** The dial asked for a fork of a LOCAL agent — see lib/forkAgent.ts. Resolves to the new agent's id. */
@@ -313,6 +319,10 @@ export class DaemonCableHost implements CableHost {
     return locale.startsWith('vi') ? 'vi' : 'en'
   }
 
+  companion(): string | null { return this.wiring.companion?.() ?? null }
+  companionIdentity(): CompanionIdentity | null { return this.wiring.companionIdentity?.() ?? null }
+  companionMilestone(): CompanionMilestone | null { return this.wiring.companionMilestone?.() ?? null }
+
   /** This computer's own agents, in the order every other surface reads them in. */
   private localAgents(): CableAgent[] {
     // `advertised()`, not `list()` — the SAME set `agents_list` answers the web and the desktop app with. They
@@ -403,14 +413,23 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
-  private unread: Array<{ agentId: string; machineId: string; question: boolean; text: string }> = []
+  private unread: UnreadNotification[] = []
 
-  setUnread(items: Array<{ agentId: string; machineId: string; question: boolean; text: string }>): void {
+  setUnread(items: UnreadNotification[]): void {
     this.unread = items
   }
 
-  listUnread(): Array<{ agentId: string; machineId: string; question: boolean; text: string }> {
+  listUnread(): UnreadNotification[] {
     return this.unread
+  }
+
+  readNotification(agentId: string, readToken: string): void {
+    if (!notificationReadToken(readToken)) return
+    const item = this.unread.find(n => n.agentId === agentId && n.readToken === readToken)
+    if (!item?.machineId) return
+    // Keep it until the window confirms through app_unread. Retrying is safe;
+    // the window checks the same identity again, even across remote machines.
+    this.wiring.notificationRead?.(item.machineId, agentId, readToken)
   }
 
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] } {
@@ -610,7 +629,7 @@ export class DaemonCableHost implements CableHost {
 
   visit(command: VisitCommand): Promise<VisitResult> {
     const machineId = command.agentId ? this.machineOf(command.agentId) : undefined
-    if ((command.op === 'open' || command.op === 'latest') && !machineId) return Promise.resolve({ ok: false, active: false, error: 'That agent is no longer available.' })
+    if ((command.op === 'open' || command.op === 'latest') && !machineId) return Promise.resolve({ ok: false, active: false, error: 'That harness is no longer available.' })
     return this.wiring.visit?.({ ...command, machineId }) ??
       Promise.resolve({ ok: false, active: false, error: 'Update Harness to visit an alert.' })
   }

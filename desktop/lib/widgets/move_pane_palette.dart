@@ -41,7 +41,7 @@ class _Destination {
 
 List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
   for (final swarm in notifier.swarms)
-    if (swarm.id != sourceId && !swarm.isStore)
+    if (swarm.id != sourceId && !swarm.isUtility && !swarm.isOrchestrator)
       _Destination(
         id: swarm.id,
         label: swarm.name,
@@ -53,7 +53,7 @@ List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
           final count => '$count harnesses',
         },
       ),
-  const _Destination(label: 'New Tab', detail: 'a tab of its own'),
+  const _Destination(label: 'New Swarm', detail: 'a swarm of its own'),
 ];
 
 class _MovePanePalette extends StatefulWidget {

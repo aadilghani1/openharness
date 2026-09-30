@@ -320,7 +320,7 @@ describe('CommanderMirror recap events', () => {
       'done',
       'summary',
     ])
-    expect(deviceFrames.at(-1)?.payload).toEqual({ kind: 'summary', text: 'Long body', recap: 'Short recap' })
+    expect(deviceFrames.at(-1)?.payload).toEqual({ kind: 'summary', text: 'Long body', recap: 'Short recap', notification: { id: expect.any(String), kind: 'done' } })
     expect(webFrames.map((f) => f.type)).toEqual(['turn_summary_pending', 'turn_summary'])
   })
 

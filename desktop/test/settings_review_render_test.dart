@@ -16,7 +16,6 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/experimental_features.dart';
-import 'swarm_state_test.dart' show MemoryStore;
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -27,7 +26,9 @@ import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/shortcuts_sheet.dart';
 import 'package:harness/widgets/update_notice.dart';
 
+import 'support/experimental_settings.dart';
 import 'support/real_fonts.dart';
+import 'swarm_state_test.dart' show MemoryStore;
 
 void main() {
   setUpAll(() async {
@@ -98,9 +99,12 @@ void main() {
                     name: 'Morgan Rivera',
                     email: 'morgan@example.test',
                   );
-            final experiments = ExperimentalFeaturesStore(storage: MemoryStore());
+            final experiments = MemoryExperimentalFeaturesStore(
+              storage: MemoryStore(),
+            );
             addTearDown(experiments.dispose);
-            if (section == SettingsSection.experimental && brightness == Brightness.dark) {
+            if (section == SettingsSection.experimental &&
+                brightness == Brightness.dark) {
               await experiments.set(ExperimentalFeature.focusBarCreature, true);
             }
             final boundary = GlobalKey();
@@ -138,7 +142,10 @@ void main() {
                         .copyWith(textScaler: TextScaler.linear(scale)),
                     child: grid.BrightnessScope(child: child!),
                   ),
-                  home: SettingsScreen(notifier: app, experimentalFeatures: experiments),
+                  home: SettingsScreen(
+                    notifier: app,
+                    experimentalFeatures: experiments,
+                  ),
                 ),
               ),
             );

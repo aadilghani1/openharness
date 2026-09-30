@@ -186,6 +186,10 @@ export interface DaemonSay {
   about: { machineId: string; agentId: string; requestId?: string }
   mood: DaemonMood
   line: string
+  /** Full conversational answer for the companion viewer. Never a status line or an action. */
+  reply?: string
+  /** The paired individual when the answer was emitted; viewers reject another individual's reply. */
+  companionUid?: string
   actions: DaemonAction[]
   ttlMs: number
   /**

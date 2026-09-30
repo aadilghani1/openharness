@@ -276,7 +276,13 @@ void main() {
           );
           expect(row['iconAsset'], 'assets/engine-icons/marp.png');
         } else {
-          expect(find.text('1:Quarterly deck'), findsOneWidget);
+          expect(
+            find.descendant(
+              of: find.byKey(ValueKey(tab.id)),
+              matching: find.text('Quarterly deck'),
+            ),
+            findsOneWidget,
+          );
         }
 
         // An agent the machine no longer lists is drawn as its session's engine,
@@ -394,7 +400,7 @@ void main() {
       final app = createApp();
       final tab = app.activeSwarm;
       await mount(tester, app, nativeTabs: native);
-      expect(tab.name, 'New Tab');
+      expect(tab.name, 'New Swarm');
       expect(
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
@@ -408,7 +414,7 @@ void main() {
         expect(row['engine'], 'codex');
         expect(row['iconAsset'], 'assets/engine-icons/codex.png');
       } else {
-        expect(find.text('1:code'), findsOneWidget);
+        expect(find.text('code'), findsOneWidget);
       }
 
       // A harness's viewer beside its agent is the same agent: still its mark, not a group.
@@ -421,14 +427,14 @@ void main() {
           url: 'http://127.0.0.1:1/',
         ),
       );
-      app.renameSwarm(tab.id, 'New Tab');
+      app.renameSwarm(tab.id, 'New Swarm');
       await tester.pump();
       if (native) {
         final row = (updates.last['tabs'] as List).single as Map;
         expect(row['agentCount'], 1);
         expect(row['engine'], 'codex');
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Swarm'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       tab.panes.removeWhere((pane) => pane.id == 900);
@@ -440,7 +446,7 @@ void main() {
         expect(row['agentCount'], 2);
         expect(row['engine'], isNull);
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Swarm'), findsOneWidget);
       }
 
       await app.closePane(app.panes.last.id);
@@ -451,7 +457,7 @@ void main() {
           'codex',
         );
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Swarm'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       expect(app.activeSwarm, same(tab));
@@ -517,9 +523,9 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
-      await openHarnessPicker(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),

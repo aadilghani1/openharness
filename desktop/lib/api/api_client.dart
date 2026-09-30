@@ -141,11 +141,26 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
-  // -- the zoo: the account's daemons and eggs (daemons/README.md), proxied like the desk --
+  // -- account-wide Experimental preferences --
+  Future<Map<String, dynamic>> experimentalSettings() async {
+    final res = await _dio.get('/api/experimental-settings');
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
 
-  /// `{revision, zoo}`; null when daemons are off: a 404 (the server's switch, harnessd's
-  /// `DAEMONS_OFF`, or a harnessd that predates the zoo) or signed out (401). A 5xx throws: it
-  /// is not an answer (daemons/README.md, "Off switches").
+  Future<Map<String, dynamic>> setExperimentalSetting(
+    String accountId,
+    String feature,
+    bool enabled,
+  ) async {
+    final res = await _dio.patch(
+      '/api/experimental-settings',
+      data: {'accountId': accountId, 'feature': feature, 'enabled': enabled},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  /// The account's collection; null when disabled or signed out. A failed read throws.
   Future<Map<String, dynamic>?> zoo() async {
     final res = await _dio.get('/api/zoo');
     if (res.statusCode == 404 || res.statusCode == 401) return null;

@@ -172,36 +172,36 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("models", "Models…", "⌥I", "switch this harness's model and effort", "Harness"),
     ("new", "New Harness…", "⌥N", "", "Harness"),
     ("terminal", "New Terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
-    ("inbox", "Agents needing input", "⌥⇧I", "", "Harness"),
+    ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
     ("next-waiting", "Next harness waiting on you", "⌥A", "oldest question first", "Harness"),
     ("send", "Send to harness…", "⌥B", "type a task — Harness picks who", "Harness"),
-    ("broadcast", "Broadcast to this tab…", "", "one message to every harness in the tab", "Harness"),
+    ("broadcast", "Broadcast to this swarm…", "", "one message to every harness in the swarm", "Harness"),
     ("clone", "Clone Harness", "⌥⇧N", "a second one with this one's history", "Harness"),
     ("restart", "Restart Harness", "⌥⇧E", "", "Harness"),
     ("pause", "Pause Harness", "", "stop the engine, keep the conversation", "Harness"),
     ("rename", "Rename Harness…", "", "", "Harness"),
     ("take", "Take over this pane", "", "when another window has the keyboard", "Harness"),
-    ("tab", "New Tab", "⌥T", "", "Tabs"),
-    ("rename-tab", "Rename Tab…", "⌥⇧R", "", "Tabs"),
-    ("close-tab", "Close Tab", "⌥⇧W", "harnesses keep running", "Tabs"),
-    ("next-tab", "Next Tab", "⌥}", "", "Tabs"),
-    ("prev-tab", "Previous Tab", "⌥{", "", "Tabs"),
-    ("tab-left", "Move Tab Left", "⌥<", "", "Tabs"),
-    ("tab-right", "Move Tab Right", "⌥>", "", "Tabs"),
+    ("tab", "New Swarm", "⌥T", "", "Swarms"),
+    ("rename-tab", "Rename Swarm…", "⌥⇧R", "", "Swarms"),
+    ("close-tab", "Close Swarm", "⌥⇧W", "harnesses keep running", "Swarms"),
+    ("next-tab", "Next Swarm", "⌥}", "", "Swarms"),
+    ("prev-tab", "Previous Swarm", "⌥{", "", "Swarms"),
+    ("tab-left", "Move Swarm Left", "⌥<", "", "Swarms"),
+    ("tab-right", "Move Swarm Right", "⌥>", "", "Swarms"),
     ("split-right", "Split Right", "⌥\\", "", "Panes"),
     ("split-down", "Split Down", "⌥-", "", "Panes"),
     ("close-pane", "Close Pane", "⌥W", "the harness keeps running", "Panes"),
     ("zoom", "Zoom Pane", "⌥Z", "", "Panes"),
     ("layout", "Layout…", "⌥L", "grid, columns, main + stack…", "Panes"),
     ("equalize", "Equalize Panes", "⌥=", "", "Panes"),
-    ("pane-tab", "Move Pane to New Tab", "", "", "Panes"),
+    ("pane-tab", "Move Pane to New Swarm", "", "", "Panes"),
     ("find", "Find in Pane…", "⌥⇧F", "search this pane's history", "Panes"),
     ("copy-mode", "Copy Mode", "⌥V", "select and copy with the keyboard", "Panes"),
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness Store", "⌥S", "", "Machines"),
-    ("help", "Keyboard Shortcuts", "⌥/", "", "Session"),
-    ("keys", "Every Key…", "", "every binding, searched as you type (C-b ? lists them as tmux does)", "Session"),
-    ("quit", "Quit", "⌥Q", "harnesses keep running", "Session"),
+    ("help", "Keyboard Shortcuts", "⌥/", "", "App"),
+    ("keys", "Every Key…", "", "every binding, searched as you type (C-b ? lists them as tmux does)", "App"),
+    ("quit", "Quit", "⌥Q", "harnesses keep running", "App"),
 ];
 
 
@@ -480,9 +480,9 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
         let (mark, mark_color) = engine_mark(&a.engine);
         let since = crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64);
         let mut detail = vec![span(who.clone(), fg(theme::MUTED))];
-        if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::ACCENT))) }
+        if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::accent()))) }
         rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(format!("{who} {} {options}", a.branch))
-            .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::REVERSED)), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::BOLD)), span(mark, fg(mark_color)), span(" ", Style::default())])
             .detail(detail)
             .right(ago(since)));
     }
@@ -534,7 +534,7 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
     let mut rows: Vec<Row> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| {
         let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
         Row::new(m.id.clone(), m.name.clone())
-            .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::ACCENT } else { theme::ONLINE }))])
+            .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::accent() } else { theme::ONLINE }))])
             .detail(vec![span(format!("{}{running} running", if m.local { "this computer · " } else { "" }), fg(theme::MUTED))])
     }).collect();
     rows.sort_by_key(|r| r.id != prefer);

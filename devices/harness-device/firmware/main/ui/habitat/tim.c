@@ -2,76 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 
-static bool due(uint32_t now, uint32_t deadline) { return (int32_t)(now - deadline) >= 0; }
-static void deadline(ht_tim_motion_t *m, uint32_t now, uint32_t at)
-{
-    uint32_t left = due(now, at) ? 1 : at - now;
-    if (left < m->next_ms) m->next_ms = left;
-}
 bool ht_tim_motion_tick(ht_tim_motion_t *m, uint32_t now, ht_tim_mood_t mood,
                         bool quiet, bool visible, bool down, int x, unsigned level, uint32_t activity)
 {
-    ht_tim_pose_t old = m->pose, p = {0};
-    m->next_ms = 1000;
-    if (!m->initialized) {
-        m->initialized = true;
-        m->next_blink = now + 5700;
-        m->blink_until = m->reaction_until = m->release_until = now;
-        m->mood = mood; m->activity = activity;
-    }
-    if (!visible || quiet || mood == HT_TIM_ASLEEP || mood == HT_TIM_OFFLINE) {
-        m->next_blink = now + 5700;
-        m->blink_until = m->reaction_until = m->release_until = now;
-    } else {
-        if ((activity != m->activity || mood != m->mood) &&
-            (mood == HT_TIM_WORKING || mood == HT_TIM_DONE || mood == HT_TIM_ATTENTION)) {
-            // Repeated tool packets cannot restart an endless busy animation.
-            bool completed = mood == HT_TIM_DONE && m->mood != HT_TIM_DONE;
-            if (completed || (due(now, m->reaction_until) && (!m->reaction_at || now - m->reaction_at >= 2000))) {
-                m->reaction_at = now;
-                m->reaction_until = now + (completed ? 1320 : 720);
-            }
-        }
-        if (down) {
-            int gaze = (x - 233) / 40;
-            p.look = gaze < -2 ? -2 : gaze > 2 ? 2 : gaze;
-            p.pressed = true;
-            m->release_until = now + 400;
-        } else if (m->was_down || !due(now, m->release_until)) {
-            p.look = old.look;
-            deadline(m, now, m->release_until);
-        }
-        if (!down && due(now, m->next_blink)) {
-            m->blink_until = now + 110;
-            m->sequence++;
-            m->next_blink = now + 5700 + (m->sequence % 5) * 413;
-        }
-        p.blink = !down && !due(now, m->blink_until);
-        if (!down) deadline(m, now, p.blink ? m->blink_until : m->next_blink);
-        if (!due(now, m->reaction_until)) {
-            p.hands = (uint8_t)(1 + (now - m->reaction_at) / 120 % 2);
-            if (mood == HT_TIM_DONE && !down) {
-                // A brief glance right, glance left, then a blink and smile.
-                // The completion event owns this finite cue; repeated status
-                // packets cannot sustain it, and touch always keeps its gaze.
-                uint32_t age = now - m->reaction_at;
-                p.look = age < 360 ? 2 : age < 720 ? -2 : 0;
-                p.blink = age >= 840 && age < 960;
-            }
-            deadline(m, now, now + 120 - (now - m->reaction_at) % 120);
-        }
-        if (mood == HT_TIM_LISTENING) {
-            p.level = old.level;
-            if (m->mood != mood || now - m->level_at >= 125) {
-                p.level = level > 4 ? 4 : (uint8_t)level;
-                m->level_at = now;
-            }
-            deadline(m, now, m->level_at + 125);
-        }
-    }
-    m->pose = p; m->mood = mood; m->activity = activity; m->was_down = down;
-    return p.look != old.look || p.hands != old.hands || p.level != old.level ||
-           p.blink != old.blink || p.pressed != old.pressed;
+    return ht_character_reaction_tick(m, now, mood, quiet, visible, down, x, level, activity);
 }
 static void portrait(ht_scene_t *s, int y, ht_tim_mood_t mood, ht_tim_pose_t p, uint16_t ink, bool carrying)
 {

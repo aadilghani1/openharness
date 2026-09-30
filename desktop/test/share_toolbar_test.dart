@@ -22,6 +22,8 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/workspace_share_button.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/experimental_settings.dart';
+
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp, MemoryStore;
@@ -68,7 +70,7 @@ void main() {
     app.stateOf('m')!.nodeOnline = true;
     keymap = MemoryKeymap();
     preferences = MemoryStore();
-    experiments = ExperimentalFeaturesStore(storage: preferences);
+    experiments = MemoryExperimentalFeaturesStore(storage: preferences);
     input.clear();
   });
   tearDown(() {
@@ -129,7 +131,7 @@ void main() {
         final session = terminal('a0', input);
         final pane = app.adoptSessionForTest(session);
         await mount(tester, native: native, enableShareButton: false);
-        expect(experiments.choice(feature), isNull);
+        expect(experiments.choice(feature), isFalse);
         expect(button, findsNothing);
         if (native) expect(updates.last['shareAction'], isNull);
 
@@ -151,7 +153,7 @@ void main() {
         await tester.tap(toggle);
         await tester.pumpAndSettle();
         expect(tester.widget<Switch>(toggle).value, isTrue);
-        expect(preferences.values[feature.storageKey], 'on');
+        expect(preferences.values[experimentFixtureKey(feature)], 'on');
         await tester.tap(find.byKey(const Key('settings-back-button')));
         await tester.pumpAndSettle();
         expect(find.byType(SettingsScreen), findsNothing);
@@ -166,7 +168,7 @@ void main() {
         expect(tester.widget<Switch>(toggle).value, isTrue);
         await tester.tap(toggle);
         await tester.pumpAndSettle();
-        expect(preferences.values[feature.storageKey], 'off');
+        expect(preferences.values[experimentFixtureKey(feature)], 'off');
         await tester.tap(find.byKey(const Key('settings-back-button')));
         await tester.pumpAndSettle();
         expect(button, findsNothing);
@@ -285,7 +287,7 @@ void main() {
   });
 
   testWidgets(
-    'Share keeps its corner at narrow widths and follows custom shortcuts',
+    'Share stays in the footer at narrow widths and follows custom shortcuts',
     (tester) async {
       app.adoptSessionForTest(terminal('a0', input));
       await mount(tester, size: const Size(520, 800));
@@ -293,12 +295,13 @@ void main() {
         find.byKey(const ValueKey('workspace-status-bar')),
       );
       expect(tester.getRect(button).right, lessThanOrEqualTo(bar.right));
+      expect(bar.contains(tester.getRect(button).center), isTrue);
       expect(
-        tester.getRect(button).left,
+        tester.getRect(button).top,
         greaterThan(
           tester
-              .getRect(find.byKey(const ValueKey('swarm-new-tab-button')))
-              .right,
+              .getRect(find.byKey(const ValueKey('workspace-tab-bar')))
+              .bottom,
         ),
       );
       expect(tester.takeException(), isNull);
@@ -387,7 +390,7 @@ void main() {
         'agent.share',
       );
       expect(
-        shortcutRows().where((row) => row.label == 'Share the focused agent'),
+        shortcutRows().where((row) => row.label == 'Share the focused harness'),
         hasLength(1),
       );
       expect(nativeKeymapSnapshot(keymap).toString(), contains('shareAgent'));
