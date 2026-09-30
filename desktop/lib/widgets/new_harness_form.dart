@@ -2048,6 +2048,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     textSize: capsule ? 13 : 12,
     truncateFromStart: row == _Row.branch,
     foregroundColor: capsule ? null : DesktopChrome.muted,
+    surfaceColor: capsule ? DesktopChrome.surface : null,
     tooltip: _desktopChoiceTooltip(row),
     onPressed: box.locked || _blocked(row) != null
         ? null

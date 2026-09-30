@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_pane_icon.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -2734,7 +2735,10 @@ class _TerminalHeader extends StatelessWidget {
     final header = SizedBox(
       height: compact ? 38 : 46,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
+        padding: const EdgeInsets.only(
+          left: _stripPadding,
+          right: grid.AppDesktop.paneCloseInset,
+        ),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final scale = grid.appTextScaleOf(context);
@@ -3088,14 +3092,14 @@ class _TerminalHeader extends StatelessWidget {
                     key: const ValueKey('pane-split-down'),
                     label: 'New Pane Below',
                     command: 'pane.split_down',
-                    icon: AppIcons.rows2,
+                    icon: AppPaneSymbol.splitDown,
                     onPressed: onSplitDown,
                   ),
                   PaneHeaderButton(
                     key: const ValueKey('pane-split-right'),
                     label: 'New Pane to the Right',
                     command: 'pane.split_right',
-                    icon: AppIcons.columns2,
+                    icon: AppPaneSymbol.splitRight,
                     onPressed: onSplitRight,
                   ),
                 ],
@@ -3104,7 +3108,7 @@ class _TerminalHeader extends StatelessWidget {
                     key: const ValueKey('pane-zoom'),
                     label: zoomed ? 'Restore Pane' : 'Zoom Pane',
                     command: 'pane.zoom',
-                    icon: zoomed ? AppIcons.minimize : AppIcons.maximize,
+                    icon: zoomed ? AppPaneSymbol.restore : AppPaneSymbol.zoom,
                     onPressed: onToggleZoom,
                   ),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),

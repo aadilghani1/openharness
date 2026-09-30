@@ -170,6 +170,12 @@ icons, alternate stroke weights or text characters for app actions. A close
 button always uses `AppIcons.close`; plus, search, back, disclosure, folder,
 branch and check retain one silhouette everywhere.
 
+Small pane split/zoom controls use the shared `AppPaneIcon` optical variants:
+the same 24-unit grid, two-unit outline and round caps, with four-unit corners
+so their rounding remains visible at 14 points. This includes Restore. The
+close mark remains the unchanged Lucide ×; keep this adjustment in the shared
+icon implementation, not in individual pane widgets.
+
 Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
 illustration. Center the drawing optically inside its role's target; icon-only
 controls retain a 32-point target and a descriptive tooltip/accessibility label.
@@ -202,6 +208,7 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
 | Tab close target inset from outer bounds | 8 |
+| Pane close target trailing inset | 4 |
 | Dialog content inset | 24 |
 | Group / control gap | 16 / 8 |
 | Menu inset | 6 |
@@ -265,7 +272,9 @@ are different states; keep existing results visible while refreshing.
 the “Harness anything” prompt; model, approvals and profile below; Worktree and
 branch together.
 The dialog is frameless over its veil. New Tab uses the same width on the page.
-Machine stays inside the repo search row.
+Agent and project capsules use an opaque neutral surface beneath their state
+tints, so workspace text never shows through them. Machine stays inside the
+repo search row.
 
 **Welcome and New Tab hierarchy** — creation is primary. Show at most six rows
 under “Recent harnesses”, separated from creation controls by 56 points. Use
@@ -315,8 +324,9 @@ input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
 **Pane header** — the right-hand controls read model, split down, split right,
-zoom, close. Use quiet 14-point Lucide split/zoom glyphs and the shared 12-point
-close glyph in 28-point targets. Resting ink is 45%; hover and keyboard focus
+zoom, close. Use the rounded 14-point `AppPaneIcon` split/zoom variants and the
+shared 12-point close glyph in 28-point targets. The close target sits 4 points
+inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
 brighten the glyph without a fill, border, or movement. Keep the controls on one
 line; model and title text truncate before icon targets shrink. Zoom becomes
 Restore while enlarged. Unavailable controls stay in place with disabled ink.

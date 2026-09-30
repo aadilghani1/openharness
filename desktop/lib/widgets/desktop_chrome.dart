@@ -128,6 +128,7 @@ class DesktopPill extends StatelessWidget {
     this.semanticHint,
     this.focusNode,
     this.foregroundColor,
+    this.surfaceColor,
     this.compact = false,
     this.quiet = false,
     this.capsule = true,
@@ -148,6 +149,9 @@ class DesktopPill extends StatelessWidget {
   final String? semanticHint;
   final FocusNode? focusNode;
   final Color? foregroundColor;
+
+  /// An opaque base for pills that float directly above workspace content.
+  final Color? surfaceColor;
   final bool compact;
   final bool quiet, capsule;
   final double textSize;
@@ -160,6 +164,8 @@ class DesktopPill extends StatelessWidget {
     grid.AppTheme.watch(context);
     final ink = foregroundColor ?? DesktopChrome.foreground;
     final highContrast = MediaQuery.highContrastOf(context);
+    Color fill(Color tint) =>
+        surfaceColor == null ? tint : Color.alphaBlend(tint, surfaceColor!);
     final button = TextButton(
       focusNode: focusNode,
       onPressed: onPressed,
@@ -169,9 +175,6 @@ class DesktopPill extends StatelessWidget {
             disabledForegroundColor: ink.withValues(alpha: .38),
             enabledMouseCursor: SystemMouseCursors.click,
             disabledMouseCursor: SystemMouseCursors.basic,
-            backgroundColor: quiet
-                ? Colors.transparent
-                : ink.withValues(alpha: selected == true ? .13 : .055),
             minimumSize: Size(
               0,
               compact
@@ -217,14 +220,16 @@ class DesktopPill extends StatelessWidget {
               ),
             ),
             backgroundColor: WidgetStateProperty.resolveWith(
-              (states) => selected == true
-                  ? ink.withValues(alpha: .13)
-                  : states.contains(WidgetState.focused) &&
-                        !states.contains(WidgetState.disabled)
-                  ? ink.withValues(alpha: .10)
-                  : quiet
-                  ? Colors.transparent
-                  : ink.withValues(alpha: selected == true ? .13 : .055),
+              (states) => fill(
+                selected == true
+                    ? ink.withValues(alpha: .13)
+                    : states.contains(WidgetState.focused) &&
+                          !states.contains(WidgetState.disabled)
+                    ? ink.withValues(alpha: .10)
+                    : quiet
+                    ? Colors.transparent
+                    : ink.withValues(alpha: .055),
+              ),
             ),
             overlayColor: WidgetStateProperty.resolveWith(
               (states) => states.contains(WidgetState.disabled)

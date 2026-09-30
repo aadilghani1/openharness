@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_pane_icon.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -92,7 +93,7 @@ class PaneHeaderButton extends StatelessWidget {
   static const width = 28.0;
 
   final String label, command;
-  final IconData icon;
+  final AppPaneSymbol icon;
   final double iconSize;
   final VoidCallback? onPressed;
 
@@ -113,7 +114,7 @@ class PaneHeaderButton extends StatelessWidget {
         width: width,
         height: workspaceBarControlHeight(context),
         child: Center(
-          child: Icon(
+          child: AppPaneIcon(
             icon,
             size: iconSize,
             color: theme.foreground.withValues(
@@ -143,7 +144,7 @@ class PaneCloseButton extends StatelessWidget {
   Widget build(BuildContext context) => PaneHeaderButton(
     label: 'Close Pane',
     command: 'pane.close',
-    icon: AppIcons.close,
+    icon: AppPaneSymbol.close,
     iconSize: AppIcons.closeSize,
     onPressed: onPressed,
   );

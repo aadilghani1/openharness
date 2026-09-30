@@ -1415,6 +1415,7 @@ abstract final class AppDesktop {
   static const double tabShoulder = 8;
   static const double tabTopInset = 6;
   static const double tabCloseInset = 8;
+  static const double paneCloseInset = 4;
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
