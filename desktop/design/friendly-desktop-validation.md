@@ -1,10 +1,46 @@
 # Friendly desktop validation
 
-Validation on `experiment/friendly-desktop`, against `a26237c9`. This remains
-an unmerged experiment for local review. The checkpoints below are historical, not the current visual specification.
+Validation for the desktop redesign in PR #484. The earlier checkpoints below
+are historical, not the current visual specification.
 Current behavior and later validation are recorded in
 [friendly-desktop-experiment.md](friendly-desktop-experiment.md); the broader
 redesign follows [desktop-design-system.md](desktop-design-system.md).
+
+## Release checkpoint — 2026-09-30
+
+The branch incorporates main through `dd3097b7f`, including machine profiles,
+companion artwork and shared chat, local-model management, web picker layouts,
+and background opacity behind running harnesses.
+
+| Check | Result |
+| --- | --- |
+| Full desktop unit/widget suite | 4,932 passed; 16 skipped; one stale startup expectation corrected below |
+| Startup rerun | All 4 passed after adding the new background preference to the expected load |
+| Native macOS composer/search journeys | All 25 passed |
+| Native macOS workspace journeys | 26 passed in the full run; the corrected reconnect case passed separately (27 total) |
+| AppKit titlebar, tabs, and footer checks | All 4,193 passed |
+| Companion render fixtures | All 95 passed |
+| Latest background and tab geometry checks | All 13 passed |
+| Welcome composer render fixtures | All 14 passed |
+| Dart analysis of app, tests, and native fixtures | No issues |
+
+The reconnect fixture now advertises the daemon's no-takeover capability and
+represents an established terminal whose initial control claim has been consumed.
+It checks automatic reattachment without takeover, retention of the terminal
+view and selection, and keyboard input after the new stream arrives. Setup uses
+the same isolated guest fixture as the current unit tests; it never launches a
+real daemon. Hermes first-message support is kept in sync with the CLI contract.
+
+Synthetic [dark](review/2026-09-30-welcome-dark.png) and
+[light](review/2026-09-30-welcome-light.png) screenshots were visually checked,
+including agent colors and system text. The welcome fixtures also cover narrow
+windows and 160% text size.
+
+These checks use fake agents and injected Flutter keys. They do not establish
+physical AppKit IME, VoiceOver, or interactive Linux/browser behavior. Release
+CI builds macOS Intel and Apple Silicon variants and Linux x64 and arm64.
+Coverage percentages from the historical checkpoints are not measurements of
+this merged release candidate.
 
 ## Historical minimal composer iteration (after a26237c9)
 

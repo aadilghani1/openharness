@@ -55,6 +55,7 @@ import 'package:harness/ws/ws_conn.dart';
 
 import '../test/keymap_host_test.dart' show key;
 import '../test/support/mixed_agents.dart';
+import '../test/support/guest_app.dart';
 import '../test/support/password_cli.dart';
 import '../test/support/machine_api.dart';
 import '../test/support/rename_connection.dart';
@@ -259,6 +260,17 @@ class _WorkspaceLinks implements PeerLinkClient {
 /// Run with FLUTTER_TEST=1. This fixture never bootstraps the real CLI, loads a
 /// Harness home, or creates real agents; it mounts the real native workspace
 /// around in-memory sessions and simulates creation and machine-link requests.
+Future<void> waitForWorkspace(
+  WidgetTester tester,
+  bool Function() ready, {
+  required String reason,
+}) async {
+  for (var i = 0; i < 100 && !ready(); i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(ready(), isTrue, reason: reason);
+}
+
 void main() {
   if (!kUnderTest) {
     throw StateError('Native workspace fixtures require FLUTTER_TEST=1');
@@ -284,7 +296,7 @@ void main() {
     (tester) async {
       final provisioner = SetupProvisioner();
       final app =
-          AppNotifier(
+          GuestTestApp(
               config: AppConfig.dev,
               authSession: AuthSession(),
               configStore: null,
@@ -320,8 +332,8 @@ void main() {
           theme: grid.buildAppTheme(brightness: Brightness.dark),
           home: ListenableBuilder(
             listenable: app,
-            builder: (_, _) => app.status == AppStatus.unauthenticated
-                ? const Scaffold(body: Text('Sign-in reached'))
+            builder: (_, _) => app.status == AppStatus.authenticated
+                ? const Scaffold(body: Text('Guest workspace reached'))
                 : EnvironmentSetupScreen(notifier: app),
           ),
         ),
@@ -381,8 +393,13 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 100));
-      expect(app.status, AppStatus.unauthenticated);
-      expect(find.text('Sign-in reached'), findsOneWidget);
+      await waitForWorkspace(
+        tester,
+        () => app.status == AppStatus.authenticated,
+        reason: 'Setup completes its async startup before opening the guest workspace',
+      );
+      expect(app.signedIn, isFalse);
+      expect(find.text('Guest workspace reached'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -406,6 +423,8 @@ void main() {
               agentId: 'a0',
               agentName: 'Fixture',
               engineId: 'codex',
+              // An established stream has already consumed its initial claim.
+              takeover: false,
               send: connection.sendTerminalFrame,
               sendBinary: (frame) async {
                 if (frame.kind == TerminalBinaryKind.input) input.add(frame);
@@ -466,11 +485,19 @@ void main() {
         'protocolVersion': 3,
         'backend': 'tmux',
         'available': true,
+        'features': {'noTakeover': true},
       });
       await tester.pump(const Duration(milliseconds: 100));
+      await waitForWorkspace(
+        tester,
+        () => connection.frames.any((frame) => frame.type == 'terminal_open'),
+        reason:
+            'Reconnect opens the visible terminal after discovery completes',
+      );
       final open = connection.frames
           .lastWhere((frame) => frame.type == 'terminal_open')
           .payload;
+      expect(open['takeover'], isFalse);
       await session.handleFrame('terminal_ready', {
         'requestId': open['requestId'],
         'agentId': 'a0',
@@ -2406,7 +2433,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          'Started a new conversation. The previous session could not be resumed.',
+          'Started a new conversation. The previous conversation could not be resumed.',
         ),
         findsOneWidget,
       );

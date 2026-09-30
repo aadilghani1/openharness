@@ -179,7 +179,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         child: composer(_desktopSessions()),
       );
     }
-    final palette = grid.AppTheme.palette.value;
+    final palette = grid.AppTheme.surfacePalette;
     final background = appearancePrefsStore.value.background;
     final hasArtwork = background != HarnessBackground.plain;
     final ink = hasArtwork

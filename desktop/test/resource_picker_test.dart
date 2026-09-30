@@ -866,7 +866,8 @@ void main() {
         );
         expect(find.text('Enter Use  ·  Tab controls'), findsOneWidget);
         expect(find.text('M2'), findsOneWidget);
-        expect(find.text('15 GB'), findsOneWidget);
+        // The memory estimate is visible in both the row and its preview.
+        expect(find.text('15 GB'), findsNWidgets(2));
         await capture(tester, 'remote-model-select');
         final origin = search(tester);
         final stop = find.byKey(

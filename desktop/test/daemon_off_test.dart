@@ -215,71 +215,70 @@ void main() {
     },
   );
 
-  testWidgets(
-    'illustrated Tim lives at the far right and hover preserves focus',
-    (tester) async {
-      await mount(tester, on: true);
-      expect(
-        find.ancestor(
-          of: slot,
-          matching: find.byKey(const ValueKey('workspace-tab-bar')),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.ancestor(
-          of: slot,
-          matching: find.byKey(const ValueKey('workspace-status-bar')),
-        ),
-        findsNothing,
-      );
-      final store = find.byKey(const ValueKey('swarm-store-button'));
-      expect(
-        tester.getRect(slot).left,
-        greaterThanOrEqualTo(tester.getRect(store).right),
-      );
-      expect(tester.getSize(slot).width, 44);
-      final focus = FocusManager.instance.primaryFocus;
-      final before = zoo.zoo.toJson();
-      final remoteBefore = remote.zoo.toJson();
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: const Offset(2, 400));
-      await mouse.moveTo(tester.getCenter(slot));
-      await tester.pump(const Duration(milliseconds: 250));
-      final preview = find.byKey(const ValueKey('daemon-hover-preview'));
-      expect(preview, findsOneWidget);
-      expect(FocusManager.instance.primaryFocus, same(focus));
-      expect(
-        tester
-            .widget<DaemonIllustration>(
-              find.descendant(
-                of: preview,
-                matching: find.byType(DaemonIllustration),
-              ),
-            )
-            .size,
-        350,
-      );
-      expect(
-        zoo.zoo.toJson(),
-        before,
-        reason: 'looking never hatches or changes progress',
-      );
-      await mouse.moveTo(const Offset(2, 400));
-      await tester.pump();
-      expect(preview, findsNothing);
-      await mouse.moveTo(tester.getCenter(slot));
-      await tester.pump(const Duration(milliseconds: 250));
-      expect(preview, findsOneWidget);
-      await experiments.set(feature, false);
-      await tester.pump();
-      expect(preview, findsNothing);
-      expect(slot, findsNothing);
-      expect(remote.zoo.toJson(), remoteBefore);
-      await mouse.removePointer();
-      await unmount(tester);
-    },
-  );
+  testWidgets('illustrated Tim lives in the footer and hover preserves focus', (
+    tester,
+  ) async {
+    await mount(tester, on: true);
+    expect(
+      find.ancestor(
+        of: slot,
+        matching: find.byKey(const ValueKey('workspace-status-bar')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.ancestor(
+        of: slot,
+        matching: find.byKey(const ValueKey('workspace-tab-bar')),
+      ),
+      findsNothing,
+    );
+    final footer = find.byKey(const ValueKey('workspace-status-bar'));
+    expect(
+      tester.getRect(slot).left,
+      greaterThanOrEqualTo(tester.getRect(footer).left),
+    );
+    expect(tester.getSize(slot).width, 44);
+    final focus = FocusManager.instance.primaryFocus;
+    final before = zoo.zoo.toJson();
+    final remoteBefore = remote.zoo.toJson();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: const Offset(2, 400));
+    await mouse.moveTo(tester.getCenter(slot));
+    await tester.pump(const Duration(milliseconds: 250));
+    final preview = find.byKey(const ValueKey('daemon-hover-preview'));
+    expect(preview, findsOneWidget);
+    expect(FocusManager.instance.primaryFocus, same(focus));
+    expect(
+      tester
+          .widget<DaemonIllustration>(
+            find.descendant(
+              of: preview,
+              matching: find.byType(DaemonIllustration),
+            ),
+          )
+          .size,
+      350,
+    );
+    expect(
+      zoo.zoo.toJson(),
+      before,
+      reason: 'looking never hatches or changes progress',
+    );
+    await mouse.moveTo(const Offset(2, 400));
+    await tester.pump();
+    expect(preview, findsNothing);
+    await mouse.moveTo(tester.getCenter(slot));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(preview, findsOneWidget);
+    await experiments.set(feature, false);
+    await tester.pump();
+    expect(preview, findsNothing);
+    expect(slot, findsNothing);
+    expect(remote.zoo.toJson(), remoteBefore);
+    await mouse.removePointer();
+    await unmount(tester);
+  });
 
   for (final native in [false, true]) {
     for (final shown in [false, true]) {

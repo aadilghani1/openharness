@@ -323,8 +323,13 @@ void main() {
         ];
         tester.view.physicalSize = size;
         final previous = grid.AppTheme.brightness.value;
+        final previousPalette = grid.AppTheme.palette.value;
+        grid.AppTheme.palette.value = grid.AppTheme.paletteFor(brightness);
         grid.AppTheme.brightness.value = brightness;
-        addTearDown(() => grid.AppTheme.brightness.value = previous);
+        addTearDown(() {
+          grid.AppTheme.brightness.value = previous;
+          grid.AppTheme.palette.value = previousPalette;
+        });
         final preview = MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: brightness),
