@@ -137,8 +137,12 @@ fn colours() -> Colours {
         return Colours { bg: r, row: r, rule: r, text: r, soft: r, muted: r, accent: r, green: r };
     }
     let fit = theme::depth_fit;
+    // The current row lifted off the background — further where the terminal has 256 colours and
+    // a small lift lands on the background's own colour, so the current row still shows.
+    let bg = fit(pal.background);
+    let row = [12, 20, 30, 40].iter().map(|a| fit(mix(pal.background, pal.foreground, *a))).find(|r| *r != bg).unwrap_or(bg);
     Colours {
-        bg: fit(pal.background), row: fit(mix(pal.background, pal.foreground, 12)), rule: fit(pal.border),
+        bg, row, rule: fit(pal.border),
         text: fit(pal.foreground), soft: fit(pal.inactive_foreground), muted: fit(pal.muted), accent: theme::paint(theme::accent()),
         green: theme::paint(theme::ONLINE),
     }

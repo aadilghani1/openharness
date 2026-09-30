@@ -111,7 +111,10 @@ pub fn chrome_for(pal: theme::PanePalette) -> Chrome {
         .remove_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::DIM | Modifier::UNDERLINED);
     // (The cursor's row: the text's own colour, bold, on a lifted surface — the accent is for the
     // pointer and the query's mark, not for words.)
-    let selected = base.add_modifier(Modifier::BOLD).bg(theme::depth_fit(mix(panel, fg, 10)));
+    // (Lifted further where the terminal has 256 colours and a small lift is the panel's colour.)
+    let panel_fit = theme::depth_fit(panel);
+    let lifted = [10, 18, 28, 40].iter().map(|a| theme::depth_fit(mix(panel, fg, *a))).find(|c| *c != panel_fit).unwrap_or(panel_fit);
+    let selected = base.add_modifier(Modifier::BOLD).bg(lifted);
     Chrome { base, muted, accent, backdrop, selected }
 }
 
@@ -826,7 +829,15 @@ mod tests {
         let a = chrome_for(theme::pane_palette_of(dark.background, dark.foreground));
         let b = chrome_for(theme::pane_palette_of(light.background, light.foreground));
         assert_ne!(a.base.bg, b.base.bg);
-        let lum = |s: Style| match s.bg { Some(Color::Rgb(r, g, b)) => 299 * r as u32 + 587 * g as u32 + 114 * b as u32, _ => 0 };
+        // (In truecolor an RGB; with 256 colours — a CI runner's terminal — an index into xterm's
+        // cube or its greys.)
+        let rgb = |c: Color| match c {
+            Color::Rgb(r, g, b) => (r, g, b),
+            Color::Indexed(i) if (16..232).contains(&i) => { let k = i - 16; let v = |n: u8| if n == 0 { 0 } else { 55 + 40 * n }; (v(k / 36), v(k / 6 % 6), v(k % 6)) }
+            Color::Indexed(i) if i >= 232 => { let g = 8 + 10 * (i - 232); (g, g, g) }
+            _ => (0, 0, 0),
+        };
+        let lum = |s: Style| { let (r, g, b) = rgb(s.bg.unwrap_or(Color::Reset)); 299 * r as u32 + 587 * g as u32 + 114 * b as u32 };
         assert!(lum(b.base) > lum(a.base), "a light theme gives a light panel");
         assert_ne!(a.base.bg, a.backdrop.bg, "the panel stands out from its backdrop");
         assert_ne!(a.base.bg, a.selected.bg, "the cursor's row stands out");
