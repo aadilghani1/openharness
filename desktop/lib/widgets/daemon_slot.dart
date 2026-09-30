@@ -750,6 +750,8 @@ class _DaemonDetailNoticeState extends State<DaemonDetailNotice> {
                 WorkspaceBarControl(
                   key: const ValueKey('daemon-detail-toggle'),
                   label: _open ? 'Hide the detail' : 'Show the detail',
+                  tooltip:
+                      '${_open ? 'Hide' : 'Show'} details · ${widget.title}',
                   onPressed: () => setState(() => _open = !_open),
                   builder: (context, emphasized) => SizedBox(
                     height: workspaceBarControlHeight(context),

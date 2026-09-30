@@ -2885,7 +2885,10 @@ class _TerminalHeader extends StatelessWidget {
                       else if (!compact)
                         Padding(
                           padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.circle, size: 8, color: color),
+                          child: Tooltip(
+                            message: 'Terminal connected',
+                            child: Icon(Icons.circle, size: 8, color: color),
+                          ),
                         ),
                     ],
                   ),

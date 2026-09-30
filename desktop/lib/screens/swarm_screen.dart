@@ -1568,6 +1568,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         terminal?.session?.engineId;
   }
 
+  String _commandTooltip(String label, String command) => [
+    label,
+    if (widget.chrome?.showsKeyHints != false) ?_keymap.hint(command),
+  ].join(' · ');
+
   void _syncNative() {
     _syncMachines();
     final focused = WorkspacePaneContext.focused(app);
@@ -1586,9 +1591,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
-      'searchTooltip':
-          'Search harnesses ${_keymap.hint('harnesses.list') ?? ''}',
-      'storeTooltip': 'Harness Store ${_keymap.hint('app.store') ?? ''}',
+      'searchTooltip': _commandTooltip('Search harnesses', 'harnesses.list'),
+      'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
@@ -6813,7 +6817,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 '+',
                 Size(cell.width * 3, toolHeight),
                 theme,
-                tooltip: 'New Swarm ${_keymap.hint('swarm.new') ?? ''}',
+                tooltip: _commandTooltip('New Swarm', 'swarm.new'),
               ),
               const Spacer(),
               _searchButton(theme),
@@ -6821,7 +6825,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               WorkspaceStoreButton(
                 key: const ValueKey('swarm-store-button'),
                 width: storeWidth,
-                tooltip: 'Harness Store ${_keymap.hint('app.store') ?? ''}',
+                tooltip: _commandTooltip('Explore Harness Store', 'app.store'),
                 onPressed: _shortcutsEnabled ? _openStore : null,
               ),
               SizedBox(width: cell.width),
@@ -6843,7 +6847,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _searchButton(TerminalTheme theme) => WorkspaceBarControl(
     key: const ValueKey('swarm-search-button'),
     label: 'Search harnesses',
-    tooltip: 'Search harnesses ${_keymap.hint('harnesses.list') ?? ''}',
+    tooltip: _commandTooltip('Search harnesses', 'harnesses.list'),
     onPressed: _shortcutsEnabled ? _toggleSessions : null,
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,

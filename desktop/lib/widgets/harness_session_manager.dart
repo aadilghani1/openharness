@@ -841,10 +841,14 @@ class _SessionRow extends StatelessWidget {
                   // the first case. This says the other one — work that is done
                   // and has not been looked at — in the one place the eye is
                   // already checking for a row's state.
-                  else if (unread == AlertKind.done || unread == AlertKind.failed)
+                  else if (unread == AlertKind.done ||
+                      unread == AlertKind.failed)
                     IconButton(
                       key: ValueKey('session-unread-${unread!.name}:${row.id}'),
-                      tooltip: unread == AlertKind.failed ? 'Failed' : 'Finished',
+                      tooltip: [
+                        if (canOpen) 'Open harness',
+                        unread == AlertKind.failed ? 'Failed' : 'Finished',
+                      ].join(' · '),
                       onPressed: canOpen ? onOpen : null,
                       color: unread == AlertKind.failed
                           ? AppPalette.dangerFill

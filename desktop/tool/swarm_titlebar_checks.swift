@@ -38,6 +38,20 @@ private extension NSView {
   }
 }
 
+private func checkIconTooltipTracking() throws {
+  let button = SwarmIconButton(frame: NSRect(x: 0, y: 0, width: 40, height: 28))
+  button.toolTip = "Search harnesses · ⌘P"
+  let tooltipAreas = button.trackingAreas
+  try checkTitlebar(!tooltipAreas.isEmpty, "AppKit installs tooltip tracking for an icon button")
+  for _ in 0..<3 {
+    button.updateTrackingAreas()
+    try checkTitlebar(tooltipAreas.allSatisfy { area in button.trackingAreas.contains { $0 === area } },
+      "Updating icon hover preserves AppKit's tooltip tracking")
+    try checkTitlebar(button.trackingAreas.count == tooltipAreas.count + 1,
+      "Repeated layout keeps exactly one custom hover area")
+  }
+}
+
 private extension SwarmTabStrip {
   func checkActivityMarks() throws {
     func payload(_ mark: String, _ label: String, working: Bool = false) -> [String: Any] {
@@ -731,6 +745,7 @@ private extension SwarmTabStrip {
 
   func checkTopActions() throws {
     var state: [String: Any] = ["enabled": true,
+      "searchTooltip": "Search harnesses · ⌘P", "storeTooltip": "Explore Harness Store · ⌘S",
       "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work",
       "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
     var calls: [String] = []
@@ -746,6 +761,11 @@ private extension SwarmTabStrip {
         "Search and Store stay adjacent after the tabs at width \(width)")
       try checkTitlebar(!subviews.contains { $0.accessibilityLabel() == "Notifications" },
         "Notifications live in the macOS menu bar, with no duplicate titlebar bell")
+      try checkTitlebar(searchButton.toolTip == state["searchTooltip"] as? String &&
+        searchButton.accessibilityHelp() == searchButton.toolTip &&
+        storeButton.toolTip == state["storeTooltip"] as? String &&
+        storeButton.accessibilityHelp() == storeButton.toolTip,
+        "Top actions retain supplied shortcut hints and accessible help after layout")
     }
     searchButton.performClick(nil)
     storeButton.performClick(nil)
@@ -1114,7 +1134,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(tabs[0] === original && original.displayLabel == "1:blender",
       "Type changes update the existing tab without renaming its saved workspace")
     try original.checkAccessibility(expectedName: "Custom name", active: true)
-    try checkTitlebar(newButton.toolTip == "New Swarm ⌘T", "New Swarm retains its keyboard hint")
+    try checkTitlebar(newButton.toolTip == "New Swarm", "New Swarm has a label before its keymap arrives")
     events.removeAll()
     contextButton.performClick(nil)
     newButton.performClick(nil)
@@ -1402,9 +1422,13 @@ private extension SwarmTitlebar {
       HarnessNativeKeymap.contexts.map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
         "hint": "⌘K N", "repeatable": false, "menuAction": "new"]]) })])!
     setKeymap(onlySequence)
+    try checkTitlebar(strip.newButton.toolTip == "New Swarm · ⌘K N",
+      "The plus tooltip teaches the current shortcut sequence")
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Sequences add no hover hints or misleading first-key menu shortcut")
     setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
+    try checkTitlebar(strip.newButton.toolTip == "New Swarm",
+      "Unbinding removes the plus tooltip's shortcut without leaving a separator")
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Unbinding clears the old native shortcut and hint")
     try checkTitlebar(models.keyEquivalent.isEmpty,
@@ -1425,7 +1449,7 @@ private extension SwarmTitlebar {
       "The menu yields the remapped search shortcut to Flutter")
     try checkTitlebar(!main.performKeyEquivalent(with: open), "Menu equivalents defer before input dispatch")
     setKeymap(defaults)
-    try checkTitlebar(strip.newButton.toolTip == "New Swarm ⌘T", "Keymap reload restores the current New Swarm hint")
+    try checkTitlebar(strip.newButton.toolTip == "New Swarm · ⌘T", "Keymap reload restores the current New Swarm hint")
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Swarm", "The plus announces New Swarm")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
       "Command-N and Command-T reach creation and New Swarm")
@@ -1963,6 +1987,7 @@ do {
   try strip.checkSharedTypography()
   try strip.checkShareAction()
   try strip.checkTopActions()
+  try checkIconTooltipTracking()
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()

@@ -160,7 +160,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private func setKeymap(_ map: HarnessNativeKeymap) {
     keymap = map
     // Mouse controls teach the effective shortcuts, including user remaps.
-    strip.newButton.toolTip = "New Swarm " + (map.hint(for: "swarm.new", context: "workspace") ?? "")
+    strip.newButton.toolTip = ["New Swarm", map.hint(for: "swarm.new", context: "workspace")]
+      .compactMap { $0 }.joined(separator: " · ")
+    strip.newButton.setAccessibilityHelp(strip.newButton.toolTip)
     if let main = NSApp.mainMenu, let window {
       let menu = main as? HarnessKeymapMenu ?? HarnessKeymapMenu.replacing(main)
       if NSApp.mainMenu !== menu { NSApp.mainMenu = menu }
@@ -884,6 +886,7 @@ private struct SwarmNativePalette: Equatable {
 
 /// Generic native icon controls retain their rounded hover wells.
 private class SwarmIconButton: NSButton {
+  private var hoverTracking: NSTrackingArea?
   private(set) var hovered = false
   private(set) var hasKeyboardFocus = false
   var showsHoverFill: Bool { true }
@@ -898,9 +901,13 @@ private class SwarmIconButton: NSButton {
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: .zero,
-      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    // AppKit owns a separate tracking area for tooltips. Replacing all areas
+    // leaves the tooltip string intact but prevents it from ever appearing.
+    if let hoverTracking { removeTrackingArea(hoverTracking) }
+    let area = NSTrackingArea(rect: .zero,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+    addTrackingArea(area)
+    hoverTracking = area
   }
   override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
   override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
@@ -1620,7 +1627,7 @@ private final class SwarmTabStrip: NSView {
     addSubview(newButton)
     newButton.setAccessibilityLabel("New Swarm")
     newButton.isEnabled = false
-    newButton.toolTip = "New Swarm ⌘T"
+    newButton.toolTip = "New Swarm"
     newButton.image = nil
     newButton.title = "+"
     newButton.imagePosition = .noImage
@@ -1794,7 +1801,9 @@ private final class SwarmTabStrip: NSView {
     searchButton.foreground = terminalForeground
     searchButton.isEnabled = actionsEnabled
     searchButton.toolTip = state["searchTooltip"] as? String ?? "Search harnesses"
-    storeButton.toolTip = state["storeTooltip"] as? String ?? "Harness Store"
+    searchButton.setAccessibilityHelp(searchButton.toolTip)
+    storeButton.toolTip = state["storeTooltip"] as? String ?? "Explore Harness Store"
+    storeButton.setAccessibilityHelp(storeButton.toolTip)
     focusedModelButton.font = barFont
     focusedModelButton.foreground = terminalForeground
     focusedModelButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
