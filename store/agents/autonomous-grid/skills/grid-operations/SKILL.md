@@ -40,7 +40,8 @@ company grid") goes to that row's exact `grid` name; a request that names none g
 (also `$HARNESS_PRIVATE_GRID`). Harness put it there from the account that is signed in, so it is
 the answer, not a guess: pass that exact name to `join`, `leave`, `engines` and `models`, and do not
 ask the person which grid is theirs. It can differ from `grid` (the workspace's selected fleet) —
-a request that says "my grid" goes to `personalGrid`, whatever is selected. The `type` column of
+a request that says "my grid" goes to `personalGrid`, whatever is selected, and so does a request that
+names no grid at all ("run a model on my Mac"). The `type` column of
 `ls --json` is what kind of grid a row is, not a permission to ask about: `permissioned-public` is
 a person's own grid, `private-domain` a company's, `domain-restricted` a team's, `os-community` a
 public one. Only when `personalGrid` is null: say in one line that Harness has not named this
@@ -77,42 +78,43 @@ that runs the engine; listing, routing and requests can run on the controller.
 
 Slow steps are a real stop: a download or an engine build is asked about through the question tool
 and runs in the **next** turn, never in the message that asks. Every model you offer comes from
-something you looked up — the host's disk, the catalog, or Hugging Face — never from memory. The
+something you looked up — the grid, a machine's disk (step 0), the catalog, or Hugging Face — never
+from memory. The
 pick is made once; after the person chooses, that is the model through the download, the vision
 question and the start, unless it fails (won't fit, won't pull, won't answer).
 
-**1. What they need — three questions, in plain words, through the question tool.** Skip any the
-person already answered. The engine numbers in brackets are yours; they are never shown.
+**0. Scan first — what the grid serves, and what every machine already holds.** Before any question
+about a download, look; the person picks from what exists before anything new is offered.
 
-    "What will you mostly use it for?"  — the work decides which model is worth downloading
-      Coding · Chat and writing · Reading images · Just something fast
-    "How much can it hold in its head at once?"  — its working memory for one conversation; when it
-      fills, it forgets the beginning; more costs memory on the machine
-      Short, about 20 pages [32K] · Medium, about 40 pages [64K] · Long, about 80 pages [128K] ·
-      As much as this machine can give it
-    "How many things will talk to it at the same time?"  — each one reserves its own share of memory
-      up front; when every share is taken, the next request waits
-      Just me, one agent at a time [1] · Two agents at once [2] · A few agents or people at once [4]
+- *The grid:* `"$GRID_FLEET" run -- models GRID --json` for the grid it will go on. A model already
+  served there needs no start at all — offer "use it from the model picker now" first.
+- *This computer:* follow `skills/run-local-model/SKILL.md` — it takes stock (`fleet models`), sizes,
+  picks file and engine, starts and verifies. This skill adds only the grid parts below.
+- *An SSH machine in `grid-fleet.json`:* `"$GRID_FLEET" models --machine M --summary` runs the same finder
+  on that machine with its own Node — its disk, engines, ports and memory [run: Ubuntu 24.04 and Debian 12
+  over SSH]. Without Node 18+ there it prints a file list only and says so; offer the full table only after
+  Node is installed there.
+- *A Harness-linked machine:* its disk cannot be listed from here yet. Read its hardware
+  (`run --machine M -- device-info --json`) and say in one line that its downloaded files are not
+  visible, so a model for it comes from the catalog.
 
-Coding wants Long (an agent burns context as a session grows); chat is fine at Short; "just me" on
-a laptop someone is also working on.
+Then ask **one** question through the question tool: one option per model found — its plain name,
+its size in GB and where it is ("on this Mac, from LM Studio") — plus "Something new (download)".
+Only "Something new" goes on to the catalog (step 4); a model found goes to `run-local-model`.
 
-**2. What the host has.** `device-info --json` on the intended host first: `usable_bytes` is the
-real ceiling for weights plus context. Per-machine, never summed across hosts. The engine check is
-the binary, not a status command: `~/.grid/bin/llama-server --version` printing a version line means
-llama.cpp is installed — go on without a word. ⚠️ `engine status` reports the **media** engine
-(ComfyUI) and says `Installed: no` on a host whose llama.cpp is fine; it sent an agent asking to
-install what was already built. Only when the binary is missing, ask (build from source or prebuilt)
-and run `engine install llama.cpp [--from-source]` in the next turn.
+**1. What they need.** The purpose only — *Coding · Chat and writing · Reading images · Just something
+fast* — through the question tool; context (never below 64K) and how many at once follow from it
+(`run-local-model` §1). Skip it when the request already says it.
 
-**3. What is already on the host's disk comes first.** `ls ~/.grid/models/*.gguf` minus the
-`.mmproj.gguf` sidecars; `ctx FILE --json` says how much each can hold; a `<stem>.mmproj.gguf`
-beside a file means it reads images. Anything that fits the answers is offered first as "already on
-this computer, no download", beside one option to fetch something new. Only that option goes on.
+**2. Another machine's hardware.** `run --machine M -- device-info --json`: `usable_bytes` is its
+ceiling, per machine, never summed. Its llama.cpp is installed when `~/.grid/bin/llama-server --version`
+prints a version. ⚠️ `engine status` reports the **media** engine (ComfyUI) and says `Installed: no`
+on a host whose llama.cpp is fine. Only when the binary is missing, ask and run
+`engine install llama.cpp [--from-source]` in the next turn.
 
 **4. The catalog, then Hugging Face.** `catalog --json` is sized for the host: keep entries that are
 `runnable`, whose `fit.ctx` covers the context asked, and that suit the purpose; pull
-`fit.version`'s `pull_spec`. Offer 2–3 in the same plain terms as step 1 — what it is good at, the
+`fit.version`'s `pull_spec`. Offer 2–3 in plain terms — what it is good at, the
 download size in GB, how much it can hold in pages, whether it reads images. No speed figure
 (`fit.est_tok_s` only orders the list for "fast"), no quant name, no token count as the whole answer.
 When the person names a model the catalog lacks, the catalog is not a wall — `pull` takes any
@@ -125,7 +127,7 @@ When the person names a model the catalog lacks, the catalog is not a wall — `
     for f in json.load(sys.stdin)["siblings"]:
         if f["rfilename"].endswith(".gguf"): print(f["rfilename"], f.get("size"))'
 
-Prefer an official org (`ggml-org`, `Qwen`, `google`, `unsloth`, `bartowski`, `lmstudio-community`)
+Prefer the model's own publisher, or a quantizer that publisher's model card or the catalog names,
 over an unknown uploader, then downloads; say which in half a line. Pick the quant by size against
 `usable_bytes` (or ≈0.6 bytes per parameter for Q4_K_M), leaving room for context. A model outside
 the catalog has been sized by nobody but you — say the fit is your estimate.
@@ -136,11 +138,8 @@ the file names, and put "reads images" or "text only" on each option; for "Readi
 only repos with an mmproj. After the pull, the disk proves it:
 `test -f ~/.grid/models/<stem>.mmproj.gguf`.
 
-**5. Two checks, then the start.** *Fit:* `--ctx-size` is per request and the engine reserves
-context × slots up front (grid passes `ctx × slots` to llama.cpp; 4 slots at 64K is 256K tokens of
-KV cache before the first request, and a size the host cannot hold fails to start rather than
-shrinking). Check context × the asked concurrency against `usable_bytes` minus the weights and
-`keepFreeMemoryGb`; if it doesn't fit, offer a smaller context or fewer slots through a tool.
+**5. The start.** Fit is `run-local-model` §3 — the engine reserves context × slots up front, and a
+size the host cannot hold fails to start rather than shrinking.
 *Vision:* when the projector is on disk, ONE question whose options say what each does —
 "Serve it with vision on?" · *Yes, with vision — it reads screenshots and photos (some extra
 memory)* · *No, text only — the vision file is set aside for this run; say the word to put it back*.
@@ -151,45 +150,44 @@ join and say so in one line — never a second question about the file.
     "$GRID_FLEET" run --machine MACHINE -- join GRID --serve EXACT_FILE.gguf --advertise-as MODEL_ALIAS \
       --name MACHINE-MODEL --max-concurrency N --ctx-size CTX --endpoint-port PORT
 
+A GGUF **already on that machine** in another folder (step 0 found it) is linked, never pulled again:
+`"$GRID_FLEET" link --machine MACHINE FILE NAME.gguf [--projector MMPROJ_FILE]`, then `join … --serve
+NAME.gguf` — FILE is the full path `fleet models --machine MACHINE` (JSON, `path`) printed. Its engine:
+when that machine's `installed` line has no Grid engine, ask, then `run --machine MACHINE -- engine
+install llama.cpp` in the next turn.
+
 `--advertise-as` is the name the person will see in their model picker; `--name` is the machine's
-display name — different things. `--max-concurrency N` is the step-1 answer; don't pass
+display name — different things. `--max-concurrency N` is 1 unless the person asked for more; don't pass
 `--parallel` (grid derives the slot count from it) and don't pass `--jinja` (on by default in the
 engine grid ships). `--ctx-size` always, capped at the file's `fit.max_ctx` ("as much as fits" =
 `fit.ctx`): left off, the engine takes a 16K default, smaller than an agent's own prompt. Use
-explicit ports when several instances share a host. An existing Ollama, vLLM, MLX or LM Studio
-engine can join with `--at URL -m MODEL --name NAME`; do not install a second engine needlessly.
+explicit ports when several instances share a host. An engine already answering (Ollama, LM Studio,
+mlx-lm, vLLM, SGLang) joins with `--at http://HOST:PORT/v1 -m MODEL --name NAME` — the `/v1` is
+required, and `fleet models` prints the exact URL; the matching `skills/engine-*/SKILL.md` has its
+ready checks. Do not install a second engine needlessly.
 
-Choose a reasoning budget deliberately. Grid's GPU default can spend more tokens thinking than a
-small output limit permits, yielding no final answer. For an everyday low-latency assistant, start
-with `fleet run --thinking off -- join ... --reasoning-budget 0`. `--thinking off` sets llama.cpp's
-`enable_thinking:false` template parameter for the newly started engine; it is needed on builds
-where a zero token budget alone still produces reasoning. Use `--thinking on` to enable a supported
-model's thinking explicitly. These switches configure startup, not an already running instance.
-For a reasoning model, reserve an explicit budget smaller than `--n-predict`, leaving room for the
-answer.
+Thinking: for everyday use `fleet run --thinking off -- join … --reasoning-budget 0`. `--thinking off`
+sets `enable_thinking:false` at startup — needed, because a zero budget alone still let a model spend
+every token thinking [run]. `--thinking on` enables it; either applies only to a new start.
 
 **6. Prove it answers — once, bounded.** A successful `join` means *starting*, not ready. First wait
 for the relay to list it (a call before that answers `No providers available for this model`, which
 is "not yet", not "broken"):
 
-    until "$GRID_FLEET" run -- models GRID 2>/dev/null | grep -qx 'MODEL_ALIAS'; do sleep 10; done
-    eval "$("$GRID_FLEET" run -- info GRID --env)" && curl -s --max-time 420 "$OPENAI_BASE_URL/chat/completions" \
-      -H "Authorization: Bearer $OPENAI_API_KEY" -H 'content-type: application/json' \
-      -d '{"model":"MODEL_ALIAS","messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":8}'
+    # engine on this computer: its own checks first, then the relay
+    "$GRID_FLEET" verify --at http://127.0.0.1:PORT/v1 --model MODEL_ALIAS --kind llama.cpp --grid GRID --alias MODEL_ALIAS
+    # engine on another machine: the relay only
+    "$GRID_FLEET" verify --grid GRID --alias MODEL_ALIAS
 
-⚠️ Not `chat` for this check. `chat` sets no output limit and the engine's default is tens of
-thousands of tokens, so a small model that runs away answering "ok" holds the slot for minutes — and
-with one slot everything after it waits, including a second check. `max_tokens` is what makes this
-finish in seconds whatever the model does. The timeout is long on purpose: right after a join, grid
-sends the new engine a probe of about 5K tokens to measure what it can do, and on a host without a
-GPU that alone takes 3–5 minutes at ~30 tokens/s while holding the single slot. Tell the user the
-model is warming up and the first answer can take a few minutes on that machine. Send the check
-ONCE and leave it alone — a second call, a `chat`, a log tail all queue behind the same probe. A
-reply with a `choices` entry means the whole path works. Nothing within the timeout: stop the model
-(`leave`), say in one line it started but did not answer in time, and offer through a tool a model
-one step larger from the same list (tiny models loop), or more requests at once, or stop. Verify
-`message.content` contains the requested result; reasoning text alone or a successful HTTP status is
-not acceptance. Then `"$GRID_FLEET" refresh`.
+Every step prints its elapsed time and every wait has a deadline (listing: every 10 s up to 300 s;
+the relay answer: up to 420 s with a "still waiting" line every 15 s) — never a bare `until … sleep`
+loop, which waits forever on an engine that never registers. Relay the progress lines to the person.
+
+Never `chat` for this check: it has no output limit, and a small model that runs away holds the only
+slot for minutes. Right after a join, grid probes the new engine with ~5K tokens (3–5 minutes on a
+host without a GPU): tell the person it is warming up, run `verify` once, and leave it alone. It fails
+within its deadline: `leave`, say so in one line, and offer the next model up, or stop. Then
+`"$GRID_FLEET" refresh`.
 
 **7. Say where it is.** "<alias> is running on <machine>, N at a time, vision on/off. Pick it from
 the model dropdown at the top of any agent's pane, and that agent switches to it." The window's
@@ -202,7 +200,7 @@ The person names the one thing they want different; everything else stays. Read 
 settings from the viewer or `stats GRID --verbose --json` (model, context, slots) so you change only
 that and can say what changed. Context, concurrency and vision all mean a restart — `leave` that
 instance, then the same `join` with the one flag (or the projector file) changed; check the fit
-first as in step 5. A different model is step 3 onward, keeping the context and concurrency they
+first as in step 5. A different model is step 4 onward, keeping the context and concurrency they
 already have; stop the old one only when the new one is about to serve. Stop is `leave` and one
 line. A restart drops the model from the picker for the seconds it takes and any agent mid-turn on
 it loses that turn: say so in one line, and ask first only when `stats` shows requests in flight.
