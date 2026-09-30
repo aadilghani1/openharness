@@ -1,7 +1,7 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/harness_cli_runner.dart';
 import '../core/reveal_folder.dart';
@@ -110,9 +110,7 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
                         ),
                       )
                     : Icon(
-                        failed
-                            ? LucideIcons.circleAlert300
-                            : LucideIcons.packageCheck300,
+                        failed ? AppIcons.circleAlert : AppIcons.packageCheck,
                         size: 18,
                         color: mark,
                       ),

@@ -107,7 +107,11 @@ final _rename = find.byKey(const ValueKey('machine-rename-input'));
 TextField _field(WidgetTester tester, Finder finder) =>
     tester.widget<TextField>(finder);
 bool _buttonFocused(WidgetTester tester, Finder finder) =>
-    tester.widget<DesktopPill>(finder).focusNode!.hasFocus;
+    switch (tester.widget(finder)) {
+      DesktopPill(:final focusNode) => focusNode!.hasFocus,
+      ButtonStyleButton(:final focusNode) => focusNode!.hasFocus,
+      _ => false,
+    };
 
 void main() {
   for (final switchPane in [true, false]) {
@@ -188,9 +192,7 @@ void main() {
           brightness: switchPane ? Brightness.light : Brightness.dark,
         );
         await tester.enterText(_apiInput('key'), 'fixture-only-secret');
-        await key(tester, LogicalKeyboardKey.tab);
-        expect(_buttonFocused(tester, _api('save')), isTrue);
-        for (final id in ['visibility', 'options', 'cancel']) {
+        for (final id in ['visibility', 'options', 'cancel', 'save']) {
           await key(tester, LogicalKeyboardKey.tab);
           expect(_buttonFocused(tester, _api(id)), isTrue);
         }
@@ -205,7 +207,7 @@ void main() {
         await tester.pump();
         await key(tester, LogicalKeyboardKey.tab, shift: true);
         expect(
-          switchPane ? query.hasFocus : _buttonFocused(tester, _api('cancel')),
+          switchPane ? query.hasFocus : _buttonFocused(tester, _api('save')),
           isTrue,
         );
         form.currentState!.focus();
@@ -277,8 +279,12 @@ void main() {
       );
       expect(_buttonFocused(tester, _api('cancel')), isTrue);
       expect(
-        tester.widget<DesktopPill>(_api('delete')).foregroundColor,
-        isNotNull,
+        tester
+            .widget<FilledButton>(_api('delete'))
+            .style!
+            .backgroundColor!
+            .resolve({}),
+        Theme.of(tester.element(_api('delete'))).colorScheme.error,
       );
       await key(tester, LogicalKeyboardKey.enter);
       expect(closed, [null]);

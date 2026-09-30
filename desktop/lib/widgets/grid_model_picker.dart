@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/workspace_bar_style.dart';
@@ -660,7 +661,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
                     )
                   else if (!widget.paneHeader)
                     Icon(
-                      Icons.arrow_drop_down,
+                      AppIcons.chevronDown,
                       size: 14,
                       color: AppColors.mutedStrong,
                     ),

@@ -1,9 +1,9 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth/cli_link.dart';
@@ -785,7 +785,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         _MachineRow(
           key: const ValueKey('add-machine'),
           name: empty ? 'Add a second machine' : 'Add machine',
-          icon: LucideIcons.plus,
+          icon: AppIcons.plus,
           subtitle: empty
               ? const _MachineStatus('Run harnesses on another computer')
               : null,
@@ -794,7 +794,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
             tooltip: _showSetup ? 'Hide setup steps' : 'Add a machine',
             onPressed: toggle,
             icon: Icon(
-              _showSetup ? LucideIcons.chevronUp : LucideIcons.chevronRight,
+              _showSetup ? AppIcons.chevronUp : AppIcons.chevronRight,
               semanticLabel: _showSetup ? 'Hide setup steps' : 'Add a machine',
               size: 18,
             ),
@@ -874,7 +874,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
                                 tooltip: 'Close Machines',
                                 onPressed: widget.onClose,
                                 icon: Icon(
-                                  LucideIcons.x,
+                                  AppIcons.close,
                                   semanticLabel: 'Close Machines',
                                   size: 18,
                                   color: grid.AppPalette.textFaint,
@@ -976,7 +976,7 @@ class _MachineRow extends StatelessWidget {
     required this.name,
     this.local = false,
     this.annotation,
-    this.icon = LucideIcons.monitor,
+    this.icon = AppIcons.monitor,
     this.subtitle,
     this.action,
     this.menuBuilder,
@@ -1014,7 +1014,7 @@ class _MachineRow extends StatelessWidget {
               Row(
                 children: [
                   Icon(
-                    offline ? LucideIcons.monitorOff : icon,
+                    offline ? AppIcons.monitorOff : icon,
                     size: 22,
                     semanticLabel: offline ? '$name: Offline' : null,
                     color: offline
@@ -1484,7 +1484,7 @@ class _MachinePasswordState extends State<_MachinePassword> {
                         tooltip: _obscure ? 'Show password' : 'Hide password',
                         onPressed: () => setState(() => _obscure = !_obscure),
                         icon: Icon(
-                          _obscure ? LucideIcons.eye : LucideIcons.eyeOff,
+                          _obscure ? AppIcons.eye : AppIcons.eyeOff,
                           semanticLabel: _obscure
                               ? 'Show password'
                               : 'Hide password',
@@ -1501,7 +1501,7 @@ class _MachinePasswordState extends State<_MachinePassword> {
                         isSelected: _showHelp,
                         onPressed: () => setState(() => _showHelp = !_showHelp),
                         icon: const Icon(
-                          LucideIcons.circleHelp,
+                          AppIcons.circleHelp,
                           semanticLabel: 'Password help',
                           size: 15,
                         ),
@@ -1701,10 +1701,10 @@ class _CopyButtonState extends State<_CopyButton> {
           onPressed: _copy,
           icon: Icon(
             _message == 'Copied'
-                ? LucideIcons.check
+                ? AppIcons.check
                 : _message == null
-                ? LucideIcons.copy
-                : LucideIcons.circleAlert,
+                ? AppIcons.copy
+                : AppIcons.circleAlert,
             size: 16,
             semanticLabel: _message ?? widget.label,
           ),

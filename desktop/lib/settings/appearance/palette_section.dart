@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
@@ -114,7 +115,7 @@ class _PaletteChoice extends StatelessWidget {
                   SizedBox(
                     width: 16,
                     child: selected
-                        ? Icon(Icons.check, size: 16, color: palette.accent)
+                        ? Icon(AppIcons.check, size: 16, color: palette.accent)
                         : null,
                   ),
                 ],

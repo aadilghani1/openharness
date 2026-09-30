@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -252,7 +253,6 @@ Future<_ReviewFixture> _mount(
                 children: [
                   Positioned.fill(
                     child: DesktopDialogBackdrop(
-                      frameless: true,
                       onDismiss: () =>
                           fixture.form.currentState?.dismissFromOutside(),
                     ),
@@ -380,7 +380,7 @@ void main() {
         expect(find.text('Options'), findsNothing);
         expect(find.text('Add task'), findsNothing);
         expect(_field('advanced'), findsNothing);
-        expect(_focused(tester, _field('start')), isTrue);
+        expect(_focused(tester, _task), isTrue);
         expect(fixture.app.launches, isEmpty);
         expect(tester.takeException(), isNull);
         await capture(tester, fixture, 'composer-${brightness.name}');
@@ -454,7 +454,7 @@ void main() {
     expect(
       find.descendant(
         of: _field('agent'),
-        matching: find.byIcon(Icons.code_rounded),
+        matching: find.byIcon(AppIcons.code),
       ),
       findsNothing,
     );
@@ -550,7 +550,7 @@ void main() {
       expect(fixture.box.field, NewHarnessField.projectMenu);
       expect(_query.hitTestable(), findsOneWidget);
       final menu = tester.getRect(_chooser);
-      expect(menu.width, 380);
+      expect(menu.width, 400);
       expect(menu.height, lessThan(280));
       expect(fixture.box.options.take(3).map((o) => o.title), [
         'Open Folder',
@@ -574,10 +574,7 @@ void main() {
       expect(local, findsOneWidget);
       expect(fixture.box.field, NewHarnessField.projectMenu);
       expect(tester.getRect(local).left, greaterThan(menu.right));
-      expect(
-        tester.getRect(local).top,
-        closeTo(tester.getRect(_machine).top + 6, 2),
-      );
+      expect(tester.getRect(local).top, closeTo(menu.top + 6, 2));
       expect(
         find.descendant(of: local, matching: find.text('office')),
         findsOneWidget,
@@ -733,9 +730,6 @@ void main() {
     (tester) async {
       final fixture = await _mount(tester);
       final cycle = [
-        _field('agent'),
-        _field('project'),
-        _task,
         _field('model'),
         _field('approvals'),
         _field('profile'),
@@ -743,8 +737,11 @@ void main() {
         _field('branch'),
         _close,
         _field('start'),
+        _field('agent'),
+        _field('project'),
+        _task,
       ];
-      expect(_focused(tester, _field('start')), isTrue);
+      expect(_focused(tester, _task), isTrue);
       for (final target in cycle) {
         await key(tester, LogicalKeyboardKey.tab);
         await tester.pumpAndSettle();
@@ -902,10 +899,6 @@ void main() {
       }
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
-      expect(fixture.closes, 0);
-      await key(tester, LogicalKeyboardKey.escape);
-      expect(fixture.closes, 0);
-      await tester.tap(_close);
       expect(fixture.closes, 1);
       expect(fixture.box.draft.task, draft);
     },
@@ -1024,10 +1017,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.descendant(
-          of: open,
-          matching: find.byIcon(Icons.chevron_right_rounded),
-        ),
+        find.descendant(of: open, matching: find.byIcon(AppIcons.chevronRight)),
         findsNothing,
         reason: 'The native picker opens directly instead of a submenu',
       );

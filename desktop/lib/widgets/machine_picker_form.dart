@@ -574,18 +574,24 @@ class MachinePickerFormState extends State<MachinePickerForm> {
               cursorColor: DesktopChrome.accent,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(color: DesktopChrome.rim),
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(color: DesktopChrome.rim),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(
                     color: DesktopChrome.focusRing,
-                    width: 2,
+                    width: grid.AppDesktop.focusWidth,
                   ),
                 ),
                 filled: true,
@@ -697,7 +703,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
                 ? 'Add machine · ${widget.kind == MachinePickerFormKind.app ? 'App' : 'CLI'}'
                 : name,
             style: desktop
-                ? DesktopChrome.text(size: 15, medium: true)
+                ? DesktopChrome.heading()
                 : terminalContentStyle(color: theme.foreground),
           ),
           gap,
@@ -872,7 +878,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
                   if (hint('picker.cancel') case final escape?) '$escape back',
                 ].join('  ·  '),
                 style: desktop
-                    ? DesktopChrome.text(size: 11, color: DesktopChrome.muted)
+                    ? DesktopChrome.metadata()
                     : terminalContentStyle(
                         color: theme.foreground.withValues(alpha: .54),
                       ),

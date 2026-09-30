@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../logging/log_file.dart';
 import '../../logging/log_stream.dart';
@@ -77,7 +77,7 @@ class _DebugLogTileState extends State<DebugLogTile> {
                         width: 18,
                         child: _hovered
                             ? Icon(
-                                LucideIcons.chevronRight,
+                                AppIcons.chevronRight,
                                 size: 15,
                                 color: AppPalette.textSecondary,
                               )
@@ -134,24 +134,24 @@ class DebugStatusIcon extends StatelessWidget {
         ),
       ),
       LogStatus.ok => Icon(
-        LucideIcons.circleCheck,
+        AppIcons.circleCheck,
         size: 15,
         color: AppPalette.online,
       ),
       LogStatus.failed => Icon(
-        LucideIcons.circleAlert,
+        AppIcons.circleAlert,
         size: 15,
         color: debugDangerInk(context),
       ),
       LogStatus.warned => Icon(
-        LucideIcons.triangleAlert,
+        AppIcons.triangleAlert,
         size: 15,
         color: AppPalette.warn,
       ),
       // An ordinary line the app chose to write. A dot, not a tick: it did not
       // succeed at anything, it happened.
       LogStatus.event => Icon(
-        LucideIcons.dot,
+        AppIcons.dot,
         size: 15,
         color: AppPalette.textFaint,
       ),

@@ -1173,10 +1173,12 @@ void main() {
         matching: find.byType(Text),
       );
       final text = tester.widget<Text>(compact);
+      final style = DefaultTextStyle.of(tester.element(compact)).style
+          .merge(text.style);
       expect(text.data, 'Harnesses');
-      expect(text.style!.fontSize, 12);
-      expect(text.style!.fontFamily, grid.AppType.sansFamily);
-      expect(text.style!.color, DesktopChrome.foreground);
+      expect(style.fontSize, grid.AppType.bodySize);
+      expect(style.fontFamily, grid.AppType.sansFamily);
+      expect(style.color, DesktopChrome.foreground);
       expect(tester.takeException(), isNull);
       await capture(tester, 'narrow-native-scopes');
       await tester.pumpWidget(const SizedBox());
@@ -1693,21 +1695,14 @@ void main() {
     expect(focused(find.byKey(const ValueKey('api-form-input:url'))), isTrue);
     await key(tester, LogicalKeyboardKey.tab);
     expect(focused(find.byKey(const ValueKey('api-form-input:key'))), isTrue);
-    await key(tester, LogicalKeyboardKey.tab);
-    expect(
-      tester
-          .widget<Focus>(
-            find
-                .descendant(
-                  of: find.byKey(const ValueKey('api-form:save')),
-                  matching: find.byType(Focus),
-                )
-                .first,
-          )
-          .focusNode!
-          .hasFocus,
-      isTrue,
-    );
+    // The fixed action row follows the fields and visibility control.
+    final save = find.byKey(const ValueKey('api-form:save'));
+    for (var step = 0; step < 5; step++) {
+      await key(tester, LogicalKeyboardKey.tab);
+      if (tester.widget<FilledButton>(save).focusNode!.hasFocus) break;
+    }
+    expect(tester.widget<FilledButton>(save).focusNode!.hasFocus, isTrue);
+    expect(save.hitTestable(), findsOneWidget);
     expect(controller.managing, isTrue);
     await tabTo(tester, field);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
@@ -1800,7 +1795,10 @@ void main() {
       await tester.pumpAndSettle();
       final line = find.byKey(ValueKey('swarm-search-line:$commandId'));
       expect(tester.getSize(line).height, greaterThanOrEqualTo(32));
-      expect(tester.widget<Material>(line).color, DesktopChrome.selection);
+      expect(
+        tester.widget<Material>(line).color,
+        DesktopChrome.activeSelection,
+      );
       expect(
         tester
             .widget<Dialog>(

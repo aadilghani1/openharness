@@ -2,6 +2,7 @@ import 'dart:async';
 
 // The pane header's model picker: two sections, the way back always offered, and a marked row that
 // says where the agent actually is.
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -1195,7 +1196,7 @@ void main() {
     expect(rowFor(tester, 'Qwen-Test').selected, isTrue);
     expect(rowFor(tester, 'DeepSeek-Test').selected, isFalse);
     expect(rowFor(tester, 'Anthropic').selected, isFalse);
-    expect(find.byIcon(Icons.check), findsNothing);
+    expect(find.byIcon(AppIcons.check), findsNothing);
     expect(
       // `.last`: the header control names the current model too.
       tester.getSemantics(find.text('Qwen-Test').last),
@@ -1219,7 +1220,7 @@ void main() {
 
     expect(rowFor(tester, 'Anthropic').selected, isTrue);
     expect(rowFor(tester, 'Qwen-Test').selected, isFalse);
-    expect(find.byIcon(Icons.check), findsNothing);
+    expect(find.byIcon(AppIcons.check), findsNothing);
   });
 
   // ── the selection has to land before the machine confirms it ──────────────────────────────────

@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../analytics/analytics_log.dart';
 import '../../analytics/analytics_sink.dart';
@@ -134,7 +134,7 @@ class _TrackingSectionState extends State<TrackingSection> {
     // stories, so the lenses stay above and the user has a way back out.
     if (nothingTracked) {
       return const EmptyState(
-        icon: LucideIcons.activity300,
+        icon: AppIcons.activity,
         title: 'No events yet',
         message:
             'Move around the app — opening a screen or creating a harness '
@@ -177,7 +177,7 @@ class _Toolbar extends StatelessWidget {
           onTap: total == 0 ? null : onClear,
           rimmed: true,
           child: DebugPillLabel(
-            icon: LucideIcons.trash2,
+            icon: AppIcons.trash2,
             label: 'Clear',
             enabled: total != 0,
           ),

@@ -149,6 +149,17 @@ class AgentPreference {
     return _save();
   }
 
+  /// Explicit composer selections become the next form's defaults without
+  /// recording an agent launch or changing the recent-use order.
+  Future<void> selectLaunch(String engine, {String? harnessId}) async {
+    await load();
+    _revision++;
+    value = engine;
+    harness = harnessId;
+    _enginesByHarness[harnessId ?? 'coding'] = engine;
+    await _save();
+  }
+
   /// [agent] was just used to create a harness: it moves to the front of
   /// [recent].
   Future<void> remember(String agent, {String? harnessId}) async {

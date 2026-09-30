@@ -279,9 +279,6 @@ void main() {
             await tester.tapAt(const Offset(4, 10));
           }
           await tester.pumpAndSettle();
-          expect(find.byType(NewHarnessForm), findsOneWidget);
-          await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-          await tester.pumpAndSettle();
           expect(find.byType(NewHarnessForm), findsNothing);
           await chord(tester, LogicalKeyboardKey.keyN);
           box = tester
@@ -297,7 +294,7 @@ void main() {
             box.project.repository?.url,
             'https://github.com/acme/terminal-tools.git',
           );
-          expect(app.projectHistory.selected('m'), '/work/project');
+          expect(app.projectHistory.selected('m'), '/work/source');
           expect(connection.requests, isEmpty);
           await tester.pumpWidget(const SizedBox());
           return;
@@ -1007,9 +1004,12 @@ void main() {
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         expect(app.swarms, contains(original));
-        // Escape keeps the draft open; search still replaces creation without
-        // restoring focus to its former detached search editor.
-        expect(find.byType(NewHarnessForm), findsOneWidget);
+        // Escape dismisses the modal and retains the draft. An empty tab keeps
+        // its embedded composer; either entry can open search afterward.
+        expect(
+          find.byType(NewHarnessForm),
+          placement == HarnessPlacement.newTab ? findsOneWidget : findsNothing,
+        );
         await chord(tester, LogicalKeyboardKey.keyP);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),

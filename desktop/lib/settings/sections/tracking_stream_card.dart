@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../analytics/analytics_sink.dart';
 import '../../shared/theme/app_theme.dart';
@@ -50,11 +50,7 @@ class _TrackingStreamCardState extends State<TrackingStreamCard> {
         children: [
           Row(
             children: [
-              Icon(
-                LucideIcons.radioTower300,
-                size: 15,
-                color: AppPalette.textFaint,
-              ),
+              Icon(AppIcons.radioTower, size: 15, color: AppPalette.textFaint),
               const SizedBox(width: 8),
               Expanded(
                 child: Text('Analytics stream', style: AppType.heading()),

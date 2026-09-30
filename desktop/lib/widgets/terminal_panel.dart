@@ -6,9 +6,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
@@ -2515,25 +2515,25 @@ class _TerminalHeader extends StatelessWidget {
           TerminalSessionStatus.controlling => null,
           TerminalSessionStatus.opening => terminalNotice(
             label: 'Connecting',
-            icon: Icons.sync,
+            icon: AppIcons.refreshCw,
             detail:
                 'Connecting to this terminal. Retained output is read only.',
           ),
           TerminalSessionStatus.resyncing => terminalNotice(
             label: 'Restoring',
-            icon: Icons.sync,
+            icon: AppIcons.refreshCw,
             detail: 'Restoring this terminal. Retained output is read only.',
           ),
           TerminalSessionStatus.takenOver => terminalNotice(
             label: 'Take control',
-            icon: Icons.lock_outline,
+            icon: AppIcons.lock,
             detail:
                 'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
           TerminalSessionStatus.error ||
           TerminalSessionStatus.closed => terminalNotice(
             label: 'Reconnect',
-            icon: Icons.refresh,
+            icon: AppIcons.refreshCw,
             detail:
                 session.errorMessage ??
                 session.errorCode ??
@@ -2778,7 +2778,14 @@ class _TerminalHeader extends StatelessWidget {
                       else if (!compact)
                         Padding(
                           padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.circle, size: 8, color: color),
+                          child: Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: color,
+                            ),
+                          ),
                         ),
                     ],
                   ),
@@ -2944,17 +2951,17 @@ class _LinkModeMark extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, color, label) = switch (mode) {
       'p2p' => (
-        LucideIcons.link2,
+        AppIcons.link2,
         AppColors.success,
         'P2P · Direct peer connection',
       ),
       'turn' => (
-        LucideIcons.waypoints,
+        AppIcons.waypoints,
         AppColors.warning,
         'TURN · Via Cloudflare relay',
       ),
       _ => (
-        LucideIcons.server,
+        AppIcons.server,
         AppColors.mutedStrong,
         'WS · Via Harness WebSocket relay',
       ),
@@ -3035,7 +3042,7 @@ class _ControlBanner extends StatelessWidget {
     grid.AppTheme.watch(context);
     // A notice that failed is red; everything else on this strip is the amber
     // of "paused, and you can do something about it".
-    final ink = notice != null && notice!.icon == Icons.error_outline
+    final ink = notice != null && notice!.icon == AppIcons.circleAlert
         ? AppColors.danger
         : AppColors.warning;
     final detail = this.detail;
@@ -3085,7 +3092,7 @@ class _ControlBanner extends StatelessWidget {
                 final lead = notice != null
                     ? Icon(notice!.icon, size: 16, color: ink)
                     : !busy
-                    ? Icon(Icons.lock_outline, size: 16, color: ink)
+                    ? Icon(AppIcons.lock, size: 16, color: ink)
                     : SizedBox(
                         width: 16,
                         height: 16,
@@ -3226,7 +3233,7 @@ class _ControlBannerButton extends StatelessWidget {
               ),
               child: Semantics(
                 label: 'Return',
-                child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
+                child: Icon(AppIcons.cornerDownLeft, size: 12, color: onAccent),
               ),
             ),
           ],

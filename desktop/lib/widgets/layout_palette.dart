@@ -1,9 +1,9 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
@@ -232,14 +232,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
       child: Dialog(
         backgroundColor: DesktopChrome.surface,
         insetPadding: const EdgeInsets.all(24),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(
-            color: MediaQuery.highContrastOf(context)
-                ? DesktopChrome.foreground.withValues(alpha: .6)
-                : DesktopChrome.rim,
-          ),
-        ),
+        shape: DesktopChrome.shape(),
         child: Focus(
           focusNode: _keys,
           autofocus: true,
@@ -308,25 +301,11 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                choices.isEmpty
-                                    ? 'Layout'
-                                    : 'Layout · $count panes',
-                                style: DesktopChrome.heading(),
-                              ),
-                            ),
-                            AppIconButton(
-                              icon: Icons.close_rounded,
-                              tooltip: 'Close',
-                              onPressed: () => Navigator.of(context).pop(),
-                            ),
-                          ],
-                        ),
+                      DesktopDialogHeader(
+                        title: choices.isEmpty
+                            ? 'Layout'
+                            : 'Layout · $count panes',
+                        onClose: () => Navigator.of(context).pop(),
                       ),
                       if (choices.isEmpty)
                         Padding(
@@ -513,11 +492,7 @@ class _ShapeButton extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (selected) ...[
-                    Icon(
-                      Icons.check_rounded,
-                      size: 14,
-                      color: DesktopChrome.accent,
-                    ),
+                    Icon(AppIcons.check, size: 14, color: DesktopChrome.accent),
                     const SizedBox(width: 4),
                   ],
                   Text('$index', style: DesktopChrome.metadata()),

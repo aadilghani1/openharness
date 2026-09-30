@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -54,8 +55,8 @@ class _SwarmCommandPickerState extends State<SwarmCommandPicker> {
               horizontal: 20,
               vertical: 24,
             ),
-            elevation: 24,
-            shadowColor: Colors.black.withValues(alpha: .3),
+            elevation: grid.AppDesktop.dialogElevation,
+            shadowColor: grid.AppDesktop.shadow,
             surfaceTintColor: Colors.transparent,
             clipBehavior: Clip.antiAlias,
             shape: DesktopChrome.shape(),
@@ -81,7 +82,7 @@ class _SwarmCommandPickerState extends State<SwarmCommandPicker> {
                         child: Row(
                           children: [
                             Icon(
-                              Icons.search_rounded,
+                              AppIcons.search,
                               size: 20,
                               color: DesktopChrome.muted,
                             ),
@@ -104,7 +105,7 @@ class _SwarmCommandPickerState extends State<SwarmCommandPicker> {
                                 key: const ValueKey('resource-command-close'),
                                 tooltip: 'Close actions',
                                 onPressed: _close,
-                                icon: const Icon(Icons.close_rounded, size: 18),
+                                icon: const Icon(AppIcons.close, size: 18),
                               ),
                             ),
                           ],

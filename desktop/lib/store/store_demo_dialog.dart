@@ -1,7 +1,7 @@
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
@@ -199,7 +199,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                     key: const ValueKey('store-demo-close'),
                     tooltip: 'Close recording',
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(LucideIcons.x300),
+                    icon: const Icon(AppIcons.close),
                   ),
                 ],
               ),
@@ -215,7 +215,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               const Icon(
-                                LucideIcons.film300,
+                                AppIcons.film,
                                 size: 36,
                                 color: Colors.white70,
                               ),
@@ -268,7 +268,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                   TextButton.icon(
                     key: const ValueKey('store-demo-browser'),
                     onPressed: _openingBrowser ? null : _openBrowser,
-                    icon: const Icon(LucideIcons.externalLink300, size: 16),
+                    icon: const Icon(AppIcons.externalLink, size: 16),
                     label: const Text('Open in browser'),
                   ),
                 ],

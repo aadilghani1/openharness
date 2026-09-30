@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
@@ -160,7 +160,7 @@ class _SessionCard extends StatelessWidget {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Icon(
-                                  LucideIcons.play300,
+                                  AppIcons.play,
                                   size: 15,
                                   color: Colors.white,
                                 ),
@@ -262,7 +262,7 @@ class _SessionCard extends StatelessWidget {
                       foregroundColor: grid.AppPalette.accentOnSurface,
                     ),
                     iconAlignment: IconAlignment.end,
-                    icon: const Icon(LucideIcons.arrowRight300, size: 15),
+                    icon: const Icon(AppIcons.arrowRight, size: 15),
                     label: const Text('Explore harness'),
                   ),
                 ],

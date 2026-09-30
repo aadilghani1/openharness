@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart';
@@ -36,7 +37,7 @@ void main() {
         home: Scaffold(
           body: Center(
             child: AppIconButton(
-              icon: Icons.refresh,
+              icon: AppIcons.refreshCw,
               spinning: spinning,
               onPressed: onPressed,
             ),
@@ -100,7 +101,7 @@ void main() {
       const MaterialApp(
         home: Scaffold(
           body: Center(
-            child: AppIconButton(icon: Icons.refresh, onPressed: null),
+            child: AppIconButton(icon: AppIcons.refreshCw, onPressed: null),
           ),
         ),
       ),

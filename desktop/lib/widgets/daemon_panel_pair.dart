@@ -254,10 +254,10 @@ mixin _PairSections on State<DaemonPanel> {
                         padding: const EdgeInsets.only(top: 2),
                         child: Icon(
                           color == _theme.red
-                              ? Icons.error_outline
+                              ? AppIcons.circleAlert
                               : color == _theme.yellow
-                              ? Icons.pending_outlined
-                              : Icons.info_outline,
+                              ? AppIcons.ellipsis
+                              : AppIcons.info,
                           size: 16,
                           color: color == _theme.red
                               ? Theme.of(context).colorScheme.error
@@ -889,10 +889,10 @@ mixin _PairSections on State<DaemonPanel> {
                 children: [
                   Icon(
                     selected
-                        ? Icons.radio_button_checked_rounded
+                        ? AppIcons.circleDot
                         : waiting
-                        ? Icons.schedule_rounded
-                        : Icons.radio_button_unchecked_rounded,
+                        ? AppIcons.clock
+                        : AppIcons.circle,
                     size: 18,
                     color: selected ? DesktopChrome.accent : _muted,
                   ),

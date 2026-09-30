@@ -1,6 +1,7 @@
 import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -788,7 +789,7 @@ void main() {
       await tester.pump();
       tester
           .widget<IconButton>(
-            find.widgetWithIcon(IconButton, Icons.more_horiz).first,
+            find.widgetWithIcon(IconButton, AppIcons.ellipsis).first,
           )
           .focusNode!
           .requestFocus();

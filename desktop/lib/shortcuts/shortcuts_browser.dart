@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -189,14 +190,17 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                         if (keymap.store != null)
                           IconButton(
                             tooltip: 'Edit keyboard shortcuts',
-                            icon: const Icon(Icons.tune, size: 20),
+                            icon: const Icon(
+                              AppIcons.slidersHorizontal,
+                              size: 20,
+                            ),
                             onPressed: () => openKeyboardConfig(context),
                           ),
                         if (widget.onClose != null)
                           IconButton(
                             onPressed: widget.onClose,
                             tooltip: 'Close keyboard shortcuts',
-                            icon: const Icon(Icons.close, size: 20),
+                            icon: const Icon(AppIcons.close, size: 20),
                           ),
                       ],
                     ),
@@ -214,7 +218,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                           color: DesktopChrome.muted,
                         ),
                         prefixIcon: Icon(
-                          Icons.search,
+                          AppIcons.search,
                           size: 18 * scale,
                           color: DesktopChrome.muted,
                         ),
@@ -222,7 +226,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                             ? null
                             : IconButton(
                                 tooltip: 'Clear search',
-                                icon: const Icon(Icons.close, size: 18),
+                                icon: const Icon(AppIcons.close, size: 18),
                                 onPressed: () {
                                   _query.clear();
                                   _filterChanged('');

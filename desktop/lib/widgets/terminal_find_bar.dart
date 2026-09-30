@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -188,7 +189,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                         width: 16,
                         child: checked == true
                             ? Icon(
-                                Icons.check,
+                                AppIcons.check,
                                 size: 16,
                                 color: DesktopChrome.foreground,
                               )
@@ -342,7 +343,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       const Tooltip(
                         message: 'This terminal is read only',
                         child: Icon(
-                          Icons.lock_outline,
+                          AppIcons.lock,
                           size: 14,
                           color: Colors.white54,
                         ),
@@ -392,7 +393,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       Builder(
                         builder: (context) => button(
                           'Find options',
-                          const Icon(Icons.more_horiz),
+                          const Icon(AppIcons.ellipsis),
                           () => _openOptions(context),
                         ),
                       )
@@ -414,7 +415,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       ),
                       button(
                         'Previous match (Shift-Enter)',
-                        const Icon(Icons.keyboard_arrow_up),
+                        const Icon(AppIcons.chevronUp),
                         count > 0
                             ? () {
                                 widget.onStep(-1);
@@ -424,7 +425,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       ),
                       button(
                         'Next match (Enter)',
-                        const Icon(Icons.keyboard_arrow_down),
+                        const Icon(AppIcons.chevronDown),
                         count > 0
                             ? () {
                                 widget.onStep(1);
@@ -435,7 +436,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                     ],
                     button(
                       'Close find (Esc)',
-                      const Icon(Icons.close),
+                      const Icon(AppIcons.close),
                       widget.onClose,
                     ),
                   ],

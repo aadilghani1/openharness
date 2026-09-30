@@ -279,15 +279,15 @@ private extension SwarmTabButton {
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == nil, "Widening a tab removes a now-redundant tooltip")
 
-    let symbol = SwarmStatusSymbolButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
-    symbol.title = "+"
+    let symbol = SwarmPlainIconButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
+    symbol.image = HarnessControlSymbols.image("plus")
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     let symbolResting = symbol.renderedPixels()
     symbol.mouseEntered(with: hover)
     try checkTitlebar(symbol.renderedPixels() != symbolResting &&
       symbol.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
-      "Symbols become bold on hover without adding a background")
+      "Symbols emphasize their ink on hover without changing weight or adding a background")
     let width = preferredWidth
     let resting = renderedPixels()
     mouseEntered(with: hover)
@@ -485,7 +485,7 @@ private extension SwarmTabStrip {
           try checkTitlebar(daemonButton.font == tabs[0].labelFont,
             "The daemon shares the workspace bar font at \(size)pt")
           try checkTitlebar(daemonButton.frame.maxX <= bounds.width &&
-            daemonButton.frame.minX >= pullRequestButton.frame.maxX &&
+            daemonButton.frame.maxX <= contextButton.frame.minX &&
             contextButton.frame.maxX <= pullRequestButton.frame.minX &&
             contextButton.superview === statusBar && newButton.frame.maxX < searchButton.frame.minX,
             "Footer controls and top navigation do not overlap at \(width)px / \(size)pt")
@@ -496,10 +496,10 @@ private extension SwarmTabStrip {
       }
     }
     let tab = tabs[0]
-    try checkTitlebar(pullRequestButton.frame.maxX <= daemonButton.frame.minX &&
+    try checkTitlebar(daemonButton.frame.maxX <= contextButton.frame.minX &&
       daemonButton.frame.height == focusedModelButton.frame.height &&
       daemonButton.frame.midY == focusedModelButton.frame.midY,
-      "The daemon follows the focused context and shares the controls' height and inner gutters")
+      "The daemon precedes focused context and shares the controls' height and inner gutters")
     scroll.contentView.scroll(to: .zero)
     let scrollFrame = scroll.frame, visible = scroll.documentVisibleRect
     let documentFrame = document.frame, daemonFrame = daemonButton.frame
@@ -574,11 +574,11 @@ private extension SwarmTabStrip {
       voiceLabel.accessibilityLabel() == voiceLabel.text && voiceLabel.accessibilityRole() == .staticText,
       "The daemon's line shows in the message colour")
     try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden,
-      "Its line replaces the left context while the model stays available on the right")
+      "Its line replaces the right context while the model stays available on the left")
     try checkTitlebar(unmoved(), "Speaking moves no tab, status control or the slot")
-    try checkTitlebar(voiceLabel.frame.maxX < daemonButton.frame.minX &&
-      voiceLabel.frame.minX == ceil(("m" as NSString).size(withAttributes: [.font: daemonButton.font!]).width),
-      "The line spans the status area up to the slot")
+    try checkTitlebar(voiceLabel.frame.minX >= daemonButton.frame.maxX &&
+      voiceLabel.frame.maxX <= statusBar.bounds.width,
+      "The line spans the status area after the slot")
     let voicePixels = voiceLabel.renderedPixels()
     daemon["voice"] = String(repeating: "a very long line ", count: 40)
     updateDaemon(daemon)
@@ -794,7 +794,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(!shareButton.isHidden && shareButton.isEnabled &&
         shareButton.frame.width == shareButton.preferredWidth &&
         shareButton.frame.maxX <= bounds.width &&
-        contextButton.frame.maxX < shareButton.frame.minX &&
+        shareButton.frame.maxX <= contextButton.frame.minX &&
         shareButton.superview === statusBar,
         "Share stays in the footer without overlapping context at width \(width)")
       update(hidden)
@@ -1019,10 +1019,10 @@ private extension SwarmTabStrip {
     update(linked)
     try checkTitlebar(!focusedModelButton.isHidden && focusedModelButton.isEnabled,
       "Focused model has its own enabled status control")
-    try checkTitlebar(focusedModelButton.frame.minX > pullRequestButton.frame.maxX &&
+    try checkTitlebar(focusedModelButton.frame.maxX < contextButton.frame.minX &&
       focusedModelButton.frame.height == contextButton.frame.height &&
       focusedModelButton.frame.maxX <= statusBar.bounds.width,
-      "Model sits on the right of the footer opposite machine/repo/branch/PR")
+      "Model sits on the left of the footer opposite machine/repo/branch/PR")
     try checkTitlebar(focusedModelButton.toolTip == "Switch model · Subscription or local models",
       "Model hint explains switching without repeating the visible name")
     let modelResting = focusedModelButton.renderedPixels()
@@ -1090,11 +1090,11 @@ private extension SwarmTabStrip {
     try checkTitlebar(subviews.count == 5 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
-    for (control, symbol) in zip(controls, ["+"]) {
-      try checkTitlebar(control.image == nil && control.title == symbol && !control.isBordered,
-        "Management controls are plain terminal text without a resting button well")
-      try checkTitlebar(control.frame.height >= 28 && control.frame.width > workspaceBarTextWidth(symbol, font: barFont),
-        "The new-tab control keeps the shared click height and padding around its text")
+    for control in controls {
+      try checkTitlebar(control.image != nil && control.title.isEmpty && !control.isBordered,
+        "Management controls use the regular outline family without a resting button well")
+      try checkTitlebar(control.frame.height >= 28 && control.frame.width > HarnessControlSymbols.size,
+        "The new-tab control keeps the shared click height and padding around its icon")
       try checkTitlebar(control.accessibilityLabel() == "New Tab" && control.toolTip?.contains("New Tab") == true,
         "Every symbol explains its action through a tooltip and accessible name")
       let resting = control.renderedPixels()

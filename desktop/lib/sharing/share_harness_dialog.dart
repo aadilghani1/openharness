@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
@@ -637,7 +638,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
             width: 18,
             child: checked == false
                 ? null
-                : Icon(checked == true ? Icons.check_rounded : icon, size: 18),
+                : Icon(checked == true ? AppIcons.check : icon, size: 18),
           ),
           const SizedBox(width: DesktopChrome.controlGap),
         ],
@@ -728,14 +729,13 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     enabled: _enabled(row),
     primary: row == _ShareRow.copy,
     destructive: row == _ShareRow.stop,
-    icon: row == _ShareRow.copy ? Icons.link_rounded : null,
+    icon: row == _ShareRow.copy ? AppIcons.link2 : null,
     disclosure: switch (row) {
-      _ShareRow.options =>
-        _options ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+      _ShareRow.options => _options ? AppIcons.chevronUp : AppIcons.chevronDown,
       _ShareRow.access ||
       _ShareRow.people ||
       _ShareRow.expiry ||
-      _ShareRow.comments => Icons.chevron_right_rounded,
+      _ShareRow.comments => AppIcons.chevronRight,
       _ => null,
     },
     onTap: () {
@@ -870,7 +870,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     final backControl = TextButton.icon(
       key: narrow ? const ValueKey('share-back') : null,
       onPressed: _backToForm,
-      icon: const Icon(Icons.arrow_back_rounded, size: 16),
+      icon: const Icon(AppIcons.arrowLeft, size: 16),
       label: const Text('Back'),
     );
     final back = _row == _ShareRow.comments && _picking

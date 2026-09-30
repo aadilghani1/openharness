@@ -11,9 +11,11 @@
 //   1. the theme declares a hover overlay for each button kind;
 //   2. a `styleFrom` at a call site restates it, because `styleFrom` REPLACES
 //      the theme's style rather than merging with it.
+
 import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -148,7 +150,10 @@ void main() {
         theme: buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: Center(
-            child: AppIconButton(icon: Icons.add, onPressed: () => presses++),
+            child: AppIconButton(
+              icon: AppIcons.plus,
+              onPressed: () => presses++,
+            ),
           ),
         ),
       ),

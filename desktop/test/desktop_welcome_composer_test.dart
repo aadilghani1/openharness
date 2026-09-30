@@ -7,12 +7,18 @@ import 'package:flutter/rendering.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
+import 'package:harness/shared/theme/prompt_style.dart';
+import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/engine_identity.dart';
+import 'package:harness/widgets/status_line.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 import 'package:harness/shared/widgets/app_dialog.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -93,6 +99,21 @@ void main() {
   NewHarnessController box(WidgetTester tester) =>
       tester.widget<NewHarnessForm>(form).controller;
 
+  Future<void> capture(WidgetTester tester, String name) async {
+    final directory = Platform.environment['WELCOME_COMPOSER_RENDER_DIR'];
+    if (directory == null) return;
+    await tester.runAsync(() async {
+      final boundary =
+          picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final image = await boundary.toImage();
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      await Directory(directory).create(recursive: true);
+      await File('$directory/$name.png')
+          .writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+  }
+
   Future<void> setup(
     WidgetTester tester, {
     bool withPane = false,
@@ -141,6 +162,8 @@ void main() {
     (tester) async {
       await setup(tester);
       expect(tester.widget<NewHarnessForm>(form).embedded, isTrue);
+      expect(find.byKey(const ValueKey('welcome-sessions')), findsNothing);
+      expect(find.byKey(const ValueKey('workspace-status-bar')), findsNothing);
       expect(find.byKey(const ValueKey('new-harness-close')), findsNothing);
       expect(find.byKey(const ValueKey('new-harness-dismiss')), findsNothing);
       expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
@@ -262,6 +285,11 @@ void main() {
         tester,
       ) async {
         await setup(tester);
+        final oldAppearance = appearancePrefsStore.value;
+        addTearDown(() => appearancePrefsStore.value = oldAppearance);
+        appearancePrefsStore.value = oldAppearance.copyWith(
+          prompt: const PromptPrefs(statusStyle: StatusLineStyle.spaceship),
+        );
         app.machineStates['m']!.agents = [
           for (final (index, name) in [
             'Polish the desktop composer',
@@ -269,14 +297,23 @@ void main() {
             'Improve notifications',
             'Build a shader preview',
             'Continue the research',
+            'Review the release notes',
+            'Older session seven',
+            'Older session eight',
+            'Older session nine',
           ].indexed)
             Agent(
               id: 'recent-$index',
               name: name,
-              engine: 'codex',
+              engine: index.isEven ? 'codex' : 'claude',
               terminalAvailable: true,
               lastOpenedAt: DateTime.now().subtract(
-                Duration(minutes: 5 + index * 23),
+                Duration(minutes: index * 23),
+              ),
+              project: const AgentProject(
+                name: 'openharness',
+                cwd: '/work/openharness',
+                branch: 'experiment/friendly-desktop',
               ),
             ),
         ];
@@ -284,50 +321,59 @@ void main() {
         final previous = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = previous);
-        await tester.pumpWidget(
-          MaterialApp(
-            debugShowCheckedModeBanner: false,
-            theme: grid.buildAppTheme(brightness: brightness),
-            builder: (context, child) => KeymapProvider(
-              keymap: map,
-              child: MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(scale)),
-                child: RepaintBoundary(key: picture, child: child!),
-              ),
-            ),
-            home: SwarmScreen(
-              key: const ValueKey('welcome-render'),
-              notifier: app,
-              nativeTabs: false,
+        final preview = MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) => KeymapProvider(
+            keymap: map,
+            child: MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(scale)),
+              child: RepaintBoundary(key: picture, child: child!),
             ),
           ),
+          home: SwarmScreen(
+            key: const ValueKey('welcome-render'),
+            notifier: app,
+            nativeTabs: false,
+          ),
         );
+        await tester.pumpWidget(preview);
         await tester.pumpAndSettle();
         expect(find.text('Recent sessions'), findsOneWidget);
+        final recent = find.byKey(const ValueKey('welcome-sessions'));
+        expect(
+          find.descendant(of: recent, matching: find.byType(EngineMark)),
+          findsNWidgets(6),
+        );
+        expect(
+          find.descendant(of: recent, matching: find.byType(ColorFiltered)),
+          findsNWidgets(6),
+        );
+        expect(find.text('Older session seven'), findsNothing);
+        expect(find.text('now'), findsOneWidget);
+        expect(find.text('0m'), findsNothing);
+        expect(
+          tester.getRect(recent).top,
+          greaterThanOrEqualTo(
+            tester
+                    .getRect(
+                      find.byKey(const ValueKey('new-harness-field-approvals')),
+                    )
+                    .bottom +
+                56,
+          ),
+        );
         final surface = tester.getRect(
           find.byKey(const ValueKey('new-harness-surface')),
         );
         expect(surface.width, lessThanOrEqualTo(680));
         expect(surface.center.dx, closeTo(size.width / 2, 1));
         expect(tester.takeException(), isNull);
-        final directory = Platform.environment['WELCOME_COMPOSER_RENDER_DIR'];
-        if (directory != null) {
-          await tester.runAsync(() async {
-            final boundary =
-                picture.currentContext!.findRenderObject()!
-                    as RenderRepaintBoundary;
-            final image = await boundary.toImage();
-            final bytes = await image.toByteData(
-              format: ui.ImageByteFormat.png,
-            );
-            await Directory(directory).create(recursive: true);
-            await File(
-              '$directory/welcome-${brightness.name}-${size.width.toInt()}.png',
-            ).writeAsBytes(bytes!.buffer.asUint8List());
-            image.dispose();
-          });
-        }
+        await capture(
+          tester,
+          'welcome-${brightness.name}-${size.width.toInt()}',
+        );
         await tester.ensureVisible(find.text('Continue the research'));
         expect(
           find.text('Continue the research').hitTestable(),
@@ -351,9 +397,78 @@ void main() {
           findsNothing,
         );
         expect(connection.starts, isEmpty);
+        if (scale == 1) {
+          app.machineStates['m']!.agents = [];
+          await tester.pumpWidget(const SizedBox());
+          await tester.pumpWidget(preview);
+          await tester.pumpAndSettle();
+          expect(find.byKey(const ValueKey('welcome-sessions')), findsNothing);
+          expect(
+            find.byKey(const ValueKey('workspace-status-bar')),
+            findsNothing,
+          );
+          expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+          await capture(tester, 'welcome-empty-${brightness.name}');
+        }
       });
     }
   }
+
+  testWidgets(
+    'native footer stays hidden on an empty tab and returns with work',
+    (tester) async {
+      await setup(tester, mac: true);
+      expect(updates.last['footerCovered'], isTrue);
+      expect(find.byKey(const ValueKey('workspace-status-bar')), findsNothing);
+      app.adoptSessionForTest(terminal('a0', []));
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(updates.last['footerCovered'], isFalse);
+      expect(
+        find.byKey(const ValueKey('workspace-status-bar')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'recent context follows status customization without another renderer',
+    (tester) async {
+      await setup(tester, withPane: true);
+      final prefs = appearancePrefsStore.value;
+      addTearDown(() => appearancePrefsStore.value = prefs);
+      app.newSwarm();
+      await tester.pumpAndSettle();
+      appearancePrefsStore.value = prefs.copyWith(
+        prompt: const PromptPrefs(statusStyle: StatusLineStyle.spaceship),
+      );
+      await tester.pumpAndSettle();
+      final recent = find.byKey(const ValueKey('welcome-sessions'));
+      final line = find.descendant(
+        of: recent,
+        matching: find.byType(StatusLine),
+      );
+      expect(line, findsOneWidget);
+      expect(
+        tester.widget<StatusLine>(line).parts.text,
+        'M2 in openharness on feature/login-redirect',
+      );
+      appearancePrefsStore.value = prefs.copyWith(
+        prompt: const PromptPrefs(
+          statusStyle: StatusLineStyle.pastelPowerline,
+          color: false,
+          machine: false,
+          branch: false,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final configured = tester.widget<StatusLine>(line);
+      expect(configured.parts.style, StatusLineStyle.pastelPowerline);
+      expect(configured.color, isFalse);
+      expect(configured.parts.text, 'openharness');
+      expect(connection.starts, isEmpty);
+    },
+  );
 
   testWidgets('native footer is covered for popup and restored on close', (
     tester,
@@ -362,6 +477,15 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     expect(tester.widget<NewHarnessForm>(form).embedded, isFalse);
+    final creationVeil = tester
+        .widget<ColoredBox>(
+          find.descendant(
+            of: find.byType(DesktopDialogBackdrop),
+            matching: find.byType(ColoredBox),
+          ),
+        )
+        .color;
+    expect(creationVeil, grid.AppDesktop.darkVeil);
     expect(updates.last['footerCovered'], isTrue);
     await tester.tap(find.byKey(const ValueKey('new-harness-close')));
     await tester.pumpAndSettle();
@@ -370,6 +494,17 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.pumpAndSettle();
     expect(updates.last['footerCovered'], isTrue);
+    expect(
+      tester
+          .widget<ColoredBox>(
+            find.descendant(
+              of: find.byType(DesktopDialogBackdrop),
+              matching: find.byType(ColoredBox),
+            ),
+          )
+          .color,
+      creationVeil,
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(updates.last['footerCovered'], isFalse);

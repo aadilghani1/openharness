@@ -35,10 +35,9 @@ Two WWDC sessions help translate these principles into a component system:
 - [Get to know the new design system, WWDC25](https://developer.apple.com/videos/play/wwdc2025/356/)
   describes shared component anatomy and consistent core interactions. For our
   pickers, this suggests stable positions for checkmarks, labels, and accessories.
-- [Modernize your AppKit app, WWDC26](https://developer.apple.com/videos/play/wwdc2026/289/)
-  connects keyboard navigation, restoration, and related corner geometry. Its
-  discussion of concentricity supports evaluating nested shapes together rather
-  than independently choosing a radius for each widget.
+- [Meet Liquid Glass, WWDC25](https://developer.apple.com/videos/play/wwdc2025/219/)
+  explains the material's functional role. In this Flutter implementation,
+  legibility over terminal output takes precedence over imitating that effect.
 
 Our interpretation: native behavior and clear content hierarchy matter more to
 this Flutter redesign than simulating every Liquid Glass effect. A visual
@@ -131,3 +130,52 @@ widget or coverage results do not establish native accessibility behavior.
 The existing friendly-desktop validation explicitly leaves physical AppKit IME
 and VoiceOver unverified. Keep those limitations visible until native review has
 actually been performed.
+
+## Second research pass: relationships before tokens
+
+Rechecked primary sources after the user challenged whether the first system
+was exceptional enough. The first document established consistency; that did
+not establish exceptional visual quality. There is no defensible objective
+ranking of a "best ever" design system, nor evidence that Jony Ive would endorse
+this particular interface.
+
+### Evidence examined
+
+- **Apple, Get to know the new design system, WWDC25:** read the transcript,
+  especially shape, structure and continuity. Apple explicitly distinguishes
+  compact rounded-rectangle controls from larger capsule controls on Mac.
+  Its spatial treatment ties secondary surfaces to their source. This supports
+  a hierarchy of related shapes, rather than giving every element an identical
+  pill. [Primary source](https://developer.apple.com/videos/play/wwdc2025/356/)
+- **Apple, Materials:** materials have functional roles. Our choice is a quiet,
+  legible floating panel; no claim of implementing native Liquid Glass.
+  [Primary source](https://developer.apple.com/design/human-interface-guidelines/materials)
+- **Things:** read the official feature account and visually inspected its
+  presented editor. A plain writing area is dominant; optional date/tag details
+  occupy a secondary edge. This is a product-page visual study, not a hands-on
+  usability test. [Primary source](https://culturedcode.com/things/features/)
+- **Raycast:** read the May 2026 engineering/design account and visually inspected
+  its interface montage. Compact labels, anchored menus and restrained controls
+  share a consistent density. Its stated native-quality criteria include
+  opening behavior and preventing clipped popovers or flicker. Our hand cursor
+  remains an explicit user preference, despite Raycast choosing otherwise.
+  [Primary source](https://www.raycast.com/blog/a-technical-deep-dive-into-the-new-raycast)
+- **Jony Ive's published design principle:** Apple's 2013 announcement quotes
+  his emphasis on "bringing order to complexity". Our interpretation is to
+  simplify structure, defaults and interaction before adding effects. It is
+  not a prediction of his present-day design choices.
+  [Primary source](https://www.apple.com/newsroom/2013/06/10Apple-Unveils-iOS-7/)
+
+### Changes this research calls for
+
+The canonical specification now starts with a design brief and explicit visual
+relationships before its measurements. Review must compare actual surfaces side
+by side. The task is the focal point; controls use a limited shared family;
+identity comes from real agent marks; depth explains ownership; behavior carries
+continuity. Dense terminal output remains visually independent.
+
+The review should reject an oversized empty search panel, nested decorative
+cards, redundant icons, competing selection treatments, inconsistent typography,
+weak text contrast, unstable focus or a lost draft even if each local component
+passes its tests. Any responsive adjustment must retain stable editor geometry
+and the existing controller's query, selection and preview state.

@@ -5,8 +5,10 @@
 /// themselves are `resting_model_words.dart`'s.
 library;
 
+
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -122,7 +124,7 @@ class _WakeRow extends StatelessWidget {
           SizedBox(
             width: _kWakeIconColumn,
             child: Icon(
-              Icons.visibility_outlined,
+              AppIcons.eye,
               size: _kWakeIconSize,
               color: DesktopChrome.muted,
             ),

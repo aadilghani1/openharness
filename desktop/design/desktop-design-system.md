@@ -1,199 +1,300 @@
 # Harness desktop design system
 
-The desktop is a welcoming Mac application around a real terminal workspace.
-People should be able to start, find, configure, and manage a harness without
-learning terminal notation or memorizing shortcuts. The terminal panes keep
-their character, density, colors, font preferences, and direct interaction.
+The canonical system for everything around terminal panes. This supersedes
+older BIOS, bracket-button and mixed desktop recipes. The experiment remains
+on `experiment/friendly-desktop`, unmerged. The user's latest direction is the
+authority: refine one system, then use it everywhere.
 
-This is the current presentation authority for the desktop experiment. It
-supersedes the BIOS, fixed-cell, plain-text-only, bracket-button, and universal
-monospace rules in earlier design documents. Keep the existing tabs, panes,
-creation, search, and resource-management workflows. This is a UI redesign,
-not authorization to change launch defaults, permissions, or data ownership.
-The branch remains unmerged until the user requests otherwise.
+## Character
 
-The [research record](macos-design-research.md) separates Apple guidance,
-observations of excellent Mac apps, and our own design choices. The choices
-below are Harness specifications, not claims of Apple approval.
+A calm, precise Mac workspace. Content supplies the personality: an agent's
+real mark, a session name, a useful preview. Surfaces organize; they do not
+compete. System typography, comfortable density, consistent optical alignment,
+quiet neutral controls and a deliberate blue selection are the visual language.
+No ornamental gradients, noisy borders, imitation terminal forms or gratuitous
+animation. Keep the live terminal, terminal font, status glyphs and native tabs.
 
-## The boundary
+The Spotlight references guide search hierarchy and recognizable identity.
+They are inspiration, not a claim of Apple authorship or pixel-identical AppKit.
 
-| Surface | Presentation |
+## The design brief
+
+Harness should feel like a precise, welcoming instrument for working with agents.
+The terminal is the working surface. Starting, finding and arranging work should
+feel effortless around it. Opening a picker should lower the amount the person
+has to think about; closing it should return them to exactly where they were.
+
+Our interpretation of Jony Ive's published emphasis on "bringing order to
+complexity" is to design these relationships before their decoration. It is not
+a prediction of what he or his team would make. See the
+[research and comparison record](macos-design-research.md) for primary sources.
+
+Five decisions give this system its character:
+
+1. **One focal point per surface.** The task in Cmd-N, the query and selected
+   result in Cmd-P, the name in Rename. Configuration stays visible but quiet.
+   Only the action that completes the task has a strong filled treatment.
+2. **Depth has a job.** The workspace, one floating task surface, and an anchored
+   child picker are distinct layers. A child menu stays attached to its source;
+   its parent loses active emphasis. Opaque content protects legibility over
+   busy terminals. Decorative glass, refraction and stacks of translucent cards
+   are not part of this implementation.
+3. **Content supplies identity.** Real agent marks and clear names carry color
+   and recognition. System symbols explain actions. Text needs no extra symbol
+   unless the symbol makes the action faster to recognize.
+4. **Proportion is deliberate.** A short form has a short reading line. The
+   space around a heading relates to the fields below it. Nested corners share
+   a rhythm. Controls keep their bounds through hover, focus and press.
+5. **Continuity is part of the finish.** Typing never moves its own field.
+   Search scopes preserve the query. Menus open at the expected edge, dismiss
+   one level at a time and return focus. Drafts survive dismissal. Immediate
+   feedback takes priority over a decorative transition.
+
+The benchmark is the relationship between surfaces, not a collection of good
+looking individual dialogs. Rename and Move Pane have different content but
+must clearly belong to the same application when viewed beside Cmd-N and Cmd-P.
+
+## Bringing order to machines, agents and models
+
+The interface follows the person's task, not the internal service architecture.
+Show each decision where it changes the outcome, and disclose the next level
+from the control that owns it.
+
+| Person's decision | Visible place | Relationship to preserve |
+| --- | --- | --- |
+| What should happen? | Prompt, then the terminal's work | The task remains the focal point |
+| Where is the project? | Project selector; machine inside its search row | A folder belongs to a machine; its path is not globally interchangeable |
+| Which agent or specialized harness? | Agent selector, with its real mark | A specialized harness can run with an agent framework: “Run Blender with” |
+| Which model and effort? | Model control and its options | Available models belong to the selected agent and connection |
+| What may it do? | Visible approvals control | Preserve the explicit setting; never hide a permission change behind styling |
+| How is the work isolated? | Worktree and branch together | Fresh main default, remembered worktree choice, reviewed draft kept intact |
+| Which work am I returning to? | Session name in tabs/search, with machine/project context when useful | Session identity stays stable when its model or activity changes |
+
+The footer describes the focused work. Creation controls describe the next
+launch. Search scopes describe the result set. Do not mix those contexts or repeat
+all machine, framework and model details in every row. Reveal extra context when
+names are ambiguous; full values remain available to accessibility and tooltips.
+
+## Reference decisions
+
+| Reference | What informs this system | Harness decision |
+| --- | --- | --- |
+| Apple Spotlight, including the user's references | Query first; recognizable identities; a clear selected row; secondary details separated from results | Compact scope pills, real agent marks, quiet toolbar, optional preview |
+| Apple design system and Materials guidance | Layout and grouping establish hierarchy; curvature relates to its container; materials separate functional layers | Shared surface anatomy and concentric geometry; legible neutral panels rather than a simulated Liquid Glass effect |
+| Things' task editor | Optional detail is available without competing with the task | A prompt-led composer with calm configuration and one completion action |
+| Raycast's official design/engineering account | Native quality includes placement, focus, opening behavior and responsiveness | Check interaction continuity alongside screenshots; keep the user's requested hand cursor as a deliberate Harness choice |
+
+Capsules are a deliberate part of Harness's requested control language, not a
+claim that every Mac control should be a capsule. Apple retains rounded
+rectangles for dense controls. Here, action buttons and scope/identity selectors
+use capsules; fields, result rows and compact icon targets use related rounded
+rectangles. Consistency means the same role looks and behaves the same everywhere.
+
+## One implementation
+
+`AppType` owns typography. `AppPalette` owns semantic colors. `AppDesktop` and
+`AppControl` own geometry, focus, selection and control dimensions. `AppMenu`
+owns floating surface colors. `buildAppTheme` applies those recipes to standard
+Flutter buttons, fields, menus and dialogs. `DesktopChrome` exposes the same
+values to creation, search and desktop presenters; it is not a second palette.
+
+`DesktopDialogSurface` frames every custom dialog and chooser.
+`DesktopDialogHeader` provides the shared title/dismiss anatomy.
+`DesktopPromptSurface` keeps form actions visible beneath scrolling content.
+`DesktopPill` is the selector/scope variant of the same control family.
+`AppMenuItem` is the ordinary context-menu row. Controllers, keymaps, pending
+receipts, transport state and persistence remain independent of presentation.
+
+Do not solve a local styling problem by inventing another button or palette.
+Use a named role below. If a new role is necessary, define it here and in shared
+tokens before adopting it at call sites.
+
+## Type and language
+
+| Role | System face, size, weight | Use |
+| --- | --- | --- |
+| Display | 28, semibold | Welcome or sign-in title |
+| Page title | 20, semibold | Settings or substantial detail page |
+| Dialog / section heading | 17, semibold, 1.3 line height | Rename Tab, Move Pane |
+| Body | 13–14, regular, 1.45 line height | Explanations and result names |
+| Control | 13, regular or medium, 1.25 line height | Buttons and menu choices |
+| Metadata | 12, regular, 1.35 line height | Context, counts, explanations |
+| Search / task editor | 17 / 15, regular | Cmd-P and Cmd-N |
+
+SF system typography on Apple platforms, system fallbacks elsewhere. Monospace
+is explicit for code, copyable technical identifiers and shortcut hints; it is
+not the default for navigation or session context. Terminal zoom never resizes
+app controls. Platform text scaling does, and controls grow rather than clip.
+
+Names before context. Buttons state the action: New Harness, Save, Cancel,
+Open Folder, New Folder, GitHub. Use short sentence-case instructions: Enter
+project name, Enter GitHub URL, Run Blender with. Standard named destinations
+retain their names, such as Harness Store and New Tab. Avoid repeated labels,
+internal state names, decorative punctuation and implementation details.
+
+## Color and state
+
+Use semantic light/dark tokens throughout. Floating surfaces share the same
+neutral material (`AppMenu.fill`); fields are one step inset, not another card.
+A hairline rim and soft shadow separate floating content from its background.
+Avoid repeatedly drawing cards inside a dialog.
+
+- Primary text is nearly white or nearly black. Metadata remains readable.
+- Blue filled capsules identify the primary action. Blue rows identify the
+  active keyboard/pointer choice; their labels and secondary text turn white.
+- A stored choice also has a checkmark. Focus and stored selection differ.
+- Ordinary controls use a faint neutral fill and one thin rim. Hover increases
+  the fill. Press increases it again. Focus has a stable 1.5-point blue boundary.
+- Destructive actions use the shared danger fill or semantic error ink.
+- Unavailable choices explain why and preserve useful previews. Disabled
+  controls do not show a hand cursor. Color is never the only status signal.
+- Increase Contrast strengthens boundaries. Reduce Motion removes optional
+  motion. Live terminal content is never blurred or scaled for decoration.
+
+The terminal's chosen color palette remains independent from UI focus blue.
+All modal veils share one 95% token: black in dark appearance, white in light.
+Cmd-N and Cmd-P must have exactly the same backdrop darkness, including coverage
+of the native footer. Popovers have no independent full-window veil.
+
+## Icons
+
+`AppIcons` owns one monochrome outline vocabulary: the regular (400) Lucide
+family with rounded ends and joins. Use its named constants, never raw Material
+icons, alternate stroke weights or text characters for app actions. A close
+button always uses `AppIcons.close`; plus, search, back, disclosure, folder,
+branch and check retain one silhouette everywhere.
+
+Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
+illustration. Center the drawing optically inside its role's target; icon-only
+controls retain a 32-point target and a descriptive tooltip/accessibility label.
+Use the surrounding text's semantic color. Hover changes emphasis or the shared
+control fill, never the symbol, weight or position. Disabled icons stay legible
+without suggesting an action. Agent, provider, service and product logos retain
+their recognizable artwork; welcome recents desaturate those marks to keep the
+composer primary.
+
+AppKit-owned menus and toolbar controls use regular monochrome SF Symbols with
+one shared sizing recipe, matching the system menus. Terminal text, user-chosen
+Powerline symbols, activity marks and companion artwork retain their meaning;
+they are content rather than competing app-control styles. Quantitative stars
+use `AppRatingStar`: one rounded outline with a proportional fill. Connection
+dots remain solid at their intended size; color is accompanied by status text.
+
+## Geometry
+
+| Role | Logical points |
 | --- | --- |
-| Terminal output, in-pane composer/find, code and logs | Terminal fonts, terminal colors, exact bytes and existing keyboard behavior |
-| Welcome, New Tab, Cmd-N, Cmd-P, menus, dropdowns, pickers, dialogs | System UI typography, real controls, deliberate spacing, semantic colors |
-| Settings, Store, setup, sharing, notifications, history | The same desktop system, with hierarchy suited to their content |
-| Tabs and pane headers | Preserve compact structure and established activity marks; app controls stay discoverable |
-| Footer context | Preserve focused machine/project/branch/PR and model/effort placement; keep user-selected status themes |
+| Spacing scale | 4, 8, 12, 16, 24 |
+| Dialog outer radius | 20 |
+| Popover outer radius | 16 |
+| Field / inset row radius | 10 |
+| Dialog content inset | 24 |
+| Group / control gap | 16 / 8 |
+| Menu inset | 6 |
+| Standard / compact control minimum height | 32 / 28 |
+| Standard field minimum height | 36 |
+| Inline icon / search identity mark | 16 / 28 |
+| Small form / destination chooser width | 460 |
+| Creation composer maximum width | 680 |
 
-Prefer actual platform services for windows, menus, file selection, clipboard,
-and accessibility. Shared Flutter surfaces implement the same interaction
-conventions on macOS and Linux. Do not describe a Flutter control as an AppKit
-control. Do not fork controllers or whole screens to achieve a visual effect.
+Primary and secondary action buttons and scope selectors are capsules. Text
+fields are rounded rectangles. Icon buttons have 32-point targets. Related
+corners are concentric: an inset row is less rounded than its enclosing panel.
+Widths describe content: agent 304, project 400, model 440, machine submenu 264;
+all clamp to the available window. Never stretch a short list to fill a page.
 
-## Hierarchy and space
+List anatomy is consistent: identity at left, name, optional useful secondary
+context, then a checkmark, shortcut or disclosure at right. Text baselines and
+accessory columns align. Specialized harness names need no marketing second
+line. Machine menus align to the project popover's top edge with an 8-point gap,
+then flip or constrain when the window has insufficient room.
 
-Use one obvious starting action, a readable content area, and quiet supporting
-information. A title describes the task; an action says what will happen.
-Secondary controls should be visible without competing with the content.
-Never turn every label into a pill or put a card inside another card just to
-create separation. Prefer alignment, whitespace, and a subtle divider.
+## Surface families
 
-Use a 4-point spacing rhythm: 4 for tightly related text, 8 between controls,
-12 within compact groups, 16 between groups, and 24 at a panel's outer edges.
-Small optical corrections are valid when verified at real scale. These are
-logical points, independent of terminal cells and terminal zoom.
+**Task dialogs** — one heading, optional short explanation, fields, and fixed
+trailing actions. Rename, confirmation, linking and sharing use the same type,
+frame, padding and control states. Content scrolls before actions disappear.
 
-| Role | Starting geometry |
-| --- | --- |
-| Compact toolbar/menu control | At least 28 high; content may grow |
-| Standard control | 32 high minimum; 10–14 horizontal inset |
-| Editable field | 36 high minimum; increase for text scaling |
-| Menu row | Natural content height plus 8 vertical inset on each side |
-| Small confirmation/rename | 440–480 maximum width; 20–24 outer inset |
-| Main composer | 680 maximum width, shared by popup and full-page entry |
-| Search | Content-led bounded width, existing list/preview split retained |
-| Window edge clearance | At least 16; 24 when space permits |
+**Pickers** — the same frame and header, inset result rows and a quiet footer
+with relevant keyboard hints. Move Pane uses a tab icon, destination name,
+harness count and optional number accelerator. Selection uses the same blue
+row treatment as search; no competing outlined selection card.
 
-Never lock a content block to a height that clips enlarged text, translated
-copy, a validation message, or a long resource name. Let the content scroll
-inside the window. Align the search text, list titles, and detail text; reserve
-icon slots so checkmarks and changing states do not move labels.
+**Cmd-P** — a prominent search field, separate compact scope pills, recognizable
+agent marks and clean results. Harnesses is the default scope. Preserve typed
+words when changing scope. Keep result selection stable through live updates.
+Details remain in the existing optional preview. No second search index or
+management implementation. Toolbar controls are secondary to the query. Keep
+the editor and footer stationary while results update; do not resize the panel
+on every keystroke or make short lists stretch their individual rows.
 
-## Typography
+**Cmd-N / New Tab** — one shared form and controller. Agent and project above
+the prompt; model, approvals and profile below; Worktree and branch together.
+The dialog is frameless over its veil. New Tab uses the same width on the page.
+Machine stays inside the repo search row.
 
-`AppType` owns the system type hierarchy. `DesktopChrome` supplies compact
-control, metadata, and heading roles. Use the platform system sans for titles,
-buttons, labels, text fields, descriptions, and navigation. Use semibold for
-hierarchy sparingly. Sentence case is the default. Avoid uppercase eyebrows,
-ASCII prompt marks, and decorative punctuation in normal app controls.
+**Welcome and New Tab hierarchy** — creation is primary. Show at most six recent
+sessions, separated from creation controls by 56 points. Use small desaturated
+agent marks, quiet session names, and “now” for visits under one minute old.
+Session context reuses `StatusLine`, honoring Customize Harness's style, color,
+machine/project/branch visibility and status font. It is never a second renderer
+with a hard-coded dot separator. A new user with no history sees the composer
+without an empty recents section; initial project guidance is neutral. Empty
+tabs hide the workspace footer, which returns when there is work to describe.
 
-Base sizes are 13 for controls and body, 12 for supporting metadata, 15–17 for
-section headings, 20 for page titles, and 28 only for a true display heading.
-The message composer remains 15 and search 17. Use comfortable line heights
-for prose and tighter ones for single-line controls. Respect accessibility
-text scaling; ordinary UI must not resize when the terminal zoom changes.
+Fresh forms focus the prompt and use the last explicit agent, project,
+approvals and worktree choices. Fresh branches default to main; reopening a
+draft preserves its selected branch. Enter submits except during composition.
+Escape and outside click dismiss the innermost picker first, then the dialog;
+they preserve its draft. Pending operations retain their existing close guards.
+Opening any form or preview must never start work.
 
-Use explicit monospace only when it makes the value easier to read: commands,
-paths, logs, identifiers, and the user's chosen terminal/status presentation.
-Do not use monospace just because a control is for a developer.
+**Focused workspace footer** — model and effort on the left; machine, project,
+branch and PR together at the right, following only the focused pane. Each
+context field keeps its existing action, including the branch/PR chooser.
+Titles stay quiet when several panes are visible; do not repeat branches in
+pane headers. The close icon retains its established hover interaction and
+right-edge position. Context and model honor Customize Harness's selected
+status face, fields, colors and shell/Powerline treatment. Recent-session
+context uses that same renderer, adapting unbacked ink only when needed for
+readability against a light or dark page. Companion and sharing controls sit
+between model and context without shifting either edge group unnecessarily.
 
-## Color, surfaces, and states
+**Settings, Store and supporting screens** — the same type, colors and controls
+at page scale. Related settings use grouping and whitespace. Existing artwork,
+terminal previews, native toolbar/footer components and domain-specific visuals
+retain their meaning. Read-only loading/error views use the same hierarchy.
 
-Use the existing `AppPalette` as the color source. Do not add a second palette
-in each feature. `DesktopChrome`, `AppMenu`, and the app theme derive their
-surfaces and control states from it. Shared controls support both appearances
-and are reviewed in light and dark fixtures; the desktop currently retains
-its existing dark appearance policy. This experiment does not add a mode switch.
+## Interaction and review
 
-Prefer a quiet opaque window surface and a subtly separated popover/dialog.
-Use a thin rim and restrained shadow only for floating layers. Preserve the
-approved Agent/Repo and Store capsules; standard controls use the shared shape
-for their role. Use related corner radii: 8 for small controls/rows, 12 for
-compact panels, and 16 for larger floating surfaces. These are starting
-tokens, not universal platform constants.
+Every clickable element has a hand cursor, every editor a text cursor. Standard
+editing, IME, keymap remaps, focus traversal and focus return remain intact.
+Opening a modal isolates the workspace and native footer in the accessibility
+tree. A late reply cannot restore a dismissed form or act on a different pane.
 
-Hover, press, keyboard focus, selection, disabled, and unavailable are distinct
-states. Hover gently lifts a control. Press is stronger. Focus has a visible
-accent boundary and must not move content. Selection retains its checkmark or
-selected state when focus arrives. Disabled controls do not advertise hover
-or activation. Increase Contrast strengthens essential boundaries. Status
-must remain understandable without color alone.
+Review actual system-font renders in both appearances, narrow/short windows,
+160–200% text, long names, empty/loading/error states, changed live data and
+Increase Contrast. Exercise mouse, keyboard, nested dismissal, drafts and
+composition. Use synthetic review data, not real agent launches or permissions.
+Inspect the rebuilt app; widget tests alone do not prove native VoiceOver or
+physical IME behavior. Record evidence and limitations in the migration ledger.
 
-Normal text should meet 4.5:1 contrast; essential control marks/focus should
-meet 3:1 against their adjacent surface. Measure the final composited colors,
-not an opacity value in isolation. Do not rely on shadows for focus.
+## Standard of finish
 
-## Controls and menus
+This specification establishes a direction, not an award or a quality score.
+The work is ready for visual review only when:
 
-Use real buttons, checkboxes, toggles, search fields, and menu items. A label
-such as `[ New Harness ]` or `[x] Worktree` is not a desktop control style.
-Keep concise labels and recognizable icons. A dropdown exposes its purpose
-through a label, useful icon, or disclosure indicator. Tooltips supplement
-visible meaning; they must not be the only explanation of an important choice.
+- Cmd-N, Cmd-P, Rename, Move Pane and an ordinary menu are reviewed together,
+  in both appearances, at normal desktop scale. None uses a competing recipe.
+- The first intended action is obvious without reading a paragraph. Secondary
+  settings are discoverable without turning the main surface into a dashboard.
+- Optical alignment, text baselines, icon weight, nested corners and empty space
+  hold up with short, long, missing and changing content.
+- Hover, focus, stored selection, unavailable and error states stay distinct;
+  small text remains readable. Enlarged text receives space instead of clipping.
+- Opening, typing, scope changes, child menus and dismissal feel continuous in
+  the running app. An attractive still image is insufficient evidence.
 
-Use one visually primary action per task. Cancel is clearly available; a
-destructive action names the affected object and never receives accidental
-default activation. Keep the existing confirmation policy and operation guards.
-Do not invent extra prompts as part of a visual redesign.
-
-Menus share row geometry, checkmark alignment, separators, surface, and focus.
-Use icons selectively, especially where repeated symbols add no meaning.
-Searchable choosers retain search focus, current selection, and scroll position
-when live data changes. Distinguish keyboard highlight from a saved choice.
-Show a short explanatory line when a choice changes approval or connection
-behavior. Keep full values available through accessibility and tooltips.
-
-## Creation and welcome
-
-Startup and New Tab use the same `NewHarnessForm` and `NewHarnessController`
-as Cmd-N, embedded at the same maximum width. The full-page entry has no modal
-frame or Close button. Recent sessions sit below the composer with enough
-context to distinguish similarly named work. No task starts merely by opening
-the page. Each empty tab preserves its own draft.
-
-The popup retains the user-approved 95% dark backdrop and explicit Close
-button; outside clicks and Escape do not discard the main form. Child pickers
-can close independently and return to the same draft. The backdrop covers the
-native footer as well as Flutter content. Do not apply this unusually strong
-backdrop to every unrelated popover or sheet.
-
-Agent and project lead above the message. Model, approvals, and profile remain
-compact and understandable below; Worktree and branch stay together. Keep the
-existing local default and machine selector inside the project search row.
-Use the current coding-agent-first order without changing the saved selection.
-Long branch names preserve their identifying suffix. Enter submits the message
-under the existing keymap and composition rules; the primary action remains
-New Harness. No Return glyph is printed on that button.
-
-## Search and navigation
-
-Cmd-P remains the shared searchable picker. Clear, clickable scope controls
-explain what is being searched. The empty-prefix scope is Harnesses, not All.
-Prefixes and keyboard shortcuts remain available as accelerators. Keep the
-same editor and list when the scope changes, with the preview optional.
-
-Results show recognizable identity and concise context. Names come first;
-supporting machine/project/branch text is secondary. Unavailable rows retain
-their preview and explain why they cannot open. Show authentic progress and
-errors in place, not invented status or unnecessary celebratory animation.
-
-Preserve navigation and management in the current right-hand preview. A live
-inventory update must not switch the resource being edited. Model Get, Use,
-and Stop remain distinct actions. Sharing and security-sensitive operations
-keep their existing scope, confirmation, and stale-response protections.
-
-## Interaction and accessibility
-
-Every primary workflow works with the pointer and keyboard. Show the hand
-cursor on clickable controls and the text cursor in editors. Shortcuts belong
-in menus or quiet hints; never require someone to learn them before starting.
-Use the live keymap, preserve standard text editing and input composition,
-and keep Enter/Space activation tied to the focused control.
-
-Focus stays within the active task and returns to its trigger on dismissal.
-Opening a dialog must not send a keystroke to an agent. Preserve drafts and
-pending operation receipts; a late response must not reopen a dismissed form
-or affect a different pane. Accessible names describe purpose, selection,
-value, availability, and result. Hidden native chrome must leave the AX tree.
-
-Motion is optional feedback, never a prerequisite to act. Typing, hover,
-selection, and keyboard navigation respond immediately. Small transitions
-may clarify a surface change after review; honor Reduce Motion, avoid scaling
-live terminal content, and avoid continuous decorative motion outside the
-established working-state glyphs.
-
-## Verification and completion
-
-Review at real desktop size in light/dark, narrow windows, 160% text, long
-names, empty/loading/error states, and changed live data. Exercise pointer,
-keyboard-only navigation, IME composition, draft recovery, and focus return.
-Use synthetic data for saved screenshots. Inspect actual renders after
-building; passing widget tests alone does not establish visual quality or
-physical native IME/VoiceOver behavior.
-
-Track the whole migration in [desktop-ui-migration.md](desktop-ui-migration.md).
-Retain relevant behavioral tests while replacing assertions that enforce
-retired terminal presentation. Validate shared form/controller coverage where
-required. Do not call the whole redesign complete until every listed surface
-has been reviewed in the running app and its remaining issues resolved.
+Remaining defects and unverified platform behavior belong in the review ledger.
+Do not describe the implementation as flawless, Apple's design, or the best Mac
+design system. Let the functioning app and the user's review establish its quality.

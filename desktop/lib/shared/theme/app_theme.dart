@@ -248,8 +248,7 @@ abstract final class AppPalette {
   /// row, still plainly the same indigo. [accent] can't simply take this value:
   /// it is the fill under white text in ~100 places, and lightening it there
   /// would drop that text to ~3.1:1 — fixing the icon by breaking the buttons.
-  static Color get accentOnSurface =>
-      AppTheme.pick(const Color(0xFF2F5BEA), AppTheme.palette.value.accent);
+  static Color get accentOnSurface => AppDesktop.focus;
 
   // avatar fill (white text on it); a touch brighter in dark for contrast.
   static Color get accentMuted =>
@@ -707,7 +706,7 @@ abstract final class AppGlass {
 /// use [styleFor] and the consts; everywhere else use [style] and the getters.
 abstract final class AppMenu {
   static const Color fillLight = Color(0xFFFFFFFF);
-  static const Color fillDark = Color(0xFF2A2A2A);
+  static const Color fillDark = Color(0xFF262626);
   static Color get fill => AppTheme.pick(fillLight, fillDark);
 
   /// The panel's rim — the same hairline [AppGlass.hair] resolves to, stated as
@@ -716,10 +715,8 @@ abstract final class AppMenu {
   static const Color rimDark = Color(0x1FFFFFFF);
   static Color get rim => AppTheme.pick(rimLight, rimDark);
 
-  /// A menu panel's rounding. On the §3 ladder this is the *panel* step (10),
-  /// one below a content card (12) and above the rows inside it (8) — a child is
-  /// never rounder than its parent.
-  static const double panelRadius = 10;
+  /// Menu frame and inset rows follow the same concentric geometry.
+  static const double panelRadius = AppDesktop.menuRadius;
 
   /// Deeper than Material's menu default (8): this panel opens over chrome that
   /// already carries a lift of its own, and at 8 it reads as lying *on* that
@@ -930,9 +927,7 @@ ThemeData buildAppTheme({
   // both were `#1E1E1E`, which is [AppCard.base] — a content card's colour, one
   // step *below* the block it was supposed to be.
   final panelFill = isDark ? AppMenu.fillDark : AppMenu.fillLight;
-  final dialogFill = isDark
-      ? AppTheme.palette.value.card
-      : const Color(0xFFFFFFFF);
+  final dialogFill = panelFill;
   final textTheme = _appTextTheme(scheme.onSurface, scheme.onSurfaceVariant);
 
   return ThemeData(
@@ -1070,7 +1065,7 @@ ThemeData buildAppTheme({
             color:
                 !states.contains(WidgetState.disabled) &&
                     states.contains(WidgetState.focused)
-                ? (isDark ? const Color(0xFF6E8BFF) : scheme.primary)
+                ? (isDark ? AppDesktop.focusDark : scheme.primary)
                 : Colors.transparent,
           ),
         ),
@@ -1144,7 +1139,7 @@ ThemeData buildAppTheme({
       border: _fieldBorder(scheme.outline),
       enabledBorder: _fieldBorder(scheme.outline),
       focusedBorder: _fieldBorder(
-        isDark ? const Color(0xFF6E8BFF) : scheme.primary,
+        isDark ? AppDesktop.focusDark : scheme.primary,
         width: highContrast ? 2 : 1.5,
       ),
       errorBorder: _fieldBorder(scheme.error),
@@ -1172,6 +1167,39 @@ ThemeData buildAppTheme({
     // point: a MenuAnchor that forgets to pass a style used to fall back to a
     // rimless panel, which is the bug the hand-written style existed to fix.
     menuTheme: MenuThemeData(style: AppMenu.styleFor(isDark: isDark)),
+    menuButtonTheme: MenuButtonThemeData(
+      style: ButtonStyle(
+        textStyle: WidgetStatePropertyAll(AppType.body(height: 1.25)),
+        minimumSize: const WidgetStatePropertyAll(Size(0, AppControl.height)),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
+          ),
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? scheme.onSurface.withValues(alpha: .38)
+              : states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)
+              ? AppDesktop.onSelection
+              : scheme.onSurface,
+        ),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) =>
+              !states.contains(WidgetState.disabled) &&
+                  (states.contains(WidgetState.hovered) ||
+                      states.contains(WidgetState.focused))
+              ? AppDesktop.selection
+              : Colors.transparent,
+        ),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+        mouseCursor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? SystemMouseCursors.basic
+              : SystemMouseCursors.click,
+        ),
+      ),
+    ),
     // An ExpansionTile defaults `backgroundColor` (expanded) and
     // `collapsedBackgroundColor` to *different* values and cross-fades between
     // them, so opening one flashes a tint over whatever surface it sits on. Our
@@ -1186,17 +1214,14 @@ ThemeData buildAppTheme({
       collapsedShape: Border(),
     ),
     dialogTheme: DialogThemeData(
-      // The raised block's own fill, not a menu's and not a card's. §9.3: a
-      // dialog that takes `windowBg` merges with the page, and one that takes
-      // [AppCard.base] sits a step under the block it is supposed to *be* —
-      // both invisible in light, both plain in dark.
+      // Standard Dialog and custom DesktopDialogSurface use one frame recipe.
       backgroundColor: dialogFill,
       surfaceTintColor: Colors.transparent,
-      // The card radius, not a number of its own. This was 18 — the iOS
-      // action-sheet curve, and the app's cards had already come down to 12 for
-      // macOS without the dialogs following.
+      elevation: AppDesktop.dialogElevation,
+      shadowColor: AppDesktop.shadow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppCard.radius),
+        borderRadius: BorderRadius.circular(AppDesktop.dialogRadius),
+        side: BorderSide(color: isDark ? AppMenu.rimDark : AppMenu.rimLight),
       ),
       titleTextStyle: AppType.heading(color: scheme.onSurface),
       contentTextStyle: AppType.body(color: scheme.onSurface),
@@ -1212,7 +1237,7 @@ ThemeData buildAppTheme({
     // Resolved from `isDark` rather than read off the getter — see the note at
     // `scrollbarTheme`.
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: isDark ? const Color(0xFF6E8BFF) : const Color(0xFF2F5BEA),
+      color: isDark ? AppDesktop.focusDark : const Color(0xFF2F5BEA),
       linearTrackColor: scheme.outline,
     ),
     snackBarTheme: SnackBarThemeData(
@@ -1231,11 +1256,8 @@ ThemeData buildAppTheme({
 
 /// The one set of numbers every button in the app is built from.
 ///
-/// macOS controls are compact, squarish and quiet: a 13pt semibold label in a
-/// ~32px capsule with a small radius — not the tall, wide, fully-round buttons
-/// Material defaults to. Before this existed each call site invented its own,
-/// which is how the app ended up with seven button heights, three shape systems
-/// and six label sizes. Change a number here, not at a call site.
+/// Shared desktop controls: 13-point system labels, 32-point capsule buttons,
+/// and softly rounded fields. Change geometry here, not in individual dialogs.
 abstract final class AppControl {
   /// Standard control height. macOS's regular push button sits at 32; the app's
   /// own most-used value was 34, and 32 reads correctly next to a 13pt label.
@@ -1254,14 +1276,11 @@ abstract final class AppControl {
   /// one.
   static const double heightField = 36;
 
-  /// Corner radius. Apple's push buttons are gently rounded, not stadium — a
-  /// pill reads as a "chip" on macOS, not as a button.
-  static const double radius = 8;
+  /// Text-field radius. Action buttons use the shared capsule shape.
+  static const double radius = AppDesktop.fieldRadius;
 
-  /// A menu/popover's rounding. Tighter than a button's: macOS menus are nearly
-  /// square-cornered, and rounding one like an iOS action sheet is one of the
-  /// louder tells that a desktop app was drawn to phone conventions.
-  static const double menuRadius = 6;
+  /// Menu/popover radius, shared with custom desktop choosers.
+  static const double menuRadius = AppDesktop.menuRadius;
 
   /// The air between a menu panel and the control it hangs off.
   ///
@@ -1339,6 +1358,41 @@ abstract final class AppControl {
 
   static EdgeInsets get paddingSmallScaled =>
       EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
+}
+
+/// The desktop's geometry and interaction tokens. Dialogs, menu anchors, search,
+/// creation and ordinary themed controls all resolve through this one recipe.
+/// Terminal geometry and the user's terminal palette remain independent.
+abstract final class AppDesktop {
+  static const double dialogRadius = 20;
+  static const double dialogElevation = 16;
+  static const Color shadow = Color(0x3D000000);
+  static const double menuRadius = 16;
+  static const double rowRadius = 10;
+  static const double fieldRadius = 10;
+  static const double panelPadding = 24;
+  static const double groupGap = 16;
+  static const double controlGap = 8;
+  static const double menuInset = 6;
+  static const double iconSize = 16;
+  static const double identitySize = 28;
+  static const double formWidth = 460;
+  static const double focusWidth = 1.5;
+
+  static Color get surface => AppMenu.fill;
+  static Color get rim => AppMenu.rim;
+  static Color get field =>
+      AppTheme.pick(const Color(0xFFF2F2F4), const Color(0xFF303030));
+  static const Color focusDark = Color(0xFF8BA9FF);
+  static Color get focus => AppTheme.pick(AppPalette.accent, focusDark);
+  static Color get selection => AppPalette.accent;
+  static const Color onSelection = Colors.white;
+  static const Color selectionDetail = Color(0xEBFFFFFF);
+
+  static const darkVeil = Color(0xF2000000);
+  static const lightVeil = Color(0xF2FFFFFF);
+  static Color veil(Brightness brightness) =>
+      brightness == Brightness.dark ? darkVeil : lightVeil;
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so
@@ -1429,7 +1483,7 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
 /// **not** inherit `fontFamily` from the text theme, so a button must receive
 /// the UI font explicitly.
 TextStyle get _buttonTextStyle =>
-    AppType.body(fontWeight: AppControl.fontWeight);
+    AppType.body(fontWeight: AppControl.fontWeight, height: 1.25);
 
 /// Ordinary form fields use the system UI face. Code, paths, credentials,
 /// and terminal editors opt into their explicit monospace styles.
@@ -1485,6 +1539,7 @@ ButtonStyle _filledButtonStyle(
   // that leaves a 32px button floating in a 48px box and wrecks every row it
   // sits in.
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
   visualDensity: VisualDensity.standard,
   // Its own wash, not [AppSurface.hoverFill]: this button already carries the
   // accent as a FILL, so the hover has to read against that rather than against
@@ -1508,6 +1563,7 @@ ButtonStyle _outlinedButtonStyle(
   backgroundColor: scheme.onSurface.withValues(alpha: .04),
   foregroundColor: scheme.onSurface,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
   visualDensity: VisualDensity.standard,
 ).copyWith(side: _controlRim(scheme, highContrast: highContrast));
 
@@ -1525,6 +1581,7 @@ ButtonStyle _textButtonStyle(
   shape: _buttonShape,
   textStyle: _buttonTextStyle,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
   visualDensity: VisualDensity.standard,
   // ⚠️ Without this a text button has NO hover state at all.
   //
@@ -1556,7 +1613,7 @@ WidgetStateProperty<BorderSide> _controlRim(
         ? filled
               ? scheme.onPrimary
               : scheme.brightness == Brightness.dark
-              ? const Color(0xFF6E8BFF)
+              ? AppDesktop.focusDark
               : scheme.primary
         : filled
         ? Colors.transparent
@@ -1565,7 +1622,7 @@ WidgetStateProperty<BorderSide> _controlRim(
                 ? .06
                 : highContrast
                 ? .6
-                : .14,
+                : .09,
           ),
   );
 });

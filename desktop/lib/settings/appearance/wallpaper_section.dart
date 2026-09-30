@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
@@ -108,7 +109,7 @@ class WallpaperSection extends StatelessWidget {
                                                 right: 8,
                                                 bottom: 8,
                                                 child: Icon(
-                                                  Icons.check_circle,
+                                                  AppIcons.circleCheck,
                                                   color: Colors.white,
                                                   size: 20,
                                                 ),

@@ -7,17 +7,16 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/app_theme.dart';
+
 /// Dialogs do not blur the live workspace by default.
 const double kDialogVeilBlur = 0;
 
-/// Default dark backdrop; the framed desktop dialog uses a lighter veil in
-/// light appearance. Cmd-N retains its separately approved 95% backdrop.
-const Color kDialogVeilTint = Color(0x85000000);
+/// Every modal uses the same 95% veil, including Cmd-N and Cmd-P.
+const Color kDialogVeilTint = AppDesktop.darkVeil;
 
 Color dialogVeilTintOf(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark
-    ? kDialogVeilTint
-    : const Color(0x33000000);
+    AppDesktop.veil(Theme.of(context).brightness);
 
 /// The app's dialog barrier: a flat tint and the active surface.
 ///

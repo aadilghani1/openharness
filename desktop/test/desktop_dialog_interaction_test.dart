@@ -187,7 +187,7 @@ Future<void> _new(WidgetTester tester) async {
   await tester.pumpAndSettle();
   expect(_form, findsOneWidget);
   // These journeys start from the visible editor. The launch-entry suite
-  // independently verifies the empty dialog's initial New harness focus.
+  // independently verifies the empty dialog's initial prompt focus.
   await _tabTo(tester, _task);
 }
 
@@ -557,7 +557,7 @@ void main({bool nativeSmoke = false}) {
   }
 
   for (final dismissal in ['Escape', 'outside click']) {
-    journey('composer ignores $dismissal and resumes its task after Close', (
+    journey('composer closes on $dismissal and restores its draft on reopen', (
       tester,
     ) async {
       await _mount(tester);
@@ -570,10 +570,6 @@ void main({bool nativeSmoke = false}) {
         await tester.tapAt(const Offset(10, 400));
         await tester.pump();
       }
-      expect(_form, findsOneWidget);
-      expect(_box(tester).task, task);
-      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-      await tester.pump();
       expect(_form, findsNothing);
       await _new(tester);
       expect(_box(tester).task, task);
@@ -819,9 +815,6 @@ void main({bool nativeSmoke = false}) {
     expect(_form, findsOneWidget);
     expect(box.task, 'Native menu and keyboard should agree');
     await key(tester, LogicalKeyboardKey.keyG, ctrl: true);
-    expect(_form, findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-    await tester.pump();
     expect(_form, findsNothing);
     expect(workspace.starts, isEmpty);
   });

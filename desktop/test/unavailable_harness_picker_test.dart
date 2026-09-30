@@ -204,7 +204,7 @@ void main() {
           ),
         ),
       );
-      expect(title.style.color, DesktopChrome.muted);
+      expect(title.style.color, DesktopChrome.selectionDetail);
       expect(find.textContaining('No room'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
       await key(tester, LogicalKeyboardKey.enter, cmd: true);

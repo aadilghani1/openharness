@@ -11,7 +11,7 @@ class DesktopPromptSurface extends StatelessWidget {
     required this.body,
     required this.actions,
     this.footer,
-    this.width = 480,
+    this.width = grid.AppDesktop.formWidth,
   });
 
   /// Normally a scroll view, with its controller owned by the calling form.

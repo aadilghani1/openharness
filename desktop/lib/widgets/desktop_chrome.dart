@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -12,20 +13,24 @@ class DesktopChrome extends InheritedWidget {
 
   static Color get foreground => grid.AppPalette.textPrimary;
   static Color get muted => grid.AppPalette.textSecondary;
-  static Color get surface => grid.AppPalette.cardBg;
-  static Color get rim => foreground.withValues(alpha: .13);
-  static Color get field =>
-      Color.alphaBlend(foreground.withValues(alpha: .035), surface);
+  static Color get surface => grid.AppDesktop.surface;
+  static Color get rim => grid.AppDesktop.rim;
+  static Color get field => grid.AppDesktop.field;
   static Color get accent => grid.AppPalette.accentOnSurface;
-  static Color get selection => accent.withValues(alpha: .16);
-  static Color get focusRing => accent.withValues(alpha: .75);
-  static const dialogRadius = 16.0;
-  static const controlRadius = 8.0;
-  static const panelPadding = 24.0;
-  static const groupGap = 16.0;
-  static const controlGap = 8.0;
-  static const controlHeight = 32.0;
-  static const compactControlHeight = 28.0;
+  static Color get selection => accent.withValues(alpha: .14);
+  static Color get activeSelection => grid.AppDesktop.selection;
+  static Color get onSelection => grid.AppDesktop.onSelection;
+  static Color get selectionDetail => grid.AppDesktop.selectionDetail;
+  static Color get focusRing => grid.AppDesktop.focus;
+  static const dialogRadius = grid.AppDesktop.dialogRadius;
+  static const menuRadius = grid.AppDesktop.menuRadius;
+  static const rowRadius = grid.AppDesktop.rowRadius;
+  static const controlRadius = grid.AppDesktop.fieldRadius;
+  static const panelPadding = grid.AppDesktop.panelPadding;
+  static const groupGap = grid.AppDesktop.groupGap;
+  static const controlGap = grid.AppDesktop.controlGap;
+  static const controlHeight = grid.AppControl.height;
+  static const compactControlHeight = grid.AppControl.heightSmall;
   static TextStyle text({
     Color? color,
     double size = 14,
@@ -42,7 +47,7 @@ class DesktopChrome extends InheritedWidget {
   static TextStyle metadata({Color? color}) =>
       text(color: color ?? muted, size: 12, height: 1.35);
   static TextStyle heading({Color? color}) =>
-      text(color: color, size: 17, medium: true, height: 1.3);
+      grid.AppType.heading(color: color ?? foreground, height: 1.3);
 
   static OutlinedBorder shape({double radius = dialogRadius}) =>
       RoundedRectangleBorder(
@@ -61,7 +66,7 @@ class DesktopDialogSurface extends StatelessWidget {
     super.key,
     required this.child,
     this.radius = DesktopChrome.dialogRadius,
-    this.elevation = 16,
+    this.elevation = grid.AppDesktop.dialogElevation,
   });
 
   final Widget child;
@@ -75,7 +80,7 @@ class DesktopDialogSurface extends StatelessWidget {
       color: DesktopChrome.surface,
       surfaceTintColor: Colors.transparent,
       elevation: elevation,
-      shadowColor: Colors.black.withValues(alpha: .24),
+      shadowColor: grid.AppDesktop.shadow,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius),
         side: BorderSide(
@@ -91,14 +96,9 @@ class DesktopDialogSurface extends StatelessWidget {
 }
 
 class DesktopDialogBackdrop extends StatelessWidget {
-  const DesktopDialogBackdrop({
-    super.key,
-    required this.onDismiss,
-    this.frameless = false,
-  });
+  const DesktopDialogBackdrop({super.key, required this.onDismiss});
 
   final VoidCallback onDismiss;
-  final bool frameless;
 
   @override
   Widget build(BuildContext context) => BlockSemantics(
@@ -106,16 +106,7 @@ class DesktopDialogBackdrop extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onDismiss,
       child: ColoredBox(
-        color: frameless
-            ? (Theme.of(context).brightness == Brightness.dark
-                      ? Colors.black
-                      : Colors.white)
-                  .withValues(alpha: .95)
-            : Colors.black.withValues(
-                alpha: Theme.of(context).brightness == Brightness.dark
-                    ? .76
-                    : .40,
-              ),
+        color: grid.AppDesktop.veil(Theme.of(context).brightness),
       ),
     ),
   );
@@ -139,10 +130,11 @@ class DesktopPill extends StatelessWidget {
     this.foregroundColor,
     this.compact = false,
     this.quiet = false,
-    this.capsule = false,
+    this.capsule = true,
     this.textSize = 13,
     this.truncateFromStart = false,
-    this.menuIcon = Icons.keyboard_arrow_down_rounded,
+    this.menuIcon = AppIcons.chevronDown,
+    this.highlightFocus = false,
   });
 
   final String label;
@@ -161,6 +153,7 @@ class DesktopPill extends StatelessWidget {
   final double textSize;
   final bool truncateFromStart;
   final IconData menuIcon;
+  final bool highlightFocus;
 
   @override
   Widget build(BuildContext context) {
@@ -200,17 +193,17 @@ class DesktopPill extends StatelessWidget {
                 capsule ? 20 : DesktopChrome.controlRadius,
               ),
             ),
-            textStyle: DesktopChrome.text(size: textSize),
+            textStyle: DesktopChrome.text(size: textSize, height: 1.25),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             splashFactory: NoSplash.splashFactory,
           ).copyWith(
             side: WidgetStateProperty.resolveWith(
               (states) => BorderSide(
                 // Reserve the same rim in every state; focus never moves text.
-                width: 1.5,
+                width: grid.AppDesktop.focusWidth,
                 color: states.contains(WidgetState.disabled)
                     ? Colors.transparent
-                    : states.contains(WidgetState.focused)
+                    : states.contains(WidgetState.focused) || highlightFocus
                     ? (highContrast
                           ? DesktopChrome.accent
                           : DesktopChrome.focusRing)
@@ -218,7 +211,7 @@ class DesktopPill extends StatelessWidget {
                     ? Colors.transparent
                     : highContrast
                     ? ink.withValues(alpha: .45)
-                    : DesktopChrome.rim,
+                    : ink.withValues(alpha: .09),
               ),
             ),
             backgroundColor: WidgetStateProperty.resolveWith(
@@ -276,6 +269,60 @@ class DesktopPill extends StatelessWidget {
         ? control
         : Tooltip(message: tooltip!, child: control);
   }
+}
+
+/// The same heading and dismiss control for every list or task dialog.
+/// A form can omit Close when its Cancel action already provides dismissal.
+class DesktopDialogHeader extends StatelessWidget {
+  const DesktopDialogHeader({
+    super.key,
+    required this.title,
+    this.detail,
+    this.onClose,
+    this.padding = const EdgeInsets.fromLTRB(24, 24, 16, 16),
+  });
+
+  final String title;
+  final String? detail;
+  final VoidCallback? onClose;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: padding,
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Semantics(
+                header: true,
+                child: Text(title, style: DesktopChrome.heading()),
+              ),
+              if (detail != null) ...[
+                const SizedBox(height: 4),
+                Text(detail!, style: DesktopChrome.metadata()),
+              ],
+            ],
+          ),
+        ),
+        if (onClose != null) ...[
+          const SizedBox(width: 12),
+          IconButton(
+            tooltip: 'Close',
+            onPressed: onClose,
+            icon: const Icon(AppIcons.close, size: 16),
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            padding: const EdgeInsets.all(8),
+            visualDensity: VisualDensity.standard,
+          ),
+        ],
+      ],
+    ),
+  );
 }
 
 /// Keep the identifying end of a branch name without reversing its text

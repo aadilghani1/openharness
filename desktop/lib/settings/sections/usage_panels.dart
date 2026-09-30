@@ -6,8 +6,9 @@
 /// handed — none reads a store — so the pane can be driven from a fixture.
 library;
 
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/skeleton.dart';
@@ -79,17 +80,17 @@ class StatsSummaryCards extends StatelessWidget {
       UsageStatCard(
         label: 'Agents spawned',
         value: '${summary.agentsSpawned}',
-        icon: LucideIcons.bot300,
+        icon: AppIcons.bot,
       ),
       UsageStatCard(
         label: 'Time agents worked',
         value: formatWorkedTime(summary.timeWorked),
-        icon: LucideIcons.clock300,
+        icon: AppIcons.clock,
       ),
       UsageStatCard(
         label: 'Turns',
         value: '${summary.turns}',
-        icon: LucideIcons.messagesSquare300,
+        icon: AppIcons.messagesSquare,
       ),
     ];
     return Column(
@@ -735,7 +736,7 @@ class UsageEmptyState extends StatelessWidget {
           Row(
             children: [
               Icon(
-                LucideIcons.chartNoAxesColumn300,
+                AppIcons.chartNoAxesColumn,
                 size: 15,
                 color: AppPalette.textFaint,
               ),

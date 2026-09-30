@@ -11,14 +11,15 @@ the composer, without a modal frame or Close button. Opening the page or dialog
 never starts a harness; New Harness submits the reviewed draft.
 
 Agent and Repo selectors sit above the message. Model, Approvals, applicable
-Profile, Worktree, and Branch remain visible below it. An empty draft initially
-focuses New Harness; a restored message focuses its editor. In the message,
+Profile, Worktree, and Branch remain visible below it. Fresh and restored task
+drafts focus the prompt. Terminal, which takes no task, focuses New Harness. In the message,
 Enter submits and Shift-Enter inserts a newline, respecting composition and the
 active keymap. Tab/Shift-Tab traverse the visible controls. Arrow keys navigate
 an open chooser. Accepting or cancelling returns focus to its originating control.
 
-The main popup closes only with its X; outside clicks and Escape close a child
-chooser first and never discard the main draft. The popup's 95% dark backdrop
+Outside clicks and Escape close the innermost child picker first, then the main
+popup. The X directly closes the popup. Dismissal preserves its draft; unresolved
+launch receipts retain their close guards. The popup's 95% dark backdrop
 covers the native footer. The full-page entry retains its per-tab draft when
 switching tabs. Choosers use system typography, normal controls, a search field,
 natural row heights, and bounded scrolling.
@@ -36,9 +37,9 @@ Opening, searching, and cancelling never send input to an existing harness.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
-| Cmd-T, then Cmd-N | Last successful agent, local machine, last project on that machine | The blank tab opened by Cmd-T |
-| Cmd-Shift-P → New Harness | Last successful agent, local machine, last project on that machine | Current tab |
-| Cmd-N or the New Harness command | Last successful agent, local machine, last project on that machine; retain explicit task and destination | Current tab unless its source requests a new tab |
+| Cmd-T, then Cmd-N | Last explicit agent, local machine, last selected project on that machine | The blank tab opened by Cmd-T |
+| Cmd-Shift-P → New Harness | Last explicit agent, local machine, last selected project on that machine | Current tab |
+| Cmd-N or the New Harness command | Last explicit agent, local machine, last selected project on that machine; retain explicit task and destination | Current tab unless its source requests a new tab |
 | Explicit pane split | Focused pane's defaults | Requested split in that tab |
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
 | Store Resume Harness | Existing harness and its machine; choose from a menu when several match | Focus its existing tab or reopen a view of the same harness |
@@ -82,9 +83,12 @@ Machine changes re-evaluate compatibility and never silently substitute at
 launch. The installed package's compatibility takes precedence over a newer
 catalog listing.
 
-The existing local state store retains separate engine and harness recents and
-the last successful engine per harness. Legacy preference keys and the app data
-directory stay in place. Fresh forms use successful launches, not canceled edits.
+The existing local state store retains separate engine and harness use recents.
+Explicit desktop agent/harness choices become defaults immediately without
+pretending a launch happened or changing use-recency order. The compatible
+agent chosen for a harness is remembered too. Explicit folder choices are saved
+after Git discovery canonicalizes linked worktrees to their repository. Legacy
+preference keys and the app data directory stay in place.
 On the desktop experiment, approvals separately remember the last explicit
 selection for each agent. Worktree remembers the last explicit toggle for each
 project on each machine, even when the form is later dismissed. Unsupported
@@ -142,8 +146,9 @@ in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent
 projects.
 
-**Branch** starts on `main` (local, or `origin/main`) with Worktree on, and on the
-folder's own branch after the user turns Worktree off. Missing `main` requires
+**Branch** starts on `main` for a fresh desktop form. With Worktree on, local
+`main` or `origin/main` can supply the base. With Worktree off, it must be a local
+branch; a remote-only `main` requires an explicit local branch choice. Missing `main` requires
 an explicit branch choice; a failed worktree creation never silently turns
 Worktree off. Branch does not follow the pane New Harness was opened from:
 New Harness is new work, and another agent's branch is one pick away. The start
@@ -183,8 +188,8 @@ A picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
 repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
-With **No**, **Branch** is the branch the folder itself is on; only local
-branches are selectable. A branch with a worktree of its own opens there.
+With **No**, **Branch** selects the local checkout branch, initially `main` for
+fresh desktop work. Only local branches are selectable. A branch with a worktree of its own opens there.
 Typing a name no branch has offers **Create branch**:
 a new branch from the folder's branch, keeping its uncommitted changes.
 Switching or creating needs no harness working in the folder, and switching
@@ -207,8 +212,11 @@ worktree: the retry selects that worktree's branch with Worktree off.
 
 - Workspace drafts belong to their original machine, focused source harness,
   and project context. A different focused harness does not inherit their edits.
-- Fresh Cmd-N and Cmd-Shift-P creation use the same successful-launch defaults.
+- Fresh Cmd-N and Cmd-Shift-P creation use the same remembered explicit choices.
   The current tab controls placement; a saved draft cannot redirect it to an old destination.
+- Draft identity uses the original source context, not the remembered project
+  subsequently changed by editing that draft. Reopening cannot lose the task
+  because the person's latest choice became a new default.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
 - Closing Cmd-N keeps its draft for that context. Explicit Store entries can

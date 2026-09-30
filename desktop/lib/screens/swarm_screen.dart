@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart'
     show ValueListenable, kIsWeb, listEquals;
@@ -10,7 +11,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../core/runtime_platform.dart';
@@ -438,7 +438,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           if (app.localMachineState == null)
                             DesktopPill(
                               label: 'Choose a machine',
-                              icon: Icons.computer_outlined,
+                              icon: AppIcons.monitor,
                               onPressed: () => unawaited(_openMachines()),
                             ),
                           if (recent != null) ...[
@@ -1085,7 +1085,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 IconButton(
                                   tooltip: 'Close',
                                   onPressed: () => Navigator.pop(context),
-                                  icon: const Icon(Icons.close, size: 18),
+                                  icon: const Icon(AppIcons.close, size: 18),
                                 ),
                               ],
                             ),
@@ -1699,6 +1699,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'agentId': focused.agentId,
             },
       'footerCovered':
+          !_showWorkspaceFooter ||
           (!_routeIsCurrent && !_footerPreviewCurrent) ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
@@ -2512,7 +2513,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Future<void> _showCustomizePane() => showHarnessCustomizePane(
     context,
-    bottomInset: _native ? _statusBarHeight : 0,
+    bottomInset: _native
+        ? workspaceBarControlHeight(context) + kWorkspaceInset
+        : 0,
     onCurrentChanged: _footerPreviewChanged,
   );
 
@@ -2715,7 +2718,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
             machineId: id,
             requestedEngine: engine,
             sourceAgentId: draftSource?.agentId,
-            folder: initialFolder,
+            // Remembered defaults may change while this draft is dismissed.
+            // Only an explicitly requested folder defines its ownership.
+            folder: folder ?? paneProject?.cwd,
             projectName: projectName,
             welcomeTabId: embedded ? target : null,
           ),
@@ -2909,7 +2914,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     Positioned.fill(
                       child: DesktopDialogBackdrop(
                         key: const ValueKey('new-harness-dismiss'),
-                        frameless: true,
                         onDismiss: () => _newHarnessFormKey.currentState
                             ?.dismissFromOutside(),
                       ),
@@ -5185,8 +5189,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     // The palette keeps its search field in place while the
                     // result list fits its matches inside this upper bound.
                     child: SizedBox(
-                      width: math.min(960, constraints.maxWidth - 40),
-                      height: math.min(570, constraints.maxHeight - 72),
+                      width: math.min(
+                        DesktopSearchPanel.maxWidth,
+                        constraints.maxWidth - 40,
+                      ),
+                      height: math.min(
+                        DesktopSearchPanel.maxHeight,
+                        constraints.maxHeight - 72,
+                      ),
                       child: contents,
                     ),
                   ),
@@ -5848,7 +5858,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _closeCommandBar,
-            child: const ColoredBox(color: kDialogVeilTint),
+            child: ColoredBox(color: dialogVeilTintOf(context)),
           ),
         ),
         SafeArea(
@@ -5976,7 +5986,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           child: Row(
                             children: [
                               const Icon(
-                                Icons.info_outline,
+                                AppIcons.info,
                                 size: 16,
                                 color: Colors.orangeAccent,
                               ),
@@ -6000,7 +6010,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     ? _projects.dismissError
                                     : app.dismissError,
                                 tooltip: 'Dismiss',
-                                icon: const Icon(Icons.close, size: 16),
+                                icon: const Icon(AppIcons.close, size: 16),
                               ),
                             ],
                           ),
@@ -6162,18 +6172,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ],
                       ),
                     ),
-                    MediaQuery.withNoTextScaling(
-                      child: _native
-                          ? SizedBox(
-                              key: const ValueKey('workspace-status-bar'),
-                              height: _statusBarHeight,
-                              child: _focusedModelPicker(
-                                WorkspacePaneContext.focused(app),
-                                menuOnly: true,
-                              ),
-                            )
-                          : _statusBar(),
-                    ),
+                    if (_showWorkspaceFooter)
+                      MediaQuery.withNoTextScaling(
+                        child: _native
+                            ? SizedBox(
+                                key: const ValueKey('workspace-status-bar'),
+                                height: _statusBarHeight,
+                                child: _focusedModelPicker(
+                                  WorkspacePaneContext.focused(app),
+                                  menuOnly: true,
+                                ),
+                              )
+                            : _statusBar(),
+                      ),
                   ],
                 ),
               ),
@@ -6332,8 +6343,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   // Include the pane's former bottom gutter in this row, so its controls sit
   // halfway between the pane edge and window bottom. Pane height is unchanged.
-  double get _statusBarHeight =>
-      workspaceBarControlHeight(context) + kWorkspaceInset;
+  bool get _showWorkspaceFooter =>
+      !newHarnessOpensInBox ||
+      app.panes.isNotEmpty ||
+      app.activeSwarm.isStore ||
+      app.activeSwarm.isOrchestrator ||
+      _footerPreviewCurrent;
+
+  double get _statusBarHeight => _showWorkspaceFooter
+      ? workspaceBarControlHeight(context) + kWorkspaceInset
+      : 0;
 
   Widget _statusBar() => LayoutBuilder(
     builder: (context, constraints) {
@@ -6385,6 +6404,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ) *
           .4;
       final paneContext = Row(
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
           if (focused != null)
             Flexible(
@@ -6429,16 +6449,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
             padding: EdgeInsets.symmetric(horizontal: cell.width),
             child: Row(
               children: [
-                Expanded(
-                  child: _zoo.loaded
-                      ? DaemonVoiceLine(
-                          face: _face,
-                          brain: _brain,
-                          onAnswer: _shortcutsEnabled ? _answerDaemon : null,
-                          fallback: paneContext,
-                        )
-                      : paneContext,
-                ),
+                if (focused != null && modelPickerSupports(focused.engine)) ...[
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: modelWidth),
+                    child: _focusedModelPicker(focused),
+                  ),
+                  SizedBox(width: cell.width * 2),
+                ],
                 if (kIsWeb) ...[
                   SizedBox(width: cell.width),
                   ConstrainedBox(
@@ -6470,13 +6487,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                 ],
-                if (focused != null && modelPickerSupports(focused.engine)) ...[
-                  SizedBox(width: cell.width * 2),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: modelWidth),
-                    child: _focusedModelPicker(focused),
-                  ),
-                ],
+                Expanded(
+                  child: _zoo.loaded
+                      ? DaemonVoiceLine(
+                          face: _face,
+                          brain: _brain,
+                          onAnswer: _shortcutsEnabled ? _answerDaemon : null,
+                          fallback: paneContext,
+                        )
+                      : paneContext,
+                ),
               ],
             ),
           ),
@@ -6682,11 +6702,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   },
                 ),
               ),
-              _statusToolSymbol(
+              _statusToolIcon(
                 'new-tab',
                 'New Tab',
                 _newTab,
-                '+',
+                AppIcons.plus,
                 Size(cell.width * 3, toolHeight),
                 theme,
                 tooltip: 'New Tab ${_keymap.hint('swarm.new') ?? ''}',
@@ -6702,7 +6722,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   width: cell.width * 4,
                   height: toolHeight,
                   child: Icon(
-                    LucideIcons.search,
+                    AppIcons.search,
                     size: 17,
                     color: theme.foreground.withValues(
                       alpha: !_shortcutsEnabled
@@ -6734,11 +6754,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
   );
 
-  Widget _statusToolSymbol(
+  Widget _statusToolIcon(
     String id,
     String label,
     VoidCallback onPressed,
-    String symbol,
+    IconData icon,
     Size size,
     TerminalTheme theme, {
     String? tooltip,
@@ -6751,9 +6771,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, emphasized) => SizedBox.fromSize(
       size: size,
       child: Center(
-        child: Text(
-          symbol,
-          style: workspaceBarTextStyle(emphasized: emphasized),
+        child: Icon(
+          icon,
+          size: AppIcons.inlineSize,
+          color: theme.foreground.withValues(
+            alpha: !_shortcutsEnabled
+                ? .28
+                : emphasized
+                ? 1
+                : .75,
+          ),
         ),
       ),
     ),

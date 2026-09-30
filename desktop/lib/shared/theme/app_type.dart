@@ -14,13 +14,13 @@ import '../../terminal/terminal_font_store.dart';
 /// ```
 ///   display    sans  28  semibold   one per screen: a page title, sign-in
 ///   title      sans  20  semibold   a settings pane, a hero card, a figure
-///   heading    sans  15  semibold   a section, a dialog title, a card title
+///   heading    sans  17  semibold   a section, a dialog title, a card title
 ///   label      sans  13  medium     buttons, rows, sidebar items, links
 ///   mono       mono  13  regular    commands, source text, paths
 ///   monoLabel  mono  12  medium     terminal labels, compact code
 ///   monoMeta   mono  11  regular    shortcut keys, identifiers, code metadata
 ///   body       sans  13  regular    prose: descriptions, explanations
-///   caption    sans  11  regular    tooltips, footnotes
+///   caption    sans  12  regular    tooltips, footnotes
 /// ```
 ///
 /// Every style takes the same optional arguments as `terminalTextStyle`, so a
@@ -28,9 +28,9 @@ import '../../terminal/terminal_font_store.dart';
 abstract final class AppType {
   static const double displaySize = 28;
   static const double titleSize = 20;
-  static const double headingSize = 15;
+  static const double headingSize = 17;
   static const double bodySize = 13;
-  static const double captionSize = 11;
+  static const double captionSize = 12;
   static const double monoSize = 13;
   static const double monoLabelSize = 12;
   static const double monoMetaSize = 11;

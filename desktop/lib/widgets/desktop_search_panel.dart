@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -33,6 +33,9 @@ class DesktopSearchPanel extends StatelessWidget {
   final VoidCallback onClose, onRefocus;
   final Widget Function() previewBuilder;
 
+  static const maxWidth = 880.0;
+  static const maxHeight = 520.0;
+
   static const categories = [
     ('Harnesses', ''),
     ('Machines', '@'),
@@ -60,159 +63,161 @@ class DesktopSearchPanel extends StatelessWidget {
     return DesktopChrome(
       child: Align(
         alignment: Alignment.topCenter,
-        child: DesktopDialogSurface(
-          key: const ValueKey('swarm-search-results'),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (search.split != null)
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: maxWidth,
+            maxHeight: maxHeight,
+          ),
+          child: DesktopDialogSurface(
+            key: const ValueKey('swarm-search-results'),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (search.split != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                    child: Text(
+                      search.title,
+                      style: DesktopChrome.text(size: 13, medium: true),
+                    ),
+                  ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                  child: Text(
-                    search.title,
-                    style: DesktopChrome.text(size: 13, medium: true),
-                  ),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 12, 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.search_rounded,
-                      size: 21,
-                      color: DesktopChrome.muted,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ReadlineKeys(
-                        controller: editing,
-                        onChanged: search.setQuery,
-                        child: SwarmSearchInput(
-                          inputKey: const ValueKey('swarm-search-input'),
-                          controller: editing,
-                          focusNode: focusNode,
-                          search: search,
-                          onClose: onClose,
-                          onChanged: search.setQuery,
-                          onOpen: onRefocus,
-                          hintText: search.hint,
-                        ),
-                      ),
-                    ),
-                    ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: editing,
-                      builder: (context, value, _) => value.text.isEmpty
-                          ? const SizedBox(width: 48, height: 48)
-                          : _toolbarButton(
-                              context,
-                              key: const ValueKey('search-clear-query'),
-                              tooltip: 'Clear search',
-                              onPressed: () {
-                                editing.clear();
-                                search.setQuery('');
-                                onRefocus();
-                              },
-                              icon: Icon(
-                                Icons.cancel_rounded,
-                                size: 16,
-                                color: DesktopChrome.muted,
-                              ),
-                            ),
-                    ),
-                    ListenableBuilder(
-                      listenable: search,
-                      builder: (context, _) => _toolbarButton(
-                        context,
-                        key: const ValueKey('search-toggle-preview'),
-                        tooltip: search.previewVisible
-                            ? 'Hide preview'
-                            : 'Show preview',
-                        isSelected: search.previewVisible,
-                        onPressed: search.supportsPreview
-                            ? () {
-                                search.togglePreview();
-                                onRefocus();
-                              }
-                            : null,
-                        icon: const Icon(
-                          Icons.vertical_split_outlined,
-                          size: 18,
-                        ),
-                      ),
-                    ),
-                    _toolbarButton(
-                      context,
-                      key: const ValueKey('search-close'),
-                      tooltip: 'Close search',
-                      onPressed: onClose,
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                    ),
-                  ],
-                ),
-              ),
-              Divider(height: 1, color: DesktopChrome.rim),
-              ListenableBuilder(
-                listenable: search,
-                builder: (context, _) => SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-                  child: _SearchScopes(
-                    selected: _prefix,
-                    onRefocus: onRefocus,
-                    onChanged: (prefix) {
-                      final words = search.wordsQuery;
-                      search.setQuery(
-                        prefix.isEmpty ? words : '$prefix $words'.trimRight(),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              Flexible(
-                child: ListenableBuilder(
-                  listenable: search,
-                  builder: (context, _) => SwarmSearchResults(
-                    search: search,
-                    onChoose: onChoose,
-                    onRefocus: onRefocus,
-                    // Keep the dialog, editor, and footer stationary while a
-                    // query gains a preview or changes to an empty result.
-                    fitRows: false,
-                    // The scope control already explains the empty search.
-                    // Give results the full width until there is a preview.
-                    showPreview: !search.showsTypeHints,
-                    sideBySideMinWidth: 840,
-                    previewBuilder: previewBuilder,
-                  ),
-                ),
-              ),
-              Divider(height: 1, color: DesktopChrome.rim),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 11,
-                ),
-                child: ListenableBuilder(
-                  listenable: search,
-                  builder: (context, _) => Wrap(
-                    spacing: 20,
-                    runSpacing: 8,
+                  padding: const EdgeInsets.fromLTRB(24, 12, 16, 8),
+                  child: Row(
                     children: [
-                      _hint(context, 'picker.next', 'Browse'),
-                      _hint(
-                        context,
-                        'picker.accept',
-                        search.selected == null
-                            ? 'Open'
-                            : search.actionLabel(search.selected!),
+                      Icon(
+                        AppIcons.search,
+                        size: 21,
+                        color: DesktopChrome.muted,
                       ),
-                      _hint(context, 'picker.cancel', 'Back'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ReadlineKeys(
+                          controller: editing,
+                          onChanged: search.setQuery,
+                          child: SwarmSearchInput(
+                            inputKey: const ValueKey('swarm-search-input'),
+                            controller: editing,
+                            focusNode: focusNode,
+                            search: search,
+                            onClose: onClose,
+                            onChanged: search.setQuery,
+                            onOpen: onRefocus,
+                            hintText: search.hint,
+                          ),
+                        ),
+                      ),
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: editing,
+                        builder: (context, value, _) => value.text.isEmpty
+                            ? const SizedBox(width: 32, height: 32)
+                            : _toolbarButton(
+                                context,
+                                key: const ValueKey('search-clear-query'),
+                                tooltip: 'Clear search',
+                                onPressed: () {
+                                  editing.clear();
+                                  search.setQuery('');
+                                  onRefocus();
+                                },
+                                icon: Icon(
+                                  AppIcons.circleX,
+                                  size: 16,
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                      ),
+                      ListenableBuilder(
+                        listenable: search,
+                        builder: (context, _) => _toolbarButton(
+                          context,
+                          key: const ValueKey('search-toggle-preview'),
+                          tooltip: search.previewVisible
+                              ? 'Hide preview'
+                              : 'Show preview',
+                          isSelected: search.previewVisible,
+                          onPressed: search.supportsPreview
+                              ? () {
+                                  search.togglePreview();
+                                  onRefocus();
+                                }
+                              : null,
+                          icon: const Icon(AppIcons.columns2, size: 18),
+                        ),
+                      ),
+                      _toolbarButton(
+                        context,
+                        key: const ValueKey('search-close'),
+                        tooltip: 'Close search',
+                        onPressed: onClose,
+                        icon: const Icon(AppIcons.close, size: 18),
+                      ),
                     ],
                   ),
                 ),
-              ),
-            ],
+                ListenableBuilder(
+                  listenable: search,
+                  builder: (context, _) => SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 14),
+                    child: _SearchScopes(
+                      selected: _prefix,
+                      onRefocus: onRefocus,
+                      onChanged: (prefix) {
+                        final words = search.wordsQuery;
+                        search.setQuery(
+                          prefix.isEmpty ? words : '$prefix $words'.trimRight(),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: ListenableBuilder(
+                    listenable: search,
+                    builder: (context, _) => SwarmSearchResults(
+                      search: search,
+                      onChoose: onChoose,
+                      onRefocus: onRefocus,
+                      // Keep the dialog, editor, and footer stationary while a
+                      // query gains a preview or changes to an empty result.
+                      fitRows: false,
+                      // The scope control already explains the empty search.
+                      // Give results the full width until there is a preview.
+                      showPreview: !search.showsTypeHints,
+                      sideBySideMinWidth: 800,
+                      previewBuilder: previewBuilder,
+                    ),
+                  ),
+                ),
+                Divider(height: 1, color: DesktopChrome.rim),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 11,
+                  ),
+                  child: ListenableBuilder(
+                    listenable: search,
+                    builder: (context, _) => Wrap(
+                      spacing: 20,
+                      runSpacing: 8,
+                      children: [
+                        _hint(context, 'picker.next', 'Browse'),
+                        _hint(
+                          context,
+                          'picker.accept',
+                          search.selected == null
+                              ? 'Open'
+                              : search.actionLabel(search.selected!),
+                        ),
+                        _hint(context, 'picker.cancel', 'Close'),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -229,12 +234,21 @@ class DesktopSearchPanel extends StatelessWidget {
   }) {
     final parent = KeymapRegion.of(context);
     void activate() => onPressed?.call();
-    final button = IconButton(
-      key: key,
-      tooltip: tooltip,
-      onPressed: onPressed,
-      isSelected: isSelected,
-      icon: icon,
+    final button = SizedBox.square(
+      dimension: 32,
+      child: IconButton(
+        key: key,
+        tooltip: tooltip,
+        onPressed: onPressed,
+        isSelected: isSelected,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        padding: const EdgeInsets.all(7),
+        visualDensity: VisualDensity.standard,
+        mouseCursor: onPressed == null
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
+        icon: icon,
+      ),
     );
     return KeymapRegion(
       contextKind: KeymapContext.picker,
@@ -287,7 +301,7 @@ class DesktopSearchPanel extends StatelessWidget {
   }
 }
 
-/// Native segmented keyboard navigation stays inside the scope control.
+/// Arrow navigation stays inside the scope group, with one tab stop.
 /// Pointer selection returns directly to typing; Return does the same for keys.
 class _SearchScopes extends StatefulWidget {
   const _SearchScopes({
@@ -306,8 +320,15 @@ class _SearchScopes extends StatefulWidget {
 
 class _SearchScopesState extends State<_SearchScopes> {
   var _focused = false;
+  final _focus = FocusNode(debugLabel: 'Search scopes');
   var _revealScheduled = false;
   BuildContext? _selectedContext;
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -363,71 +384,66 @@ class _SearchScopesState extends State<_SearchScopes> {
             FocusManager.instance.primaryFocus?.previousFocus(),
       },
       child: Focus(
-        canRequestFocus: false,
+        key: const ValueKey('search-scopes'),
+        focusNode: _focus,
         onFocusChange: (focused) => setState(() => _focused = focused),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: Colors.transparent),
-            color: _focused
-                ? DesktopChrome.foreground.withValues(alpha: .08)
-                : Colors.transparent,
-          ),
-          child: Listener(
-            onPointerUp: (_) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) widget.onRefocus();
-              });
-            },
-            child: CupertinoSlidingSegmentedControl<String>(
-              groupValue: widget.selected,
-              backgroundColor: DesktopChrome.foreground.withValues(alpha: .045),
-              thumbColor: Color.alphaBlend(
-                DesktopChrome.foreground.withValues(
-                  alpha: _focused ? .16 : .10,
+        onKeyEvent: (_, event) {
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+            return KeyEventResult.ignored;
+          }
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.arrowLeft ||
+              key == LogicalKeyboardKey.arrowRight ||
+              parent == null &&
+                  (key == LogicalKeyboardKey.arrowUp ||
+                      key == LogicalKeyboardKey.arrowDown)) {
+            _move(
+              key == LogicalKeyboardKey.arrowLeft ||
+                      key == LogicalKeyboardKey.arrowUp
+                  ? -1
+                  : 1,
+            );
+            return KeyEventResult.handled;
+          }
+          if (key == LogicalKeyboardKey.space ||
+              parent == null &&
+                  (key == LogicalKeyboardKey.enter ||
+                      key == LogicalKeyboardKey.numpadEnter)) {
+            widget.onRefocus();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: ExcludeFocus(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 6,
+            children: [
+              for (final (label, prefix) in DesktopSearchPanel.categories)
+                Builder(
+                  builder: (segmentContext) {
+                    final selected = widget.selected == prefix;
+                    if (selected) _selectedContext = segmentContext;
+                    return DesktopPill(
+                      key: ValueKey('search-category-$label'),
+                      label: label,
+                      capsule: true,
+                      selected: selected,
+                      highlightFocus: selected && _focused,
+                      foregroundColor: selected
+                          ? DesktopChrome.foreground
+                          : DesktopChrome.muted,
+                      tooltip: prefix.isEmpty
+                          ? 'Search harnesses'
+                          : 'Type $prefix to search ${label.toLowerCase()}',
+                      onPressed: () {
+                        widget.onChanged(prefix);
+                        widget.onRefocus();
+                      },
+                    );
+                  },
                 ),
-                DesktopChrome.surface,
-              ),
-              padding: const EdgeInsets.all(3),
-              onValueChanged: (prefix) {
-                if (prefix != null) widget.onChanged(prefix);
-              },
-              children: {
-                for (final (label, prefix) in DesktopSearchPanel.categories)
-                  prefix: Builder(
-                    builder: (segmentContext) {
-                      // Cupertino measures a second copy of each label, so a
-                      // GlobalKey on a segment would collide. Both copies have
-                      // the same position inside their segment's layout box.
-                      if (widget.selected == prefix) {
-                        _selectedContext = segmentContext;
-                      }
-                      return Tooltip(
-                        message: prefix.isEmpty
-                            ? 'Search harnesses'
-                            : 'Type $prefix to search ${label.toLowerCase()}',
-                        child: Padding(
-                          key: ValueKey('search-category-$label'),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          child: Text(
-                            label,
-                            style: DesktopChrome.text(
-                              size: 12,
-                              medium: widget.selected == prefix,
-                              color: widget.selected == prefix
-                                  ? DesktopChrome.foreground
-                                  : DesktopChrome.muted,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-              },
-            ),
+            ],
           ),
         ),
       ),

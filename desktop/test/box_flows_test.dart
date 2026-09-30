@@ -33,7 +33,7 @@ void main() {
       tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
 
   testWidgets(
-    'dismissed edits resume without replacing successful launch defaults',
+    'dismissed edits resume and explicit agent/project choices become defaults',
     (tester) async {
       final app = createApp();
       seedMixedAgents(app);
@@ -58,8 +58,8 @@ void main() {
       expect(box(tester).task, 'Review this project');
       expect(box(tester).engine, 'opencode');
       expect(box(tester).project.folder, '/work/selected-before-task');
-      expect(app.agentPreference.value, 'codex');
-      expect(app.projectHistory.selected('m'), '/work/openharness');
+      expect(app.agentPreference.value, 'opencode');
+      expect(app.projectHistory.selected('m'), '/work/selected-before-task');
       expect(app.panes, hasLength(1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

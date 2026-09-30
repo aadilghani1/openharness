@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,8 +13,6 @@ import '../state/app_state.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
-
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'box_chrome.dart';
 
@@ -532,7 +531,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
                                 ? 'Show password'
                                 : 'Hide password',
                             icon: Icon(
-                              _obscure ? LucideIcons.eye : LucideIcons.eyeOff,
+                              _obscure ? AppIcons.eye : AppIcons.eyeOff,
                               size: 16,
                             ),
                             constraints: const BoxConstraints.tightFor(

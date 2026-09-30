@@ -9,10 +9,11 @@ Follow the [terminal workspace design system](terminal-workspace.md).
 
                                  panes
 
-M2 > openharness > branch-name > #439                          GPT-6 Astra · Max
+GPT-6 Astra · Max                          M2 > openharness > branch-name > #439
 ```
 
-![Top navigation and bottom context, rendered with synthetic data](images/workspace-bottom-bar.png)
+The two edge groups follow the focused pane. The branch stays clickable in the
+footer; pane headers do not repeat it. Empty New Tabs have no footer.
 
 ## Tabs on the left
 
@@ -132,10 +133,10 @@ and size.
 
 ## Pane controls
 
-The bottom bar shows the focused harness's model selector at the right, with
-machine, project, branch and PR at the left. Pane headers keep the harness title and a hover-only ASCII `x` at their
-far right. The `x` closes that pane view, keeps its harness running, and uses the
-shared bold hover treatment. Its tooltip names Close Pane and the current shortcut.
+The bottom bar shows the focused harness's model selector at the left, with
+machine, project, branch and PR at the right. Pane headers keep the harness title
+and a hover-only outline close icon at their far right. The close control closes that pane view, keeps its harness running, and uses the
+shared icon hover treatment. Its tooltip names Close Pane and the current shortcut.
 Reserve its width so revealing it does not move the title.
 
 For the model label, prefer
@@ -167,7 +168,7 @@ access. Keep the resize gaps available for resizing.
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button
 or space is reserved. [Settings reference](images/share-experimental.png).
-When enabled, Share sits in the bottom bar before the model selector, with a
+When enabled, Share sits in the bottom bar between the model and focused context, with a
 flat accent fill, white text, and the same fixed font and control height as the
 other bar actions. Reserve its width before allocating context. Web keeps
 Download app as a secondary text action in the same footer.
@@ -234,11 +235,11 @@ the window bottom. The former 9.5 pt pane gutter is part of the status row,
 rather than extra padding only above it. Native and Flutter reserve 37.5 pt and
 keep the same pane height, with equal space above and below the footer content.
 
-Show `machine  project`, then `(branch)` and PR when known at the left. Put the
-focused model at the far right. The status row has one-cell outer gutters and no background fill or divider;
+Show `machine  project`, then `(branch)` and PR when known at the right. Put the
+focused model and effort at the far left. The status row has one-cell outer gutters and no background fill or divider;
 its controls sit directly on the workspace surface. Both sides follow
 the focused pane; changing placement preserves each field's existing action.
-The optional companion and Share control sit before the model. At narrow widths,
+The optional companion and Share control sit between these groups. At narrow widths,
 truncate labels inside their allocated space rather than overlap controls.
 The model is a separate plain text control so switching themes preserves its
 click target. A focus change closes its picker; stale native actions and delayed
@@ -417,7 +418,7 @@ narrow windows. Native menus and commands remain available.
 
 Only while daemons are on (the account's `GET /api/zoo` answered 200, or a
 person enabled Settings → Experimental → Focus-bar creature), the daemon sits
-in the footer before the optional Share control and focused model. Off, or before that is known, nothing is
+in the footer after the model and before the optional Share control. Off, or before that is known, nothing is
 reserved for it and the bar is exactly the one described above; when it turns
 on, the slot waits for a quiet moment (no button held, the pointer off the
 footer) so controls never move under a click. On:
@@ -435,7 +436,7 @@ enters or leaves, so neither the creature nor its neighbors move.
 Its name and progress belong in the tooltip and panel, never beside the
 sprite. Clicking a ready egg hatches it; otherwise a click boops the daemon and
 opens its panel. When something needs you or failed, its one line replaces the
-left context and PR in the terminal's yellow for 5.2 s, like tmux's message
+right context and PR in the terminal's yellow for 5.2 s, like tmux's message
 line. The model stays available; a reply to a click is dim. Mood and frame updates repaint only the slot.
 The contract is [daemons/README.md](../../daemons/README.md); the desktop's
 choices are in [Daemons on the desktop](daemons.md).

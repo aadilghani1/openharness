@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -157,11 +158,7 @@ class WorkspaceStartGuide extends StatelessWidget {
                                     ),
                                   ],
                                   const SizedBox(width: 20),
-                                  Icon(
-                                    Icons.add_rounded,
-                                    size: 16,
-                                    color: faint,
-                                  ),
+                                  Icon(AppIcons.plus, size: 16, color: faint),
                                 ],
                               ),
                             ),

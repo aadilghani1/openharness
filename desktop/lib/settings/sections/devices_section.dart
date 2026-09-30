@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -306,7 +307,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                     children: [
                       const Expanded(child: SelectableText('harness update')),
                       AppIconButton(
-                        icon: Icons.refresh_rounded,
+                        icon: AppIcons.refreshCw,
                         tooltip: 'Refresh Autonomous robot status',
                         onPressed: disabled
                             ? null
@@ -415,7 +416,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                           ),
                           const SizedBox(width: 8),
                           AppIconButton(
-                            icon: Icons.refresh_rounded,
+                            icon: AppIcons.refreshCw,
                             tooltip: 'Refresh Autonomous robot status',
                             onPressed: disabled
                                 ? null

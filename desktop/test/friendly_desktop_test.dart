@@ -395,6 +395,8 @@ void main() {
       expect(search.selected, isNotNull);
       await key(tester, LogicalKeyboardKey.enter);
       expect(chosen, hasLength(1));
+      // The pointer's tooltip exit delay is unrelated to search completion.
+      await tester.pump(const Duration(milliseconds: 350));
       expect(tester.takeException(), isNull);
     },
   );

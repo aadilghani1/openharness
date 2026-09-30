@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
+
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shared/theme/workspace_bar_style.dart';
@@ -136,9 +138,10 @@ class PaneCloseButton extends StatelessWidget {
           width: workspaceBarCellSizeOf(context).width * 3,
           height: workspaceBarControlHeight(context),
           child: Center(
-            child: Text(
-              'x',
-              style: workspaceBarTextStyle(emphasized: emphasized),
+            child: Icon(
+              AppIcons.close,
+              size: AppIcons.inlineSize,
+              color: theme.foreground.withValues(alpha: emphasized ? 1 : .7),
             ),
           ),
         ),

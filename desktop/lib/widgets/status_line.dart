@@ -21,6 +21,7 @@ class StatusLine extends StatelessWidget {
     this.workspaceBar = false,
     this.emphasized = false,
     this.middleEllipsis = false,
+    this.surfaceBackground,
   });
   final StatusLineParts parts;
   final bool color;
@@ -33,6 +34,9 @@ class StatusLine extends StatelessWidget {
   final bool emphasized;
   final bool middleEllipsis;
 
+  /// Set only when the status is displayed outside its terminal surface.
+  final Color? surfaceBackground;
+
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
@@ -44,17 +48,18 @@ class StatusLine extends StatelessWidget {
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
+        final foreground = surfaceBackground == null
+            ? theme.foreground
+            : statusLineInkOnSurface(theme.foreground, surfaceBackground!);
         final style = workspaceBar
-            ? workspaceBarTextStyle(
-                color: theme.foreground,
-                emphasized: emphasized,
-              )
-            : terminalContentStyle(color: theme.foreground);
+            ? workspaceBarTextStyle(color: foreground, emphasized: emphasized)
+            : terminalContentStyle(color: foreground);
         final segments = statusLinePaintSegments(
           parts,
           theme,
           color: color,
           segmentOffset: segmentOffset,
+          surfaceBackground: surfaceBackground,
         );
         final cell = workspaceBar
             ? workspaceBarCellSizeOf(context)

@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -62,7 +63,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.byIcon(Icons.hourglass_empty_rounded), findsOneWidget);
+    expect(find.byIcon(AppIcons.hourglass), findsOneWidget);
     expect(
       tester.binding.hasScheduledFrame,
       isFalse,

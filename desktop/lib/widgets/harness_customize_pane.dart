@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -96,7 +97,7 @@ class HarnessCustomizePane extends StatelessWidget {
                                 ),
                               ),
                             ),
-                        icon: const Icon(Icons.close, size: 20),
+                        icon: const Icon(AppIcons.close, size: 20),
                       ),
                     ],
                   ),

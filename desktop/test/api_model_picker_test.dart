@@ -2,6 +2,8 @@
 // its chat models folded under its row, Enter shows them, and Use moves the focused pane's agent onto
 // one through the daemon — which reads the endpoint and key itself. Only this computer's harnesses
 // can use its APIs, and an API that takes no Bearer key stays tools-only.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -212,7 +214,7 @@ void main() {
                 ),
               )
               .icon,
-          Icons.chevron_right_rounded,
+          AppIcons.chevronRight,
         );
         expect(
           tester
@@ -255,7 +257,7 @@ void main() {
         final marker = find.byKey(
           const ValueKey('api-row-marker:model:api:openrouter'),
         );
-        expect(tester.widget<Icon>(marker).icon, Icons.expand_more_rounded);
+        expect(tester.widget<Icon>(marker).icon, AppIcons.chevronDown);
         expect(
           tester
               .getTopLeft(
@@ -432,8 +434,17 @@ void main() {
         find.byKey(const ValueKey('api-form-input:key')),
         'fixture-key',
       );
-      // Tab from the last field reaches Save; Enter presses it.
-      await key(tester, LogicalKeyboardKey.tab);
+      // Traverse the secondary controls, then the fixed footer action.
+      final save = find.byKey(const ValueKey('api-form:save'));
+      for (
+        var step = 0;
+        step < 6 && !tester.widget<FilledButton>(save).focusNode!.hasFocus;
+        step++
+      ) {
+        await key(tester, LogicalKeyboardKey.tab);
+      }
+      expect(tester.widget<FilledButton>(save).focusNode!.hasFocus, isTrue);
+      expect(save.hitTestable(), findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
 

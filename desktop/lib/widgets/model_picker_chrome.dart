@@ -8,6 +8,8 @@
 /// chosen, and what happens when it is are all the picker's ([GridModelPicker]).
 library;
 
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -99,7 +101,7 @@ class ModelPickerSearch extends StatelessWidget {
             hintText: 'Search models or machines',
             hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
             prefixIcon: Icon(
-              Icons.search,
+              AppIcons.search,
               size: 16,
               color: DesktopChrome.muted,
             ),
@@ -113,7 +115,10 @@ class ModelPickerSearch extends StatelessWidget {
             border: border,
             enabledBorder: border,
             focusedBorder: border.copyWith(
-              borderSide: BorderSide(color: DesktopChrome.accent, width: 2),
+              borderSide: BorderSide(
+                color: DesktopChrome.focusRing,
+                width: grid.AppDesktop.focusWidth,
+              ),
             ),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 12,
@@ -341,7 +346,7 @@ class ModelPickerFooter extends StatelessWidget {
         );
         final action = DesktopPill(
           label: actionLabel,
-          icon: Icons.grid_view_rounded,
+          icon: AppIcons.layoutGrid,
           onPressed: onAction,
           tooltip: actionLabel,
         );

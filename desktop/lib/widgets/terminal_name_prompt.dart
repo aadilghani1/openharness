@@ -139,7 +139,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
     grid.AppTheme.watch(context);
     final errorColor = Theme.of(context).colorScheme.error;
     final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(grid.AppDesktop.fieldRadius),
       borderSide: BorderSide(color: DesktopChrome.rim),
     );
     return TerminalPromptKeys(
@@ -154,7 +154,10 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(widget.title, style: DesktopChrome.heading()),
+              DesktopDialogHeader(
+                title: widget.title,
+                padding: EdgeInsets.zero,
+              ),
               if (widget.detail case final detail?) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -200,7 +203,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
                           ? '${_text.text.characters.length}/${widget.maxLength}'
                           : null,
                       suffixStyle: DesktopChrome.text(
-                        size: 11,
+                        size: 12,
                         color: DesktopChrome.muted,
                       ),
                       isDense: true,
@@ -211,7 +214,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
                       focusedBorder: border.copyWith(
                         borderSide: BorderSide(
                           color: DesktopChrome.focusRing,
-                          width: 2,
+                          width: grid.AppDesktop.focusWidth,
                         ),
                       ),
                       contentPadding: const EdgeInsets.symmetric(

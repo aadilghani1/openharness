@@ -1,9 +1,13 @@
+import 'dart:math' as math;
 import 'dart:async';
 
 import '../shared/widgets/labeled_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
+
+import '../shared/widgets/app_rating_star.dart';
+
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -623,14 +627,14 @@ class _StoreNav extends StatelessWidget {
               children: [
                 SidebarItem(
                   key: const ValueKey('store-shelf-discover'),
-                  icon: LucideIcons.sparkles300,
+                  icon: AppIcons.sparkles,
                   label: 'Discover',
                   selected: !hasProduct && shelf is _Discover,
                   onTap: () => onSelect(const _Discover()),
                 ),
                 SidebarItem(
                   key: const ValueKey('store-shelf-all'),
-                  icon: LucideIcons.layoutGrid300,
+                  icon: AppIcons.layoutGrid,
                   label: 'All harnesses',
                   selected: !hasProduct && shelf is _All,
                   onTap: () => onSelect(const _All()),
@@ -638,7 +642,7 @@ class _StoreNav extends StatelessWidget {
                 if (sessionCount > 0 || shelf is _Sessions)
                   SidebarItem(
                     key: const ValueKey('store-shelf-sessions'),
-                    icon: LucideIcons.play300,
+                    icon: AppIcons.play,
                     label: 'Featured',
                     tooltip: '$sessionCount recorded sessions',
                     selected: !hasProduct && shelf is _Sessions,
@@ -686,7 +690,7 @@ class _StoreNav extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: AppIconButton(
                 key: const ValueKey('store-viewers-button'),
-                icon: LucideIcons.panelsTopLeft300,
+                icon: AppIcons.panelsTopLeft,
                 size: 17,
                 color: shelf is _Viewers
                     ? grid.AppPalette.textPrimary
@@ -703,18 +707,18 @@ class _StoreNav extends StatelessWidget {
 }
 
 IconData _categoryIcon(String category) => switch (category) {
-  'Design' => LucideIcons.box300,
-  'Engineering' => LucideIcons.cpu300,
-  'Media' => LucideIcons.film300,
-  'Music' => LucideIcons.music300,
-  'Productivity' => LucideIcons.fileText300,
-  'Science & Data' => LucideIcons.flaskConical300,
-  'Simulation' => LucideIcons.bot300,
-  'Research' => LucideIcons.search300,
-  'Local AI' => LucideIcons.brainCircuit300,
-  'Coding' => LucideIcons.terminal300,
-  'Games' => LucideIcons.gamepad2300,
-  _ => LucideIcons.shapes300,
+  'Design' => AppIcons.box,
+  'Engineering' => AppIcons.cpu,
+  'Media' => AppIcons.film,
+  'Music' => AppIcons.music,
+  'Productivity' => AppIcons.fileText,
+  'Science & Data' => AppIcons.flaskConical,
+  'Simulation' => AppIcons.bot,
+  'Research' => AppIcons.search,
+  'Local AI' => AppIcons.brainCircuit,
+  'Coding' => AppIcons.terminal,
+  'Games' => AppIcons.gamepad2,
+  _ => AppIcons.shapes,
 };
 
 // Search and the complete index stay compact; disciplines and collections
@@ -848,16 +852,29 @@ class _Stars extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 1; i <= 5; i++)
-          GestureDetector(
-            onTap: onPick == null ? null : () => onPick!(i),
-            child: Icon(
-              value >= i
-                  ? Icons.star_rounded
-                  : value >= i - 0.5
-                  ? Icons.star_half_rounded
-                  : Icons.star_outline_rounded,
-              size: size,
-              color: value >= i - 0.5 ? _amber : grid.AppPalette.textFaint,
+          MouseRegion(
+            cursor: onPick == null
+                ? SystemMouseCursors.basic
+                : SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: onPick == null ? null : () => onPick!(i),
+              child: Semantics(
+                label: '$i ${i == 1 ? 'star' : 'stars'}',
+                button: onPick != null,
+                child: SizedBox.square(
+                  dimension: onPick == null ? size : math.max(32, size),
+                  child: Center(
+                    child: AppRatingStar(
+                      fraction: (value - i + 1).clamp(0, 1),
+                      size: size,
+                      color: _amber,
+                      outlineColor: value >= i - 0.5
+                          ? _amber
+                          : grid.AppPalette.textFaint,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
       ],
@@ -1635,7 +1652,7 @@ class _QuietLinkState extends State<_QuietLink> {
           widget.child ?? Text(widget.label!),
           if (url != null) ...[
             const SizedBox(width: 3),
-            Icon(LucideIcons.arrowUpRight300, size: 13, color: color),
+            Icon(AppIcons.arrowUpRight, size: 13, color: color),
           ],
         ],
       ),

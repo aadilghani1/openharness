@@ -3,6 +3,7 @@ import '../sharing/shared_harness_panel.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
@@ -1385,7 +1386,7 @@ class _PaneContent extends StatelessWidget {
       if (machine == null) {
         notice = terminalNotice(
           label: 'Unavailable',
-          icon: Icons.cloud_off,
+          icon: AppIcons.cloudOff,
           detail: notifier.machineInventoryLoaded
               ? 'This machine isn’t available. Retained output is read only.'
               : 'Waiting for this machine. Retained output is read only.',
@@ -1393,7 +1394,7 @@ class _PaneContent extends StatelessWidget {
       } else if (needsLink) {
         notice = terminalNotice(
           label: 'Link required',
-          icon: Icons.link_off,
+          icon: AppIcons.unlink,
           detail:
               '${machine.machine.displayName} needs linking. Retained output is read only.',
           // A tile still showing its last screen gets the same way out as an
@@ -1408,14 +1409,14 @@ class _PaneContent extends StatelessWidget {
       } else if (offline) {
         notice = terminalNotice(
           label: 'Offline',
-          icon: Icons.cloud_off,
+          icon: AppIcons.cloudOff,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = terminalNotice(
           label: 'Unavailable',
-          icon: Icons.terminal,
+          icon: AppIcons.terminal,
           detail:
               agent?.terminalUnavailableReason ??
               'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
@@ -1431,7 +1432,7 @@ class _PaneContent extends StatelessWidget {
         final unconfirmed = agent.launchError == 'RESUME_UNCONFIRMED';
         notice = terminalNotice(
           label: unconfirmed ? 'Not confirmed' : 'Start failed',
-          icon: unconfirmed ? Icons.help_outline : Icons.error_outline,
+          icon: unconfirmed ? AppIcons.circleHelp : AppIcons.circleAlert,
           detail: unconfirmed
               ? 'The engine is still running here; the daemon has not confirmed '
                     'which conversation it reopened.'
@@ -1520,7 +1521,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: wantedAgentId == null ? 'Machine' : kUntitledPane,
-        icon: listFailed || stale ? Icons.cloud_off : Icons.link_off,
+        icon: listFailed || stale ? AppIcons.cloudOff : AppIcons.unlink,
         message: listFailed
             ? 'Could not load machines. Retry to reconnect.'
             : waiting
@@ -1538,7 +1539,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName ?? machine.machine.displayName,
-        icon: Icons.link_off,
+        icon: AppIcons.unlink,
         message:
             '${machine.machine.displayName} is not linked to this computer yet. '
             'Link it with the remote password set on that machine.',
@@ -1564,7 +1565,7 @@ class _PaneContent extends StatelessWidget {
         compactMessage: machine.isLocalMachine
             ? 'Harness is not running on this computer.'
             : 'Harness is not running on ${machine.machine.displayName}.',
-        compactIcon: Icons.cloud_off,
+        compactIcon: AppIcons.cloudOff,
         full: HarnessJoinGuideScreen(
           notifier: notifier,
           machineState: machine,
@@ -1576,7 +1577,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: machine.machine.displayName,
-        icon: Icons.check_circle_outline,
+        icon: AppIcons.circleCheck,
         message: 'This machine is ready. Drag an agent here to open it.',
         onClose: close,
       );
@@ -1585,7 +1586,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: wantedAgentId,
-        icon: Icons.help_outline,
+        icon: AppIcons.circleHelp,
         message: 'This agent is no longer on ${machine.machine.displayName}.',
         onClose: close,
       );
@@ -1594,7 +1595,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName,
-        icon: Icons.terminal,
+        icon: AppIcons.terminal,
         message:
             agent.terminalUnavailableReason ??
             'This agent has no available terminal.',
@@ -1609,7 +1610,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName,
-        icon: Icons.terminal,
+        icon: AppIcons.terminal,
         message:
             'Open this harness here. Another screen may be using its terminal; '
             'opening takes it, because ${machine.machine.displayName} runs an '
@@ -1624,7 +1625,7 @@ class _PaneContent extends StatelessWidget {
     return _PaneStatus(
       activity: activityMark,
       title: agentName,
-      icon: Icons.hourglass_empty,
+      icon: AppIcons.hourglass,
       message: 'Attaching…',
       onClose: single && !swarmMode ? null : close,
       busy: true,
@@ -2226,7 +2227,7 @@ class _AddSlot extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.add, size: 24, color: AppColors.mutedStrong),
+            Icon(AppIcons.plus, size: 24, color: AppColors.mutedStrong),
             const SizedBox(height: 8),
             Text(
               'Drop here for a new pane',
@@ -2298,7 +2299,7 @@ class _EmptyGrid extends StatelessWidget {
                 const SizedBox(height: 16),
                 FilledButton.icon(
                   key: const ValueKey('empty-grid-new-agent'),
-                  icon: const Icon(Icons.add, size: 16),
+                  icon: const Icon(AppIcons.plus, size: 16),
                   label: const Text('New Harness'),
                   onPressed: () => showNewAgentDialog(
                     context,

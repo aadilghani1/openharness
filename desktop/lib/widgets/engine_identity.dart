@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/harness_catalog.dart';
@@ -962,7 +962,7 @@ class EngineMark extends StatelessWidget {
           )
         : identity.id == kTerminalEngine
         ? Icon(
-            LucideIcons.terminal,
+            AppIcons.terminal,
             key: const ValueKey('engine-icon-terminal'),
             size: size,
             color: identity.color,

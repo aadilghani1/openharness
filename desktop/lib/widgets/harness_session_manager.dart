@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_menu.dart';
@@ -285,7 +285,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                       IconButton(
                         tooltip: 'Close Harnesses',
                         onPressed: widget.onClose,
-                        icon: const Icon(LucideIcons.x, size: 16),
+                        icon: const Icon(AppIcons.close, size: 16),
                       ),
                     ],
                   ),
@@ -308,7 +308,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                           'Search harnesses, machines, projects, branches',
                       hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
                       prefixIcon: Icon(
-                        LucideIcons.search,
+                        AppIcons.search,
                         size: 15,
                         color: AppPalette.textFaint,
                       ),
@@ -317,7 +317,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                           ? null
                           : IconButton(
                               tooltip: 'Clear search',
-                              icon: const Icon(LucideIcons.x, size: 14),
+                              icon: const Icon(AppIcons.close, size: 14),
                               onPressed: () {
                                 _search.clear();
                                 setState(() => _selected = null);
@@ -332,13 +332,18 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                         horizontal: 12,
                       ),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(
+                          AppDesktop.fieldRadius,
+                        ),
                         borderSide: BorderSide.none,
                       ),
                       focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(
+                          AppDesktop.fieldRadius,
+                        ),
                         borderSide: BorderSide(
-                          color: AppPalette.accent.withValues(alpha: .8),
+                          color: AppDesktop.focus,
+                          width: AppDesktop.focusWidth,
                         ),
                       ),
                     ),
@@ -434,7 +439,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                               textStyle: AppType.monoMeta(),
                             ),
                             icon: const Icon(
-                              LucideIcons.arrowDownWideNarrow,
+                              AppIcons.arrowDownWideNarrow,
                               size: 13,
                             ),
                             label: Text(
@@ -463,7 +468,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                LucideIcons.layers,
+                                AppIcons.layers,
                                 size: 25,
                                 color: AppPalette.textFaint,
                               ),
@@ -630,19 +635,19 @@ class _SessionRow extends StatelessWidget {
         );
     final details = [
       detail(
-        LucideIcons.monitor,
+        AppIcons.monitor,
         row.machine.machine.displayName,
         AppPalette.textSecondary,
       ),
       if (row.project case final project?) ...[
         detail(
-          LucideIcons.folder,
+          AppIcons.folder,
           project.label,
           const Color(0xff79bbaf),
           tooltip: project.cwd,
         ),
         if (project.shownBranch case final branch?)
-          detail(LucideIcons.gitBranch, branch, const Color(0xff8dbb79)),
+          detail(AppIcons.gitBranch, branch, const Color(0xff8dbb79)),
       ],
     ];
     return Padding(
@@ -830,7 +835,7 @@ class _SessionRow extends StatelessWidget {
                       onPressed: canOpen ? onAnswer : null,
                       color: const Color(0xffd9ad70),
                       icon: Icon(
-                        LucideIcons.messageCircleQuestionMark,
+                        AppIcons.messageCircleQuestionMark,
                         size: 17,
                         semanticLabel:
                             'Needs input for ${row.agent.displayName}',
@@ -841,18 +846,21 @@ class _SessionRow extends StatelessWidget {
                   // the first case. This says the other one — work that is done
                   // and has not been looked at — in the one place the eye is
                   // already checking for a row's state.
-                  else if (unread == AlertKind.done || unread == AlertKind.failed)
+                  else if (unread == AlertKind.done ||
+                      unread == AlertKind.failed)
                     IconButton(
                       key: ValueKey('session-unread-${unread!.name}:${row.id}'),
-                      tooltip: unread == AlertKind.failed ? 'Failed' : 'Finished',
+                      tooltip: unread == AlertKind.failed
+                          ? 'Failed'
+                          : 'Finished',
                       onPressed: canOpen ? onOpen : null,
                       color: unread == AlertKind.failed
                           ? AppPalette.dangerFill
                           : _UnreadMark.doneTint,
                       icon: Icon(
                         unread == AlertKind.failed
-                            ? LucideIcons.circleX
-                            : LucideIcons.circleCheckBig,
+                            ? AppIcons.circleX
+                            : AppIcons.circleCheckBig,
                         size: 17,
                         semanticLabel:
                             '${unread == AlertKind.failed ? 'Failed' : 'Finished'}, not yet seen: ${row.agent.displayName}',
@@ -889,8 +897,8 @@ class _SessionRow extends StatelessWidget {
                               onPressed: row.canControl ? onToggle : null,
                               icon: Icon(
                                 row.agent.isStopped
-                                    ? LucideIcons.play
-                                    : LucideIcons.pause,
+                                    ? AppIcons.play
+                                    : AppIcons.pause,
                                 size: 17,
                                 semanticLabel:
                                     '${row.agent.isStopped ? 'Resume' : 'Pause'} ${row.agent.displayName}',

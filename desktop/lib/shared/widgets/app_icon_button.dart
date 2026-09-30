@@ -90,7 +90,7 @@ class AppIconButton extends StatefulWidget {
 
   /// 7 — the app's radius for a small inline button (`ghost_button.dart`,
   /// `chat_header.dart`), and never rounder than the 8 of a control it sits in.
-  static const double _radius = 7;
+  static const double _radius = AppDesktop.fieldRadius;
 
   @override
   State<AppIconButton> createState() => _AppIconButtonState();

@@ -1,5 +1,6 @@
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -381,7 +382,7 @@ void main() {
         expect(
           tester
               .widget<IconButton>(
-                find.widgetWithIcon(IconButton, Icons.refresh),
+                find.widgetWithIcon(IconButton, AppIcons.refreshCw),
               )
               .onPressed,
           isNotNull,

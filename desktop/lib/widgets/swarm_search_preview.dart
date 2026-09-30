@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
@@ -895,9 +895,7 @@ class _AgentPreview extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      waiting != null
-                          ? LucideIcons.hand300
-                          : LucideIcons.circle300,
+                      waiting != null ? AppIcons.hand : AppIcons.circle,
                       size: 10,
                       color: color,
                     ),
@@ -1052,11 +1050,7 @@ class _AgentPreview extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
                   children: [
-                    Icon(
-                      LucideIcons.gitBranch300,
-                      size: 12,
-                      color: muted.color,
-                    ),
+                    Icon(AppIcons.gitBranch, size: 12, color: muted.color),
                     const SizedBox(width: 6),
                     Expanded(child: Text(branch, style: muted)),
                   ],

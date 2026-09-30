@@ -2,6 +2,17 @@ import Cocoa
 import FlutterMacOS
 import ImageIO
 
+/// The native counterpart of AppIcons: regular monochrome system outlines.
+/// Controls share one optical size; hover changes ink, never the silhouette.
+private enum HarnessControlSymbols {
+  static let size: CGFloat = 16
+  static let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
+  static func image(_ name: String, description: String? = nil) -> NSImage? {
+    NSImage(systemSymbolName: name, accessibilityDescription: description)?
+      .withSymbolConfiguration(configuration)
+  }
+}
+
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
@@ -259,13 +270,13 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       addPhone.target = self
       addPhone.representedObject = "addPhone"
       addPhone.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "addPhone")
-      addPhone.image = NSImage(systemSymbolName: "iphone", accessibilityDescription: nil)
+      addPhone.image = HarnessControlSymbols.image("iphone")
       appMenu.insertItem(addPhone, at: appMenu.index(of: settings) + 1)
       let customize = NSMenuItem(title: "Customize Harness", action: #selector(menuAction(_:)), keyEquivalent: "")
       customize.target = self
       customize.representedObject = "customize"
       customize.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "customize")
-      customize.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
+      customize.image = HarnessControlSymbols.image("paintpalette")
       appMenu.insertItem(customize, at: appMenu.index(of: settings))
       HarnessAppMenu.arrange()
     }
@@ -285,7 +296,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         "commands": "command", "notifications": "bell",
       ]
       if let symbol = symbols[action] {
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        item.image = HarnessControlSymbols.image(symbol, description: title)
       }
       menu.addItem(item)
     }
@@ -542,7 +553,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
 private enum SwarmIdentity {
   // Same four separate tiles as widgets/swarm_icon.dart.
-  static let menuIcon = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: nil)
+  static let menuIcon = HarnessControlSymbols.image("square.grid.2x2")
 }
 
 private struct SwarmMachineEntry: Equatable {
@@ -632,7 +643,7 @@ private final class SwarmHistoryMenuRow: NSView {
       : selected ? .selectedMenuItemTextColor : .labelColor
     let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: color]
     if item.state == .on {
-      let mark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)!
+      let mark = HarnessControlSymbols.image("checkmark")!
       let tinted = mark.copy() as! NSImage
       tinted.lockFocus()
       color.set()
@@ -932,23 +943,6 @@ private func workspaceBarTextWidth(_ text: String, font: NSFont) -> CGFloat {
     (text as NSString).size(withAttributes: [.font: workspaceBarEmphasisFont(font)]).width)
 }
 
-/// Terminal symbols with a shared text baseline and a visible hover/focus cue.
-private final class SwarmStatusSymbolButton: SwarmIconButton {
-  var foreground = NSColor(white: 0.85, alpha: 1) { didSet { needsDisplay = true } }
-
-  override func draw(_ dirtyRect: NSRect) {
-    let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
-    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    let line = NSAttributedString(string: title, attributes: [
-      .font: active ? workspaceBarEmphasisFont(regularFont) : regularFont,
-      .foregroundColor: foreground.withAlphaComponent(isEnabled ? 0.75 : 0.28),
-    ])
-    let size = line.size()
-    line.draw(in: NSRect(x: (bounds.width - size.width) / 2,
-      y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
-  }
-}
-
 /// Plain toolbar icons emphasize the glyph without a button well.
 private class SwarmPlainIconButton: SwarmIconButton {
   var foreground = NSColor.white { didSet { needsDisplay = true } }
@@ -957,8 +951,7 @@ private class SwarmPlainIconButton: SwarmIconButton {
     let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
     // Draw only the glyph: AppKit can paint a hover bezel even on a borderless
     // NSButton. Emphasis belongs to the bell, never a background around it.
-    if let symbol = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(
-      pointSize: 17, weight: emphasized ? .semibold : .regular)) {
+    if let symbol = image?.withSymbolConfiguration(HarnessControlSymbols.configuration) {
       let rect = NSRect(x: (bounds.width - symbol.size.width) / 2,
         y: (bounds.height - symbol.size.height) / 2,
         width: symbol.size.width, height: symbol.size.height)
@@ -1575,7 +1568,7 @@ private final class SwarmTabStrip: NSView {
   var emit: ((String, Any?) -> Void)?
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
-  fileprivate let newButton = SwarmStatusSymbolButton()
+  fileprivate let newButton = SwarmPlainIconButton()
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let focusedModelButton = SwarmContextButton()
   private var focusedModelTarget: [String: Any]?
@@ -1623,9 +1616,9 @@ private final class SwarmTabStrip: NSView {
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
     newButton.toolTip = "New Tab ⌘T"
-    newButton.image = nil
-    newButton.title = "+"
-    newButton.imagePosition = .noImage
+    newButton.image = HarnessControlSymbols.image("plus")
+    newButton.title = ""
+    newButton.imagePosition = .imageOnly
     contextButton.isBordered = false
     contextButton.alignment = .right
     contextButton.target = self
@@ -1669,7 +1662,7 @@ private final class SwarmTabStrip: NSView {
     notificationsButton.isBordered = false
     notificationsButton.focusRingType = .none
     notificationsButton.title = ""
-    notificationsButton.image = NSImage(systemSymbolName: "bell", accessibilityDescription: nil)
+    notificationsButton.image = HarnessControlSymbols.image("bell")
     notificationsButton.imagePosition = .imageOnly
     notificationsButton.target = self
     notificationsButton.action = #selector(openNotifications)
@@ -1679,7 +1672,7 @@ private final class SwarmTabStrip: NSView {
     searchButton.isBordered = false
     searchButton.focusRingType = .none
     searchButton.title = ""
-    searchButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+    searchButton.image = HarnessControlSymbols.image("magnifyingglass")
     searchButton.imagePosition = .imageOnly
     searchButton.isEnabled = false
     searchButton.target = self
@@ -1713,7 +1706,7 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityLabel("Focused pane status")
     statusBar.setAccessibilityParent(self)
     setAccessibilityChildren([scroll, newButton, searchButton, notificationsButton, storeButton, statusBar])
-    statusBar.setAccessibilityChildren([contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton, focusedModelButton])
+    statusBar.setAccessibilityChildren([focusedModelButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
@@ -2047,20 +2040,21 @@ private final class SwarmTabStrip: NSView {
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
     let modelBudget = max(0, available - daemonWidth - shareWidth - cell * 4)
     let modelWidth = hasFocusedModel ? min(focusedModelButton.preferredWidth, modelBudget * 0.4) : 0
-    focusedModelButton.frame = NSRect(x: statusBar.bounds.width - cell - modelWidth,
+    focusedModelButton.frame = NSRect(x: cell,
       y: y, width: modelWidth, height: height)
-    let shareRight = focusedModelButton.frame.minX - (modelWidth > 0 ? cell : 0)
-    shareButton.frame = NSRect(x: shareRight - shareWidth, y: y, width: shareWidth, height: height)
-    let daemonRight = shareButton.frame.minX - (shareWidth > 0 ? cell : 0)
-    daemonButton.frame = NSRect(x: daemonRight - daemonWidth, y: y, width: daemonWidth, height: height)
-    let contextRight = daemonButton.frame.minX - cell * 2
-    let statusWidth = max(0, contextRight - cell)
-    voiceLabel.frame = NSRect(x: cell, y: y, width: statusWidth, height: height)
+    let daemonLeft = focusedModelButton.frame.maxX + (modelWidth > 0 ? cell * 2 : 0)
+    daemonButton.frame = NSRect(x: daemonLeft, y: y, width: daemonWidth, height: height)
+    let shareLeft = daemonButton.frame.maxX + (daemonWidth > 0 ? cell : 0)
+    shareButton.frame = NSRect(x: shareLeft, y: y, width: shareWidth, height: height)
+    let contextLeft = shareButton.frame.maxX + (shareWidth > 0 || daemonWidth > 0 ? cell * 2 : 0)
+    let statusWidth = max(0, statusBar.bounds.width - cell - contextLeft)
+    voiceLabel.frame = NSRect(x: contextLeft, y: y, width: statusWidth, height: height)
     let prWidth = hasPullRequest ? min(pullRequestButton.preferredWidth, statusWidth * 0.3) : 0
     let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
     let prGap = prWidth > 0 && !joined ? cell : 0
     let contextWidth = min(contextButton.preferredWidth, max(0, statusWidth - prWidth - prGap))
-    contextButton.frame = NSRect(x: cell, y: y, width: contextWidth, height: height)
+    let contextX = statusBar.bounds.width - cell - prWidth - prGap - contextWidth
+    contextButton.frame = NSRect(x: contextX, y: y, width: contextWidth, height: height)
     pullRequestButton.frame = NSRect(x: contextButton.frame.maxX + prGap,
       y: y, width: prWidth, height: height)
     contextButton.nextBackground = joined && pullRequestButton.drawsSegments

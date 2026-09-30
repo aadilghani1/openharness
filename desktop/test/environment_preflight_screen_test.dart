@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
@@ -153,7 +154,7 @@ void main() {
       EnginePhase.sendSemanticsUpdate,
       const Duration(seconds: 1),
     );
-    expect(find.byIcon(Icons.hourglass_empty_rounded), findsOneWidget);
+    expect(find.byIcon(AppIcons.hourglass), findsOneWidget);
     expect(find.text('Waiting for checks…'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(tester.binding.hasScheduledFrame, isFalse);

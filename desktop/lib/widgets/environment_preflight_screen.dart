@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../bootstrap/environment_provisioner.dart';
@@ -132,7 +133,7 @@ class EnvironmentPreflightScreen extends StatelessWidget {
                             )
                           else if (MediaQuery.disableAnimationsOf(context))
                             Icon(
-                              Icons.hourglass_empty_rounded,
+                              AppIcons.hourglass,
                               size: 20,
                               color: DesktopChrome.muted,
                             )
@@ -185,13 +186,13 @@ class EnvironmentPreflightScreen extends StatelessWidget {
   };
 
   static IconData _icon(EnvironmentStepStatus status) => switch (status) {
-    EnvironmentStepStatus.ready => Icons.check_circle_outline_rounded,
-    EnvironmentStepStatus.notApplicable => Icons.remove_circle_outline_rounded,
+    EnvironmentStepStatus.ready => AppIcons.circleCheck,
+    EnvironmentStepStatus.notApplicable => AppIcons.circleMinus,
     EnvironmentStepStatus.failed ||
-    EnvironmentStepStatus.unavailable => Icons.error_outline_rounded,
-    EnvironmentStepStatus.needsTerminal => Icons.open_in_new_rounded,
-    EnvironmentStepStatus.running => Icons.more_horiz_rounded,
-    EnvironmentStepStatus.pending => Icons.schedule_rounded,
+    EnvironmentStepStatus.unavailable => AppIcons.circleAlert,
+    EnvironmentStepStatus.needsTerminal => AppIcons.externalLink,
+    EnvironmentStepStatus.running => AppIcons.ellipsis,
+    EnvironmentStepStatus.pending => AppIcons.clock,
   };
 
   static Color _ink(EnvironmentStepStatus status) => switch (status) {

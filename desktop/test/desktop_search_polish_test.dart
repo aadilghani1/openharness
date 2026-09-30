@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -186,10 +185,19 @@ void main() {
     String name,
   ) async {
     if (renderDir == null) return;
+    final previousShadows = debugDisableShadows;
+    debugDisableShadows = false;
+    final boundary =
+        palette.picture.currentContext!.findRenderObject()!
+            as RenderRepaintBoundary;
+    void repaint(RenderObject object) {
+      object.markNeedsPaint();
+      object.visitChildren(repaint);
+    }
+
+    repaint(boundary);
+    await tester.pump();
     await tester.runAsync(() async {
-      final boundary =
-          palette.picture.currentContext!.findRenderObject()!
-              as RenderRepaintBoundary;
       final image = await boundary.toImage(pixelRatio: 1.5);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       final directory = Directory(renderDir)..createSync(recursive: true);
@@ -197,16 +205,16 @@ void main() {
           .writeAsBytes(data!.buffer.asUint8List());
       image.dispose();
     });
+    debugDisableShadows = previousShadows;
+    repaint(boundary);
+    await tester.pump();
   }
 
   testWidgets(
     'native scopes put machines first and keep typed words and focus',
     (tester) async {
       final palette = await mount(tester);
-      final segmented = tester.widget<CupertinoSlidingSegmentedControl<String>>(
-        find.byType(CupertinoSlidingSegmentedControl<String>),
-      );
-      expect(segmented.children.keys, ['', '@', '#', ':', '*', '>']);
+      expect(find.byType(DesktopPill), findsNWidgets(6));
       expect(
         find.byKey(const ValueKey('search-category-Harnesses')),
         findsOneWidget,
@@ -398,12 +406,10 @@ void main() {
     var focusedScope = false;
     for (var step = 0; step < 30; step++) {
       await key(tester, LogicalKeyboardKey.tab);
-      focusedScope =
-          FocusManager.instance.primaryFocus?.context
-              ?.findAncestorWidgetOfExactType<
-                CupertinoSlidingSegmentedControl<String>
-              >() !=
-          null;
+      focusedScope = tester
+          .widget<Focus>(find.byKey(const ValueKey('search-scopes')))
+          .focusNode!
+          .hasFocus;
       if (focusedScope) break;
     }
     expect(focusedScope, isTrue);
@@ -572,6 +578,7 @@ void main() {
             'machines-${brightness.name}-${narrow ? 'narrow' : 'regular'}',
           );
           await tester.enterText(input, 'no-such-result-999999');
+          await tester.pump(const Duration(milliseconds: 350));
           await tester.pumpAndSettle();
           expect(palette.search.rows, isEmpty);
           expect(find.text('No matching harnesses'), findsOneWidget);

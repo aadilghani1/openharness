@@ -1,5 +1,7 @@
 // Where the model picker's furniture sits: the figures and the one button end on the edges the eye
 // looks for them at, rather than wherever a flex split happened to leave them.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/widgets/model_picker_chrome.dart';
@@ -39,7 +41,7 @@ void main() {
     final meter = tester.getRect(find.byType(LinearProgressIndicator));
     expect(tester.getRect(find.text('43% left')).right, meter.right);
     expect(tester.getRect(find.text('Healthy')).right, meter.right);
-    expect(find.byIcon(Icons.check), findsNothing);
+    expect(find.byIcon(AppIcons.check), findsNothing);
   });
 
   testWidgets('the footer button ends on the panel edge, not mid-row', (

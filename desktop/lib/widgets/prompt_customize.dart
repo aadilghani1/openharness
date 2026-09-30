@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -247,9 +248,7 @@ class _StatusStyleChoice extends StatelessWidget {
                 Row(
                   children: [
                     Icon(
-                      selected
-                          ? Icons.radio_button_checked_rounded
-                          : Icons.radio_button_unchecked_rounded,
+                      selected ? AppIcons.circleDot : AppIcons.circle,
                       size: 18,
                       color: selected
                           ? DesktopChrome.accent

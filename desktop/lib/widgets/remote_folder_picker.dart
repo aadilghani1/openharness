@@ -5,6 +5,7 @@ import '../terminal/terminal_text.dart';
 
 import '../shared/widgets/labeled_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -27,11 +28,6 @@ Future<String?> showRemoteFolderPicker(
   bool desktop = false,
 }) => showAppDialog<String>(
   context: context,
-  veilTint: desktop
-      ? Colors.black.withValues(
-          alpha: Theme.of(context).brightness == Brightness.dark ? .38 : .20,
-        )
-      : kDialogVeilTint,
   builder: (context) => ListenableBuilder(
     listenable: terminalFontStore,
     builder: (context, _) {
@@ -379,22 +375,28 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
           fillColor: widget.desktop ? DesktopChrome.field : null,
           border: widget.desktop
               ? OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(color: DesktopChrome.rim),
                 )
               : null,
           enabledBorder: widget.desktop
               ? OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(color: DesktopChrome.rim),
                 )
               : null,
           focusedBorder: widget.desktop
               ? OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    grid.AppDesktop.fieldRadius,
+                  ),
                   borderSide: BorderSide(
                     color: DesktopChrome.focusRing,
-                    width: 2,
+                    width: grid.AppDesktop.focusWidth,
                   ),
                 )
               : null,
@@ -405,7 +407,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                     (_loading && _location.text.trim() == _requestedPath)
                 ? null
                 : _openPath,
-            icon: const Icon(Icons.arrow_forward, size: 18),
+            icon: const Icon(AppIcons.arrowRight, size: 18),
           ),
         ),
         onChanged: (_) => setState(() {
@@ -485,7 +487,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                       child: Row(
                         children: [
                           Icon(
-                            Icons.folder_outlined,
+                            AppIcons.folder,
                             size: 18,
                             color: widget.desktop
                                 ? DesktopChrome.accent
@@ -503,7 +505,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                             ),
                           ),
                           Icon(
-                            Icons.chevron_right,
+                            AppIcons.chevronRight,
                             size: 16,
                             color: widget.desktop
                                 ? DesktopChrome.muted
@@ -526,16 +528,6 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
           140.0,
           290.0,
         );
-    final actionStyle = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size(0, 34)),
-      shape: WidgetStatePropertyAll(
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-      textStyle: WidgetStatePropertyAll(DesktopChrome.text(size: 13)),
-      padding: const WidgetStatePropertyAll(
-        EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      ),
-    );
     return DesktopChrome(
       child: Dialog(
         key: const ValueKey('desktop-remote-folder-dialog'),
@@ -555,46 +547,16 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.folder_open_outlined,
-                            color: DesktopChrome.accent,
-                            size: 24,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Choose a folder',
-                                  style: DesktopChrome.text(
-                                    size: 17,
-                                    medium: true,
-                                  ),
-                                ),
-                                Text(
-                                  'On ${machine ?? 'the remote machine'}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.text(
-                                    size: 12,
-                                    color: DesktopChrome.muted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+                    DesktopDialogHeader(
+                      title: 'Choose a folder',
+                      detail: 'On ${machine ?? 'the remote machine'}',
                     ),
                     Divider(height: 1, color: DesktopChrome.rim),
                     Flexible(
                       child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.all(
+                          grid.AppDesktop.panelPadding,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -618,7 +580,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                   key: const Key('remote-folder-up'),
                                   label: 'Up',
                                   semanticLabel: 'Up one folder',
-                                  icon: Icons.arrow_upward_rounded,
+                                  icon: AppIcons.arrowUp,
                                   compact: true,
                                   tooltip: mac
                                       ? 'Up one folder (⌘↑ or ⌥↑)'
@@ -630,7 +592,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                 DesktopPill(
                                   key: const Key('remote-folder-home'),
                                   label: 'Home',
-                                  icon: Icons.home_outlined,
+                                  icon: AppIcons.house,
                                   compact: true,
                                   tooltip: 'Home folder on this machine',
                                   onPressed: () => _load(null),
@@ -638,7 +600,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                 DesktopPill(
                                   key: const Key('remote-folder-refresh'),
                                   label: 'Refresh',
-                                  icon: Icons.refresh_rounded,
+                                  icon: AppIcons.refreshCw,
                                   compact: true,
                                   tooltip: mac
                                       ? 'Refresh folders (⌘R)'
@@ -677,7 +639,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                 alignment: Alignment.centerLeft,
                                 child: DesktopPill(
                                   label: 'Retry',
-                                  icon: Icons.refresh_rounded,
+                                  icon: AppIcons.refreshCw,
                                   onPressed: _retry,
                                 ),
                               ),
@@ -707,18 +669,11 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                         runSpacing: 8,
                         children: [
                           OutlinedButton(
-                            style: actionStyle,
                             onPressed: () => Navigator.of(context).pop(),
                             child: const Text('Cancel'),
                           ),
                           FilledButton(
                             key: const Key('remote-folder-select'),
-                            style: actionStyle.merge(
-                              FilledButton.styleFrom(
-                                backgroundColor: DesktopChrome.accent,
-                                foregroundColor: DesktopChrome.surface,
-                              ),
-                            ),
                             onPressed: _canSelect ? _select : null,
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -873,12 +828,12 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                             key: const Key('remote-folder-home'),
                             tooltip: 'Home folder on this machine',
                             onPressed: () => _load(null),
-                            icon: const Icon(Icons.home_outlined, size: 18),
+                            icon: const Icon(AppIcons.house, size: 18),
                           ),
                           IconButton(
                             tooltip: 'Refresh folders',
                             onPressed: _loading ? null : _refresh,
-                            icon: const Icon(Icons.refresh, size: 18),
+                            icon: const Icon(AppIcons.refreshCw, size: 18),
                           ),
                           IconButton(
                             tooltip: mac
@@ -887,7 +842,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                             onPressed: _blocking || _parentPath == null
                                 ? null
                                 : _up,
-                            icon: const Icon(Icons.arrow_upward, size: 18),
+                            icon: const Icon(AppIcons.arrowUp, size: 18),
                           ),
                         ],
                       ),

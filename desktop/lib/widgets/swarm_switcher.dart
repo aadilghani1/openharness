@@ -3,9 +3,9 @@ import 'dart:math' as math;
 
 import 'swarm_search_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter/services.dart';
 
 import '../shortcuts/app_keymap.dart';
@@ -880,29 +880,48 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   visualDensity: VisualDensity.compact,
                   minVerticalPadding: 0,
                   horizontalTitleGap: 10,
-                  minLeadingWidth: 20,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  minLeadingWidth: desktop ? 28 : 20,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: desktop ? 14 : 10,
+                  ),
                   // The dock uses its full-row highlight for
                   // selection; prefixes only appear in the input.
                   leading: widget.terminal && !desktop
                       ? null
                       : desktop
                       ? row.isStore
-                            ? StoreMark(size: 20, enabled: canSubmit)
+                            ? StoreMark(size: 28, enabled: canSubmit)
+                            : row.agentId != null ||
+                                  row.isStoreEntry ||
+                                  (row.isSwarm && row.members.length == 1)
+                            ? EngineMark(
+                                engine: row.storeId ?? row.engine,
+                                size: 28,
+                                enabled: canSubmit,
+                              )
+                            : row.isSwarm
+                            ? SwarmIcon(
+                                size: 26,
+                                color: highlighted
+                                    ? DesktopChrome.onSelection
+                                    : DesktopChrome.muted,
+                              )
                             : Icon(
                                 row.isProject
-                                    ? Icons.folder_outlined
+                                    ? AppIcons.folder
                                     : row.isMachine
-                                    ? Icons.laptop_mac_rounded
+                                    ? AppIcons.laptop
                                     : row.isModel
-                                    ? Icons.auto_awesome_outlined
-                                    : row.isStore
-                                    ? Icons.widgets_outlined
+                                    ? AppIcons.sparkles
+                                    : row.isCreate
+                                    ? AppIcons.plus
                                     : row.isCommand
-                                    ? Icons.keyboard_command_key_rounded
-                                    : Icons.terminal_rounded,
-                                size: 18,
-                                color: DesktopChrome.muted,
+                                    ? AppIcons.command
+                                    : AppIcons.terminal,
+                                size: 22,
+                                color: highlighted
+                                    ? DesktopChrome.onSelection
+                                    : DesktopChrome.muted,
                               )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
@@ -916,7 +935,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 ? const SizedBox(width: 2)
                                 : row.isCreate
                                 ? const Icon(
-                                    LucideIcons.plus300,
+                                    AppIcons.plus,
                                     size: 18,
                                     color: Colors.white70,
                                   )
@@ -931,13 +950,13 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                   )
                                 : row.isProject
                                 ? const Icon(
-                                    LucideIcons.folderOpen,
+                                    AppIcons.folderOpen,
                                     size: 18,
                                     color: Colors.white60,
                                   )
                                 : row.isMachine
                                 ? const Icon(
-                                    LucideIcons.monitor300,
+                                    AppIcons.monitor,
                                     size: 18,
                                     color: Colors.white60,
                                   )
@@ -952,6 +971,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     row: row,
                     terminal: widget.terminal,
                     stacked: desktop || stacked,
+                    highlighted: desktop && highlighted,
                   ),
                   trailing: desktop
                       ? row.shortcut == null
@@ -959,7 +979,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             : Text(
                                 row.shortcut!,
                                 style: grid.AppType.monoMeta(
-                                  color: DesktopChrome.muted,
+                                  color: highlighted
+                                      ? DesktopChrome.selectionDetail
+                                      : DesktopChrome.muted,
                                 ),
                               )
                       : widget.terminal
@@ -1025,7 +1047,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                       child: Material(
                         key: ValueKey('swarm-search-line:${row.id}'),
                         color: highlighted
-                            ? DesktopChrome.selection
+                            ? DesktopChrome.activeSelection
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                         child: tile,
@@ -1460,6 +1482,12 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         ? hit
         : null;
     if (DesktopChrome.of(context)) {
+      final ink = widget.highlighted
+          ? DesktopChrome.onSelection
+          : DesktopChrome.foreground;
+      final muted = widget.highlighted
+          ? DesktopChrome.selectionDetail
+          : DesktopChrome.muted;
       final title = widget.search.isModelMode && row.isCreate
           ? 'Add API connection'
           : widget.search.isModelDownloadsRow(row)
@@ -1486,7 +1514,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             : row.isModel
             ? ValueKey('model-row-status:${row.id}')
             : null,
-        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+        style: DesktopChrome.metadata(color: muted),
       );
       return Semantics(
         label:
@@ -1504,11 +1532,9 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 if (api != null) ...[
                   Icon(
                     key: ValueKey('api-row-marker:${row.id}'),
-                    api.open
-                        ? Icons.expand_more_rounded
-                        : Icons.chevron_right_rounded,
+                    api.open ? AppIcons.chevronDown : AppIcons.chevronRight,
                     size: 16,
-                    color: DesktopChrome.muted,
+                    color: muted,
                   ),
                   const SizedBox(width: 4),
                 ],
@@ -1517,9 +1543,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                     title,
                     matches: matches.where((match) => match.title),
                     style: DesktopChrome.text(
-                      color: unavailable == null
-                          ? DesktopChrome.foreground
-                          : DesktopChrome.muted,
+                      color: unavailable == null ? ink : muted,
                     ),
                   ),
                 ),
@@ -1542,21 +1566,12 @@ class _SearchRowContentState extends State<_SearchRowContent> {
               snippet != null
                   ? SessionSnippetText(
                       snippet,
-                      style: DesktopChrome.text(
-                        size: 12,
-                        color: DesktopChrome.muted,
-                      ),
+                      style: DesktopChrome.text(size: 12, color: muted),
                     )
                   : SearchResultText(
                       detail,
                       matches: matches.where((match) => !match.title),
-                      style: row.isMachine || row.isModel || row.isStore
-                          ? DesktopChrome.text(
-                              size: 12,
-                              color: DesktopChrome.muted,
-                            )
-                          : grid.AppType.monoMeta(color: DesktopChrome.muted)
-                                .copyWith(fontSize: 12),
+                      style: DesktopChrome.metadata(color: muted),
                     ),
             ],
           ],
@@ -1796,7 +1811,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             inlineIcon: widget.terminal || row.detailBranchOffset == null
                 ? null
                 : const Icon(
-                    LucideIcons.gitBranch300,
+                    AppIcons.gitBranch,
                     size: 12,
                     color: Colors.white60,
                   ),
@@ -1865,7 +1880,7 @@ class SwarmSearchActionLabel extends StatelessWidget {
             if (_returnChord.hasMatch(hint)) ...[
               if (hint.length > 1)
                 Text(hint.substring(0, hint.length - 1), style: boxMonoStyle()),
-              const Icon(Icons.keyboard_return, size: 14),
+              const Icon(AppIcons.cornerDownLeft, size: 14),
             ] else
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 96),

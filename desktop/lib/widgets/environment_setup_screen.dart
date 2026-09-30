@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -237,7 +238,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         if (mode == EnvironmentSetupMode.automatic) ...[
           if (needsTerminal) ...[
             _notice(
-              Icons.terminal,
+              AppIcons.terminal,
               'Admin prompts stay in Terminal',
               'Complete any installation prompts there, then return to Harness.',
             ),
@@ -264,7 +265,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       ),
       if (state.phase == EnvironmentSetupPhase.waitingForTerminal)
         _notice(
-          Icons.lock_outline,
+          AppIcons.lock,
           'Harness cannot see your password',
           'Finish the prompts in Terminal, then return here. Harness checks progress automatically.',
         ),
@@ -374,7 +375,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
   Widget _planList(List<EnvironmentPlanItem> items) {
     if (items.isEmpty) {
       return _notice(
-        Icons.check_circle_outline,
+        AppIcons.circleCheck,
         'Nothing left to install',
         'Every dependency is ready. Continue to final verification.',
       );
@@ -421,7 +422,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     children: [
       if (items.isEmpty)
         _notice(
-          Icons.check_circle_outline,
+          AppIcons.circleCheck,
           'Nothing left to install',
           'Every dependency is ready. Continue to final verification.',
         ),
@@ -483,7 +484,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             ),
             TextButton.icon(
               onPressed: () => _copy(diagnostics),
-              icon: const Icon(Icons.copy, size: 14),
+              icon: const Icon(AppIcons.copy, size: 14),
               label: Text(
                 _copied == diagnostics ? 'Copied' : 'Copy diagnostics',
               ),
@@ -565,7 +566,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             : missingCount == 0
             ? 'Verify and continue'
             : 'Install $missingCount ${missingCount == 1 ? 'tool' : 'tools'}';
-        icon = manual ? Icons.refresh : Icons.download_outlined;
+        icon = manual ? AppIcons.refreshCw : AppIcons.download;
         action = manual
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
@@ -579,7 +580,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         action = widget.notifier.continueAfterEnvironmentSetup;
       case EnvironmentSetupPhase.waitingForTerminal:
         label = 'Recheck now';
-        icon = Icons.refresh;
+        icon = AppIcons.refreshCw;
         action = () => widget.notifier.recheckEnvironmentStep(
           state.steps[EnvironmentStep.clipboard] ==
                   EnvironmentStepStatus.needsTerminal
@@ -747,12 +748,12 @@ class _CheckRow extends StatelessWidget {
           else
             Icon(
               status == EnvironmentStepStatus.ready
-                  ? Icons.check_circle
+                  ? AppIcons.circleCheck
                   : status == EnvironmentStepStatus.failed
-                  ? Icons.cancel_outlined
+                  ? AppIcons.circleX
                   : status == EnvironmentStepStatus.notApplicable
-                  ? Icons.remove_circle_outline
-                  : Icons.circle_outlined,
+                  ? AppIcons.circleMinus
+                  : AppIcons.circle,
               size: 17,
               color: color,
             ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -1245,7 +1246,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                       key: const ValueKey('team-close'),
                       tooltip: 'Close conversation',
                       onPressed: widget.onClose,
-                      icon: const Icon(Icons.close_rounded, size: 18),
+                      icon: const Icon(AppIcons.close, size: 18),
                     ),
                   ],
                 ),
@@ -1488,7 +1489,7 @@ class _TeamChoiceState extends State<_TeamChoice> {
                   IconButton(
                     tooltip: 'Close chooser',
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded, size: 18),
+                    icon: const Icon(AppIcons.close, size: 18),
                   ),
                 ],
               ),

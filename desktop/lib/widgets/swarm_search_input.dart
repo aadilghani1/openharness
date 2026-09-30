@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -202,7 +203,7 @@ class SwarmSearchInput extends StatelessWidget {
                   : terminal
                   ? null
                   : Icon(
-                      Icons.search,
+                      AppIcons.search,
                       size: fontSize + 4,
                       color: Colors.white60,
                     ),

@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../analytics/analytics_log.dart';
 import '../../logging/log_file.dart';
@@ -75,7 +75,7 @@ class _TrackingTileState extends State<TrackingTile> {
                         width: 18,
                         child: _hovered
                             ? Icon(
-                                LucideIcons.chevronRight,
+                                AppIcons.chevronRight,
                                 size: 15,
                                 color: AppPalette.textSecondary,
                               )
@@ -125,12 +125,12 @@ class TrackingStatusIcon extends StatelessWidget {
   }
 
   IconData get _glyph => switch (status) {
-    AnalyticsEventStatus.queued => LucideIcons.clock,
-    AnalyticsEventStatus.sent => LucideIcons.circleCheck,
-    AnalyticsEventStatus.refused => LucideIcons.circleAlert,
+    AnalyticsEventStatus.queued => AppIcons.clock,
+    AnalyticsEventStatus.sent => AppIcons.circleCheck,
+    AnalyticsEventStatus.refused => AppIcons.circleAlert,
     // A slash, not an alert: nothing went wrong on the wire, the event simply
     // never reached it — a muted build, a full queue, a name we refused.
-    AnalyticsEventStatus.dropped => LucideIcons.circleSlash,
+    AnalyticsEventStatus.dropped => AppIcons.circleSlash,
   };
 
   Color _ink(BuildContext context) => switch (status) {

@@ -645,14 +645,25 @@ class NewHarnessController extends ChangeNotifier {
           app.projectHistory.worktreeFor(_machineId, _project.folder ?? '') ??
           worktreeByDefault(_gitProject));
 
-  /// With Worktree on, what a new branch starts from; off, the branch the
-  /// folder is on. Unchosen, the default for the mode.
-  String? get branchRef =>
-      _branchRef ?? defaultBranchRef(_gitProject, worktree: worktree);
+  /// Fresh desktop work starts on main, with or without a worktree. A retry
+  /// must instead keep the branch of the folder its first attempt prepared.
+  bool get _defaultsToMain =>
+      _desktopChoices && _attempt?.preparedFolder == null;
+  String? get branchRef {
+    if (_branchRef != null) return _branchRef;
+    if (_defaultsToMain) {
+      final main = defaultBranchRef(_gitProject, worktree: true);
+      return !worktree && main?.startsWith('refs/remotes/') == true
+          ? null
+          : main;
+    }
+    return defaultBranchRef(_gitProject, worktree: worktree);
+  }
+
   String? get gitError => _gitProject.error;
   String get branchLabel =>
       _refName(branchRef) ??
-      (worktree ? 'main · unavailable' : 'Detached HEAD');
+      (worktree || _defaultsToMain ? 'main · unavailable' : 'Detached HEAD');
   String? _refName(String? ref) =>
       _gitProject.branches
           .where((branch) => branch.ref == ref)
@@ -837,7 +848,10 @@ class NewHarnessController extends ChangeNotifier {
     // With Worktree off its branch stays chosen and Start reopens that
     // worktree; otherwise new work starts from the repository's own branch.
     if (info.mainFolder case final main? when _project.folder == key.$2) {
-      if (_worktree == false && _branchRef == null && info.branch != null) {
+      if (!_defaultsToMain &&
+          _worktree == false &&
+          _branchRef == null &&
+          info.branch != null) {
         _branchRef = 'refs/heads/${info.branch}';
       }
       _project = NewHarnessProject.folder(main);
@@ -1046,7 +1060,7 @@ class NewHarnessController extends ChangeNotifier {
           _project.folder!,
           _gitProject,
           worktree: worktree,
-          branchRef: _branchRef,
+          branchRef: branchRef,
           branchName: _branchName,
           placeholder: placeholder,
         )
@@ -1263,7 +1277,10 @@ class NewHarnessController extends ChangeNotifier {
         message: 'This project is unavailable. Choose a project.',
       );
     }
-    if (!checkingGit && isGitProject && worktree && branchRef == null) {
+    if (!checkingGit &&
+        isGitProject &&
+        (worktree || _defaultsToMain && _gitProject.branches.isNotEmpty) &&
+        branchRef == null) {
       return (
         field: _gitProject.branches.isEmpty
             ? NewHarnessField.projectMenu
@@ -1770,6 +1787,25 @@ class NewHarnessController extends ChangeNotifier {
     query = field == NewHarnessField.task ? task : '';
     error = null;
     _refresh(resetCursor: true);
+    _rememberProjectSelection();
+  }
+
+  void _rememberProjectSelection() {
+    if (!_desktopChoices || _project.folder == null) return;
+    final machine = _machineId;
+    final revision = _gitRevision;
+    // Git discovery normalizes a chosen worktree back to its repository.
+    // Do not persist the temporary checkout or an obsolete async selection.
+    unawaited(() async {
+      await _gitFuture;
+      if (_disposed || machine != _machineId || revision != _gitRevision) {
+        return;
+      }
+      final folder = _project.folder;
+      if (folder != null && gitError != 'PROJECT_UNAVAILABLE') {
+        await app.projectHistory.select(machine, folder);
+      }
+    }());
   }
 
   /// ⌘↵: make it now — WITH the row under the highlight. Creating with the
@@ -1849,6 +1885,10 @@ class NewHarnessController extends ChangeNotifier {
       case NewHarnessField.projectRepository:
         if (option.machineId case final id?) _selectMachine(id);
         _project = option.project ?? _project;
+        if (_desktopChoices) {
+          _syncGitProject();
+          _rememberProjectSelection();
+        }
       case NewHarnessField.mode:
         _selectEngine(_settingsEngine);
         _mode = option.id;
@@ -1861,6 +1901,12 @@ class NewHarnessController extends ChangeNotifier {
       case NewHarnessField.task:
       case NewHarnessField.launch:
         break;
+    }
+    if (_desktopChoices &&
+        (field == NewHarnessField.harness || field == NewHarnessField.agent)) {
+      unawaited(
+        app.agentPreference.selectLaunch(_engine, harnessId: _harnessId),
+      );
     }
   }
 

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -314,7 +314,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
           key: const ValueKey('notification-inbox-close'),
           tooltip: 'Close notifications',
           onPressed: () => Navigator.of(context).pop(),
-          icon: const Icon(LucideIcons.x, size: 18),
+          icon: const Icon(AppIcons.close, size: 18),
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           padding: const EdgeInsets.all(6),
         ),

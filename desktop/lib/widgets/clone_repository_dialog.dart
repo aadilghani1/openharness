@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -186,7 +187,7 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
                   const FieldLabel('Destination on this computer'),
                   OutlinedButton.icon(
                     onPressed: _busy || _picking ? null : _chooseDestination,
-                    icon: const Icon(Icons.folder_open_outlined, size: 18),
+                    icon: const Icon(AppIcons.folderOpen, size: 18),
                     label: Text(
                       _parent ?? 'Choose folder…',
                       maxLines: 2,

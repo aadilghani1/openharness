@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,8 +8,6 @@ import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'desktop_chrome.dart';
-
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'box_chrome.dart';
 
@@ -293,8 +292,8 @@ class _LinkMachineScreenState extends State<LinkMachineScreen> {
                                             : 'Hide password',
                                         icon: Icon(
                                           _obscure
-                                              ? LucideIcons.eye
-                                              : LucideIcons.eyeOff,
+                                              ? AppIcons.eye
+                                              : AppIcons.eyeOff,
                                           size: 16,
                                         ),
                                         constraints:

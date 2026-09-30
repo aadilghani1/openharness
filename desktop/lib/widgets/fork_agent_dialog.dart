@@ -308,7 +308,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                 focusedBorder: border.copyWith(
                   borderSide: BorderSide(
                     color: DesktopChrome.focusRing,
-                    width: 2,
+                    width: grid.AppDesktop.focusWidth,
                   ),
                 ),
                 contentPadding: const EdgeInsets.symmetric(

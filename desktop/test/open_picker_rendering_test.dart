@@ -12,6 +12,8 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/search_result_text.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart';
@@ -95,7 +97,7 @@ void main() {
               )
               .first,
         );
-        expect(panel.color, grid.AppPalette.cardBg);
+        expect(panel.color, DesktopChrome.surface);
         expect(field.style!.color, grid.AppPalette.textPrimary);
         expect(field.cursorColor, grid.AppPalette.textPrimary);
         expect(editor.selectionColor, pane.theme.selection);
@@ -115,9 +117,13 @@ void main() {
           final row = search.rows.firstWhere((row) => row.title == title.text);
           expect(
             title.style.color,
-            search.sessionUnavailable(row) == null
-                ? grid.AppPalette.textPrimary
-                : grid.AppPalette.textSecondary,
+            row.id == search.selected?.id
+                ? search.sessionUnavailable(row) == null
+                      ? DesktopChrome.onSelection
+                      : DesktopChrome.selectionDetail
+                : search.sessionUnavailable(row) == null
+                ? DesktopChrome.foreground
+                : DesktopChrome.muted,
           );
         }
         final previewText = find.descendant(
@@ -132,7 +138,7 @@ void main() {
             style.fontFamily,
             isIn([grid.AppType.sansFamily, grid.AppType.monoFamily]),
           );
-          expect(style.fontSize, isIn([11.0, 12.0, 15.0]));
+          expect(style.fontSize, isIn([11.0, 12.0, 13.0, 15.0]));
           expect(style.height ?? 1, inInclusiveRange(1.0, 1.6));
         }
         expect(search.selected!.id, selectedId);
@@ -226,7 +232,7 @@ void main() {
                     .first,
               )
               .color,
-          grid.AppPalette.cardBg,
+          DesktopChrome.surface,
         );
         expect(field.style!.color, grid.AppPalette.textPrimary);
         expect(field.cursorColor, grid.AppPalette.textPrimary);
@@ -303,7 +309,7 @@ void main() {
       expect(rowHeight, greaterThanOrEqualTo(48));
       expect(rows.evaluate(), isNotEmpty);
       expect(
-        find.descendant(of: results, matching: find.byType(Icon)),
+        find.descendant(of: results, matching: find.byType(EngineMark)),
         findsWidgets,
       );
       expect(search.rows.length, greaterThan(50));

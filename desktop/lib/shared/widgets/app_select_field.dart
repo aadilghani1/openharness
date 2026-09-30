@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -477,7 +478,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           decoration: InputDecoration(
             hintText: 'Search',
             prefixIcon: Icon(
-              Icons.search,
+              AppIcons.search,
               size: kFieldIconSize,
               color: AppPalette.textFaint,
             ),
@@ -655,10 +656,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                       border: Border.all(
                         width: MediaQuery.highContrastOf(context) ? 2 : 1.5,
                         color: _focused
-                            ? AppTheme.pick(
-                                AppPalette.accent,
-                                const Color(0xFF6E8BFF),
-                              )
+                            ? AppDesktop.focus
                             : widget.selected == true
                             ? AppPalette.accentOnSurface
                             : MediaQuery.highContrastOf(context)
@@ -708,7 +706,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                             ),
                             const SizedBox(width: 6),
                             Icon(
-                              Icons.expand_more_rounded,
+                              AppIcons.chevronDown,
                               size: AppControl.iconSize,
                               color: _hovered || controller.isOpen
                                   ? AppPalette.textPrimary

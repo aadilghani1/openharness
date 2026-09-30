@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
@@ -114,8 +115,10 @@ void main() {
     if (Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'] !=
         null) {
       await loadRealFonts();
-      await (FontLoader('packages/lucide_icons_flutter/Lucide')..addFont(
-            rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
+      await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
+            rootBundle.load(
+              'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
+            ),
           ))
           .load();
       if (Platform.isMacOS) {
@@ -205,6 +208,12 @@ void main() {
         } else {
           expect(find.text('GPT-6 Astra · High'), findsOneWidget);
           expect(find.text('Fable'), findsNothing);
+          final modelRect = tester.getRect(selectors);
+          final contextRect = tester.getRect(
+            find.byKey(const ValueKey('workspace-pane-context')),
+          );
+          expect(modelRect.right, lessThan(contextRect.left));
+          expect(modelRect.center.dy, closeTo(contextRect.center.dy, .1));
           await captureControls(tester, 'focused-model');
           expect(
             find.descendant(
@@ -307,11 +316,12 @@ void main() {
     }
     await mouse.moveTo(tester.getCenter(close.hitTestable()));
     await tester.pump();
-    final closeText = find.descendant(
+    final closeIcon = find.descendant(
       of: close.hitTestable(),
-      matching: find.text('x'),
+      matching: find.byIcon(AppIcons.close),
     );
-    expect(tester.widget<Text>(closeText).style?.fontWeight, FontWeight.bold);
+    expect(tester.widget<Icon>(closeIcon).color!.a, 1);
+    expect(tester.widget<Icon>(closeIcon).size, AppIcons.inlineSize);
     expect(
       find.descendant(
         of: close.hitTestable(),

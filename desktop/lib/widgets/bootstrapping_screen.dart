@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -95,7 +96,7 @@ class _BootstrappingScreenState extends State<BootstrappingScreen> {
                             dimension: indicatorSize,
                             child: MediaQuery.disableAnimationsOf(context)
                                 ? Icon(
-                                    Icons.hourglass_empty_rounded,
+                                    AppIcons.hourglass,
                                     size: indicatorSize,
                                     color: DesktopChrome.muted,
                                   )

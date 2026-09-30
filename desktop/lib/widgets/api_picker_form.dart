@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -46,6 +47,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
   ApiConnection? _editing;
   bool _advanced = false, _visible = false;
   String? _error;
+  bool _desktop = false;
 
   /// The field [_error] is about, drawn under it; null for an error about the whole form.
   String? _errorField;
@@ -72,6 +74,12 @@ class ApiPickerFormState extends State<ApiPickerForm> {
       });
     }
     focus();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _desktop = DesktopChrome.of(context);
   }
 
   void _setConnection(ApiConnection connection) {
@@ -196,9 +204,24 @@ class ApiPickerFormState extends State<ApiPickerForm> {
 
   List<FocusNode> get _nodes => [
     for (final id in _visibleFields) _inputs[id]!,
-    for (final action in _actions)
+    for (final action in [
+      for (final action in _actions)
+        if (!_fixedAction(action.id)) action,
+      ..._fixedActions,
+    ])
       if (action.run != null && _buttons[action.id] != null)
         _buttons[action.id]!,
+  ];
+
+  bool _fixedAction(String id) =>
+      _desktop &&
+      _editing != null &&
+      const {'save', 'delete', 'cancel'}.contains(id);
+
+  List<({String id, String label, VoidCallback? run})> get _fixedActions => [
+    for (final id in ['cancel', 'save', 'delete'])
+      for (final action in _actions)
+        if (_fixedAction(action.id) && action.id == id) action,
   ];
 
   FocusNode get _focusTarget =>
@@ -451,6 +474,20 @@ class ApiPickerFormState extends State<ApiPickerForm> {
         onPressed: action.run,
       );
     }
+    if (action.id == 'save' || action.id == 'delete') {
+      return FilledButton(
+        key: ValueKey('api-form:${action.id}'),
+        focusNode: node,
+        onPressed: action.run,
+        style: action.id == 'delete'
+            ? FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              )
+            : null,
+        child: Text(action.label),
+      );
+    }
     if (action.id.startsWith('provider:')) {
       return TextButton(
         key: ValueKey('api-form:${action.id}'),
@@ -463,7 +500,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
               textStyle: DesktopChrome.text(size: 13),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
               ),
               splashFactory: NoSplash.splashFactory,
             ).copyWith(
@@ -472,20 +509,16 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                   color: states.contains(WidgetState.focused)
                       ? DesktopChrome.focusRing
                       : DesktopChrome.rim,
-                  width: states.contains(WidgetState.focused) ? 2 : 1,
+                  width: grid.AppDesktop.focusWidth,
                 ),
               ),
             ),
         child: Row(
           children: [
-            Icon(Icons.cloud_outlined, size: 16, color: DesktopChrome.muted),
+            Icon(AppIcons.cloud, size: 16, color: DesktopChrome.muted),
             const SizedBox(width: 10),
             Expanded(child: Text(action.label)),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 17,
-              color: DesktopChrome.muted,
-            ),
+            Icon(AppIcons.chevronRight, size: 17, color: DesktopChrome.muted),
           ],
         ),
       );
@@ -566,9 +599,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                         widget.removing
                             ? 'Delete ${_editing?.name ?? 'API'}?'
                             : _editing?.name ?? 'Add API connection',
-                        style: desktop
-                            ? DesktopChrome.text(size: 15, medium: true)
-                            : style,
+                        style: desktop ? DesktopChrome.heading() : style,
                       ),
                       if (controller.app.viewer != null)
                         Text('Saved on ${controller.hostLabel}', style: muted),
@@ -628,7 +659,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                       ? InputDecoration(
                                           border: OutlineInputBorder(
                                             borderRadius: BorderRadius.circular(
-                                              8,
+                                              grid.AppDesktop.fieldRadius,
                                             ),
                                             borderSide: BorderSide(
                                               color: DesktopChrome.rim,
@@ -636,7 +667,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                           ),
                                           enabledBorder: OutlineInputBorder(
                                             borderRadius: BorderRadius.circular(
-                                              8,
+                                              grid.AppDesktop.fieldRadius,
                                             ),
                                             borderSide: BorderSide(
                                               color: DesktopChrome.rim,
@@ -644,11 +675,11 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                           ),
                                           focusedBorder: OutlineInputBorder(
                                             borderRadius: BorderRadius.circular(
-                                              8,
+                                              grid.AppDesktop.fieldRadius,
                                             ),
                                             borderSide: BorderSide(
                                               color: DesktopChrome.focusRing,
-                                              width: 2,
+                                              width: grid.AppDesktop.focusWidth,
                                             ),
                                           ),
                                           filled: true,
@@ -726,7 +757,8 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                 runSpacing: desktop ? 8 : cell.height,
                                 children: [
                                   for (final action in _actions)
-                                    _actionButton(action),
+                                    if (!_fixedAction(action.id))
+                                      _actionButton(action),
                                 ],
                               ),
                         buttons: true,
@@ -735,6 +767,24 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                   ),
                 ),
               ),
+              if (_fixedActions.isNotEmpty) ...[
+                Divider(height: 1, color: DesktopChrome.rim),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: _keys(
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final action in _fixedActions)
+                          _actionButton(action),
+                      ],
+                    ),
+                    buttons: true,
+                  ),
+                ),
+              ],
               Padding(
                 padding: EdgeInsets.symmetric(
                   horizontal: cell.width * 2,
@@ -765,9 +815,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                           case final hint?)
                         '${hint.replaceAll('⇥', 'Tab').replaceAll('↵', 'Enter')} $label',
                   ].join('  ·  '),
-                  style: desktop
-                      ? DesktopChrome.text(size: 11, color: DesktopChrome.muted)
-                      : muted,
+                  style: desktop ? DesktopChrome.metadata() : muted,
                 ),
               ),
             ],

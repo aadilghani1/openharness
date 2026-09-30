@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
@@ -205,7 +205,7 @@ class _StoreCategoryState extends State<StoreCategory> {
                           ActionChip(
                             key: ValueKey('store-related:$category'),
                             avatar: Icon(
-                              LucideIcons.arrowUpRight300,
+                              AppIcons.arrowUpRight,
                               size: 14,
                               color: grid.AppPalette.textSecondary,
                             ),
@@ -302,7 +302,7 @@ class _DisciplineHero extends StatelessWidget {
                           ),
                         ),
                         Icon(
-                          LucideIcons.arrowRight300,
+                          AppIcons.arrowRight,
                           size: 16,
                           color: grid.AppPalette.textSecondary,
                         ),

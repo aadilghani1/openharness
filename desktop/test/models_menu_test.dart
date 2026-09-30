@@ -478,9 +478,6 @@ void main() {
       expect(app.swarms, [source]);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      expect(find.byType(NewHarnessForm), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-      await tester.pumpAndSettle();
       expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.swarms, [source]);
       if (command == 'manageMachines') {

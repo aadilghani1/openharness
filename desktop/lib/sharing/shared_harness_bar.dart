@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -84,7 +85,7 @@ class SharedHarnessBar extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final close = AppIconButton(
-            icon: Icons.close_rounded,
+            icon: AppIcons.close,
             tooltip: 'Close shared harness',
             onPressed: onClose,
           );
@@ -162,7 +163,14 @@ class SharedHarnessBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ExcludeSemantics(
-                child: Icon(Icons.circle, color: status.color, size: 6),
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: status.color,
+                  ),
+                ),
               ),
               const SizedBox(width: 6),
               Text(status.label, style: DesktopChrome.metadata()),

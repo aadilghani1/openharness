@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -13,9 +13,11 @@ import '../state/welcome_sessions.dart';
 import 'engine_identity.dart';
 import 'desktop_chrome.dart';
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/theme/status_line_style.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
 import 'terminal_text_action.dart';
+import 'status_line.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -25,8 +27,8 @@ import '../terminal/terminal_text.dart';
 ///
 /// With [app], it also offers what to pick up: the harnesses you were just
 /// with and the Claude Code and Codex conversations on your machines that
-/// Harness did not start ([WelcomeSessions]), numbered 1–9 like the terminal
-/// client's home. [onOpen] opens one in this tab, as Cmd-P would.
+/// Harness did not start ([WelcomeSessions]), limited to six recent visits.
+/// [onOpen] opens one in this tab, as Cmd-P would.
 class WorkspaceWelcome extends StatefulWidget {
   const WorkspaceWelcome({
     super.key,
@@ -53,7 +55,7 @@ class WorkspaceWelcome extends StatefulWidget {
 class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   // Resolve the icon at compile time. Lazy initialization of Lucide's large
   // generated library overflows the browser debug runtime's stack here.
-  static const _phoneIcon = LucideIcons.smartphone500;
+  static const _phoneIcon = AppIcons.smartphone;
   WelcomeSessions? _sessions;
   int _cursor = 0;
   final _focus = FocusNode(debugLabel: 'Welcome sessions');
@@ -376,10 +378,12 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   alignment: Alignment.centerLeft,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
-                    vertical: 9,
+                    vertical: 8,
                   ),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(
+                      grid.AppDesktop.rowRadius,
+                    ),
                   ),
                 ).copyWith(
                   side: WidgetStateProperty.resolveWith(
@@ -395,6 +399,39 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                 ),
             child: Row(
               children: [
+                ExcludeSemantics(
+                  child: Opacity(
+                    opacity: MediaQuery.highContrastOf(context) ? 1 : .65,
+                    child: ColorFiltered(
+                      // Desaturate the real mark, preserving its shading and
+                      // recognizable silhouette without competing with New.
+                      colorFilter: const ColorFilter.matrix([
+                        .2126,
+                        .7152,
+                        .0722,
+                        0,
+                        0,
+                        .2126,
+                        .7152,
+                        .0722,
+                        0,
+                        0,
+                        .2126,
+                        .7152,
+                        .0722,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                      ]),
+                      child: EngineMark(engine: row.engine, size: 18),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,18 +442,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.control(),
                       ),
-                      if (_recentContext(row) case final context?
-                          when context.isNotEmpty) ...[
+                      if (_recentContext(row) case final context?) ...[
                         const SizedBox(height: 2),
-                        Tooltip(
-                          message: context,
-                          child: Text(
-                            context,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ),
+                        context,
                       ],
                     ],
                   ),
@@ -424,7 +452,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                 const SizedBox(width: 16),
                 if (sessions.lastUsedAt(row) case final at?)
                   Text(
-                    harnessActivityAge(at, sessions.readAt),
+                    sessions.readAt.difference(at).inMinutes < 1
+                        ? 'now'
+                        : harnessActivityAge(at, sessions.readAt),
                     style: DesktopChrome.text(
                       size: 12,
                       color: DesktopChrome.muted,
@@ -437,14 +467,39 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
   }
 
-  String? _recentContext(SwarmDestination row) {
+  Widget? _recentContext(SwarmDestination row) {
     final context = row.promptContext;
-    if (context == null) return row.detail.isEmpty ? null : row.detail;
-    return [
-      context.machine,
-      context.project,
-      context.branch,
-    ].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
+    if (context == null) {
+      return row.detail.isEmpty
+          ? null
+          : Text(
+              row.detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            );
+    }
+    final prefs = appearancePrefsStore.value.prompt;
+    final parts = statusLineParts(
+      provider: '',
+      machine: prefs.machine ? context.machine ?? '' : '',
+      project: prefs.project ? context.project ?? '' : '',
+      branch: prefs.branch ? context.branch : null,
+      style: prefs.statusStyle,
+      separateMachine: true,
+    );
+    if (parts.text.isEmpty) return null;
+    return Tooltip(
+      message: parts.text,
+      child: StatusLine(
+        parts: parts,
+        color: prefs.color,
+        workspaceBar: true,
+        textAlign: TextAlign.left,
+        middleEllipsis: true,
+        surfaceBackground: grid.AppPalette.windowBg,
+      ),
+    );
   }
 
   /// The commands, each with its shortcut: the whole page before there is

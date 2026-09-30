@@ -350,7 +350,7 @@ void main({bool nativeSmoke = false}) {
             .dx,
       ),
     );
-    expect(_focused(tester, _start), isTrue);
+    expect(_focused(tester, _task), isTrue);
     await capture(tester, fixture, 'composer-dark');
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -366,9 +366,6 @@ void main({bool nativeSmoke = false}) {
   ) async {
     final fixture = await _mount(tester);
     for (final target in [
-      _agent,
-      find.byKey(const ValueKey('new-harness-field-project')),
-      _task,
       find.byKey(const ValueKey('new-harness-field-model')),
       find.byKey(const ValueKey('new-harness-field-approvals')),
       find.byKey(const ValueKey('new-harness-field-profile')),
@@ -376,6 +373,9 @@ void main({bool nativeSmoke = false}) {
       find.byKey(const ValueKey('new-harness-field-branch')),
       _close,
       _start,
+      _agent,
+      find.byKey(const ValueKey('new-harness-field-project')),
+      _task,
     ]) {
       await key(tester, LogicalKeyboardKey.tab);
       expect(
@@ -386,7 +386,10 @@ void main({bool nativeSmoke = false}) {
       );
     }
     await key(tester, LogicalKeyboardKey.tab, shift: true);
-    expect(_focused(tester, _close), isTrue);
+    expect(
+      _focused(tester, find.byKey(const ValueKey('new-harness-field-project'))),
+      isTrue,
+    );
     expect(fixture.app.launches, isEmpty);
   });
 
@@ -409,8 +412,6 @@ void main({bool nativeSmoke = false}) {
       expect(fixture.closed, 0);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(fixture.closed, 0);
-      await tester.tap(_close);
       expect(fixture.closed, 1);
       expect(fixture.app.launches, isEmpty);
     },
@@ -420,6 +421,7 @@ void main({bool nativeSmoke = false}) {
     'an agent becoming unavailable while Start is focused preserves Escape',
     (tester) async {
       final fixture = await _mount(tester, harnessId: 'fixture/review-tool');
+      await _focus(tester, _start);
       expect(_focused(tester, _start), isTrue);
       expect(fixture.box.requiredChoice, isNull);
       fixture.app.machineStates['m']!.dsh.replace(const []);
@@ -430,12 +432,41 @@ void main({bool nativeSmoke = false}) {
       expect(tester.widget<FilledButton>(_start).onPressed, isNull);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(fixture.closed, 0);
-      await tester.tap(_close);
       expect(fixture.closed, 1);
       expect(fixture.app.launches, isEmpty);
     },
   );
+
+  for (final submitKey in [
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+  ]) {
+    journey(
+      'a promptless agent without main directs ${submitKey.keyLabel} to the branch chooser',
+      (tester) async {
+        final fixture = await _mount(
+          tester,
+          engine: 'cursor',
+          missingMain: true,
+        );
+        expect(tester.widget<TextField>(_task).readOnly, isTrue);
+        expect(fixture.box.requiredChoice?.field, NewHarnessField.branch);
+        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+        await key(tester, submitKey);
+        await tester.pumpAndSettle();
+        expect(_chooser, findsOneWidget);
+        expect(fixture.box.field, NewHarnessField.branch);
+        expect(fixture.app.launches, isEmpty);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expect(fixture.closed, 0);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(fixture.closed, 1);
+      },
+    );
+  }
 
   for (final mouse in [true, false]) {
     journey(
@@ -579,8 +610,6 @@ void main({bool nativeSmoke = false}) {
       expect(tester.getSize(_surface).width, 680);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
-      expect(fixture.closed, 0);
-      await tester.tap(_close);
       expect(fixture.closed, 1);
     });
   }
@@ -606,7 +635,7 @@ void main({bool nativeSmoke = false}) {
       expect(find.text('Offline. Try again.'), findsWidgets);
       expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
       expect(
-        _focused(tester, _start),
+        _focused(tester, _task),
         isTrue,
         reason:
             'Failure should leave Return ready to retry without an extra Tab',
@@ -709,38 +738,35 @@ void main({bool nativeSmoke = false}) {
       findsNothing,
     );
     expect(tester.getSize(_surface).width, 680);
-    expect(_focused(tester, _start), isTrue);
+    expect(_focused(tester, _task), isTrue);
     expect(fixture.box.engine, 'claude');
     expect(fixture.box.worktree, isFalse);
     expect(fixture.box.mode, 'ask');
   });
 
-  journey(
-    'restored task focuses the editor while an empty draft focuses launch',
-    (tester) async {
-      final source = await _mount(tester);
-      source.box.setTask('Draft from earlier');
-      final draft = source.box.draft;
-      await tester.pumpWidget(const SizedBox());
-      final restored = await _mount(tester, draft: draft);
-      expect(restored.box.task, 'Draft from earlier');
-      expect(
-        tester.widget<TextField>(_task).controller!.text,
-        'Draft from earlier',
-      );
-      expect(_focused(tester, _task), isTrue);
-      expect(tester.getSize(_surface).width, 680);
-      restored.box.setTask('');
-      final empty = restored.box.draft;
-      await tester.pumpWidget(const SizedBox());
-      final emptyFixture = await _mount(tester, draft: empty);
-      expect(_task, findsOneWidget);
-      expect(_focused(tester, _start), isTrue);
-      expect(tester.getSize(_surface).width, 680);
-      expect(emptyFixture.box.project, draft.project);
-      expect(emptyFixture.box.worktree, draft.worktree);
-    },
-  );
+  journey('restored and empty drafts both focus the prompt', (tester) async {
+    final source = await _mount(tester);
+    source.box.setTask('Draft from earlier');
+    final draft = source.box.draft;
+    await tester.pumpWidget(const SizedBox());
+    final restored = await _mount(tester, draft: draft);
+    expect(restored.box.task, 'Draft from earlier');
+    expect(
+      tester.widget<TextField>(_task).controller!.text,
+      'Draft from earlier',
+    );
+    expect(_focused(tester, _task), isTrue);
+    expect(tester.getSize(_surface).width, 680);
+    restored.box.setTask('');
+    final empty = restored.box.draft;
+    await tester.pumpWidget(const SizedBox());
+    final emptyFixture = await _mount(tester, draft: empty);
+    expect(_task, findsOneWidget);
+    expect(_focused(tester, _task), isTrue);
+    expect(tester.getSize(_surface).width, 680);
+    expect(emptyFixture.box.project, draft.project);
+    expect(emptyFixture.box.worktree, draft.worktree);
+  });
 
   for (final brightness in [Brightness.dark, Brightness.light]) {
     for (final scale in [1.0, 1.6]) {

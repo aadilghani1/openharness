@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
@@ -129,7 +129,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   onPressed: widget.onTry == null
                       ? null
                       : () => widget.onTry!(example.prompt),
-                  icon: const Icon(LucideIcons.sparkles300, size: 17),
+                  icon: const Icon(AppIcons.sparkles, size: 17),
                   label: const Text('Try this prompt'),
                   style: FilledButton.styleFrom(
                     backgroundColor: grid.AppPalette.accent,
@@ -150,7 +150,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                       entry: widget.entry,
                       example: example,
                     ),
-                    icon: const Icon(LucideIcons.play300, size: 17),
+                    icon: const Icon(AppIcons.play, size: 17),
                     label: const Text('Watch real session'),
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size(0, 46),
@@ -160,7 +160,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   ),
                 AppIconButton(
                   key: ValueKey('store-copy-prompt:$i'),
-                  icon: LucideIcons.copy300,
+                  icon: AppIcons.copy,
                   tooltip: 'Copy prompt',
                   onPressed: () async {
                     await Clipboard.setData(

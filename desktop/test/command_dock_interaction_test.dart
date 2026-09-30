@@ -53,9 +53,6 @@ void main() {
     expect(box.mode, 'ask');
     expect(app.panes, hasLength(1));
     await key(tester, LogicalKeyboardKey.escape);
-    expect(find.byType(NewHarnessForm), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-    await tester.pumpAndSettle();
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
@@ -100,7 +97,15 @@ void main() {
       final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
       expect(
         find.descendant(of: row, matching: find.byType(EngineMark)),
-        findsNothing,
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<EngineMark>(
+              find.descendant(of: row, matching: find.byType(EngineMark)),
+            )
+            .engine,
+        previous.engine,
       );
       expect(
         find.descendant(of: row, matching: find.text('33m')),

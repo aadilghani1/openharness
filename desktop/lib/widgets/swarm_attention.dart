@@ -1,5 +1,6 @@
 import 'swarm_search_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -148,7 +149,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                   IconButton(
                     tooltip: 'Close notifications',
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: const Icon(AppIcons.close, size: 18),
                   ),
                 ],
               ),

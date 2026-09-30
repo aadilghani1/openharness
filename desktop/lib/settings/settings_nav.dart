@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
@@ -124,7 +124,7 @@ class _SettingsNavState extends State<SettingsNav> {
               child: Center(
                 child: SidebarItem(
                   key: const Key('settings-back-button'),
-                  icon: LucideIcons.arrowLeft300,
+                  icon: AppIcons.arrowLeft,
                   label: 'Back to app',
                   onTap: () => Navigator.of(context).maybePop(),
                 ),
@@ -205,7 +205,7 @@ class _SearchField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: 'Search settings',
         prefixIcon: Icon(
-          LucideIcons.search300,
+          AppIcons.search,
           size: grid.kFieldIconSize,
           color: grid.AppPalette.textFaint,
         ),

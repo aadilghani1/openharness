@@ -144,9 +144,6 @@ void main() {
         expect(app.swarms, hasLength(count));
         await key(tester, LogicalKeyboardKey.escape);
         expect(app.activeSwarm, same(store));
-        expect(find.byType(NewHarnessForm), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-        await tester.pumpAndSettle();
         expect(find.byType(NewHarnessForm), findsNothing);
         await tester.pumpWidget(const SizedBox());
       },
@@ -154,7 +151,7 @@ void main() {
   }
 
   testWidgets(
-    'returning from Store restores the creation draft and keeps defaults',
+    'returning from Store restores the creation draft and selected project',
     (tester) async {
       newHarnessOpensInBox = true;
       addTearDown(() => newHarnessOpensInBox = false);
@@ -198,7 +195,7 @@ void main() {
       expect(resumed.engine, draft.engine);
       expect(resumed.machineId, draft.machineId);
       expect(resumed.project.folder, draft.project.folder);
-      expect(app.projectHistory.selected('m'), '/work/saved');
+      expect(app.projectHistory.selected('m'), '/work/project');
       await key(tester, LogicalKeyboardKey.escape);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

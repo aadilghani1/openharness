@@ -62,7 +62,6 @@ void main() {
     grid.AppType.titleSize,
     grid.AppType.headingSize,
     grid.AppType.bodySize,
-    grid.AppType.monoLabelSize,
     grid.AppType.captionSize,
     DesktopChrome.heading().fontSize!,
     DesktopChrome.text().fontSize!,

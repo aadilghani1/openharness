@@ -129,9 +129,10 @@ class _Fixture {
 
   NewHarnessController open({
     String machine = 'm',
-    String engine = 'codex',
+    String? engine = 'codex',
     String folder = '/repo',
     NewHarnessDraft? draft,
+    bool desktop = false,
   }) {
     final box = NewHarnessController(
       app,
@@ -140,6 +141,7 @@ class _Fixture {
       folder: folder,
       draft: draft,
     );
+    box.useDesktopChoices(desktop);
     addTearDown(box.dispose);
     return box;
   }
@@ -175,6 +177,97 @@ String _storedWorktrees(Map<String, Map<String, Object?>> machines) =>
     });
 
 void main() {
+  test(
+    'explicit agent defaults persist without inventing a recent launch',
+    () async {
+      final storage = _Store();
+      final preferences = AgentPreference(storage);
+      await preferences.remember('grok');
+      await preferences.selectLaunch('claude', harnessId: 'autonomous/blender');
+      await preferences.selectLaunch('codex', harnessId: 'autonomous/blender');
+      final restored = AgentPreference(storage);
+      await restored.load();
+      expect(restored.harness, 'autonomous/blender');
+      expect(restored.value, 'codex');
+      expect(restored.engineFor('autonomous/blender'), 'codex');
+      expect(restored.recentChoices, ['grok']);
+      await restored.selectLaunch('claude');
+      expect(restored.harness, isNull);
+      expect(restored.engineFor(null), 'claude');
+      expect(restored.engineFor('autonomous/blender'), 'codex');
+    },
+  );
+
+  test('desktop remembers selected agent and repo before launching', () async {
+    final storage = _Store();
+    final fixture = _Fixture(storage: storage);
+    final box = fixture.open(desktop: true);
+    await _settle();
+    _engine(box, 'claude');
+    box.setFolder('/chosen/project');
+    await _settle();
+    expect(fixture.app.agentPreference.value, 'claude');
+    expect(fixture.app.projectHistory.selected('m'), '/chosen/project');
+    expect(fixture.connections.values.expand((c) => c.creates), isEmpty);
+    final next = fixture.open(engine: null, desktop: true);
+    await _settle();
+    expect(next.engine, 'claude');
+  });
+
+  test(
+    'desktop defaults to main with saved worktree off and sends that branch',
+    () async {
+      final fixture = _Fixture();
+      await fixture.app.projectHistory.selectWorktree('m', '/repo', false);
+      final box = fixture.open(desktop: true);
+      await _settle();
+      expect(box.worktree, isFalse);
+      expect(box.branchRef, 'refs/heads/main');
+      expect(box.projectFolderRequest!.branchRef, 'refs/heads/main');
+      box.focusField(NewHarnessField.branch);
+      box.accept(
+        box.options.singleWhere((row) => row.id == 'refs/heads/feature'),
+      );
+      final restored = fixture.open(draft: box.draft, desktop: true);
+      final fresh = fixture.open(desktop: true);
+      await _settle();
+      expect(restored.branchRef, 'refs/heads/feature');
+      expect(fresh.branchRef, 'refs/heads/main');
+      expect(await fresh.create(), NewHarnessOutcome.created);
+      expect(
+        fixture.connections['m']!.creates.single['branchRef'],
+        'refs/heads/main',
+      );
+    },
+  );
+
+  test('desktop does not substitute a remote or different branch for missing local main', () async {
+    final fixture = _Fixture();
+    await fixture.app.projectHistory.selectWorktree('m', '/repo', false);
+    final connection = fixture.connections.putIfAbsent(
+      'm',
+      () => _Connection('m'),
+    );
+    connection.gitAnswers['/repo'] = {
+      ..._git,
+      'branches': [
+        {'ref': 'refs/heads/feature', 'name': 'feature'},
+        {
+          'ref': 'refs/remotes/origin/main',
+          'name': 'origin/main',
+          'remote': true,
+        },
+      ],
+    };
+    final box = fixture.open(desktop: true);
+    await _settle();
+    expect(box.branchRef, isNull);
+    expect(box.requiredChoice?.field, NewHarnessField.branch);
+    expect(box.branchLabel, 'main · unavailable');
+    box.toggleWorktree();
+    expect(box.branchRef, 'refs/remotes/origin/main');
+  });
+
   test(
     'launch recency interleaves harnesses and agents across reloads',
     () async {

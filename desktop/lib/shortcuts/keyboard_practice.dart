@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -517,7 +518,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
         hintText: hint,
         hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
         prefixIcon: search
-            ? Icon(Icons.search, size: 18, color: DesktopChrome.muted)
+            ? Icon(AppIcons.search, size: 18, color: DesktopChrome.muted)
             : null,
         filled: true,
         fillColor: DesktopChrome.field,
@@ -694,8 +695,8 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                                       children: [
                                         Icon(
                                           practiced
-                                              ? Icons.check_circle_outline
-                                              : Icons.circle_outlined,
+                                              ? AppIcons.circleCheck
+                                              : AppIcons.circle,
                                           size: 18,
                                           color: practiced
                                               ? DesktopChrome.accent
@@ -727,7 +728,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                                         ),
                                         const SizedBox(width: 8),
                                         Icon(
-                                          Icons.chevron_right,
+                                          AppIcons.chevronRight,
                                           size: 18,
                                           color: DesktopChrome.muted,
                                         ),
@@ -766,7 +767,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
                             Row(
                               children: [
                                 Icon(
-                                  Icons.check_circle_outline,
+                                  AppIcons.circleCheck,
                                   color: DesktopChrome.accent,
                                   size: 20,
                                 ),

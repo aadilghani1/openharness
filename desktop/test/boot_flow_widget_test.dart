@@ -2,6 +2,7 @@ import 'support/resource_picker.dart';
 import 'support/workspace_tools.dart';
 import 'swarm_interactions_test.dart' show chord;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/services.dart';
 
 import 'dart:async';
@@ -546,7 +547,7 @@ void main() {
     // the wordmark left when the screen stopped being a logo over a button.
     expect(find.text('Your agents, wherever they run'), findsOneWidget);
     expect(find.text('Sign in'), findsOneWidget);
-    expect(find.byIcon(Icons.login), findsOneWidget);
+    expect(find.byIcon(AppIcons.logIn), findsOneWidget);
   });
 
   testWidgets('bootstrapping shows branded startup screen (pre-login)', (

@@ -27,7 +27,7 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Teams / ancillary dialogs | Swarm conversation, questions, member controls and Quick Start use desktop typography and controls; polling, answers, learning steps and storage unchanged |
 | Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu and compact Find options implemented; keyboard navigation and terminal Find sizing retained |
 | Daemon panels | Companion settings, pairing, proposal controls and consent use desktop controls; artwork, reveal frames, state and approval gates retained |
-| Native tabs / footer / menus | Familiar compact tabs and footer preserved; modals hide native footer/AX actions, with an explicitly passive preview for status customization |
+| Native tabs / footer / menus | Compact tabs retained; model/effort at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
 | Linux / browser presentation | Shared light/dark, narrow and enlarged-text fixtures cover responsive behavior; physical Linux/browser platform validation is not claimed |
 
 Legacy/test-only paths (including the old NewAgentDialog entry when
@@ -120,3 +120,44 @@ physical AppKit IME or VoiceOver interaction. No live user data in saved preview
   semantics and injected-key tests do not establish those results.
 
 The experimental branch remains unmerged for the user's visual review.
+
+
+### Coherent desktop system and focused footer, 2026-09-29
+
+- The specification now defines the task/project/machine hierarchy, shared
+  surface and control tokens, interaction defaults, one 95% modal veil, and one
+  regular outline icon family. `AppIcons` replaces mixed Material/Lucide weights
+  throughout app controls; native menus use the matching regular SF recipe.
+  Agent/provider logos, terminal glyphs and companion artwork retain identity.
+- Cmd-N and Cmd-P, nested pickers, Rename, Move Pane, layout, task routing,
+  connection forms and resource editing use shared geometry and focus states.
+  API editor actions remain visible while the fields scroll. Explicit launch
+  choices persist; fresh forms default to main without overwriting drafts.
+- Welcome/New Tab shows at most six secondary recents, small monochrome agent
+  marks, a 56-point separation and “now” below one minute. Context uses the
+  actual customized status renderer with contrast correction for unbacked ink.
+  No-history welcome has no empty recents section or blank footer.
+- Model/effort is left; focused machine/project/branch/PR is right in both
+  Flutter and AppKit. Branch actions retain their existing target guards.
+  Pane headers retain their quiet titles and hover-only close control.
+- Full suite: **4,645 passed, 16 skipped**. The creation controller/form gate
+  covers **3,894/3,894 executable lines (100%)**. Subsequent icon presentation
+  refinements passed the relevant **76-test** footer/dialog/Store/sharing/pane
+  rerun; no creation logic changed after the full coverage run.
+- Static analysis is clean. **999 AppKit titlebar checks** and **19 native macOS
+  journeys** pass across four sequential batches (5, 5, 4, 5). The native fixture
+  uses fake transports and in-memory workspaces; it starts no real agent.
+- Final real-font synthetic renders were inspected for creation and its machine
+  submenu, search, welcome with/without history, rename/move/layout, focused
+  footer, pane close and customized status styles. Both appearances and narrow,
+  enlarged-text cases are covered. Screenshot fixtures now load the actual
+  regular outline font rather than substituting Ahem squares.
+- The normal macOS debug build succeeds and is open for review. Live review
+  confirmed the focused footer's left/right arrangement, branch/PR click target,
+  matching Cmd-N/Cmd-P veils covering the native footer, Escape dismissal, and
+  six quieter New Tab recents without an empty footer. Existing windows were
+  restored; no real agent was launched. The design system file is open in
+  TextEdit for review.
+- Physical IME, VoiceOver and native Linux/browser execution remain outside this
+  verification. These results do not claim those platform checks or whole-app
+  code coverage. The branch remains experimental and unmerged.

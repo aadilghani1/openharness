@@ -154,9 +154,6 @@ void main() {
         await tester.pumpAndSettle();
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        expect(find.byType(NewHarnessForm), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-        await tester.pumpAndSettle();
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.focusedPane, same(pane));
         expect(frames, isEmpty);

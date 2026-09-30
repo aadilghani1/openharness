@@ -343,7 +343,7 @@ void main() {
   );
 
   testWidgets(
-    'standalone desktop composer submits on Return and closes only with X',
+    'standalone desktop composer submits on Return and closes with Escape',
     (tester) async {
       final fixture = await _mount(tester, withKeymap: false);
       await tester.enterText(_task, 'A fallback keyboard task');
@@ -354,8 +354,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(fixture.app.launches, hasLength(2));
       await key(tester, LogicalKeyboardKey.escape);
-      expect(fixture.closes, 0);
-      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
       expect(fixture.closes, 1);
     },
   );

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -432,7 +433,7 @@ class _AgentPickerState extends State<AgentPicker> {
                             ),
                           )
                         : Icon(
-                            Icons.search,
+                            AppIcons.search,
                             size: _fontSize + 4,
                             color: Colors.white60,
                           ),
@@ -441,7 +442,7 @@ class _AgentPickerState extends State<AgentPicker> {
                   const Padding(
                     padding: EdgeInsets.only(left: 12, right: 22),
                     child: Icon(
-                      Icons.keyboard_arrow_down,
+                      AppIcons.chevronDown,
                       size: 22,
                       color: Colors.white60,
                     ),
@@ -868,7 +869,7 @@ class _AgentPickerState extends State<AgentPicker> {
                 ),
               )
             : current
-            ? const Icon(Icons.check, size: 16, color: Colors.white60)
+            ? const Icon(AppIcons.check, size: 16, color: Colors.white60)
             : null,
         onTap: () => _choose(choice),
       ),

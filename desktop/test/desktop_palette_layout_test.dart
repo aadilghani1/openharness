@@ -9,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/widgets/layout_palette.dart';
 import 'package:harness/widgets/move_pane_palette.dart';
+import 'package:harness/widgets/swarm_dialogs.dart';
 
 import 'support/real_fonts.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -16,6 +17,12 @@ import 'swarm_state_test.dart' show createApp;
 void main() {
   setUpAll(() async {
     await loadRealFonts();
+    await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
+          rootBundle.load(
+            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
+          ),
+        ))
+        .load();
     if (Platform.isMacOS &&
         Platform.environment['HARNESS_PALETTE_CAPTURE_DIR'] != null) {
       final font = ByteData.sublistView(
@@ -31,9 +38,11 @@ void main() {
   });
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 1.7]) {
-      for (final move in [false, true]) {
+      for (final surface in ['layout', 'move', 'rename']) {
+        final move = surface == 'move';
+        final rename = surface == 'rename';
         testWidgets(
-          '${move ? 'Move' : 'Layout'} is readable and reachable in ${brightness.name} at $scale',
+          '$surface is readable and reachable in ${brightness.name} at $scale',
           (tester) async {
             final size = scale == 1
                 ? const Size(860, 620)
@@ -71,7 +80,9 @@ void main() {
                   home: Scaffold(
                     body: Builder(
                       builder: (context) => TextButton(
-                        onPressed: () => move
+                        onPressed: () => rename
+                            ? showSwarmRenameDialog(context, 'Desktop')
+                            : move
                             ? showMovePanePalette(context, app)
                             : showLayoutPalette(context, app),
                         child: const Text('Open'),
@@ -92,28 +103,42 @@ void main() {
               expect(last.top, greaterThan(0));
               expect(last.bottom, lessThan(size.height));
             }
-            final close = tester.getRect(find.byTooltip('Close'));
+            final dismiss = rename
+                ? find.text('Cancel')
+                : find.byTooltip('Close');
+            final close = tester.getRect(dismiss);
             expect(close.top, greaterThanOrEqualTo(24));
             expect(close.bottom, lessThan(size.height - 24));
             final directory =
                 Platform.environment['HARNESS_PALETTE_CAPTURE_DIR'];
             if (directory != null) {
+              final previousShadows = debugDisableShadows;
+              debugDisableShadows = false;
+              final boundary =
+                  key.currentContext!.findRenderObject()!
+                      as RenderRepaintBoundary;
+              void repaint(RenderObject object) {
+                object.markNeedsPaint();
+                object.visitChildren(repaint);
+              }
+
+              repaint(boundary);
+              await tester.pump();
               await tester.runAsync(() async {
-                final boundary =
-                    key.currentContext!.findRenderObject()!
-                        as RenderRepaintBoundary;
                 final image = await boundary.toImage(pixelRatio: 1);
                 final bytes = await image.toByteData(
                   format: ui.ImageByteFormat.png,
                 );
                 await Directory(directory).create(recursive: true);
-                await File(
-                  '$directory/${move ? 'move' : 'layout'}-${brightness.name}-$scale.png',
-                ).writeAsBytes(bytes!.buffer.asUint8List());
+                await File('$directory/$surface-${brightness.name}-$scale.png')
+                    .writeAsBytes(bytes!.buffer.asUint8List());
                 image.dispose();
               });
+              debugDisableShadows = previousShadows;
+              repaint(boundary);
+              await tester.pump();
             }
-            await tester.tap(find.byTooltip('Close'));
+            await tester.tap(dismiss);
             await tester.pumpAndSettle();
             expect(app.activeSwarmId, source);
             expect(

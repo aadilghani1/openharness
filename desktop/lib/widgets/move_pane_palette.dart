@@ -1,9 +1,9 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import 'desktop_chrome.dart';
 
@@ -50,12 +50,12 @@ List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
         detail: switch (swarm.panes
             .where((pane) => pane.agentId != null)
             .length) {
-          0 => 'empty',
+          0 => 'No harnesses',
           1 => '1 harness',
           final count => '$count harnesses',
         },
       ),
-  const _Destination(label: 'New Tab', detail: 'a tab of its own'),
+  const _Destination(label: 'New Tab', detail: 'Create a tab'),
 ];
 
 class _MovePanePalette extends StatefulWidget {
@@ -185,29 +185,17 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
         elevation: 0,
         child: DesktopDialogSurface(
           child: SizedBox(
-            width: 420,
+            width: grid.AppDesktop.formWidth,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Move pane to',
-                          style: DesktopChrome.heading(),
-                        ),
-                      ),
-                      AppIconButton(
-                        icon: Icons.close_rounded,
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    ],
-                  ),
+                DesktopDialogHeader(
+                  title: 'Move Pane',
+                  detail: 'Choose a destination tab.',
+                  onClose: () => Navigator.of(context).pop(),
                 ),
+                Divider(height: 1, color: DesktopChrome.rim),
                 Flexible(
                   child: SingleChildScrollView(
                     child: Column(
@@ -227,8 +215,9 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
                     ),
                   ),
                 ),
+                Divider(height: 1, color: DesktopChrome.rim),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
                   child: Text(
                     '↑↓ Select  ·  Return Move  ·  Esc Cancel',
                     style: DesktopChrome.metadata(),
@@ -260,9 +249,10 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ink = selected
-        ? grid.AppPalette.textPrimary
-        : grid.AppPalette.textSecondary;
+    final ink = selected ? DesktopChrome.onSelection : DesktopChrome.foreground;
+    final muted = selected
+        ? DesktopChrome.selectionDetail
+        : DesktopChrome.muted;
     return Semantics(
       button: true,
       selected: selected,
@@ -277,31 +267,27 @@ class _Row extends StatelessWidget {
             child: InkWell(
               onTap: onTap,
               canRequestFocus: false,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
               child: Container(
                 key: ValueKey('move-pane-destination-$index'),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
-                  vertical: 10,
+                  vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: selected ? grid.AppSurface.selectedFill : null,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: selected ? DesktopChrome.accent : Colors.transparent,
-                  ),
+                  color: selected ? DesktopChrome.activeSelection : null,
+                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 ),
                 child: Row(
                   children: [
-                    SizedBox(
-                      width: 18,
-                      child: Text(
-                        index < 9 ? '${index + 1}' : '',
-                        style: grid.AppType.monoMeta(
-                          color: grid.AppPalette.textFaint,
-                        ),
-                      ),
+                    Icon(
+                      destination.id == null
+                          ? AppIcons.plus
+                          : AppIcons.panelsTopLeft,
+                      color: ink,
+                      size: 18,
                     ),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -315,18 +301,15 @@ class _Row extends StatelessWidget {
                           const SizedBox(height: 2),
                           Text(
                             destination.detail,
-                            style: DesktopChrome.metadata(),
+                            style: DesktopChrome.metadata(color: muted),
                           ),
                         ],
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Icon(
-                      destination.id == null
-                          ? Icons.add_rounded
-                          : Icons.tab_rounded,
-                      color: DesktopChrome.muted,
-                      size: 18,
+                    Text(
+                      index < 9 ? '${index + 1}' : '',
+                      style: grid.AppType.monoMeta(color: muted),
                     ),
                   ],
                 ),

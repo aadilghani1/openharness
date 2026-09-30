@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -156,11 +155,10 @@ void main() {
       final search = await mount(tester);
       for (var step = 0; step < 20; step++) {
         await key(tester, LogicalKeyboardKey.tab);
-        if (FocusManager.instance.primaryFocus?.context
-                ?.findAncestorWidgetOfExactType<
-                  CupertinoSlidingSegmentedControl<String>
-                >() !=
-            null) {
+        if (tester
+            .widget<Focus>(find.byKey(const ValueKey('search-scopes')))
+            .focusNode!
+            .hasFocus) {
           break;
         }
       }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_type.dart';
@@ -180,7 +181,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
                           onPressed: machineId == null || picking
                               ? null
                               : browse,
-                          icon: const Icon(Icons.folder_open, size: 17),
+                          icon: const Icon(AppIcons.folderOpen, size: 17),
                           label: Text(
                             path ?? 'Choose folder',
                             maxLines: 1,

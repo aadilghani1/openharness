@@ -60,21 +60,22 @@ Desktop 1.2.27 and must not be merged without the user's approval.
   access when selected. Worktree choices are remembered per machine/project.
   Projects without a saved choice keep Worktree on; agents without a saved
   approval mode keep Auto-approve. Drafts take precedence over these defaults.
-- Enter on the initially focused New harness launches without an extra step.
-  Nonempty restored messages receive editor focus. The task shortcut focuses
+- Fresh and restored task drafts focus the prompt. Enter launches without an
+  extra step. Explicit agent and project selections become remembered defaults;
+  use recents still record actual launches. The task shortcut focuses
   the editor; the former Options shortcut opens Model directly (Repo for
   Terminal). Terminal keeps the editor read-only and outside keyboard
   traversal while preserving a carried message.
 - In the task editor, Enter submits; Shift-Enter inserts a newline. Cmd-Enter
   remains a remappable launch shortcut. Opening a chooser does not submit the task.
-  Only the X closes the composer. Escape and outside clicks back out of a
-  chooser but leave the main form and its draft open. X remains available while
+  Escape and outside clicks dismiss the innermost chooser, then the main form,
+  preserving its draft. X directly dismisses the composer and remains available while
   a chooser is open. Existing pending-launch checks still protect unresolved
   creation receipts.
   A choice or cancellation returns focus to the originating control. Tab and
   Shift-Tab dismiss a chooser without applying a value and continue form traversal.
-- Focus stays inside the active dialog. New harness receives initial focus for
-  empty drafts; restored tasks receive editor focus. Tab from New harness wraps
+- Focus stays inside the active dialog. The prompt receives initial focus;
+  Terminal focuses New Harness because it has no task. Tab from New Harness wraps
   to Agent, then Repo, message, Model, Approvals, Profile, Worktree,
   Branch, and Close. Shift-Tab reaches Close. Tab reaches each visible control without
   stopping on hidden fields. Arrow keys navigate searchable option lists.
@@ -103,8 +104,8 @@ Desktop 1.2.27 and must not be merged without the user's approval.
   Filters edit the existing searchable prefixes; typing prefixes still works.
   Sessions show their context in the second line. A visible preview toggle
   keeps session history and resource management available, with their existing
-  keyboard controls and safety checks. Tab traverses the toolbar, segmented
-  scopes, and preview actions; Up/Down navigates results. Escape returns from
+  keyboard controls and safety checks. Tab traverses the toolbar, the scope-pill
+  group, and preview actions; Up/Down navigates results. Escape returns from
   management controls to search before dismissing the dialog.
 - System UI typography is used for app headings, controls, fields, shortcut
   browsing, and task text. Explicit code, paths, workspace bars, and terminal

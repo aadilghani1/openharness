@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
@@ -451,7 +452,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           onPressed: widget.onClose,
           tooltip: 'Close daemon',
           style: _buttonStyle,
-          icon: const Icon(Icons.close, size: 18),
+          icon: const Icon(AppIcons.close, size: 18),
         ),
       ),
     ],
@@ -634,7 +635,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       builder: (context, constraints) => Row(
         children: [
           Icon(
-            complete ? Icons.check_circle_rounded : Icons.circle_outlined,
+            complete ? AppIcons.circleCheck : AppIcons.circle,
             size: 18,
             color: complete ? DesktopChrome.accent : _muted,
           ),

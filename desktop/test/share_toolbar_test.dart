@@ -1,10 +1,10 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/settings/experimental_features.dart';
@@ -74,7 +74,7 @@ void main() {
   final input = <TerminalBinaryFrame>[];
 
   // Initialize the icon library before the deep viewer build stack in Chrome.
-  setUpAll(() => expect(LucideIcons.refreshCw.codePoint, greaterThan(0)));
+  setUpAll(() => expect(AppIcons.refreshCw.codePoint, greaterThan(0)));
 
   setUp(() {
     connection = _SharingConnection();
