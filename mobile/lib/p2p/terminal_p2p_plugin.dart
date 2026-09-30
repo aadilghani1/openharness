@@ -113,6 +113,20 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// `terminal_ready` decides whether the stream lands in [_p2pStreams].
   final _pendingOpens = <String>{};
 
+  /// Streams that came up on the relay and have not yet had their first keyframe — each moved to
+  /// the channel as that keyframe arrives, if the channel is up by then ([observeWsBinary]).
+  ///
+  /// ⚠️ **The gap this closes.** [_promoteOpenStreams] runs once, as the channel opens, over the
+  /// streams already READY. One whose open went out on the relay but whose `terminal_ready` had not
+  /// come back yet at that moment was never walked, and stayed on the relay for as long as it
+  /// lived. Rare while an open waited for the channel; routine once it stopped waiting
+  /// ([prepareOpen]), because the launch's first open and the channel now come up side by side.
+  ///
+  /// After the first keyframe and not at `terminal_ready`: the migration's first phase is a resync
+  /// whose ANSWERING keyframe is what [observeWsBinary] takes as "drained, flip now" — started
+  /// before the open's own keyframe, that keyframe would be taken for the answer.
+  final _promoteAfterFirstFrame = <String>{};
+
   /// streamId → when its migration to p2p started.
   final _migrating = <String, DateTime>{};
 
@@ -195,6 +209,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _upgradeWaitResolve = null;
     _p2pStreams.clear();
     _pendingOpens.clear();
+    _promoteAfterFirstFrame.clear();
     _streams.clear();
     _migrating.clear();
     unawaited(shadow?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
@@ -364,6 +379,11 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     final header = peekTerminalLocal(localFrame);
     if (header == null) return;
     final streamId = header.streamId;
+    // Taken off on the stream's first keyframe whichever branch below runs: it is owed one
+    // promotion attempt, at that frame, and never another from here — see [_promoteAfterFirstFrame].
+    final firstKeyframe =
+        header.kind == TerminalBinaryKind.keyframe &&
+        _promoteAfterFirstFrame.remove(streamId);
     if (header.kind == TerminalBinaryKind.keyframe &&
         _migrating.containsKey(streamId) &&
         !_p2pStreams.contains(streamId)) {
@@ -375,6 +395,9 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       // Suppressed while migrating: during phase 2 the responder may still emit
       // relay-routed output until ITS flip lands, and that is not p2p breaking.
       await _demote('relay_binary_received');
+    } else if (firstKeyframe && _link?.isReady == true) {
+      // Came up on the relay after the channel was already up — nothing else would move it.
+      _promote(streamId);
     }
   }
 
@@ -420,7 +443,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       final streamId = header.streamId;
       // Phase 2 of a live migration confirmed: this stream's bytes are genuinely
       // arriving over p2p — re-arm the ordinary demote-on-mismatch rule for it.
-      _migrating.remove(streamId);
+      await _confirmMigration(streamId);
       // Drain-barrier confirmation for an upgrade in flight: the OLD connection's
       // answer to the resync it sent itself, proving everything before is accounted for.
       if (_upgradeDraining.remove(streamId) != null &&
@@ -446,13 +469,22 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         : '';
     // Any p2p-delivered frame for a stream still migrating is itself proof the
     // responder committed its flip.
-    if (wire == _Wire.p2p && streamId.isNotEmpty) _migrating.remove(streamId);
+    if (wire == _Wire.p2p && streamId.isNotEmpty) {
+      await _confirmMigration(streamId);
+    }
     if (type == 'terminal_ready' &&
         requestId.isNotEmpty &&
         streamId.isNotEmpty) {
       _streams.add(streamId);
-      if (_pendingOpens.remove(requestId) && wire == _Wire.p2p) {
+      final openedOnChannel = _pendingOpens.remove(requestId);
+      if (openedOnChannel && wire == _Wire.p2p) {
         _p2pStreams.add(streamId);
+      }
+      // Only a stream that went to the relay because the channel was not up when it opened
+      // ([prepareOpen]). One that asked for the channel and was answered on the relay anyway is
+      // the responder's choice, and left where the responder put it, as before.
+      if (!openedOnChannel && wire == _Wire.relay) {
+        _promoteAfterFirstFrame.add(streamId);
       }
       // Derived from the routing table's own membership, not an echo of `wire`, so
       // a stale terminal_ready can never report a mode that is not actually routing.
@@ -463,6 +495,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       _p2pStreams.remove(streamId);
       _streams.remove(streamId);
       _migrating.remove(streamId);
+      _promoteAfterFirstFrame.remove(streamId);
     }
     // A frame for a stream still marked p2p but physically delivered over the relay:
     // a quieter, single-stream demotion than [_demote] — still worth telling the app.
@@ -488,19 +521,31 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
 
   // ── Outbound ──────────────────────────────────────────────────────────────
 
+  /// Whether this open rides the channel: yes if it is up right now, and otherwise the relay, AT
+  /// ONCE — the stream then moves to the channel on its own once it opens ([_promoteOpenStreams],
+  /// or [_promoteAfterFirstFrame] for one that comes up after the channel did).
+  ///
+  /// ⚠️ **Deliberately not the CLI's rule, which waits up to the policy's `openWait` for the
+  /// channel (owner, 2026-09-30).** On a phone that wait landed on the one open somebody is staring
+  /// at: the channel only starts negotiating once the socket is up, which is also the moment the
+  /// launch opens its first terminal — so every launch waited for it. Measured on the simulator: a
+  /// launch took 6.1s to its first live screen, 2.0s of it this wait (the backend's `openWait` at
+  /// 2500ms, the channel taking 1.7–2.8s to connect); without the wait, 3.5s.
+  ///
+  /// What it costs instead: the first seconds of a stream ride the relay — a relay round trip per
+  /// keystroke and relay bandwidth — and each such stream is moved over with two resyncs, which
+  /// the terminal takes as two keyframes. Both are cheaper than a blank screen.
+  ///
+  /// Nothing is reported to the backend for it (it used to send `open_wait_elapsed`): no wait ran
+  /// out, and the channel's own outcome is still reported when it lands or gives up.
   @override
   Future<bool> prepareOpen(String requestId) async {
     final link = _link;
-    final policy = _policy;
-    if (link == null || policy == null || _disposed) return false;
-    final ready = link.isReady || await link.waitUntilReady(policy.openWait);
-    if (_disposed) return false;
-    if (ready) {
-      _pendingOpens.add(requestId);
-    } else {
-      _reportP2pResult('relay', reason: 'open_wait_elapsed');
+    if (link == null || _policy == null || _disposed || !link.isReady) {
+      return false;
     }
-    return ready;
+    _pendingOpens.add(requestId);
+    return true;
   }
 
   @override
@@ -550,6 +595,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     if (closing != null) {
       _streams.remove(closing);
       _migrating.remove(closing);
+      _promoteAfterFirstFrame.remove(closing);
     }
     return false;
   }
@@ -626,18 +672,53 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// resync over p2p, which is what makes the responder flip its routing too.
   void _promoteOpenStreams() {
     for (final streamId in _streams) {
-      if (_p2pStreams.contains(streamId) || _migrating.containsKey(streamId)) {
-        continue;
-      }
-      _migrating[streamId] = _now();
-      unawaited(
-        host.send({
-          'type': 'terminal_resync',
-          'payload': {'streamId': streamId},
-        }),
-      );
+      _promote(streamId);
     }
   }
+
+  /// Phase 1 of moving one relay stream onto the channel: a resync over the socket, whose answering
+  /// keyframe [observeWsBinary] then commits. A stream already on the channel, or already on its
+  /// way, is left alone.
+  ///
+  /// Either way it no longer waits in [_promoteAfterFirstFrame]: that is a stream's one attempt,
+  /// and a stream walked here has had it — a migration that then goes unanswered is swept
+  /// ([_sweepMigrations]) and not started over by the keyframe that follows.
+  void _promote(String streamId) {
+    _promoteAfterFirstFrame.remove(streamId);
+    if (_p2pStreams.contains(streamId) || _migrating.containsKey(streamId)) {
+      return;
+    }
+    _migrating[streamId] = _now();
+    _log('migrate · start stream=${_short(streamId)}');
+    unawaited(
+      host.send({
+        'type': 'terminal_resync',
+        'payload': {'streamId': streamId},
+      }),
+    );
+  }
+
+  /// A frame for [streamId] arrived over the channel. If the stream was migrating, that is the
+  /// proof the responder flipped: the migration is over, and the app is told the stream's wire.
+  ///
+  /// ⚠️ **The telling is new (owner, 2026-09-30).** A migrated stream used to keep the `relay` badge
+  /// its `terminal_ready` gave it, whatever wire its bytes actually took after — harmless while a
+  /// migration was the rare case, misleading once every stream opened during a launch goes
+  /// through one ([prepareOpen]). The upgrade path already re-tells its streams for the same
+  /// reason (see [_attemptUpgrade]'s cutover).
+  Future<void> _confirmMigration(String streamId) async {
+    final startedAt = _migrating.remove(streamId);
+    if (startedAt == null) return;
+    _log(
+      'migrate · done stream=${_short(streamId)} via=${linkModeFor(streamId)}'
+      ' took=${_now().difference(startedAt).inMilliseconds}ms',
+    );
+    await _dispatchLinkMode(streamId, linkModeFor(streamId));
+  }
+
+  /// Enough of a stream id to tell a launch's few streams apart in the log.
+  static String _short(String streamId) =>
+      streamId.length > 8 ? streamId.substring(0, 8) : streamId;
 
   Future<void> _commitMigration(String streamId) async {
     final link = _link;
