@@ -8,11 +8,10 @@ below the circle and square fade to a faint line and the figure carries the icon
 Unlike the rounds before it this revision carries no clip path: its own rounded
 tile is the first element and nothing is drawn outside it.
 
-The macOS menu bar uses a lowercase `hn` lettermark outlined from
-[Departure Mono Regular](https://departuremono.com/) 1.500 by Helena Zhang
-(SIL Open Font License 1.1). Its pixel forms occupy 18 × 12pt inside a 20pt canvas.
-The letters are stored as vector paths, without a runtime font dependency, with
-enough space beside them for the bottom-right unread badge. Its source is
+The macOS menu bar uses the team's September 30 portrait symbol from
+`team-symbols-2026-09-30/Symbol Harness_dark.svg`, drawn at 20pt.
+The original vector paths and transparent cutouts are preserved, with enough
+space beside the mark for the bottom-right unread badge. Its source is
 `desktop/macos/Runner/Assets.xcassets/HarnessStatusIcon.imageset/HarnessStatusIcon.svg`;
 edit that vector directly. AppKit tints the template for the menu bar's appearance
 and composes the unread badge at runtime, slightly outside the mark to keep

@@ -181,7 +181,7 @@ upstream package upgrade without preserving the local rendering and IME fixes.
 
 ## Harness manager
 
-On macOS, a pixel-style `hn` in Departure Mono follows the system menu bar's appearance and
+On macOS, the Harness portrait symbol follows the system menu bar's appearance and
 carries a small circular unread badge at its bottom-right corner,
 including zero (`99+` above 99; the tooltip keeps the exact count). Open it for
 sessions with unread results or questions, grouped

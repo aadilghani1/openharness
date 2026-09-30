@@ -1,4 +1,4 @@
-// Preview app icons using the approved Departure Mono menu bar lettermark.
+// Preview app icons using the original Departure Mono lettermark.
 // Run from the repository root on macOS:
 //   swift docs/branding/app-logo/render-hn-dock-options.swift
 // Writes review SVGs, PNGs, and Dock mockups; does not replace shipping app icons.
@@ -8,7 +8,7 @@ _ = NSApplication.shared
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let folder = root.appendingPathComponent("docs/branding/app-logo/hn-dock-options")
 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-let source = root.appendingPathComponent("desktop/macos/Runner/Assets.xcassets/HarnessStatusIcon.imageset/HarnessStatusIcon.svg")
+let source = folder.appendingPathComponent("hn.svg")
 let document = try XMLDocument(contentsOf: source, options: [])
 let glyph = (try document.nodes(forXPath: "//*[local-name()='path']").first as! XMLElement)
   .attribute(forName: "d")!.stringValue!

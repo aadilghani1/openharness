@@ -190,10 +190,10 @@ follow a dependent viewer's owner.
 
 ## Notifications
 
-On macOS, the Harness menu bar mark is a lowercase `hn` in Departure Mono Regular,
-stored as vector outlines and rendered as a monochrome template. A small circular
+On macOS, the Harness menu bar uses the team's portrait symbol,
+stored as vector paths and rendered as a monochrome template. A small circular
 count badge sits at the bottom-right corner, including zero. The badge
-sits slightly outside the letters so both remain legible. The combined template
+sits slightly outside the mark so both remain legible. The combined template
 adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
 above 99 with the exact count in its tooltip and accessibility
 value. Its native menu lists only harnesses with unread
