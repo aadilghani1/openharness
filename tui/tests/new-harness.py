@@ -50,8 +50,8 @@ def state(route='dial'):
 
 def screen(): return tmux('capture-pane', '-p', '-t', 'test')
 def settle_ui():
-    # The form moves when a side chooser opens/closes. Wait for the visible
-    # geometry, not tmux send-keys returning, before taking mouse coordinates.
+    # Wait for chooser content to redraw, not just tmux send-keys returning,
+    # before taking mouse coordinates.
     # Crop to popup borders so animated working panes cannot keep it unsettled.
     previous, changed = None, time.monotonic()
     deadline = changed + 3
@@ -137,7 +137,7 @@ try:
     field('Project'); shows('Clone Repository'); snapshot('new-harness-project')
     type_text('clone'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('GitHub URL')
     raw('\x1b[200~autonomous-ai/openharness\x1b[201~'); keys('Enter')
-    shows('Clone: autonomous-ai/openharness')
+    shows('Clone: autonomous-ai/')
     assert create_count() == before, 'choosing fields must not launch'
     field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
     type_text('fail-once'); keys('Enter'); shows('New Folder: fail-once')

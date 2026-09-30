@@ -97,29 +97,28 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
             }
         }
     }
-    let side = form.child.is_some() && body.width >= 110;
-    let form_w = if side {
-        ((u32::from(body.width) - 5) * 3 / 5).min(76) as u16
-    } else {
-        body.width.saturating_sub(4).min(76)
-    };
-    let child_w = if side {
-        (body.width - form_w - 5).min(60)
-    } else {
-        form_w
-    };
+    // Center the compact form itself. Options grow down and choosers open in
+    // the remaining space to its right, without moving the form's anchor.
+    let form_w = body.width.saturating_sub(4).min(52);
+    let compact_h = 11.min(body.height.saturating_sub(2).max(5));
+    let x = body.x + (body.width - form_w) / 2;
+    let y = body.y + (body.height - compact_h) / 2;
+    let side_w = body
+        .right()
+        .saturating_sub(x + form_w)
+        .saturating_sub(4)
+        .min(60);
+    let side = side_w >= 32;
+    let child_w = if side { side_w } else { form_w };
     let fields = form.fields();
-    let form_h = (fields.len() as u16 * 2 + 3).min(body.height.saturating_sub(2).max(5));
+    let height = body.bottom().saturating_sub(y + 1).max(5);
+    let form_h = (fields.len() as u16 * 2 + 3).min(height);
     let child_h = form
         .child
         .as_ref()
         .map(|c| if c.kind.editing() { 8 } else { 22 })
         .unwrap_or(0)
-        .min(body.height.saturating_sub(2).max(5));
-    let total_w = if side { form_w + 2 + child_w } else { form_w };
-    let height = form_h.max(child_h);
-    let x = body.x + (body.width - total_w) / 2;
-    let y = body.y + (body.height - height) / 2;
+        .min(height);
     let r = Rect::new(x, y, form_w, form_h);
     form.area = r;
     if form.child.is_none() || side || !form.child_active {
@@ -147,7 +146,7 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
             };
             let (label, value) = form.describe(*field);
             put(buf, r.x + 1, fy, 1, if active { "›" } else { " " }, accent);
-            let label_w = if r.width < 45 { 10 } else { 15 };
+            let label_w = if r.width < 45 { 10 } else { 12 };
             put(
                 buf,
                 r.x + 3,

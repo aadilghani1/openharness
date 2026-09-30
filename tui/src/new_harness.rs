@@ -1598,29 +1598,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn form_and_picker_fit_every_terminal_size() {
+    async fn compact_form_is_centered_and_stays_anchored_at_every_terminal_size() {
         let mut app = app();
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
             panic!()
         };
-        for expanded in [false, true] {
-            form.expanded = expanded;
-            for chooser in [false, true] {
-                if chooser {
-                    child(&mut app, &mut form, Choice::Agent, "");
-                } else {
-                    form.child = None;
-                }
-                for width in [1, 10, 21, 22, 45, 80, 109, 110, 150] {
-                    for height in [1, 4, 5, 10, 14, 24, 42] {
-                        let area = Rect::new(0, 0, width, height);
-                        let mut buf = Buffer::empty(area);
-                        if let Some(cursor) = draw(&mut buf, area, &mut form) {
-                            assert!(area.contains(cursor), "{area:?} {cursor:?}");
+        for width in [
+            1, 10, 21, 22, 45, 80, 109, 110, 120, 122, 123, 124, 150, 220,
+        ] {
+            for height in [1, 4, 5, 10, 14, 24, 42] {
+                let area = Rect::new(3, 2, width, height);
+                let mut anchor = None;
+                for expanded in [false, true, false] {
+                    form.expanded = expanded;
+                    for chooser in [None, Some(Choice::Agent), Some(Choice::Clone), None] {
+                        if let Some(kind) = chooser {
+                            child(&mut app, &mut form, kind, "");
+                        } else {
+                            form.child = None;
                         }
-                        for (hit, _) in &form.hits {
-                            assert_eq!(hit.intersection(area), *hit);
+                        for active in [false, true] {
+                            form.child_active = active;
+                            let mut buf = Buffer::empty(area);
+                            if let Some(cursor) = draw(&mut buf, area, &mut form) {
+                                assert!(area.contains(cursor), "{area:?} {cursor:?}");
+                            }
+                            for (hit, _) in &form.hits {
+                                assert_eq!(hit.intersection(area), *hit);
+                            }
+                            if form.area.width > 0 {
+                                assert!(form.area.width <= 52);
+                                let left = form.area.x - area.x;
+                                let right = area.right() - form.area.right();
+                                assert!(left.abs_diff(right) <= 1, "not centered in {area:?}");
+                                if !expanded {
+                                    let top = form.area.y - area.y;
+                                    let bottom = area.bottom() - form.area.bottom();
+                                    assert!(top.abs_diff(bottom) <= 1, "not centered in {area:?}");
+                                }
+                                let position = (form.area.x, form.area.y, form.area.width);
+                                assert_eq!(
+                                    *anchor.get_or_insert(position),
+                                    position,
+                                    "form moved in {area:?}: expanded={expanded}, active={active}"
+                                );
+                                assert_eq!(form.area.intersection(area), form.area);
+                            }
+                            if form.child_area.width > 0 {
+                                assert_eq!(form.child_area.intersection(area), form.child_area);
+                                assert_eq!(form.child_area.y, form.area.y);
+                                if form.child_area.x == form.area.x {
+                                    assert!(active && width < 150);
+                                    assert_eq!(form.child_area.width, form.area.width);
+                                } else {
+                                    assert_eq!(form.child_area.x, form.area.right() + 2);
+                                }
+                            }
                         }
                     }
                 }
