@@ -1,10 +1,37 @@
 {
   "schema": 1,
   "devices": [
-    {"mac": "44:1B:F6:85:52:18", "role": "development", "chip": "esp32s3", "branch": "dev/firmware-round", "name": "Round development dial"},
-    {"mac": "E8:F6:0A:E7:64:61", "role": "development", "chip": "esp32p4", "branch": "dev/firmware-pro", "name": "Dock-only Pro development unit"},
-    {"mac": "28:84:85:90:65:94", "role": "production", "chip": "esp32s3", "name": "Diego production reference"},
-    {"mac": "90:70:69:F3:0E:2C", "role": "protected", "chip": "esp32s3", "name": "Previous production reference"},
-    {"mac": "90:70:69:F3:D8:54", "role": "protected", "chip": "esp32s3", "name": "Orange terminal, excluded by user"}
+    {
+      "mac": "44:1B:F6:85:52:18",
+      "role": "protected",
+      "chip": "esp32s3",
+      "name": "Disconnected dial; not the assigned development unit"
+    },
+    {
+      "mac": "E8:F6:0A:E7:64:61",
+      "role": "development",
+      "chip": "esp32p4",
+      "branch": "dev/firmware-pro",
+      "name": "Dock-only Pro development unit"
+    },
+    {
+      "mac": "28:84:85:90:65:94",
+      "role": "production",
+      "chip": "esp32s3",
+      "name": "Diego production reference"
+    },
+    {
+      "mac": "90:70:69:F3:0E:2C",
+      "role": "development",
+      "chip": "esp32s3",
+      "branch": "dev/firmware-round",
+      "name": "Round development dial, reassigned by user"
+    },
+    {
+      "mac": "90:70:69:F3:D8:54",
+      "role": "protected",
+      "chip": "esp32s3",
+      "name": "Orange terminal, excluded by user"
+    }
   ]
 }
