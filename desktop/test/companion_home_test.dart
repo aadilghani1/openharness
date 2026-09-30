@@ -356,6 +356,16 @@ void main() {
       expect(find.byKey(const ValueKey('companion-chat-input')), findsNothing);
       expect(find.byTooltip('Open full conversation'), findsNothing);
       expect(workspace.swarms, hasLength(1));
+      void expectBothPanesClear() {
+        for (final pane in workspace.panes) {
+          final frame = tester.widget<Container>(
+            find.byKey(ValueKey('pane-frame:${pane.id}')),
+          );
+          expect((frame.foregroundDecoration as BoxDecoration).color, isNull);
+        }
+      }
+
+      expectBothPanesClear();
       conversation.terminal.write(
         '\r\nDo you trust the files in this folder?\r\n> Yes, I trust this folder\r\n',
       );
@@ -371,6 +381,7 @@ void main() {
       // second chat API or automatic approval of the setup text above.
       await tester.tap(find.byType(TerminalView));
       await tester.pump();
+      expectBothPanesClear();
       expect(tester.testTextInput.hasAnyClients, isTrue);
       tester.testTextInput.updateEditingValue(
         const TextEditingValue(

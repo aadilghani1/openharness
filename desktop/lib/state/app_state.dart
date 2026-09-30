@@ -2308,6 +2308,18 @@ class AppNotifier extends ChangeNotifier {
   bool isPaneFocused(int paneId) =>
       !railFocused && !tabStripFocused && focusedPaneId == paneId;
 
+  /// A harness's terminal and viewers stay clear together. Keyboard focus and
+  /// its ring still belong to one pane, including while a menu owns input.
+  bool isPaneEmphasized(TerminalPane pane) {
+    final selected = focusedPane;
+    if (selected == null) return false;
+    if (selected.id == pane.id) return true;
+    final agentId = selected.agentId ?? selected.ownerAgentId;
+    return agentId != null &&
+        selected.machineId == pane.machineId &&
+        agentId == (pane.agentId ?? pane.ownerAgentId);
+  }
+
   /// True while the KEYBOARD is on the tab strip rather than in any pane.
   ///
   /// Closing the ACTIVE tab with work in it — ⌘W, the strip's own close, or

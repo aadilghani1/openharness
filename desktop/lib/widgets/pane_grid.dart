@@ -470,6 +470,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       link: session.linkMode,
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
+      emphasized: app.isPaneEmphasized(pane),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
       focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
@@ -1209,9 +1210,9 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
-    // Keep the selected pane clear while a menu or the tab strip owns keyboard
-    // focus. This is paint only: inactive terminals stay mounted and clickable.
-    final dimmed = !_single && notifier.focusedPaneId != pane.id;
+    // Keep the selected harness's terminal and viewers clear, including while
+    // a menu owns input. This changes paint, never the keyboard's destination.
+    final dimmed = !_single && !notifier.isPaneEmphasized(pane);
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
