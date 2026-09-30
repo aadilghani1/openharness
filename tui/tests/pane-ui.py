@@ -32,7 +32,7 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
 CONF.write_text('set -g automatic-rename off\n'
-                'set -g status-right \'  #{usage_remaining_mark}  #{s/ /  /:fleet}  "#{=/21/…:host}"  20:41 \'\n')
+                'set -g status-right \'  #{usage_remaining_mark}  #{s/ /  /:fleet}  "#{=/21/…:local_machine}"  20:41 \'\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -223,12 +223,13 @@ try:
     hn('set', '-gu', 'status-right')
     default_status = hn('show', '-gv', 'status-right', strip=False)
     assert all(part not in default_status for part in ('pane_branch', 'pane_where', 'pane_machine', 'pane_current_path', 'pane_project', 'git:'))
-    assert value('#{host}') == socket.gethostname(), 'status host is the machine running hn'
-    host_label = value('"#{=/21/…:host}"')
-    assert host_label in value(default_status), (host_label, value(default_status))
-    def local_host_status():
+    assert value('#{host}') == socket.gethostname(), 'standard host format keeps its hostname meaning'
+    assert value('#{local_machine}') == 'studio', 'status uses the local machine name configured in the app'
+    machine_label = '"studio"'
+    assert machine_label in value(default_status), (machine_label, value(default_status))
+    def local_machine_status():
         line = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
-        return re.search(re.escape(host_label) + r'  \d{2}:\d{2}$', line.rstrip()) and '[' + session + ']' not in line
+        return re.search(re.escape(machine_label) + r'  \d{2}:\d{2}$', line.rstrip()) and '[' + session + ']' not in line
     def aligned_status_edges():
         line = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
         return re.match(r' \d+:', line) and len(line.rstrip()) == 149
@@ -240,13 +241,13 @@ try:
     for target in (third, second, first):
         hn('select-pane', '-t', target)
         assert value(default_left).strip() == ''
-        wait(local_host_status, 'quoted local host stays beside the clock across local and remote panes; no machine label on the left')
+        wait(local_machine_status, 'quoted local machine stays beside the clock across local and remote panes; no machine label on the left')
         if target in (first, third):
             snapshot('status-local' if target == first else 'status-remote')
     for window in hn('list-windows', '-F', '#{window_id}').splitlines():
         hn('select-window', '-t', window)
         assert value(default_left).strip() == ''
-        wait(local_host_status, 'quoted local host stays beside the clock in every window')
+        wait(local_machine_status, 'quoted local machine stays beside the clock in every window')
     hn('select-window', '-t', current)
     hn('select-pane', '-t', first)
     keys('C-b')
@@ -254,7 +255,7 @@ try:
     keys('Escape')
     hn('rename-session', 'work-review')
     assert value(default_left).strip() == '', 'renaming a session does not add a left label'
-    wait(local_host_status, 'renaming a session does not change the quoted host')
+    wait(local_machine_status, 'renaming a session does not change the quoted machine name')
     hn('set', '-g', 'status-left', '[custom] ')
     assert value(hn('show', '-gv', 'status-left')).strip() == '[custom]'
     hn('set', '-gu', 'status-left')

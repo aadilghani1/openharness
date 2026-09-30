@@ -93,12 +93,12 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // has it] when another window has the pane to type in, and its project and branch
         // where there is room. Git context stays here; the status bar keeps the location cue.
         m.insert("pane-border-format".into(), " #{pane_heading}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
-        // Window navigation on the left; connection, quota, fleet, host and clock on the
-        // right. The quoted host is this computer, independent of the focused pane.
+        // Window navigation on the left; connection, quota, fleet, machine and clock on the
+        // right. The quoted name is this computer's name in Harness, independent of focus.
         // One cell at each outer edge aligns status text with the pane surfaces.
         // Two spaces separate the window list from the information on the right.
         m.insert("status-left".into(), " #{?client_prefix,#[bold]›#[nobold] ,}".into());
-        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}\"#{=/21/…:host}\"  %H:%M ".into());
+        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}\"#{=/21/…:local_machine}\"  %H:%M ".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other
@@ -118,7 +118,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         m.insert("set-titles-string".into(), "#{?fleet_needs,?#{fleet_needs} ,}#{pane_title}#{?pane_agent_state, (#{pane_agent_state}),} — Harness".into());
         // Leave room for custom status-left formats as well as the prefix cue.
         m.insert("status-left-length".into(), "24".into());
-        // Room for both subscription allowances without cutting off host and time.
+        // Room for both subscription allowances without cutting off machine name and time.
         m.insert("status-right-length".into(), "96".into());
         // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
         m.insert("history-limit".into(), "10000".into());

@@ -101,12 +101,13 @@ harness's name, not what the program sets), `history-limit 10000` (agents print 
 harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line:
 each window's most urgent harness state follows its name and tmux marker; idle dots are hidden
 in tabs and pane headers. Connection, quota,
-fleet counts, the quoted hostname and clock sit on the right. The git branch stays in its pane
+fleet counts, the quoted local machine name and clock sit on the right. The git branch stays in its pane
 header, aligned to the right with its PR and written `⎇ branch` without redundant punctuation.
 Status-bar groups are separated by two spaces, with one space at each outer edge to align
 with the pane surfaces. Window tabs start at the left, without a machine/session label.
-The right side shows the machine running hn, such as `"m0.local"`, independent of the
-focused pane or session name. Custom status formats and the prefix cue remain supported.
+The right side shows the machine running hn by its name in the app, such as `"office"`,
+falling back to its hostname, independent of the focused pane or session name.
+Custom status formats and the prefix cue remain supported.
 One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).
@@ -199,7 +200,7 @@ pane counts as done and unread (`✓`) until you go to that pane.
 
 - **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you, one failed,
   five are done and unread, and 41 are working. Idle ones aren't counted, and a state with none
-  drops out. The right side keeps the quoted local hostname and the clock, with two
+  drops out. The right side keeps the quoted local machine name and the clock, with two
   spaces between groups. Branch and pull request context stay in the pane header.
 - **`C-b s`** lists every harness, the most urgent nearest the prompt: needs you, failed, done and
   unread, working, then the rest. Each row has one line: the question, what it is doing now
@@ -259,7 +260,8 @@ has multiple accounts, extra remote accounts say `Claude@studio 20%` to distingu
 and Codex; Grok and other providers are not listed until a quota source is available. Existing
 `usage`, `usage_high` and `usage_high_mark` formats retain their used-quota meaning for custom
 configurations. Other formats:
-`#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
+`#{local_machine}` (this computer's name in the app, falling back to its hostname),
+`#{pane_machine}` (the focused pane's machine), `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
 

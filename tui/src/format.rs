@@ -1287,6 +1287,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // gethostname(3): the whole name (mac.lan); #{host_short} is it up to the first dot.
         "host" => crate::app::full_hostname(),
         "host_short" => crate::app::full_hostname().split('.').next().unwrap_or("").to_string(),
+        // This computer's name in Harness, including app renames; never the focused pane's.
+        "local_machine" => app.fleet.machine(&app.fleet.local_id).or_else(|| app.fleet.machines.iter().find(|m| m.local))
+            .map(|m| m.name.clone()).filter(|name| !name.is_empty()).unwrap_or_else(crate::app::full_hostname),
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
