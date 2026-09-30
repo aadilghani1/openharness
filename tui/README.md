@@ -74,12 +74,14 @@ pane numbers and the same active pane after each. hn draws these layouts as pane
 with one-cell gaps and inset terminal content. Panes have no drawn borders: background
 contrast identifies focus. The focused pane keeps the terminal's native background across the
 whole surface. Inactive dark panes use `rgb(64, 64, 64)` with softer text, separated by dark gaps.
-A lone or zoomed pane has no gray surround. Light terminals keep a light counterpart.
+A lone or zoomed pane keeps the same focused surface and surrounding canvas. Light terminals
+keep a light counterpart.
 Explicit pane-border styles still customize the title; border line choices apply in classic and
 tmux appearances.
 Explicit program colors and user styles stay intact. The muted green status bar has a continuous
 background, with tabs ordered `number:name* status` (previous window: `number:name- status`).
-Quota warnings read `Claude 100%`, with amber or red only on the percentage. Padding
+Subscription allowances read `Claude 0%  Codex 89%` **remaining**, with amber at 20% or less
+and red at 0% only on the percentage. Padding
 shrinks automatically in small panes. The space between panes remains a resize handle; mouse
 coordinates, copy selection and PTY dimensions follow the inset content. `window_layout` keeps
 the original split structure. Use `set -g @hn-animations off` to keep
@@ -94,8 +96,10 @@ each window's most urgent harness state follows its name and tmux marker; idle d
 in tabs and pane headers. Connection, quota,
 fleet counts, `machine:folder` and clock sit on the right. The git branch stays in its pane
 header, aligned to the right with its PR and written `⑂ branch` without redundant punctuation.
-Status-bar groups are separated by two spaces. The left session label is hidden when it repeats
-the focused machine on the right; distinct session names and the prefix cue remain visible.
+Status-bar groups are separated by two spaces, with one space at each outer edge to align
+with the pane surfaces. The left session label always stays visible: the
+desk uses the local machine name, independent of the focused pane's machine on the right.
+Custom session names and the prefix cue remain supported.
 One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).
@@ -214,9 +218,17 @@ and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lin
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
 `#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
 `#{usage}` (the agent accounts' rate limits on the focused pane's machine: `claude 5h 42% week
-18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80%). The status line uses
-`#{usage_high_mark}`: `Claude 80%`, with amber on the percentage from 80%, red from 100%.
-The raw `usage` and `usage_high` formats retain the reset window. Other formats:
+18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80% used).
+The status line uses `#{usage_remaining_mark}`: `Claude 0%  Codex 89%`, showing **remaining**
+allowance for every subscription with quota data, even when healthy. Each figure is the lowest
+remaining percentage across that account's reported windows. Amber starts at 20% left, red at
+0%; a nonzero allowance below 1% reads `<1%`. Shared account keys appear once across machines,
+with the local reading preferred; different or unknown accounts stay separate. When a provider
+has multiple accounts, extra remote accounts say `Claude@studio 20%` to distinguish them.
+`#{usage_remaining}` provides the same figures without color. The daemon currently reads Claude
+and Codex; Grok and other providers are not listed until a quota source is available. Existing
+`usage`, `usage_high` and `usage_high_mark` formats retain their used-quota meaning for custom
+configurations. Other formats:
 `#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).

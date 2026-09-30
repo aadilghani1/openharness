@@ -31,19 +31,19 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{s/ /  /:fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
+CONF.write_text('set -g automatic-rename off\nset -g status-right "  #{usage_remaining_mark}  #{s/ /  /:fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
 
 
-def hn(*args, ok=True):
+def hn(*args, ok=True, strip=True):
     assert 19783 <= PORT <= 19789 and PREFIX.startswith('hn-pane-ui-')
     p = subprocess.run([str(HN), '-L', PREFIX, '--port', str(PORT), '-f', str(CONF), *args], env=ENV,
                        cwd=BASE, text=True, capture_output=True, timeout=12)
     if ok:
         assert p.returncode == 0, (args, p.stdout, p.stderr)
-    return p.stdout.strip()
+    return p.stdout.strip() if strip else p.stdout.rstrip('\n')
 
 
 def tmux(*args, ok=True):
@@ -213,27 +213,39 @@ try:
     assert 'reverse' not in value('#{fleet}')
     assert 'reverse' not in value('#{tree_mode_format}')
     assert 'reverse' not in value('#{pane_agent_mark}', second)
-    custom_status = hn('show', '-gv', 'status-right')
+    custom_status = hn('show', '-gv', 'status-right', strip=False)
     assert 'reverse' not in custom_status
     title = value('#{pane_title}', first)
     header = value(hn('show', '-gwv', 'pane-border-format'), first)
     plain_header = re.sub(r'#\[[^]]*\]', '', header).strip()
     assert plain_header.startswith(title + ' '), (title, plain_header)
     hn('set', '-gu', 'status-right')
-    default_status = hn('show', '-gv', 'status-right')
+    default_status = hn('show', '-gv', 'status-right', strip=False)
     assert all(part not in default_status for part in ('pane_branch', 'pane_where', 'git:'))
     location = value('#{pane_machine}:#{b:pane_current_path}')
     assert location in value(default_status), (location, value(default_status))
     wait(lambda: location in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'bottom right shows the focused machine and folder')
+    def aligned_status_edges():
+        line = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
+        return line.startswith(' [') and len(line.rstrip()) == 149
+    wait(lambda: 'Claude 0%  Codex 89%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'default status includes both subscription allowances')
+    wait(aligned_status_edges, 'default status text has one outer space matching the pane margins')
     hn('set', '-g', 'status-right', custom_status)
-    default_left = hn('show', '-gv', 'status-left')
+    default_left = hn('show', '-gv', 'status-left', strip=False)
     session = value('#{session_name}')
-    machine = value('#{pane_machine}')
-    hn('rename-session', machine)
-    assert value(default_left) == '', 'focused machine should not repeat on the left'
-    wait(lambda: not tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith('[' + machine + ']'), 'redundant machine label disappears')
+    assert session == value('#{pane_machine}'), 'desk session is named for the local machine'
+    for target in (third, second, first):
+        hn('select-pane', '-t', target)
+        assert value(default_left).strip() == '[' + session + ']'
+        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith(' [' + session + ']'), 'local machine label stays visible across local and remote panes')
+    for window in hn('list-windows', '-F', '#{window_id}').splitlines():
+        hn('select-window', '-t', window)
+        assert value(default_left).strip() == '[' + session + ']'
+        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith(' [' + session + ']'), 'local machine label stays visible in every window')
+    hn('select-window', '-t', current)
+    hn('select-pane', '-t', first)
     keys('C-b')
-    wait(lambda: '›' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'prefix cue survives hidden session label')
+    wait(lambda: '[' + session + '] ›' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'prefix cue stays beside the local machine label')
     keys('Escape')
     hn('rename-session', 'work-review')
     assert value(default_left).strip() == '[work-review]', 'distinct session labels remain visible'
@@ -244,7 +256,13 @@ try:
     for option in ('window-status-activity-style', 'window-status-bell-style'):
         assert hn('show', '-gwv', option) == 'bold'
     assert 'reverse' not in hn('show', '-gv', 'status-format[1]')
-    wait(lambda: 'Claude 100%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'plain quota warning reaches the status row')
+    wait(lambda: 'Claude 0%  Codex 89%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'all subscription allowances reach the status row, even below the warning threshold')
+    assert value('#{usage_remaining}') == 'Claude 0%  Codex 89%', 'accounts shared across fixture machines appear once'
+    assert value('#{usage_high}') == 'claude 5h 100%', 'existing custom used-quota format is preserved'
+    row = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
+    assert color_at(row.index('0%'), 41, foreground=True) == '#ff9b8e', 'exhausted allowance uses red text'
+    assert color_at(row.index('89%'), 41, foreground=True) == color_at(row.index('Codex'), 41, foreground=True), 'healthy allowance has no warning styling'
+    assert background_at(row.index('0%'), 41) == background_at(row.index('Codex'), 41), 'subscription text keeps the continuous status background'
     hn('set', '-gw', 'pane-border-lines', 'double')
     wait(lambda: not pane_outline(first) and not pane_outline(second), 'border line options do not draw outlines in pane appearance')
     hn('set', '-g', '@hn-look', 'classic')
@@ -289,8 +307,10 @@ try:
     branch_context = value('#{pane_where}')
     assert '⑂ ' + value('#{pane_branch}') in branch_context, branch_context
     assert 'git:(' not in branch_context
-    wait(lambda: not pane_outline(first) and background_at(0, 0) == active_bg, 'zoomed pane has no border or gray surround')
-    assert background_at(0, 41) == normal_bg, 'status bar keeps its own color'
+    wait(lambda: not pane_outline(first) and background_at(1, 1) == active_bg
+         and background_at(0, 0) == background_at(149, 40) == '#202020',
+         'zoomed pane keeps its focused surface inside the canvas')
+    wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', first).split())
     wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'branch and PR align to the right edge')
     snapshot('panes-zoomed')
@@ -432,7 +452,9 @@ try:
 
     single = hn('new-window', '-n', 'single', '-P', '-F', '#{pane_id}', '/bin/sh')
     wait(lambda: value('#{pane_id}') == single and value('#{window_panes}') == '1', 'single-pane window')
-    wait(lambda: not pane_outline(single) and background_at(0, 0) == '#101010', 'single pane has no outline or gray surround')
+    wait(lambda: not pane_outline(single) and background_at(1, 1) == '#101010'
+         and background_at(0, 0) == background_at(149, 40) == '#202020',
+         'single pane keeps its focused surface inside the canvas')
     snapshot('panes-single')
     hn('kill-window')
     wait(lambda: value('#{window_id}') == current, 'return from single-pane window')

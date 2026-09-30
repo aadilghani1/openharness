@@ -1004,6 +1004,41 @@ pub fn agent_mark(state: crate::fleet::State, tick: u64) -> String {
 }
 
 
+/// One remaining figure per subscription, across every machine with a reading. The local
+/// reading wins when machines share an account; unnamed accounts cannot safely be merged.
+/// Machine labels distinguish additional subscriptions without repeating them for shared ones.
+fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet::Usage)>, local: &str, machine_name: impl Fn(&str) -> String, marked: bool) -> String {
+    let mut readings: Vec<_> = readings.filter(|(_, u)| !u.windows.is_empty()).collect();
+    readings.sort_by(|(am, a), (bm, b)| (&a.provider, *am != local, machine_name(am), am).cmp(&(&b.provider, *bm != local, machine_name(bm), bm)));
+    let mut seen = std::collections::HashSet::new();
+    readings.retain(|(_, u)| u.account.as_deref().filter(|a| !a.is_empty()).map(|a| seen.insert((u.provider.as_str(), a))).unwrap_or(true));
+    readings.iter().filter_map(|(machine, u)| {
+        let used = u.windows.iter().map(|w| w.used).filter(|u| u.is_finite()).reduce(f64::max)?.clamp(0.0, 100.0);
+        let remaining = 100.0 - used;
+        // A little allowance remains: don't round it to a misleading exhausted 0%.
+        let number = if remaining > 0.0 && remaining < 1.0 { "<1%".into() } else { format!("{remaining:.0}%") };
+        let mut label = quota_provider(&u.provider);
+        if *machine != local && readings.iter().filter(|(_, other)| other.provider == u.provider).count() > 1 {
+            label.push('@'); label.push_str(&clip_middle(&machine_name(machine), 12));
+        }
+        if marked && used >= 80.0 && !crate::theme::no_color() {
+            Some(format!("{label} #[fg={}]{number}#[fg=default]", quota_color(used)))
+        } else { Some(format!("{label} {number}")) }
+    }).collect::<Vec<_>>().join("  ")
+}
+
+fn quota_provider(provider: &str) -> String {
+    let mut chars = provider.chars();
+    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+}
+
+fn quota_color(used: f64) -> &'static str {
+    match (crate::term_out::terminal_is_light().unwrap_or(false), used >= 100.0) {
+        (false, false) => "#f3cc76", (false, true) => "#ff9b8e",
+        (true, false) => "#875600", (true, true) => "#a53028",
+    }
+}
+
 /// Compact quota warning: provider plus percentage, with color only on the number.
 /// The raw format retains the reset window for scripts and custom status lines.
 fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, marked: bool) -> String {
@@ -1013,12 +1048,8 @@ fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, ma
     } }
     let Some((u, w)) = worst else { return String::new() };
     if !marked { return format!("{} {} {:.0}%", u.provider, w.label, w.used) }
-    let provider = match u.provider.as_str() { "claude" => "Claude", "codex" => "Codex", p => p };
-    let light = crate::term_out::terminal_is_light().unwrap_or(false);
-    let color = match (light, w.used >= 100.0) {
-        (false, false) => "#f3cc76", (false, true) => "#ff9b8e",
-        (true, false) => "#875600", (true, true) => "#a53028",
-    };
+    let provider = quota_provider(&u.provider);
+    let color = quota_color(w.used);
     format!("{provider} #[fg={color}]{:.0}%#[fg=default]", w.used)
 }
 
@@ -1332,6 +1363,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let m = pane.map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone());
             app.usage.get(&m).map(|u| u.iter().map(|x| x.line()).collect::<Vec<_>>().join(" · ")).unwrap_or_default()
         }
+        // Compact remaining allowance for every subscription, not just the one in danger.
+        "usage_remaining" | "usage_remaining_mark" => quota_remaining(
+            app.usage.iter().flat_map(|(machine, readings)| readings.iter().map(move |u| (machine.as_str(), u))),
+            &app.fleet.local_id, |id| app.fleet.machine_name(id), name == "usage_remaining_mark"),
         "usage_high" | "usage_high_mark" => quota_warning(app.usage.values().flatten(), name == "usage_high_mark"),
         "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
@@ -1652,6 +1687,49 @@ mod tests {
         assert!(compact.contains("[watching]") && !compact.contains("another terminal"));
         let wide = super::compact_pane_heading("Review", None, Some("another terminal"), 80, 0);
         assert!(wide.contains("[watching — another terminal has it]"));
+    }
+
+    fn quota(provider: &str, account: Option<&str>, used: &[f64]) -> crate::fleet::Usage {
+        crate::fleet::Usage { provider: provider.into(), account: account.map(str::to_string),
+            windows: used.iter().map(|used| crate::fleet::Window { label: "limit".into(), used: *used, resets: None }).collect() }
+    }
+
+    #[test]
+    fn remaining_quota_shows_all_subscriptions_and_the_tightest_window() {
+        let claude = quota("claude", Some("a"), &[42.0, 18.0]);
+        let codex = quota("codex", Some("b"), &[3.0, 11.0]);
+        let other = quota("other", Some("c"), &[30.0]);
+        let empty = quota("missing", None, &[]);
+        let readings = [("local", &other), ("local", &codex), ("local", &empty), ("local", &claude)];
+        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false), "Claude 58%  Codex 89%  Other 70%");
+        assert_eq!(super::quota_remaining(std::iter::empty(), "local", str::to_string, false), "");
+        // The existing per-window format continues reporting used quota for custom configs.
+        assert_eq!(claude.line(), "claude limit 42% limit 18%");
+    }
+
+    #[test]
+    fn remaining_quota_groups_shared_accounts_but_keeps_distinct_and_unknown_accounts() {
+        let local = quota("claude", Some("a"), &[42.0]);
+        let shared = quota("claude", Some("a"), &[40.0]);
+        let distinct = quota("claude", Some("b"), &[80.0]);
+        let unknown = quota("codex", None, &[11.0]);
+        let readings = [("studio", &distinct), ("shared", &shared), ("local", &local), ("studio", &unknown), ("local", &unknown)];
+        let expected = "Claude 58%  Claude@studio 20%  Codex 89%  Codex@studio 89%";
+        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false), expected);
+        assert_eq!(super::quota_remaining(readings.into_iter().rev(), "local", str::to_string, false), expected);
+    }
+
+    #[test]
+    fn remaining_quota_is_plain_until_low_and_does_not_round_to_exhausted() {
+        for (used, number) in [(0.0, "100%"), (79.0, "21%"), (80.0, "20%"), (99.7, "<1%"), (100.0, "0%"), (120.0, "0%")] {
+            let u = quota("claude", None, &[used]);
+            let plain = format!("Claude {number}");
+            assert_eq!(super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, false), plain);
+            let styled = super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, true);
+            if used < 80.0 || crate::theme::no_color() { assert_eq!(styled, plain) }
+            else { assert!(styled.starts_with("Claude #[fg=")); assert!(styled.ends_with(&format!("]{number}#[fg=default]"))); }
+            assert!(!styled.contains("reverse") && !styled.contains("bg="));
+        }
     }
 
     #[test]

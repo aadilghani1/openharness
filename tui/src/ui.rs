@@ -252,9 +252,8 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
         if surfaces {
             let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.pane_status(app.tab()));
-            // A lone or zoomed pane needs no focus treatment, including in its outer space.
-            let surface = if rects.len() == 1 { body } else { f.surface };
-            buf.set_style(surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
+            // A single or zoomed pane keeps the same surface and surrounding canvas.
+            buf.set_style(f.surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
         }
         // choose-tree's tree, over the pane.
         if app.panes.get(id).map(|p| p.tree_top()).unwrap_or(false) {
