@@ -28,6 +28,17 @@ installed, from the repository root:
 swift docs/branding/app-logo/render-hn-dock-options.swift
 ```
 
+The team's September 30 portrait symbols are preserved in
+`team-symbols-2026-09-30/`. [Review the dark and light symbols in the Dock and menu
+bar](team-symbols-2026-09-30/team-icons-preview.png). These preview assets keep the
+original transparent cutouts; the Dock background shows through the face. The
+menu bar examples use the existing badge size and monochrome template treatment.
+Regenerate the previews from the repository root on a Mac with Xcode installed:
+
+```sh
+swift docs/branding/app-logo/render-team-symbols.swift
+```
+
 Earlier rounds, kept for reference:
 
 - `harness-logo-3.svg`: the untouched SVG supplied on 2026-09-22, which shipped
