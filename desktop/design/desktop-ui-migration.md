@@ -10,7 +10,7 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Surface | Current evidence / work remaining |
 | --- | --- |
 | Shared type, controls, fields, menus | System typography, semantic colors, 32-point icon controls, stable focus boundaries, Increase Contrast and platform text scaling implemented; terminal scaling stays independent |
-| Welcome / New Tab | Shared 680-point composer; six muted Recent harnesses with status-format context and “now”; empty welcome omits history |
+| Welcome / New Tab | Shared 680-point composer; six muted Recent harnesses with status-format context and “now”; empty welcome omits history; machine discovery and pending defaults have distinct, actionable startup presentations |
 | Cmd-N and child choosers | Purpose icons, approval explanations, visible focus, and coding-agent-first order implemented; shared controller retained |
 | Cmd-P and resource previews | 1120×680 bounded panel, wider preview, natural-height model groups, explicit loading/error/retry states; six scopes rendered in both appearances |
 | Rename and takeover | Desktop prompt anatomy implemented; safety/IME and focus-return tests pass |
@@ -19,13 +19,13 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Add Phone | Desktop QR/device layout implemented; pairing lifecycle tests and light/dark enlarged-text renders pass |
 | Machine recovery/linking | Desktop linking/password layouts implemented; bounded selectable errors, fixed actions, and 32-point reveal controls tested/rendered |
 | Notifications | Desktop popup, two-line rows, glyphs, and empty/error states implemented; unchanged event rules tested; live empty popup inspected |
-| Branches / pull requests | Desktop lists implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
+| Branches / pull requests | Desktop lists and shared modal veil implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
 | Settings / customization | Desktop status customization, natural-height controls, error contrast, keyboard focus and passive native footer preview implemented; actual status previews preserve the selected renderer |
 | Store | Existing graphical discovery/detail/launch routes retained; ordinary labels, search and counts use system typography; desktop and narrow/enlarged previews inspected |
 | Sign-in / setup / boot | Boot/preflight/setup migrated and rendered; installer lifecycle tests pass; sign-in already graphical and scrollable |
 | Shortcuts / keyboard practice | Desktop browsing/practice layout implemented and rendered; remapping and scratch terminal retained |
 | Teams / ancillary dialogs | Swarm conversation, questions, member controls and Quick Start use desktop typography and controls; polling, answers, learning steps and storage unchanged |
-| Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu and compact Find options implemented; keyboard navigation and terminal Find sizing retained |
+| Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu, compact Find options and desktop resize guidance implemented; keyboard navigation and terminal Find sizing retained |
 | Daemon panels | Companion settings, pairing, proposal controls and consent use desktop controls; artwork, reveal frames, state and approval gates retained |
 | Native tabs / footer / menus | System-font curved tabs with names, hover close and Command-held hints; 10-point pane frames. Pane model control before an always-visible close icon. Remaining subscription usage at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
 | Linux / browser presentation | Shared light/dark, narrow and enlarged-text fixtures cover responsive behavior; physical Linux/browser platform validation is not claimed |
@@ -252,3 +252,38 @@ The experimental branch remains unmerged for the user's visual review.
 Remaining review: physical VoiceOver and AppKit IME, and native Linux/browser
 use. These remain explicit gaps, not completed checks. This checkpoint remains
 unmerged.
+
+### Welcome handoff and final interaction review, 2026-09-29
+
+- The no-machine welcome now has a clear heading and natural-width action.
+  Machine discovery keeps that action available. Pending saved defaults show
+  distinct preparation copy before the existing composer receives focus. Recent
+  harnesses retain their 56-point separation in this fallback presentation.
+- Project search measures its header at enlarged text sizes; both “Search repos”
+  and the machine remain readable at 880×560 and 200% text. The ordinary width
+  stays compact. The branch/PR route now uses the shared modal veil, including
+  native footer coverage, without changing the underlying pane or terminal input.
+- Add project uses the same desktop remote-folder chooser as New Harness,
+  preserving path shortcuts and visible recovery. Errors use shared semantic
+  ink. Orchestrator guidance wraps before its Send action can leave the panel.
+- Pane-resize instructions use the desktop surface and system type; divider and
+  key behavior are unchanged. Clone repository gives its URL initial focus.
+  Synthetic composition checks protect Escape in cloning and Enter/Escape in
+  task routing; ordinary actions resume after composition. Explicit Cancel stays
+  available, and retry preserves its existing focus behavior.
+- The independent reviewers inspected actual-font light/dark renders, enlarged
+  text, startup/loading/recovery states, and input handoffs. Supporting dialogs
+  passed **48 render checks**, with **9 final clone tests/renders** after the
+  initial-focus correction. Resize guidance fits 480×360 at 200% text.
+- With source frozen, the combined affected-journey suite passes **171 tests**.
+  Static analysis of `lib`, `test`, and `integration_test` is clean; the normal
+  macOS debug build succeeds. New Harness passes its full **3,953/3,953** line
+  gate, and the resource picker passes **1,271/1,271** lines.
+- The broader run passed **4,754 tests**, skipped **16**, and reported one clone
+  focus failure because it had compiled the library before the final focus edit.
+  The final 171-test run recompiles and passes that regression. Do not describe
+  the earlier broad run as a clean run of the final source.
+- The native app-control service still returns “native pipe startup failed”.
+  Actual VoiceOver and physical AppKit IME remain unverified. Light renders test
+  shared components; the production workspace still uses its approved dark
+  appearance and this work does not add an appearance switch.

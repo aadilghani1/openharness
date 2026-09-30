@@ -213,7 +213,9 @@ Primary and secondary action buttons and scope selectors are capsules. Text
 fields are rounded rectangles. Icon buttons have 32-point targets. Related
 corners are concentric: an inset row is less rounded than its enclosing panel.
 Widths describe content: agent 304, project 400, model 440, machine submenu 264;
-all clamp to the available window. Never stretch a short list to fill a page.
+all clamp to the available window. The project search grows with enlarged text
+so its query and machine remain readable together. Never stretch a short list
+to fill a page.
 
 List anatomy is consistent: identity at left, name, optional useful secondary
 context, then a checkmark, shortcut or disclosure at right. Text baselines and
@@ -265,6 +267,11 @@ It is never a second renderer with a hard-coded dot separator.
 A new user with no history sees the composer
 without an empty recents section; initial project guidance is neutral. Empty
 tabs hide the workspace footer, which returns when there is work to describe.
+Before a creation machine is available, show “Harness anything”, a short next
+step and a natural-width “Choose a machine” action. Keep that action available
+while finding machines. While saved defaults load, show “Preparing your harness…”
+in the same quiet hierarchy, then hand focus to the existing composer. Startup
+must not leave a blank page or imply that a harness has already started.
 
 Fresh forms focus the prompt and use the last explicit agent, project,
 approvals and worktree choices. Fresh branches default to main; reopening a
@@ -324,6 +331,8 @@ Companion and sharing controls sit after usage without shifting the context.
 at page scale. Related settings use grouping and whitespace. Existing artwork,
 terminal previews, native toolbar/footer components and domain-specific visuals
 retain their meaning. Read-only loading/error views use the same hierarchy.
+Pane-resize guidance is app navigation: use the shared popover surface, system
+type and wrapping keyboard hints. It must not look like terminal output.
 
 ## Interaction and review
 

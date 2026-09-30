@@ -92,6 +92,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
               notifier: widget.notifier,
               machineId: id,
               initialPath: path,
+              desktop: true,
             );
       if (!mounted || revision != _machineRevision) return;
       setState(() {

@@ -68,6 +68,75 @@ RouteAnswer choices() => RouteAnswer(
 
 void main() {
   setUpAll(loadRealFonts);
+  for (final choosing in [false, true]) {
+    for (final key in [LogicalKeyboardKey.enter, LogicalKeyboardKey.escape]) {
+      testWidgets(
+        'composition owns ${key.keyLabel} while ${choosing ? 'choosing an agent' : 'typing a task'}',
+        (tester) async {
+          final app = _App();
+          try {
+            await tester.pumpWidget(
+              MaterialApp(
+                theme: grid.buildAppTheme(brightness: Brightness.dark),
+                home: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () => showTaskPalette(context, app),
+                    child: const Text('Open'),
+                  ),
+                ),
+              ),
+            );
+            await tester.tap(find.text('Open'));
+            await tester.pumpAndSettle();
+            final field = find.byType(TextField);
+            if (choosing) {
+              await tester.enterText(field, 'Review the desktop');
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              app.reply.complete(choices());
+              await tester.pumpAndSettle();
+            }
+            const composing = TextEditingValue(
+              text: 'しごと',
+              selection: TextSelection.collapsed(offset: 3),
+              composing: TextRange(start: 0, end: 3),
+            );
+            tester.testTextInput.updateEditingValue(composing);
+            await tester.pump();
+            await tester.sendKeyEvent(key);
+            await tester.pump();
+            expect(app.routed, choosing ? ['Review the desktop'] : isEmpty);
+            expect(app.sent, isEmpty);
+            expect(field, findsOneWidget);
+            expect(
+              tester.widget<TextField>(field).controller!.value,
+              composing,
+            );
+
+            tester.testTextInput.updateEditingValue(
+              composing.copyWith(composing: TextRange.empty),
+            );
+            await tester.pump();
+            await tester.sendKeyEvent(key);
+            await tester.pump();
+            if (key == LogicalKeyboardKey.escape) {
+              await tester.pumpAndSettle();
+              expect(field, findsNothing);
+            } else if (choosing) {
+              expect(app.sent, [('a0', 'm0', 'しごと')]);
+            } else {
+              expect(app.routed, ['しごと']);
+              app.reply.complete(choices());
+              await tester.pumpAndSettle();
+            }
+          } finally {
+            await tester.pumpWidget(const SizedBox());
+            await tester.pump(const Duration(seconds: 1));
+            app.dispose();
+          }
+        },
+      );
+    }
+  }
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 1.7]) {
       testWidgets(

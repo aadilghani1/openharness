@@ -131,6 +131,7 @@ import '../widgets/daemon_slot.dart';
 import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
+import '../widgets/workspace_machine_prompt.dart';
 import '../shortcuts/keyboard_practice.dart';
 import '../widgets/agent_alert_banners.dart';
 import '../settings/experimental_features.dart';
@@ -437,14 +438,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (app.localMachineState == null)
-                            DesktopPill(
-                              label: 'Choose a machine',
-                              icon: AppIcons.monitor,
-                              onPressed: () => unawaited(_openMachines()),
-                            ),
+                          WorkspaceMachinePrompt(
+                            loading: app.machinesLoading,
+                            preparing: app.localMachineState != null,
+                            onChoose: () => unawaited(_openMachines()),
+                          ),
                           if (recent != null) ...[
-                            const SizedBox(height: 28),
+                            const SizedBox(height: 56),
                             recent,
                           ],
                         ],
@@ -1600,7 +1600,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         final agent = focused.agent;
         if (agent == null) return;
         final machineId = focused.pane.machineId;
-        await showDialog<void>(
+        await showAppDialog<void>(
           context: context,
           builder: (_) => SessionWorkDialog(
             agent: agent,

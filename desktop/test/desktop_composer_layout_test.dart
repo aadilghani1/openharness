@@ -613,7 +613,15 @@ void main() {
       expect(fixture.box.field, NewHarnessField.projectMenu);
       expect(_query.hitTestable(), findsOneWidget);
       final menu = tester.getRect(_chooser);
-      expect(menu.width, 400);
+      expect(menu.width, greaterThanOrEqualTo(400));
+      final hint = find.descendant(
+        of: _query,
+        matching: find.text('Search repos'),
+      );
+      expect(
+        tester.renderObject<RenderParagraph>(hint).didExceedMaxLines,
+        isFalse,
+      );
       expect(menu.height, lessThan(280));
       expect(fixture.box.options.take(3).map((o) => o.title), [
         'Open Folder',
@@ -655,6 +663,45 @@ void main() {
       expect(fixture.app.launches, isEmpty);
       expect(tester.takeException(), isNull);
     });
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'Repo search remains readable with enlarged text ${brightness.name}',
+      (tester) async {
+        final fixture = await _mount(
+          tester,
+          brightness: brightness,
+          size: const Size(880, 560),
+          scale: 2,
+        );
+        await tester.tap(_field('project'));
+        await tester.pumpAndSettle();
+        final hint = find.descendant(
+          of: _query,
+          matching: find.text('Search repos'),
+        );
+        expect(
+          tester.renderObject<RenderParagraph>(hint).didExceedMaxLines,
+          isFalse,
+        );
+        expect(_machine.hitTestable(), findsOneWidget);
+        expect(tester.getRect(_chooser).right, lessThanOrEqualTo(880));
+        expect(
+          tester.getRect(_query).right,
+          lessThan(tester.getRect(_machine).left),
+        );
+        await capture(tester, fixture, 'repo-menu-enlarged-${brightness.name}');
+        await tester.enterText(_query, 'openharness');
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(_query).controller!.text,
+          'openharness',
+        );
+        expect(fixture.app.launches, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets('Repo scopes folders to its machine and preserves the draft', (

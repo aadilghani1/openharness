@@ -371,13 +371,20 @@ class _TaskPaletteState extends State<_TaskPalette> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      Navigator.of(context).pop();
-      return KeyEventResult.handled;
-    }
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    final isEscape = event.logicalKey == LogicalKeyboardKey.escape;
+    final composing = _text.value.composing;
+    if (composing.isValid && !composing.isCollapsed) {
+      return isEnter || isEscape
+          ? KeyEventResult.skipRemainingHandlers
+          : KeyEventResult.ignored;
+    }
+    if (isEscape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
     // ⇧Enter is the newline — ignored here so the field does what it always does with it.
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (isEnter && !shift && _stage != _Stage.choosing) {

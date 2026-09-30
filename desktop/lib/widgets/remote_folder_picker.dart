@@ -630,7 +630,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                   _errorMessage(_error!),
                                   style: DesktopChrome.text(
                                     size: 13,
-                                    color: AppColors.danger,
+                                    color: Theme.of(context).colorScheme.error,
                                   ),
                                 ),
                               ),
@@ -858,7 +858,11 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                                 child: Text(
                                   _errorMessage(_error!),
                                   style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(color: AppColors.danger),
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .error,
+                                      ),
                                 ),
                               ),
                             ),

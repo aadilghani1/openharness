@@ -230,12 +230,16 @@ void main() {
     final storage = _DelayedPreferences();
     await setup(tester, storage: storage);
     expect(form, findsNothing);
+    expect(find.text('Harness anything'), findsOneWidget);
+    expect(find.text('Preparing your harness…'), findsOneWidget);
+    expect(find.text('Choose a machine'), findsNothing);
     app.newSwarm(name: 'Second draft');
     await tester.pumpAndSettle();
     final target = app.activeSwarmId;
     storage.loaded.complete('codex');
     await tester.pumpAndSettle();
     expect(form, findsOneWidget);
+    expect(find.text('Preparing your harness…'), findsNothing);
     expect(box(tester).swarmId, target);
     expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
     expect(connection.starts, isEmpty);

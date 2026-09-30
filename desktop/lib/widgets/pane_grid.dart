@@ -36,7 +36,8 @@ import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
-import 'box_chrome.dart';
+import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder;
+import 'desktop_chrome.dart';
 
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
 /// one stable parent as its rectangle, visibility and keyboard focus change.
@@ -612,40 +613,45 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         right: 24,
         child: IgnorePointer(
           child: Center(
-            child: TerminalBox(
-              key: const ValueKey('pane-resize-hint'),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Wrap(
-                  spacing: 18,
-                  runSpacing: 6,
-                  children: [
-                    Text(
-                      'resize >',
-                      style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
-                    ),
-                    for (final (key, action) in const [
-                      ('arrows', 'resize'),
-                      ('shift', 'larger steps'),
-                      ('tab', 'next divider'),
-                      ('esc', 'done'),
-                    ])
-                      Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: '$key  ',
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                            TextSpan(text: action),
-                          ],
-                        ),
-                        style: kBoxFaintStyle,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: DesktopDialogSurface(
+                key: const ValueKey('pane-resize-hint'),
+                radius: DesktopChrome.menuRadius,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        'Resize panes',
+                        style: DesktopChrome.control(medium: true),
                       ),
-                  ],
+                      for (final (key, action) in const [
+                        ('Arrow keys', 'Adjust'),
+                        ('Shift', 'Larger steps'),
+                        ('Tab', 'Next divider'),
+                        ('Esc', 'Done'),
+                      ])
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '$key  ',
+                                style: DesktopChrome.control(medium: true),
+                              ),
+                              TextSpan(text: action),
+                            ],
+                          ),
+                          style: DesktopChrome.metadata(),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

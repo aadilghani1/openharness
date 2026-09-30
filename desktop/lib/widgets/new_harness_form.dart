@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
@@ -2104,7 +2105,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     final preferredWidth = switch (box.field) {
       NewHarnessField.harness || NewHarnessField.agent => 304.0,
       NewHarnessField.model => 440.0,
-      NewHarnessField.projectMenu || NewHarnessField.project => 400.0,
+      // Keep room for the query beside its machine at enlarged text sizes.
+      // Fixed space covers both insets, icons, gaps, the capped machine pill,
+      // and refresh; measuring the labels also supports nonlinear text scaling.
+      NewHarnessField.projectMenu => math.max(
+        400.0,
+        _desktopTextSize('Search repos', 14).width +
+            _desktopTextSize('in', 12).width +
+            278,
+      ),
+      NewHarnessField.project => 400.0,
       NewHarnessField.mode => 380.0,
       NewHarnessField.profile => 320.0,
       _ => 360.0,
@@ -2345,7 +2355,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     },
   );
 
-  double _desktopLineHeight(String text, double size) {
+  Size _desktopTextSize(String text, double size) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
@@ -2355,10 +2365,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       textScaler: MediaQuery.textScalerOf(context),
       maxLines: 1,
     )..layout();
-    final height = painter.height.ceilToDouble();
+    final dimensions = painter.size;
     painter.dispose();
-    return height;
+    return dimensions;
   }
+
+  double _desktopLineHeight(String text, double size) =>
+      _desktopTextSize(text, size).height.ceilToDouble();
 
   double get _desktopGroupHeight => _desktopLineHeight('Ag', 11) + 12;
   double get _desktopSearchHeight =>

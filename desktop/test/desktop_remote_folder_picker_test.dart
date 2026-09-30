@@ -13,6 +13,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/remote_folder_picker.dart';
+import 'package:harness/widgets/swarm_dialogs.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 
@@ -106,6 +107,7 @@ Future<_Folders> _open(
   String? initialPath,
   bool unknownMachine = false,
   bool desktop = true,
+  bool addProject = false,
 }) async {
   final app = _Folders();
   final callerFocus = FocusNode(debugLabel: 'remote-folder-caller');
@@ -135,6 +137,11 @@ Future<_Folders> _open(
             focusNode: callerFocus,
             autofocus: true,
             onPressed: () async {
+              if (addProject) {
+                final project = await showSwarmProjectDialog(context, app);
+                onResult?.call(project?.path);
+                return;
+              }
               final result = await showRemoteFolderPicker(
                 context,
                 notifier: app,
@@ -155,6 +162,11 @@ Future<_Folders> _open(
   await tester.tap(find.text('Browse remote'));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
+  if (addProject) {
+    await tester.ensureVisible(find.text('Choose folder'));
+    await tester.tap(find.text('Choose folder'));
+    await tester.pumpAndSettle();
+  }
   return app;
 }
 
@@ -507,6 +519,104 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
+    for (final desktop in [false, true]) {
+      testWidgets(
+        'folder errors remain readable in ${brightness.name} desktop=$desktop',
+        (tester) async {
+          final app = await _open(
+            tester,
+            brightness: brightness,
+            desktop: desktop,
+          );
+          app.requests.single.reply.complete({'error': 'FORBIDDEN'});
+          await tester.pumpAndSettle();
+          final error = find.text(
+            'Choose a folder inside your home directory on this machine.',
+          );
+          final foreground = tester.widget<Text>(error).style!.color!;
+          Color? background;
+          error.evaluate().single.visitAncestorElements((element) {
+            if (element.widget case Material(color: final color?)
+                when color.a == 1) {
+              background = color;
+              return false;
+            }
+            return true;
+          });
+          expect(background, isNotNull);
+          final fg = foreground.computeLuminance();
+          final bg = background!.computeLuminance();
+          final contrast = fg > bg
+              ? (fg + .05) / (bg + .05)
+              : (bg + .05) / (fg + .05);
+          expect(contrast, greaterThanOrEqualTo(4.5));
+        },
+      );
+    }
+
+    testWidgets(
+      'Add project uses the desktop remote chooser with enlarged recovery in ${brightness.name}',
+      (tester) async {
+        String? projectPath;
+        final app = await _open(
+          tester,
+          brightness: brightness,
+          size: const Size(440, 560),
+          scale: 1.6,
+          addProject: true,
+          onResult: (path) => projectPath = path,
+        );
+        expect(
+          find.byKey(const ValueKey('desktop-remote-folder-dialog')),
+          findsOneWidget,
+        );
+        app.requests.single.reply.complete({'error': 'FORBIDDEN'});
+        await tester.pumpAndSettle();
+        final error = find.text(
+          'Choose a folder inside your home directory on this machine.',
+        );
+        await _capture(tester, 'add-project-remote-${brightness.name}');
+        await tester.ensureVisible(error);
+        expect(error.hitTestable(), findsOneWidget);
+        await tester.ensureVisible(find.text('Retry'));
+        expect(find.text('Retry').hitTestable(), findsOneWidget);
+        expect(
+          tester.getBottomRight(error).dy,
+          lessThan(
+            tester.getTopLeft(find.byKey(const Key('remote-folder-select'))).dy,
+          ),
+        );
+        await tester.tap(find.text('Retry'));
+        await tester.pump();
+        app.requests.last.reply.complete(
+          _listing('/Users/dev/Project', ['src']),
+        );
+        await tester.pumpAndSettle();
+        await _key(tester, LogicalKeyboardKey.arrowDown);
+        expect(_path(tester).focusNode!.hasFocus, isFalse);
+        await _key(tester, LogicalKeyboardKey.keyL, cmd: true);
+        expect(_path(tester).focusNode!.hasFocus, isTrue);
+        expect(
+          _path(tester).controller!.selection,
+          const TextSelection(baseOffset: 0, extentOffset: 18),
+        );
+        await _key(tester, LogicalKeyboardKey.enter, cmd: true);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('desktop-remote-folder-dialog')),
+          findsNothing,
+        );
+        expect(
+          find.widgetWithText(OutlinedButton, '/Users/dev/Project'),
+          findsOneWidget,
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Add project'));
+        await tester.pumpAndSettle();
+        expect(projectPath, '/Users/dev/Project');
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets(
       'narrow ${brightness.name} keeps enlarged errors and actions reachable',
       (tester) async {

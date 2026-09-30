@@ -558,10 +558,12 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      Text(
-                        'Shift ↵ for a new line',
-                        style: grid.AppType.monoMeta(
-                          color: grid.AppPalette.textSecondary,
+                      Flexible(
+                        child: Text(
+                          'Shift ↵ for a new line',
+                          style: grid.AppType.monoMeta(
+                            color: grid.AppPalette.textSecondary,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
