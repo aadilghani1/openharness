@@ -5,6 +5,8 @@ an illustrated, interactive viewer on the left and a conversation on the right.
 This is the native viewer for the existing hidden `autonomous/pair` harness,
 opened as one `companions` utility tab. It is not a second agent or a Store item.
 
+![Companion story and chat, rendered with synthetic fixture data](companion-home.png)
+
 The storybook treatment is a scoped exception to terminal workspace typography:
 editorial serif titles, readable system-sans prose, softly tinted worlds, and
 the established illustrated characters. Workspace chrome remains unchanged.
@@ -54,3 +56,7 @@ versions still supply their short replies. Chat uses the person's model usage.
 
 Keep this behind the existing Experimental companion gate. A restored tab with
 the experiment off does not load the collection or start chat.
+The Focus-bar creature choice defaults to off and belongs to the signed-in
+account, so enabling it on one computer also enables it on that account's other
+computers. Other accounts retain their own choice. This opt-in is separate from
+the server's optional account allowlist; the switch alone is not a private beta.

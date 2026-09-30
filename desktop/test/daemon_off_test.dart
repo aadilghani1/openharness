@@ -551,6 +551,37 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('a saved companion tab stays inert while the experiment is off', (
+    tester,
+  ) async {
+    // The same utility tab can return from the saved account workspace.
+    app.openCompanions();
+    await mount(tester, on: true, enabled: false);
+    expect(app.activeSwarm.isCompanions, isTrue);
+    expect(find.byKey(const ValueKey('companion-home')), findsNothing);
+    expect(
+      find.text('Companions is available in Settings → Experimental.'),
+      findsOneWidget,
+    );
+    expect(remote.fetches, 0);
+    expect(frames, isEmpty);
+
+    await setCreature(tester, true);
+    expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
+    expect(remote.fetches, greaterThan(0));
+    expect(frames.where((frame) => frame.$1 == 'daemon_talk'), isEmpty);
+
+    await setCreature(tester, false);
+    final fetches = remote.fetches;
+    expect(find.byKey(const ValueKey('companion-home')), findsNothing);
+    zoo.pushed(999);
+    app.notifyListeners();
+    await tester.pump(const Duration(seconds: 1));
+    expect(remote.fetches, fetches);
+    expect(frames.where((frame) => frame.$1 == 'daemon_talk'), isEmpty);
+    await unmount(tester);
+  });
+
   testWidgets('disabling the experiment also closes an egg reveal', (
     tester,
   ) async {
