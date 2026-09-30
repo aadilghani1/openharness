@@ -85,6 +85,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("confirm-before", "confirm", "Ask y/n before a command"),
     ("new-harness", "newh", "New harness: [engine] [@machine] [folder] — or choose"),
     ("new-terminal", "newt", "A shell on this pane's machine"),
+    ("take-control", "take", "Reclaim control of all panes across the TUI's tabs"),
     ("clone-harness", "cloneh", "A second harness with this one's history"),
     ("restart-harness", "restarth", "Restart this harness"),
     ("pause-harness", "pauseh", "Pause this harness (the conversation is kept)"),
@@ -1302,7 +1303,7 @@ fn harness_target(app: &App, words: &Words) -> Result<Option<(String, String)>, 
 fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
     if let Some((m, a)) = t.split_once(':') {
         if app.fleet.agent(m, a).is_some() { return Ok((m.to_string(), a.to_string())) }
-        if let Some(machine) = app.fleet.machines.iter().find(|x| x.name == m) { if app.fleet.agent(&machine.id, a).is_some() { return Ok((machine.id.clone(), a.to_string())) } }
+        if let Some(machine) = app.fleet.machines.iter().find(|x| app.fleet.machine_name(&x.id) == m && app.fleet.agent(&x.id, a).is_some()) { return Ok((machine.id.clone(), a.to_string())) }
     }
     if let Some(a) = app.fleet.agents.values().find(|a| a.id == t) { return Ok(a.key()) }
     if t.starts_with('%') || t.contains([':', '.']) {
@@ -3479,6 +3480,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
         "new-terminal" => input::run(app, "terminal"),
+        "take-control" => app.take_control(),
         // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
         // pane's; from a shell -t is needed, and one mid-turn is restarted or paused only with -y
         // (the keys ask first).

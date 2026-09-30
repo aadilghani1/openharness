@@ -1054,7 +1054,7 @@ fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, ma
 }
 
 pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
-    let Some(p) = app.panes.get(&pane) else { return crate::app::hostname() };
+    let Some(p) = app.panes.get(&pane) else { return app.fleet.local_machine_name() };
     let tab_id = app.tabs.get(window).map(|t| t.id.clone()).unwrap_or_default();
     if !p.osc_title.is_empty() && app.options.get("allow-set-title", &tab_id, Some(pane)).as_deref() == Some("on") { return p.osc_title.clone() }
     if !p.title.is_empty() { return p.title.clone() }
@@ -1065,8 +1065,8 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
         return if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) };
     }
     // A harness not heard of yet (another terminal's new one, before the list comes): what runs
-    // in it, else tmux's own title (the host) — never its id.
-    agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) })
+    // in it, else the machine's app name.
+    agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| app.fleet.machine_name(&p.machine_id))
 }
 
 /// Keep a distinguishing suffix, such as "(3)", visible when a title is long.
@@ -1288,8 +1288,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "host" => crate::app::full_hostname(),
         "host_short" => crate::app::full_hostname().split('.').next().unwrap_or("").to_string(),
         // This computer's name in Harness, including app renames; never the focused pane's.
-        "local_machine" => app.fleet.machine(&app.fleet.local_id).or_else(|| app.fleet.machines.iter().find(|m| m.local))
-            .map(|m| m.name.clone()).filter(|name| !name.is_empty()).unwrap_or_else(crate::app::full_hostname),
+        "local_machine" => app.fleet.local_machine_name(),
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),

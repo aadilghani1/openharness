@@ -428,7 +428,7 @@ pub fn palette() -> (Color, Color, bool) {
 /// Surface colors derived from the terminal theme, with a stable fallback before OSC replies.
 #[derive(Clone, Copy, Debug)]
 pub struct PanePalette {
-    pub canvas: Color, pub surface: Color, pub inactive_surface: Color,
+    pub surface: Color, pub inactive_surface: Color,
     pub foreground: Color, pub inactive_foreground: Color, pub muted: Color,
     pub active_foreground: Color,
     pub border: Color, pub active_border: Color,
@@ -452,10 +452,12 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
     };
     let green = if light { Color::Rgb(58, 102, 48) } else { Color::Rgb(133, 181, 105) };
     let inactive_surface = if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) };
+    // Panes sit directly on the native terminal background. Lift the focused fill
+    // just enough to distinguish its edge while retaining the terminal's theme.
+    let surface = mix(bg, foreground, if light { 4 } else { 10 });
+    let surface = if surface == inactive_surface { mix(bg, foreground, if light { 2 } else { 6 }) } else { surface };
     PanePalette {
-        // Separate pane cards sit on a quiet backdrop, with clear space between outlines.
-        canvas: if light { mix(bg, foreground, 14) } else { Color::Rgb(32, 32, 32) },
-        surface: bg,
+        surface,
         inactive_surface,
         foreground, inactive_foreground: mix(foreground, bg, 9),
         muted: mix(foreground, bg, 30),
@@ -1279,9 +1281,8 @@ mod palette_tests {
                          (Color::Rgb(247, 247, 247), Color::Rgb(26, 26, 26))] {
             let p = super::pane_palette_for(Some((bg, fg)));
             assert_ne!(p.surface, p.inactive_surface);
-            assert_ne!(p.inactive_surface, p.canvas);
+            assert_ne!(p.surface, bg);
             assert_ne!(p.border, p.active_border);
-            assert_eq!(p.surface, bg);
             assert_eq!(p.foreground, fg);
             let luminance = |c: Color| { let Color::Rgb(r, g, b) = c else { panic!("RGB palette") };
                 299 * r as i32 + 587 * g as i32 + 114 * b as i32 };
@@ -1290,7 +1291,7 @@ mod palette_tests {
             assert!((luminance(p.status) - luminance(p.status_foreground)).abs() > 120_000);
         }
         let fallback = super::pane_palette_for(None);
-        assert_eq!(fallback.surface, Color::Rgb(28, 31, 36));
+        assert_eq!(fallback.surface, Color::Rgb(47, 50, 55));
         assert_eq!(fallback.inactive_surface, Color::Rgb(64, 64, 64));
     }
 

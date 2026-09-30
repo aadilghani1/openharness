@@ -176,7 +176,7 @@ try:
     started = True
     wait(lambda: 'Fix flaky login test' in tmux('capture-pane', '-p', '-t', 'test'), 'demo panes')
     background('#000000')
-    wait(lambda: 'bg=#000000' in hn('show', '-gwv', 'window-active-style'), 'black terminal background')
+    wait(lambda: 'bg=#181818' in hn('show', '-gwv', 'window-active-style'), 'focused pane lifted above the black terminal background')
     hn('select-layout', 'even-horizontal')
     panes = hn('list-panes', '-F', '#{pane_id}').splitlines()
     assert len(panes) == 3
@@ -190,12 +190,12 @@ try:
     active_bg = hn('show', '-gwv', 'window-active-style').split('bg=')[1]
     inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
     assert active_bg != inactive_bg
-    assert active_bg == '#000000' and inactive_bg == '#404040'
+    assert active_bg == '#181818' and inactive_bg == '#404040'
     wait(lambda: not any(pane_outline(p) for p in (first, second, third)), 'pane backgrounds without outlines')
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
-    assert background_at(149, 0) == '#202020', 'dark backdrop surrounds the pane cards'
+    assert background_at(149, 0) == 'default', 'outer margins use the native terminal background'
     wait(lambda: pane_edge_background(first, active_bg), 'focused background fills through the pane edges')
-    assert background_at(49, 20) == background_at(99, 20) == '#202020', 'dark gaps separate pane backgrounds'
+    assert background_at(49, 20) == background_at(99, 20) == 'default', 'pane gaps use the native terminal background'
     assert pane_edge_background(second, inactive_bg)
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
@@ -319,8 +319,8 @@ try:
         assert '⎇ ' + value('#{pane_branch}') in branch_context, branch_context
         assert 'git:(' not in branch_context
         wait(lambda: not pane_outline(target) and background_at(1, 1) == active_bg
-             and background_at(0, 0) == background_at(149, 40) == '#202020',
-             'zoomed pane keeps its focused surface inside the canvas')
+             and background_at(0, 0) == background_at(149, 40) == 'default',
+             'zoomed pane sits directly on the terminal background')
         wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
         x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', target).split())
         wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'machine, project, branch and PR align to the right edge')
@@ -431,9 +431,10 @@ try:
     layout_before_theme = value('#{window_layout}')
     before = len(api()['inputs'])
     background('#f7f7f7')
-    wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
-    wait(lambda: pane_background(first) == '#f7f7f7' and pane_background(second) == '#e5e5e5', 'light focus contrast')
-    wait(lambda: pane_edge_background(first, '#f7f7f7') and pane_title_color(first, foreground=False) == '#f7f7f7', 'light surface fills the focused pane through its padding')
+    wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#eeeeee', 'light surface defaults')
+    wait(lambda: pane_background(first) == '#eeeeee' and pane_background(second) == '#e5e5e5', 'light focus contrast')
+    wait(lambda: pane_edge_background(first, '#eeeeee') and pane_title_color(first, foreground=False) == '#eeeeee', 'light surface fills the focused pane through its padding')
+    assert background_at(149, 0) == 'default', 'light theme also keeps the native terminal background'
     light_status = hn('show', '-gv', 'status-style')
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
@@ -447,7 +448,7 @@ try:
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
     assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
-    wait(lambda: pane_background(first) == '#101010' and pane_background(second) == '#404040', 'dark focus contrast')
+    wait(lambda: pane_background(first) == '#262626' and pane_background(second) == '#404040', 'dark focus contrast')
     print('PASS pane UI: live light/dark themes, reported defaults and custom style preservation', flush=True)
 
     hn('send-keys', '-t', first, '-l', '\x1b[H\x1b[31;44mHN_COLOR\x1b[0m')
@@ -464,9 +465,9 @@ try:
 
     single = hn('new-window', '-n', 'single', '-P', '-F', '#{pane_id}', '/bin/sh')
     wait(lambda: value('#{pane_id}') == single and value('#{window_panes}') == '1', 'single-pane window')
-    wait(lambda: not pane_outline(single) and background_at(1, 1) == '#101010'
-         and background_at(0, 0) == background_at(149, 40) == '#202020',
-         'single pane keeps its focused surface inside the canvas')
+    wait(lambda: not pane_outline(single) and background_at(1, 1) == '#262626'
+         and background_at(0, 0) == background_at(149, 40) == 'default',
+         'single pane sits directly on the terminal background')
     snapshot('panes-single')
     hn('kill-window')
     wait(lambda: value('#{window_id}') == current, 'return from single-pane window')

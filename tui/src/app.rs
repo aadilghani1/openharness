@@ -1111,8 +1111,9 @@ impl App {
                 }
                 if id.is_empty() { return }
                 app.fleet.local_id = id.clone();
+                for machine in &mut app.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
                 if app.fleet.machine(&id).is_none() {
-                    app.fleet.machines.insert(0, Machine { id: id.clone(), name: hostname(), local: true, status: "running".into(), reach: Reach::Unknown });
+                    app.fleet.machines.insert(0, Machine { id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
                 }
                 app.connect(&id);
                 app.refresh_machines();
@@ -1150,7 +1151,7 @@ impl App {
 
     fn ensure_local_shells(&mut self) {
         if self.fleet.machine(crate::local::MACHINE).is_none() {
-            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: hostname(), local: true, status: "running".into(), reach: Reach::Unknown });
+            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: "This computer".into(), local: true, status: "running".into(), reach: Reach::Unknown });
         }
         self.connect(crate::local::MACHINE);
     }
@@ -1172,10 +1173,10 @@ impl App {
             for row in rows {
                 let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
                 if id.is_empty() { continue }
-                let name = ["name", "hostname"].iter().filter_map(|k| row.get(*k).and_then(Value::as_str)).map(str::trim).find(|s| !s.is_empty()).unwrap_or(&id[..8.min(id.len())]).to_string();
+                let name = fleet::machine_display_name(&id, row.get("name").and_then(Value::as_str));
                 let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown").to_string();
                 match app.fleet.machine_mut(&id) {
-                    Some(machine) => { machine.name = name; machine.status = status }
+                    Some(machine) => { machine.name = name; machine.status = status; machine.local = id == local }
                     None => app.fleet.machines.push(Machine { local: id == local, id: id.clone(), name, status, reach: Reach::Unknown }),
                 }
             }
@@ -1272,12 +1273,13 @@ impl App {
                 for pane in self.panes.values_mut().filter(|p| p.machine_id == machine_id) {
                     pane.stream = None;
                     pane.opening = false;
+                    pane.takeover_pending = false;
                     pane.open_token += 1;
                     if !matches!(pane.phase, Phase::Card { .. }) {
                         pane.phase = if needs_link {
                             Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (machines, then C-l), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("choose-tree -m").unwrap_or_default(), "machines".into())] }
                         } else {
-                            Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machines.iter().find(|m| m.id == machine_id).map(|m| m.name.clone()).unwrap_or_default()))
+                            Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machine_name(&machine_id)))
                         };
                     }
                     pane.dirty = true;
@@ -1661,6 +1663,26 @@ impl App {
         }
     }
 
+    /// A user asks for control of this TUI: reclaim every available pane across its tabs and
+    /// sessions without moving focus. Reconnects and ownership notifications never call this.
+    pub fn take_control(&mut self) {
+        if self.read_only() { return }
+        let mut ids: Vec<u64> = self.tabs.iter().chain(self.sessions.iter()
+            .filter(|s| !s.mirror.as_ref().is_some_and(|m| m.readonly))
+            .flat_map(|s| s.tabs.iter())).flat_map(Tab::panes).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            let Some(pane) = self.panes.get_mut(&id) else { continue };
+            if pane.dead.is_some() || matches!(pane.phase, Phase::Card { .. }) { continue }
+            if pane.stream.is_some() && !pane.read_only && !matches!(pane.phase, Phase::Watching(_)) { continue }
+            if !self.fleet.machine(&pane.machine_id).is_some_and(Machine::usable)
+                || !self.links.get(&pane.machine_id).is_some_and(|s| s.link.is_some()) { continue }
+            if pane.opening { pane.takeover_pending = true }
+            else { self.open_stream(id, true) }
+        }
+    }
+
     /// Open (or re-open) a pane's terminal. [takeover]: take the keyboard from any other window.
     pub fn open_stream(&mut self, pane_id: u64, takeover: bool) {
         let content = self.content_size(pane_id);
@@ -1700,7 +1722,7 @@ impl App {
         // recognised by this token and not allowed to overwrite the current state.
         pane.open_token += 1;
         let token = pane.open_token;
-        let host = hostname();
+        let host = self.fleet.local_machine_name();
         self.spawn(async move {
             link.request("terminal_open", json!({
                 "protocolVersion": 3,
@@ -1728,6 +1750,7 @@ impl App {
         }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         pane.opening = false;
+        let takeover_requested = std::mem::take(&mut pane.takeover_pending);
         match reply {
             Ok((ty, payload)) if ty == "terminal_ready" => {
                 pane.stream = stream;
@@ -1739,7 +1762,8 @@ impl App {
                 pane.phase = if pane.read_only {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
-                let queued = std::mem::take(&mut pane.queued);
+                let retake = takeover_requested && pane.read_only;
+                let queued = if retake { Vec::new() } else { std::mem::take(&mut pane.queued) };
                 let read_only = pane.read_only;
                 // The tile changed size while this was opening: tell the far pane now.
                 if !read_only && pane.want != asked {
@@ -1760,6 +1784,9 @@ impl App {
                 if crate::local::is_local(machine_id) {
                     let death = stream.and_then(|id| self.orphan_exits.remove(&id).map(|(_, death)| death)).or_else(|| serde_json::from_value::<pane::Exit>(payload["exit"].clone()).ok());
                     if let Some(death) = death { self.local_ended(pane_id, death) }
+                }
+                if retake && self.panes.get(&pane_id).is_some_and(|p| p.dead.is_none() && matches!(p.phase, Phase::Watching(_))) {
+                    self.open_stream(pane_id, true);
                 }
             }
             Ok((_, payload)) => {
@@ -2191,8 +2218,7 @@ impl App {
     fn machine_session_name(&self) -> String {
         // (Before the daemon has said which it is, this computer as the fleet was last seen:
         // `hn attach -t studio` finds the desk's session at once.)
-        let m = if self.fleet.local_id.is_empty() { self.fleet.machines.iter().find(|m| m.local) } else { self.fleet.machine(&self.fleet.local_id) };
-        m.map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(hostname)
+        self.fleet.local_machine_name()
     }
 
     fn stash_name(&self, s: &Stash) -> String { s.alias.clone().unwrap_or_else(|| self.machine_session_name()) }
@@ -5733,6 +5759,79 @@ mod recovery_tests {
         app.panes.get_mut(&3).unwrap().stream = None;
         app.shells.insert(("test-peer".into(), "agent-2".into()));
         app
+    }
+
+    #[tokio::test]
+    async fn taking_control_reclaims_hidden_local_and_remote_panes_without_moving_focus() {
+        let mut app = fixture();
+        app.fleet.machines[0].local = true;
+        app.fleet.local_id = "test-peer".into();
+        app.fleet.machines.push(Machine { id: "other-peer".into(), name: "Remote".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.links.insert("other-peer".into(), LinkState { link: Some(Link::spawn(app.port, "other-peer", 1, app.sink.clone())), generation: 1, attempts: 0, retry_at: None });
+        let mut controlled = Pane::new(5, "test-peer", "already-controlled", 80, 24);
+        controlled.stream = Some(Uuid::new_v4());
+        controlled.phase = Phase::Live;
+        let stream = controlled.stream;
+        app.panes.insert(5, controlled);
+        app.tabs = (1..=5).map(|id| {
+            let mut tab = Tab::with_wid("Control test", id);
+            tab.root = Some(Node::new(id, 80, 23));
+            tab.focus = Some(id);
+            tab
+        }).collect();
+        app.active = 1;
+        for id in [1, 2, 4] {
+            let pane = app.panes.get_mut(&id).unwrap();
+            pane.phase = Phase::Watching("another app".into());
+            pane.read_only = true;
+        }
+        app.client_flags.push("read-only".into());
+        app.take_control();
+        assert!(![1, 2, 4].iter().any(|id| app.panes[id].opening));
+        app.client_flags.clear();
+        app.take_control();
+        for id in [1, 2, 4] {
+            assert!(app.panes[&id].opening);
+            assert_eq!(app.panes[&id].open_token, 8);
+        }
+        assert!(matches!(app.panes[&3].phase, Phase::Card { .. }));
+        assert_eq!(app.panes[&5].stream, stream);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.focused(), Some(2));
+        app.take_control();
+        for id in [1, 2, 4] { assert_eq!(app.panes[&id].open_token, 8); }
+        for state in app.links.values() { state.link.as_ref().unwrap().close(); }
+    }
+
+    #[tokio::test]
+    async fn taking_control_during_a_passive_open_preserves_input_and_claims_once() {
+        let mut app = fixture();
+        app.tabs[0].root = Some(Node::new(1, 80, 23));
+        app.tabs[0].focus = Some(1);
+        let pane = app.panes.get_mut(&1).unwrap();
+        pane.phase = Phase::Watching("another app".into());
+        pane.read_only = true;
+        pane.opening = true;
+        pane.stream = None;
+        pane.queued.push(b"hello".to_vec());
+        app.take_control();
+        assert!(app.panes[&1].takeover_pending);
+        assert_eq!(app.panes[&1].open_token, 7);
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
+        assert!(app.panes[&1].opening);
+        assert!(!app.panes[&1].takeover_pending);
+        assert_eq!(app.panes[&1].open_token, 8);
+        assert_eq!(app.panes[&1].queued, [b"hello".to_vec()]);
+        app.opened(1, "test-peer", 8, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":false}))));
+        assert!(matches!(app.panes[&1].phase, Phase::Live));
+        assert!(app.panes[&1].queued.is_empty());
+        app.take_control();
+        assert_eq!(app.panes[&1].open_token, 8);
+        // A passive watcher response with no new gesture must never retake a terminal.
+        app.opened(2, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
+        assert!(matches!(app.panes[&2].phase, Phase::Watching(_)));
+        assert!(!app.panes[&2].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
     }
 
     #[tokio::test]

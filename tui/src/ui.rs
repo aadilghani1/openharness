@@ -239,7 +239,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let surfaces = app.options.pane_look();
     if surfaces {
         crate::term_out::clear_extras(body);
-        buf.set_style(body, Style::default().bg(theme::pane_palette().canvas));
+        buf.set_style(body, Style::default().bg(Color::Reset));
     }
     let rects = app.rects.clone();
     let mut cursor = None;
@@ -253,7 +253,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
         if surfaces {
             let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.pane_status(app.tab()));
-            // A single or zoomed pane keeps the same surface and surrounding canvas.
+            // Single and zoomed panes also sit directly on the terminal background.
             buf.set_style(f.surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
         }
         // choose-tree's tree, over the pane.
@@ -381,9 +381,10 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::accent()))) } lines.push(Line::raw("")) }
     else { lines.push(Line::styled("harness", bold(theme::accent()))) }
-    let local = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_default();
-    let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
-    let sub = if app.fleet.machines.len() > 1 { format!("{local} · {up}/{} machines connected", app.fleet.machines.len()) } else { local };
+    let local = app.fleet.local_machine_name();
+    let up = app.fleet.visible_machines().filter(|m| m.usable()).count();
+    let total = app.fleet.visible_machines().count();
+    let sub = if total > 1 { format!("{local} · {up}/{total} machines connected") } else { local };
     lines.push(Line::styled(sub, fg(theme::MUTED)));
     lines.push(Line::raw(""));
     let centered = lines.len();
@@ -397,7 +398,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
         lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::accent())), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::accent())), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
-        let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+        let many = up > 1;
         for (index, row) in rows.iter().enumerate() {
             // A harness as its state says; a conversation Harness did not start as a paused one
             // would be (nothing running), its folder where the project goes.

@@ -95,11 +95,21 @@ def choose_field(label, query):
     field(label); type_text(query); keys('Enter'); shows('New Harness')
 def new_form():
     keys('C-b', 'N'); shows('Options')
+def placement():
+    window, windows, panes = hn('display-message', '-p', '#{window_id} #{session_windows} #{window_panes}').split()
+    return window, int(windows), int(panes)
+def placed_in_current_window(before):
+    window, windows, panes = before
+    assert placement() == (window, windows, panes + 1), 'New Harness must add a pane in the current window'
+    # Keep room for the next launch as this suite creates several harnesses in one window.
+    hn('select-layout', 'tiled')
 def submit(count):
     # Git discovery is asynchronous. Wait for its answer before accepting the visible draft.
     time.sleep(.15)
+    before = placement()
     keys('Enter')
     wait(lambda: create_count() == count and 'Options' not in screen(), 'created harness')
+    placed_in_current_window(before)
 
 def raw(data):
     tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in data.encode()])
@@ -187,8 +197,10 @@ try:
     new_form(); choose_field('Harness', 'Terminal'); field('Options')
     assert not re.search(r'│[ ›]*(Model|Approvals|Profile) {2,}', screen()), 'Terminal omits irrelevant settings'
     # Return focus to the action without accepting any of the disabled Git rows.
+    before_terminal = placement()
     field('New Harness')
     wait(lambda: create_count() == before + 7 and 'Options' not in screen(), 'terminal launch')
+    placed_in_current_window(before_terminal)
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and request.get('permissionMode') is None, request
     assert not any(k in request for k in ('dsh', 'prompt', 'gridModel', 'gitSource', 'codexHome')), request
@@ -214,6 +226,7 @@ try:
     new_form(); field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
     type_text('lose-reply'); keys('Enter'); shows('New Folder: lose-reply')
     count = create_count()
+    before_recovery = placement()
     keys('Enter'); shows('Check status'); shows('Launch not confirmed')
     assert create_count() == count + 1
     request = state()['created'][-1]
@@ -225,6 +238,7 @@ try:
     keys('Enter'); shows('Still starting your harness')
     assert create_count() == count + 1
     keys('Enter'); wait(lambda: 'Options' not in screen(), 'original harness recovered')
+    placed_in_current_window(before_recovery)
     assert create_count() == count + 1, 'status recovery must never send a second create'
     checks = state()['creationChecks'][-2:]
     assert len(checks) == 2 and all(c['creationId'] == request['creationId'] for c in checks)

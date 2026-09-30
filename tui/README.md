@@ -48,8 +48,8 @@ this computer unless you name it); the others are this computer's, kept between 
 
 **More than one terminal** works as with one tmux server. Each `hn` is a client. `hn attach -t
 main` from a second terminal (or over SSH) shows `main` in both, as tmux does: a split, a new
-window or a window chosen in either shows in both, and either can type into its panes (the first
-key takes the pane's keyboard). `attach -r` only watches; `attach -d` takes the session and
+window or a window chosen in either shows in both, and either can type into its panes (typing
+into a watcher takes control across that TUI's tabs). `attach -r` only watches; `attach -d` takes the session and
 detaches the others. Commands from a shell reach every session, whichever terminal has it. `hn
 ls`, `list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in
 any order: the last one showing a session keeps it. What tmux's server
@@ -79,10 +79,10 @@ Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pa
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
 with one-cell gaps and inset terminal content. Panes have no drawn borders: background
-contrast identifies focus. The focused pane keeps the terminal's native background across the
-whole surface. Inactive dark panes use `rgb(64, 64, 64)` with softer text, separated by dark gaps.
-A lone or zoomed pane keeps the same focused surface and surrounding canvas. Light terminals
-keep a light counterpart.
+contrast identifies focus. The margins and gaps keep the terminal's native background. The focused
+pane uses a subtly contrasting fill (`#181818` on a black terminal), while inactive dark panes use
+`rgb(64, 64, 64)` with softer text. A lone or zoomed pane keeps the same focused surface. Light
+terminals keep a light counterpart.
 Explicit pane-border styles still customize the title; border line choices apply in classic and
 tmux appearances.
 Explicit program colors and user styles stay intact. The muted green status bar has a continuous
@@ -105,9 +105,16 @@ fleet counts, the quoted local machine name and clock sit on the right. The git 
 header, aligned to the right with its PR and written `⎇ branch` without redundant punctuation.
 Status-bar groups are separated by two spaces, with one space at each outer edge to align
 with the pane surfaces. Window tabs start at the left, without a machine/session label.
-The right side shows the machine running hn by its name in the app, such as `"office"`,
-falling back to its hostname, independent of the focused pane or session name.
+Local and remote machines use their names from the app everywhere, such as `"office"`.
+Local shell panes keep that same name across daemon disconnects and reconnects. Unnamed account
+machines use `machine-<id8>`, as on desktop and phone; before this computer is known, it is
+`This computer`. The status bar names the machine running hn, independent of the focused pane
+or session name.
 Custom status formats and the prefix cue remain supported.
+Take Control (`C-b : take-control`, or `take`) reclaims all available local and remote panes
+across the TUI's tabs, including hidden ones, without changing focus. Typing into a watched pane
+does the same; the input goes only to that pane. Reconnects keep watching until a person asks
+for control again, and read-only clients keep their read-only behavior.
 One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).
@@ -140,11 +147,12 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
 `C-b N` opens the compact desktop-style New Harness form with Agent, Project, collapsed
-Options and New Harness. The initial destination is the local machine, with successful agent
+Options and New Harness. The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; Up/Down moves between fields and previews their chooser. Enter,
 Right or typing enters the chooser. Tab switches between the form and chooser; Enter accepts
-an item and returns to New Harness. A second Enter starts it. Lowercase `C-b n` remains next window.
+an item and returns to New Harness. A second Enter starts it in the current window, splitting
+beside the focused pane when needed. Lowercase `C-b n` remains next window.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
 compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
@@ -260,7 +268,7 @@ has multiple accounts, extra remote accounts say `Claude@studio 20%` to distingu
 and Codex; Grok and other providers are not listed until a quota source is available. Existing
 `usage`, `usage_high` and `usage_high_mark` formats retain their used-quota meaning for custom
 configurations. Other formats:
-`#{local_machine}` (this computer's name in the app, falling back to its hostname),
+`#{local_machine}` (this computer's name in the app),
 `#{pane_machine}` (the focused pane's machine), `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
@@ -347,7 +355,9 @@ are sitting at, over SSH too.
 ## Two windows, one harness
 
 A terminal has one keyboard. Opening a harness another window is driving shows it read-only
-("watching"); the first key you type takes it over, and the other window starts watching.
+("watching"); taking control here reclaims this TUI's panes across all tabs, and the other
+window starts watching. The first key typed into a watcher also takes control, preserving that
+key for its intended pane.
 
 ## The dial
 

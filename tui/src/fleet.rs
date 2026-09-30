@@ -430,10 +430,40 @@ pub struct Fleet {
     pub agents: HashMap<(String, String), Agent>,
 }
 
+/// Match the desktop and phone: the app's saved name, or its stable machine-id label.
+pub fn machine_display_name(id: &str, name: Option<&str>) -> String {
+    name.map(str::trim).filter(|name| !name.is_empty()).map(str::to_string)
+        .unwrap_or_else(|| format!("machine-{}", id.chars().take(8).collect::<String>()))
+}
+
 impl Fleet {
     pub fn machine(&self, id: &str) -> Option<&Machine> { self.machines.iter().find(|m| m.id == id) }
     pub fn machine_mut(&mut self, id: &str) -> Option<&mut Machine> { self.machines.iter_mut().find(|m| m.id == id) }
-    pub fn machine_name(&self, id: &str) -> String { self.machine(id).map(|m| m.name.clone()).unwrap_or_default() }
+    /// The account's record for this computer; the local PTY transport is not another machine.
+    pub fn registered_local_machine(&self) -> Option<&Machine> {
+        self.machine(&self.local_id).filter(|m| !crate::local::is_local(&m.id))
+            .or_else(|| self.machines.iter().find(|m| m.local && !crate::local::is_local(&m.id)))
+    }
+    pub fn local_machine_name(&self) -> String {
+        self.registered_local_machine().map(|m| machine_display_name(&m.id, Some(&m.name)))
+            .unwrap_or_else(|| "This computer".into())
+    }
+    pub fn machine_name(&self, id: &str) -> String {
+        if crate::local::is_local(id) { return self.local_machine_name() }
+        machine_display_name(id, self.machine(id).map(|m| m.name.as_str()))
+    }
+    /// New work from a local shell goes through Harness when its daemon is connected.
+    /// Existing PTYs keep their transport identity so their sessions survive reconnects.
+    pub fn launch_machine_id<'a>(&'a self, id: &'a str) -> &'a str {
+        if crate::local::is_local(id) {
+            if let Some(machine) = self.registered_local_machine().filter(|m| m.usable()) { return &machine.id }
+        }
+        id
+    }
+    pub fn visible_machines(&self) -> impl Iterator<Item = &Machine> {
+        let connected_local = self.registered_local_machine().is_some_and(Machine::usable);
+        self.machines.iter().filter(move |m| !connected_local || !crate::local::is_local(&m.id))
+    }
     pub fn agent(&self, machine: &str, id: &str) -> Option<&Agent> { self.agents.get(&(machine.to_string(), id.to_string())) }
 
     pub fn state_of(&self, agent: &Agent) -> State { agent.state(self.machine(&agent.machine_id)) }
@@ -567,6 +597,34 @@ pub fn ago(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_shells_share_the_app_name_without_changing_their_transport() {
+        let shell = crate::local::MACHINE;
+        let mut fleet = Fleet { local_id: "registered-local".into(), ..Default::default() };
+        for (id, name, local) in [(shell, "m0", true), ("registered-local", "office", true), ("remote", "GPU rig", false)] {
+            fleet.machines.push(Machine { id: id.into(), name: name.into(), local, status: "running".into(), reach: Reach::Ready });
+        }
+        assert_eq!(fleet.machine_name(shell), "office");
+        assert_eq!(fleet.machine_name("registered-local"), "office");
+        assert_eq!(fleet.machine_name("remote"), "GPU rig");
+        assert_eq!(fleet.launch_machine_id(shell), "registered-local");
+        assert_eq!(fleet.visible_machines().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["registered-local", "remote"]);
+        assert_eq!(fleet.machine(shell).unwrap().id, shell);
+        // A rename is visible even to existing shell panes. Offline boot keeps the cached app name.
+        fleet.machine_mut("registered-local").unwrap().name = "Work Mac".into();
+        assert_eq!(fleet.machine_name(shell), "Work Mac");
+        fleet.local_id = shell.into();
+        fleet.machine_mut("registered-local").unwrap().reach = Reach::Offline;
+        assert_eq!(fleet.local_machine_name(), "Work Mac");
+        assert_eq!(fleet.machine_name(shell), "Work Mac");
+        assert_eq!(fleet.launch_machine_id(shell), shell);
+        // An unnamed account machine follows the desktop/phone convention, not its hostname.
+        fleet.machine_mut("registered-local").unwrap().name.clear();
+        assert_eq!(fleet.machine_name(shell), "machine-register");
+        assert_eq!(Fleet::default().machine_name(shell), "This computer");
+    }
+
     #[test]
     fn parses_iso() {
         assert_eq!(parse_iso("1970-01-01T00:00:01.500Z"), Some(1500));

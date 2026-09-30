@@ -176,7 +176,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("restart", "Restart Harness", "⌥⇧E", "", "Harness"),
     ("pause", "Pause Harness", "", "stop the engine, keep the conversation", "Harness"),
     ("rename", "Rename Harness…", "", "", "Harness"),
-    ("take", "Take over this pane", "", "when another window has the keyboard", "Harness"),
+    ("take", "Take Control", "", "reclaim all panes across every tab", "App"),
     ("tab", "New Swarm", "⌥T", "", "Swarms"),
     ("rename-tab", "Rename Swarm…", "⌥⇧R", "", "Swarms"),
     ("close-tab", "Close Swarm", "⌥⇧W", "harnesses keep running", "Swarms"),
@@ -208,7 +208,7 @@ fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(t
 pub struct PopupLook { pub lines: String, pub style: String, pub border_style: String }
 
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
-    let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
     // The project in each row when the harnesses work in more than one.
     let projects = { let mut p: Vec<&str> = app.fleet.agents.values().map(|a| a.project.as_str()).filter(|p| !p.is_empty()).collect(); p.sort(); p.dedup(); p.len() > 1 };
     let open: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
@@ -282,7 +282,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
 /// was said in them (never in the list as it opens): `not in Harness`, Enter resuming one as a
 /// harness; one open in another terminal or app is marked so, and not opened twice.
 pub fn external_rows(app: &App) -> Vec<Row> {
-    let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
     app.said.iter().filter_map(|s| s.external.as_ref()).map(|x| {
         let (mark, mark_color) = engine_mark(&x.engine);
         let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
@@ -388,7 +388,7 @@ pub fn project_rows(app: &App) -> Vec<Row> {
         if !matches!(app.fleet.state_of(a), State::Paused | State::Offline) { entry.1 += 1 }
         entry.2 = entry.2.max(a.recency());
     }
-    let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
     let mut rows: Vec<(u64, Row)> = groups.into_iter().map(|((machine, root), (all, live, recent))| {
         let name = root.rsplit('/').next().unwrap_or(&root).to_string();
         let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
@@ -497,7 +497,7 @@ pub fn palette_rows(app: &App) -> Vec<Row> {
 pub const NEEDS_ARGS: &[&str] = &["select-window", "rename-window", "move-window", "select-pane", "resize-pane", "swap-pane", "select-layout", "send-keys", "command-prompt", "confirm-before", "display-message", "send-message", "rename-harness", "send-task", "broadcast"];
 
 pub fn machine_rows(app: &App) -> Vec<Row> {
-    app.fleet.machines.iter().map(|m| {
+    app.fleet.visible_machines().map(|m| {
         // Its harnesses by what they do: the fleet's counts, for this machine.
         let here: Vec<State> = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
         let n = |s: State| here.iter().filter(|x| **x == s).count();
@@ -514,7 +514,7 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
         let counts = [(State::NeedsInput, "waiting"), (State::Failed, "failed"), (State::Done, "done"), (State::Working, "working"), (State::Ready, "idle")]
             .iter().filter(|(s, _)| n(*s) > 0).map(|(s, w)| format!("{} {w}", n(*s))).collect::<Vec<_>>().join(" · ");
         let counts = format!("{rtt}{}", if counts.is_empty() { "no harnesses".into() } else { counts });
-        Row::new(m.id.clone(), m.name.clone()).extra(m.status.clone())
+        Row::new(m.id.clone(), app.fleet.machine_name(&m.id)).extra(m.status.clone())
             .lead(vec![span(dot, fg(color)), span(" ", Style::default())])
             .detail(vec![span(word, fg(color))])
             .right(counts)
@@ -527,9 +527,10 @@ pub fn layout_rows() -> Vec<Row> {
 
 
 pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
-    let mut rows: Vec<Row> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| {
+    let prefer = app.fleet.launch_machine_id(prefer);
+    let mut rows: Vec<Row> = app.fleet.visible_machines().filter(|m| m.usable()).map(|m| {
         let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
-        Row::new(m.id.clone(), m.name.clone())
+        Row::new(m.id.clone(), app.fleet.machine_name(&m.id))
             .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::accent() } else { theme::ONLINE }))])
             .detail(vec![span(format!("{}{running} running", if m.local { "this computer · " } else { "" }), fg(theme::MUTED))])
     }).collect();

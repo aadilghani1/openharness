@@ -484,6 +484,7 @@ wss.on('connection', (ws) => {
       case 'terminal_open': {
         if (reconnect) opens.push({ connection: connection.id, machine, agent: payload.agentId, takeover: payload.takeover, hung: connection.hang, at: Date.now() })
         if (reconnect && connection.hang) return // WS still answers pings; application requests do not.
+        if (reconnect && payload.takeover === true) readOnly.delete(payload.agentId)
         const target = agents[machine].find((a) => a.id === payload.agentId)
         if (!target || target.status !== 'active') return send('terminal_error', { requestId: payload.requestId, code: 'TERMINAL_AGENT_NOT_FOUND' })
         const streamId = randomUUID()

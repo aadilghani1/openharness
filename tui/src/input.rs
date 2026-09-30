@@ -209,20 +209,22 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Keys into the focused pane. A watcher is promoted first — typing is how you take a terminal.
+/// Keys into the focused pane. Typing in a watcher takes control across the TUI.
 fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
     let Some(focus) = app.focused() else { return };
     send_to_pane(app, focus, bytes)
 }
 
-/// Keys into a pane (send-keys -t): a watcher's is taken over first, as typing takes it.
+/// Keys into a pane (send-keys -t): a watcher first reclaims the TUI's other panes too.
 pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
     // attach -r: a session only watched takes no keys.
     if app.read_only() && app.tabs.iter().any(|t| t.panes().contains(&focus)) { return }
     let Some(pane) = app.panes.get_mut(&focus) else { return };
     if pane.read_only || matches!(pane.phase, Phase::Watching(_)) || pane.stream.is_none() {
         pane.queued.push(bytes);
-        if !pane.opening { app.open_stream(focus, true) }
+        app.take_control();
+        // A popup has no tab, so its own stream still needs to be opened here.
+        if app.panes.get(&focus).is_some_and(|p| !p.opening) { app.open_stream(focus, true) }
         return;
     }
     // synchronize-panes (window_pane_key): the same keys into every other pane of the window that
@@ -649,8 +651,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
         }
         PickerKind::Machines => {
             picker.set_rows(modal::machine_rows(app));
-            let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
-            picker.status = format!("{up}/{} connected", app.fleet.machines.len());
+            let up = app.fleet.visible_machines().filter(|m| m.usable()).count();
+            picker.status = format!("{up}/{} connected", app.fleet.visible_machines().count());
             picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("M-l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
@@ -845,7 +847,7 @@ pub fn run(app: &mut App, command: &str) {
         }
         "restart" => agent_rpc(app, "agent_restart", "Restarted"),
         "pause" => agent_rpc(app, "agent_delete", "Paused — the conversation is saved"),
-        "take" => { if let Some(f) = app.focused() { app.open_stream(f, true) } }
+        "take" => app.take_control(),
         "rename" => {
             let Some((machine, agent)) = focused_agent(app) else { return };
             let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
@@ -1262,6 +1264,7 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) { create_opts(app, machine, what, cwd, message, worktree, NewOpts::default()) }
 
 pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
+    let machine = app.fleet.launch_machine_id(&machine).to_string();
     let Some(link) = app.link(&machine) else { return app.error("That machine is not connected") };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
@@ -1317,14 +1320,22 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                // A new harness is a new window (as C-b c's shell is), or the empty one here —
-                // in the session it was asked for; -d: not gone to.
+                // Keep new harnesses in the current window, filling it or splitting beside
+                // the focused pane; -d keeps the previous pane focused.
                 let back = (app.session_id, app.tab().id.clone());
                 let swapped = session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) && { app.swap_back = Some(back.0); app.swap_session(session) };
-                let before = app.tab().id.clone();
-                let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
-                app.open_agent(&machine, id, placement);
-                if opts.detached { if let Some(i) = app.tabs.iter().position(|t| t.id == before) { app.select_tab(i) } }
+                let before = (app.tab().id.clone(), app.focused(), app.tab().zoomed);
+                app.open_agent(&machine, id, Placement::Auto(None));
+                if opts.detached {
+                    if let Some(i) = app.tabs.iter().position(|t| t.id == before.0) {
+                        app.select_tab(i);
+                        if let Some(pane) = before.1.filter(|p| app.tabs[i].panes().contains(p)) {
+                            app.focus_pane(i, pane);
+                            app.tabs[i].zoomed = before.2;
+                            app.fit_panes();
+                        }
+                    }
+                }
                 if let Some(fmt) = opts.print.as_ref().and(app.print_new.take()) {
                     let line = app.find_pane(&machine, id).map(|(w, p)| crate::format::spans_for_pane(app, &fmt, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default();
                     if let Some(tx) = app.held_reply.take() { let _ = tx.send((vec![line], Vec::new(), 0)); }
@@ -3000,7 +3011,8 @@ pub fn new_harness_words(app: &mut App, words: &[String]) {
         }
         flags = false;
         if let Some(m) = w.strip_prefix('@').filter(|_| task.is_empty()) {
-            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => return app.error(format!("can't find machine: {m}")) }
+            let matched = app.fleet.visible_machines().find(|x| app.fleet.machine_name(&x.id).to_lowercase().starts_with(&m.to_lowercase()) || x.id == m).map(|x| x.id.clone());
+            match matched { Some(id) => machine = id, None => return app.error(format!("can't find machine: {m}")) }
         } else if task.is_empty() && (w.starts_with('/') || w.starts_with('~') || w.starts_with("./") || w.starts_with("../") || w == ".") {
             cwd = Some(path(app, &machine, &w));
         } else if task.is_empty() && engine.is_none() && (theme::engine_label(&w) != w || w == "terminal") {
@@ -3108,6 +3120,54 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn created_harness_stays_in_the_current_window() {
+        for existing in 0..=2 {
+            for detached in [false, true] {
+                let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+                let mut app = App::new(19789, sink, (150, 42));
+                for index in 0..existing {
+                    app.open_agent("fixture", &format!("existing-{index}"), Placement::Auto(None));
+                }
+                let window = app.tab().id.clone();
+                let panes = app.tab().panes();
+                let focus = app.focused();
+                app.tab_mut().zoomed = existing > 1;
+                let session = app.session_id;
+                creation_finished(&mut app, "fixture".into(), session,
+                    NewOpts { detached, ..Default::default() },
+                    Ok(json!({"agent":{"id":"created", "name":"New harness", "engine":"codex"}})), false);
+                assert_eq!(app.tabs.len(), 1, "creation must not add a window");
+                assert_eq!(app.tab().id, window);
+                assert_eq!(app.tab().panes().len(), existing + 1);
+                assert!(panes.iter().all(|p| app.tab().panes().contains(p)));
+                let (_, created) = app.find_pane("fixture", "created").unwrap();
+                assert_eq!(app.focused(), if detached { focus.or(Some(created)) } else { Some(created) });
+                assert_eq!(app.tab().zoomed, detached && existing > 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn created_harness_reuses_the_home_window() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        let window = app.tab().id.clone();
+        app.tab_mut().home = true;
+        app.open_agent("fixture", "home-shell", Placement::Fill(window.clone()));
+        assert!(app.tab().home);
+        let session = app.session_id;
+        creation_finished(&mut app, "fixture".into(), session, NewOpts::default(),
+            Ok(json!({"agent":{"id":"created", "name":"New harness", "engine":"codex"}})), false);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tab().id, window);
+        assert_eq!(app.tab().panes().len(), 1);
+        assert!(!app.tab().home);
+        assert!(app.find_pane("fixture", "home-shell").is_none());
+        let (_, created) = app.find_pane("fixture", "created").unwrap();
+        assert_eq!(app.focused(), Some(created));
+    }
 
     #[tokio::test]
     async fn delayed_picker_refresh_preserves_the_replacement_modal() {

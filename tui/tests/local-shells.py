@@ -186,7 +186,12 @@ try:
     wait(lambda: 'Mock Claude' in hn('list-harnesses', check=False).stdout, 'Harness daemon arrives', 15)
     send("printf 'WITH_DAEMON:%s:%s\\n' \"$$\" \"$HNE_PERSIST\"")
     wait(lambda: f'WITH_DAEMON:{pid}:remembered' in capture(), 'original local shell survives daemon arrival')
-    print('PASS daemon arrival preserves local shell', flush=True)
+    wait(lambda: hn('display-message', '-p', '#{local_machine}|#{pane_machine}').stdout.strip() == 'mock-local|mock-local',
+         'local shell and status share the machine name from the app')
+    tm('send-keys', '-t', 'outer', 'C-b', 'N')
+    wait(lambda: 'mock-local:' in tm('capture-pane', '-p', '-t', 'outer').stdout, 'New Harness uses the app machine name')
+    tm('send-keys', '-t', 'outer', 'Escape')
+    print('PASS daemon arrival preserves local shell and uses the app machine name everywhere', flush=True)
 
     hn('kill-server', check=False)
     wait(lambda: not own_processes(), 'all test hn processes stop')
@@ -217,6 +222,7 @@ try:
     wait(lambda: len(hn('list-windows', '-t', 'desk', '-F', '#{window_id}').stdout.splitlines()) == 2, 'local window after daemon loss')
     send('printf LOCAL_WINDOW', 'desk:1.0')
     wait(lambda: 'LOCAL_WINDOW' in capture('desk:1.0'), 'local window runs')
+    assert hn('display-message', '-p', '-t', 'desk:1.0', '#{local_machine}|#{pane_machine}').stdout.strip() == 'mock-local|mock-local'
     os.kill(mock.pid, signal.SIGCONT)
     hn('send-keys', '-t', 'desk:0.0', 'RETURNED_DESK')
     wait(lambda: 'RETURNED_DESK' in capture('desk:0.0'), 'daemon stream reconnects', 25)
