@@ -92,6 +92,17 @@ checkout and recording the exact commit and binary hash. The development
 allowlist must reject it. Development firmware work does not authorize changing
 the shared CLI or desktop installation.
 
+Persistent `settings.character` accepts only the saved skins: Tim `0`, Tux `1`,
+Focus `2`. For illustrated Tim, keep the saved Tim skin, enable
+`followCompanion`, and use `companion.set` with `id: "tim"`; the desktop then
+supplies the paired creature's identity and appearance. The illustrated
+registry's internal IDs are not valid persistent skin settings.
+
+A local `-rc.<commit>` image tests Diego's unchanged source without taking a
+customer release number. Like a development image, it requires an explicit
+flash to move to the final published artifact; do not use its version label to
+certify the customer's automatic-update path.
+
 ## Existing installations at separation
 
 On 2026-09-30, round `65:94` was running a local `aa0a583cb` build labeled
