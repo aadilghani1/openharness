@@ -18,6 +18,8 @@ export interface CaptureSession {
 export interface CaptureOutcome { state: 'captured' | 'idle' | 'learning_off' | 'source_changed' | 'unavailable'; sources: number; reason?: string }
 const cursorSchema = z.object({ v: z.literal(1), f: z.string().length(24), o: z.number().int().nonnegative(), a: z.string().length(16),
   e: z.string().uuid().nullable(), l: z.number().int().nonnegative(), i: z.boolean(), s: z.boolean(),
+  q: z.number().int().nonnegative().default(0),
+  p: z.number().int().nonnegative().default(0),
   n: z.number().int().nonnegative(), b: z.number().int().nonnegative() }).strict()
 type Cursor = z.infer<typeof cursorSchema>
 const FRAME_BYTES = 256 * 1024
@@ -41,10 +43,11 @@ export class NativeMemoryCapture {
     let handle: FileHandle | undefined
     let captured = 0
     try {
-      const controls = await this.memory.request('controls', [])
+      const controls = await this.memory.request('capturePolicy', [session.projectId, session.engine, session.sessionId])
       if (!controls.learn) return { state: 'learning_off', sources: 0 }
+      if (!controls.included) return { state: 'unavailable', sources: 0, reason: 'source_ineligible' }
       if (session.liveFrom !== undefined && (!Number.isSafeInteger(session.liveFrom) || session.liveFrom < 0)) throw new MemoryError('invalid_capture_boundary')
-      const notBefore = Math.max(controls.learnSince ?? Infinity, session.liveFrom ?? 0)
+      const notBefore = Math.max(controls.learnSince ?? Infinity, session.liveFrom ?? 0, controls.liveFrom)
       handle = await open(session.transcriptPath, 'r')
       const stat = await handle.stat()
       if (!stat.isFile()) return { state: 'unavailable', sources: 0, reason: 'source_unavailable' }
@@ -67,19 +70,28 @@ export class NativeMemoryCapture {
         if (!cursor?.e) return
         await commit({ ...cursor, e: null, i: false, n: 0, b: 0 }, [], incomplete || cursor.i ? 'incomplete' : 'complete')
       }
+      if (cursor?.e && !await this.memory.request('episodeOpen', [streamId, cursor.e])) {
+        // Keep the acknowledged byte position. A cancelled episode must never be replayed under
+        // a new ID, nor prevent fresh native records from starting the next episode.
+        const next = { ...cursor, e: null, i: false, n: 0, b: 0 }
+        const to = JSON.stringify(next)
+        await this.memory.request('checkpoint', [{ ...base, from: raw, to }])
+        raw = to; cursor = next
+      }
       const changed = cursor && (cursor.f !== identity || stat.size < cursor.o || await anchor(handle, cursor.o) !== cursor.a)
-      const paused = cursor && cursor.l !== controls.captureEpoch
+      const paused = cursor && (cursor.l !== controls.captureEpoch || cursor.q !== controls.sessionEpoch || cursor.p !== controls.projectEpoch)
       if (!cursor || changed || paused) {
         if (cursor?.e) await seal(true)
         // New sessions start at byte zero. Enabling learning in an old conversation reads only its
         // recent tail, and the native timestamps below reject anything before consent.
         // Rewritten transcripts establish a new EOF baseline; replay is not new independent evidence.
-        let start = changed ? stat.size : stat.birthtimeMs >= (controls.learnSince ?? this.now()) ? 0 : Math.max(0, stat.size - FRAME_BYTES)
-        if (start && start < stat.size) {
+        let start = changed ? stat.size : paused ? cursor!.o : stat.birthtimeMs >= (controls.learnSince ?? this.now()) ? 0 : Math.max(0, stat.size - FRAME_BYTES)
+        if (!paused && start && start < stat.size) {
           const first = await frame(handle, start, stat.size, true)
           start = first?.end ?? stat.size
         }
-        await commit({ v: 1, f: identity, o: start, a: await anchor(handle, start), e: null, l: controls.captureEpoch, i: false, s: false, n: 0, b: 0 })
+        await commit({ v: 1, f: identity, o: start, a: await anchor(handle, start), e: null, l: controls.captureEpoch,
+          q: controls.sessionEpoch, p: controls.projectEpoch, i: false, s: false, n: 0, b: 0 })
         if (changed) return { state: 'source_changed', sources: 0, reason: 'transcript_rewritten' }
       }
       if (!cursor) throw new MemoryError('capture_cursor_invalid')

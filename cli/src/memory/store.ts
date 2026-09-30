@@ -33,7 +33,11 @@ export class CodingMemoryStore {
   private constructor(private readonly db: Database, readonly profileId: string, private readonly now: () => number) {
     this.learning = new MemoryQueue({ db, profileId, now, transaction: operation => this.transaction(operation),
       controls: () => this.controls(), included: projectId => this.included(projectId),
-      ingest: (event, generation) => this.ingest(event, generation), source: id => this.rawSource(id),
+      sessionIncluded: (engine, sessionId) => this.sessionPolicy(engine, sessionId).included,
+      ingest: (event, generation) => this.ingest(event, generation), source: id => {
+        const source = this.rawSource(id)
+        return source && this.sourceIncluded(source) ? source : null
+      },
       propose: (draft, access, generation) => this.propose(draft, access, generation),
     })
   }
@@ -64,6 +68,13 @@ export class CodingMemoryStore {
         db!.exec(`
           CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, included INTEGER NOT NULL CHECK(included IN (0,1)));
+          CREATE TABLE IF NOT EXISTS memory_project_policy (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id), epoch INTEGER NOT NULL, live_from INTEGER NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS memory_session_policy (
+            engine TEXT NOT NULL, session_id TEXT NOT NULL, included INTEGER NOT NULL,
+            epoch INTEGER NOT NULL, live_from INTEGER NOT NULL, PRIMARY KEY(engine, session_id)
+          );
           CREATE TABLE IF NOT EXISTS project_locators (
             locator_key TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id)
           );
@@ -177,10 +188,55 @@ export class CodingMemoryStore {
   setProjectIncluded(projectId: string, included: boolean): void {
     if (typeof included !== 'boolean' || !this.db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new MemoryError('unknown_project')
     this.transaction(() => {
+      if (this.included(projectId) === included) return
       this.db.prepare('UPDATE projects SET included = ? WHERE id = ?').run(included ? 1 : 0, projectId)
-      this.db.prepare('UPDATE topics SET data = NULL WHERE project_id = ?').run(projectId)
+      this.db.prepare(`INSERT INTO memory_project_policy(project_id,epoch,live_from) VALUES(?,1,?)
+        ON CONFLICT(project_id) DO UPDATE SET epoch=epoch+1,live_from=excluded.live_from`).run(projectId, this.now())
+      this.db.exec('UPDATE topics SET data = NULL')
       const controls = this.controls()
       this.db.prepare("UPDATE memory_meta SET value = ? WHERE key = 'controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
+      this.db.prepare(`UPDATE memory_jobs SET state='cancelled', lease_token=NULL, lease_until=0, source_digest=NULL,
+        last_error='project_privacy_changed', updated_at=? WHERE project_id=? AND state NOT IN ('learned','no_useful_memory','cancelled')`)
+        .run(this.now(), projectId)
+      if (!included) this.cancelHiddenSources()
+      else this.reconcileVisibleConflicts()
+    })
+  }
+
+  sessionPolicy(engine: string, sessionId: string): { included: boolean; epoch: number; liveFrom: number } {
+    if (![engine, sessionId].every(value => /^[A-Za-z0-9_.:-]{1,200}$/.test(value))) throw new MemoryError('invalid_input')
+    const row = this.db.prepare('SELECT included, epoch, live_from FROM memory_session_policy WHERE engine=? AND session_id=?').get(engine, sessionId)
+    return row ? { included: row.included === 1, epoch: Number(row.epoch), liveFrom: Number(row.live_from) }
+      : { included: true, epoch: 0, liveFrom: 0 }
+  }
+
+  capturePolicy(projectId: string, engine: string, sessionId: string): Controls & { included: boolean; sessionEpoch: number; projectEpoch: number; liveFrom: number } {
+    const policy = this.sessionPolicy(engine, sessionId)
+    const project = this.db.prepare('SELECT epoch,live_from FROM memory_project_policy WHERE project_id=?').get(projectId)
+    return { ...this.controls(), included: this.included(projectId) && policy.included,
+      sessionEpoch: policy.epoch, projectEpoch: Number(project?.epoch ?? 0), liveFrom: Math.max(policy.liveFrom, Number(project?.live_from ?? 0)) }
+  }
+
+  /** Host-authorized privacy control. Withholds previous knowledge without erasing the native conversation. */
+  setSessionIncluded(engine: string, sessionId: string, included: boolean): void {
+    if (typeof included !== 'boolean') throw new MemoryError('invalid_input')
+    this.transaction(() => {
+      const previous = this.sessionPolicy(engine, sessionId)
+      if (previous.included === included) return
+      this.db.prepare(`INSERT INTO memory_session_policy(engine,session_id,included,epoch,live_from) VALUES(?,?,?,?,?)
+        ON CONFLICT(engine,session_id) DO UPDATE SET included=excluded.included, epoch=excluded.epoch, live_from=excluded.live_from`)
+        .run(engine, sessionId, included ? 1 : 0, previous.epoch + 1, this.now())
+      const controls = this.controls()
+      this.db.prepare("UPDATE memory_meta SET value=? WHERE key='controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
+      this.db.prepare(`UPDATE memory_jobs SET state='cancelled', lease_token=NULL, lease_until=0, source_digest=NULL,
+        last_error='session_privacy_changed', updated_at=? WHERE stream_id IN
+        (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ('learned','no_useful_memory','cancelled')`)
+        .run(this.now(), engine, sessionId)
+      // Derived input can belong to a different stream while retaining this session's source roots.
+      if (!included) this.cancelHiddenSources()
+      else this.reconcileVisibleConflicts()
+      // A derived page may combine several sessions. Rebuild it only from currently visible parents.
+      this.db.exec('UPDATE topics SET data=NULL')
     })
   }
 
@@ -192,7 +248,7 @@ export class CodingMemoryStore {
     const source = parse(sourceSchema, input)
     if (source.profileId !== this.profileId) throw new MemoryError('profile_mismatch')
     if (!userAction && !this.controls().learn) throw new MemoryError('learning_off')
-    if (source.eligibility !== 'coding' || !this.included(source.projectId)) throw new MemoryError('source_ineligible')
+    if (source.eligibility !== 'coding' || !this.included(source.projectId) || !this.sessionPolicy(source.engine, source.sessionId).included) throw new MemoryError('source_ineligible')
     // Native adapters preserve roles. Generated packets may only cite already known source roots.
     if (source.role !== 'derived' && (source.rootIds.length !== 1 || source.rootIds[0] !== source.id)) throw new MemoryError('invalid_lineage')
     const { text, ...metadata } = source
@@ -210,7 +266,8 @@ export class CodingMemoryStore {
         for (const parent of source.derivedFrom!) {
           const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(parent.memoryId)
           const record = row ? this.record(row) : null
-          if (!record || record.revision !== parent.revision || record.state !== 'active' || !this.current(record)) throw new MemoryError('invalid_lineage')
+          if (!record || record.revision !== parent.revision || record.state !== 'active' || !this.current(record)
+            || !this.evidenceIncluded(record)) throw new MemoryError('invalid_lineage')
           if (record.scope.projectId && record.scope.projectId !== source.projectId) throw new MemoryError('evidence_scope')
           for (const key of ['taskId', 'branchId'] as const) {
             if (record.scope[key] !== undefined && record.scope[key] !== source[key]) throw new MemoryError('evidence_scope')
@@ -234,7 +291,7 @@ export class CodingMemoryStore {
 
   source(id: string, access: MemoryAccess): SourceEvent | null {
     const source = this.rawSource(id)
-    return source && this.allowed({ profileId: source.profileId, ...(source.projectId ? { projectId: source.projectId } : {}),
+    return source && this.sourceIncluded(source) && this.allowed({ profileId: source.profileId, ...(source.projectId ? { projectId: source.projectId } : {}),
       ...(source.taskId ? { taskId: source.taskId } : {}), ...(source.branchId ? { branchId: source.branchId } : {}) }, access) ? source : null
   }
 
@@ -246,7 +303,14 @@ export class CodingMemoryStore {
       const fingerprint = proposalFingerprint(draft)
       const duplicate = this.db.prepare("SELECT data FROM memories WHERE fingerprint = ? AND state != 'superseded'").get(fingerprint)
       if (duplicate) {
-        const record = this.record(duplicate)
+        let record = this.record(duplicate)
+        // A fresh public statement can independently support the same meaning. Never return its
+        // old private evidence to the caller; preserve that revision only in its private history.
+        if (!this.evidenceIncluded(record)) {
+          record = { ...record, ...draft, revision: record.revision + 1, state, updatedAt: this.now() }
+          this.withholdConflicts(record)
+          this.writeRecord(record)
+        }
         this.recordSupport(record, draft)
         return { record, disposition: 'duplicate' as const }
       }
@@ -317,30 +381,34 @@ export class CodingMemoryStore {
     const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(id)
     if (!row) return null
     const record = this.record(row)
-    return this.allowed(record.scope, access) ? record : null
+    return this.allowed(record.scope, access) && this.evidenceIncluded(record) ? record : null
   }
 
   history(id: string, access: MemoryAccess): MemoryRecord[] {
     if (!this.read(id, access)) return []
     return this.db.prepare('SELECT data FROM revisions WHERE memory_id = ? ORDER BY revision').all(id)
-      .map(row => this.record(row)).filter(record => this.allowed(record.scope, access))
+      .map(row => this.record(row)).filter(record => this.allowed(record.scope, access) && this.evidenceIncluded(record))
   }
 
   support(id: string, access: MemoryAccess): MemorySupport | null {
     const record = this.read(id, access)
     if (!record) return null
-    const row = this.db.prepare(`SELECT SUM(kind='user_statement') AS users, SUM(kind='verified_observation') AS observations,
-      COUNT(DISTINCT session_key) AS sessions, MAX(observed_at) AS last FROM memory_support WHERE memory_id=? AND fingerprint=?`)
-      .get(id, proposalFingerprint(asDraft(record)))!
-    return { independentUserStatements: Number(row.users ?? 0), verifiedObservations: Number(row.observations ?? 0),
-      distinctSessions: Number(row.sessions), lastObservedAt: row.last as number | null }
+    const rows = this.db.prepare('SELECT * FROM memory_support WHERE memory_id=? AND fingerprint=?')
+      .all(id, proposalFingerprint(asDraft(record))).filter(row => {
+        const source = this.rawSource(String(row.source_id))
+        return source && this.sourceIncluded(source)
+      })
+    return { independentUserStatements: rows.filter(row => row.kind === 'user_statement').length,
+      verifiedObservations: rows.filter(row => row.kind === 'verified_observation').length,
+      distinctSessions: new Set(rows.map(row => row.session_key)).size,
+      lastObservedAt: rows.length ? Math.max(...rows.map(row => Number(row.observed_at))) : null }
   }
 
   list(access: MemoryAccess, limit = 100): MemoryRecord[] {
     if (access.profileId !== this.profileId) return []
     const filter = this.scopeFilter(access)
-    return this.db.prepare(`SELECT m.data FROM memories m WHERE ${filter.sql} ORDER BY m.rowid DESC LIMIT ?`)
-      .all(...filter.params, bounded(limit, 100, 1, 200)).map(row => this.record(row)).filter(record => this.allowed(record.scope, access))
+    return this.db.prepare(`SELECT m.data FROM memories m WHERE ${filter.sql} AND ${visibleEvidenceSql()} ORDER BY m.rowid DESC LIMIT ?`)
+      .all(...filter.params, bounded(limit, 100, 1, 200)).map(row => this.record(row)).filter(record => this.allowed(record.scope, access) && this.evidenceIncluded(record))
   }
 
   recall(request: RecallRequest, access: MemoryAccess): RecallPacket {
@@ -361,6 +429,7 @@ export class CodingMemoryStore {
     const rows = this.db.prepare(`WITH context(actual) AS (VALUES (?))
       SELECT m.data FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
       WHERE memory_fts MATCH ? AND m.state = 'active' AND ${filter.sql}
+      AND ${visibleEvidenceSql()}
       AND ${applicabilitySql("json_extract(m.data, '$.applicability')")}
       AND NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.exceptions') exception
         WHERE ${applicabilitySql("json_extract(exception.value, '$.when')")})
@@ -380,7 +449,7 @@ export class CodingMemoryStore {
         || record.exceptions.some(exception => matches(exception.when, actual))
         || !this.current(record, now)) continue
       const sources = record.evidence.map(e => this.rawSource(e.sourceEventId))
-      if (sources.some(source => !source || !this.included(source.projectId))) continue
+      if (sources.some(source => !source || !this.sourceIncluded(source))) continue
       const item: RecallItem = {
         id: record.id, revision: record.revision, kind: record.kind, assertionType: record.assertionType,
         scope: record.scope, claim: record.claim, rationale: record.rationale, futureAction: record.futureAction,
@@ -487,6 +556,39 @@ export class CodingMemoryStore {
     return projectId == null || this.db.prepare('SELECT included FROM projects WHERE id = ?').get(projectId)?.included === 1
   }
 
+  private sourceIncluded(source: SourceEvent): boolean {
+    if (!this.included(source.projectId) || !this.sessionPolicy(source.engine, source.sessionId).included) return false
+    return source.rootIds.every(id => {
+      if (id === source.id) return true
+      const root = this.rawSource(id)
+      return !!root && this.included(root.projectId) && this.sessionPolicy(root.engine, root.sessionId).included
+    })
+  }
+
+  private evidenceIncluded(record: MemoryRecord): boolean {
+    return record.evidence.every(evidence => {
+      const source = this.rawSource(evidence.sourceEventId)
+      return !!source && this.sourceIncluded(source)
+    })
+  }
+
+  private cancelHiddenSources(): void {
+    this.learning.invalidateSources(this.db.prepare('SELECT DISTINCT s.data FROM memory_job_sources j JOIN sources s ON s.id=j.source_id').all()
+      .map(row => JSON.parse(String(row.data)) as SourceEvent).filter(source => !this.sourceIncluded(source)).map(source => source.id))
+  }
+
+  private reconcileVisibleConflicts(): void {
+    const candidates = this.db.prepare(`SELECT m.id FROM memories m WHERE m.state='active' AND EXISTS
+      (SELECT 1 FROM memories peer WHERE peer.scope_key=m.scope_key AND peer.conflict_key=m.conflict_key
+        AND peer.id!=m.id AND peer.state IN ('active','needs_verification'))`).all()
+    for (const { id } of candidates) {
+      const record = this.record(this.db.prepare('SELECT data FROM memories WHERE id=?').get(id)!)
+      if (record.state !== 'active' || !this.evidenceIncluded(record)) continue
+      this.withholdConflicts(record)
+      if (record.state !== 'active') this.writeRecord({ ...record, revision: record.revision + 1, updatedAt: this.now() })
+    }
+  }
+
   private locatorKey(locator: ProjectLocator): string {
     if (!['git_common_directory', 'directory'].includes(locator.kind) || !isAbsolute(locator.path)
       || locator.path.length > 4096 || /[\x00-\x1f\x7f]/.test(locator.path)) throw new MemoryError('invalid_locator')
@@ -519,7 +621,7 @@ export class CodingMemoryStore {
       const source = this.rawSource(evidence.sourceEventId)
       if (!source) throw new MemoryError('evidence_missing')
       if (this.isSuppressed(source)) throw new MemoryError('source_suppressed')
-      if (!this.included(source.projectId)) throw new MemoryError('source_ineligible')
+      if (!this.sourceIncluded(source)) throw new MemoryError('source_ineligible')
       for (const dependency of source.derivedFrom ?? []) {
         const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(dependency.memoryId)
         const parent = row ? this.record(row) : null
@@ -541,7 +643,7 @@ export class CodingMemoryStore {
     const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(id)
     const record = row ? this.record(row) : null
     if (!record || record.scope.profileId !== this.profileId || !canAccess(record.scope, access)
-      || (!allowExcluded && !this.included(record.scope.projectId))) throw new MemoryError('not_found')
+      || (!allowExcluded && (!this.included(record.scope.projectId) || !this.evidenceIncluded(record)))) throw new MemoryError('not_found')
     if (record.revision !== revision) throw new MemoryError('revision_conflict')
     return record
   }
@@ -550,7 +652,7 @@ export class CodingMemoryStore {
     if (record.state !== 'active') return
     const peers = this.db.prepare("SELECT data FROM memories WHERE scope_key = ? AND conflict_key = ? AND id != ? AND state IN ('active', 'needs_verification')")
       .all(canonical(record.scope), record.conflictKey, record.id).map(row => this.record(row))
-      .filter(peer => peer.claim !== record.claim && conditionsOverlap(peer.applicability, record.applicability))
+      .filter(peer => this.evidenceIncluded(peer) && peer.claim !== record.claim && conditionsOverlap(peer.applicability, record.applicability))
     if (!peers.length) return
     record.state = 'needs_verification'
     for (const peer of peers) {
@@ -667,6 +769,20 @@ export class CodingMemoryStore {
       this.transactionDepth--
     }
   }
+}
+
+/** Apply source privacy before LIMIT, so private candidates cannot crowd out usable knowledge. */
+function visibleEvidenceSql(): string {
+  return `NOT EXISTS (SELECT 1 FROM evidence e LEFT JOIN sources s ON s.id=e.source_id
+    WHERE e.memory_id=m.id AND e.revision=m.revision AND (s.id IS NULL
+      OR (s.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=s.project_id AND p.included=1))
+      OR EXISTS (SELECT 1 FROM memory_session_policy policy WHERE policy.engine=json_extract(s.data,'$.engine')
+        AND policy.session_id=json_extract(s.data,'$.sessionId') AND policy.included=0)
+      OR EXISTS (SELECT 1 FROM json_each(s.data,'$.rootIds') lineage LEFT JOIN sources root ON root.id=lineage.value
+        WHERE root.id IS NULL
+          OR (root.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=root.project_id AND p.included=1))
+          OR EXISTS (SELECT 1 FROM memory_session_policy policy WHERE policy.engine=json_extract(root.data,'$.engine')
+            AND policy.session_id=json_extract(root.data,'$.sessionId') AND policy.included=0))))`
 }
 
 /** Same scalar/array overlap semantics as matches(), applied before the candidate limit. */

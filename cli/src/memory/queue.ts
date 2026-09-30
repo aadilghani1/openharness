@@ -62,6 +62,7 @@ interface QueueDeps {
   transaction: <T>(operation: () => T) => T
   controls: () => { learn: boolean; generation: number }
   included: (projectId: string | null) => boolean
+  sessionIncluded: (engine: string, sessionId: string) => boolean
   ingest: (event: SourceEvent, generation: number) => { disposition: string }
   source: (id: string) => SourceEvent | null
   propose: (draft: MemoryDraft, access: MemoryAccess, generation: number) => { record: MemoryRecord }
@@ -83,7 +84,7 @@ export class MemoryQueue {
       const controls = this.deps.controls()
       if (!controls.learn) throw new MemoryError('learning_off')
       if (batch.generation !== undefined && batch.generation !== controls.generation) throw new MemoryError('generation_changed')
-      if (!this.deps.included(batch.projectId)) throw new MemoryError('source_ineligible')
+      if (!this.deps.included(batch.projectId) || !this.deps.sessionIncluded(batch.engine, batch.sessionId)) throw new MemoryError('source_ineligible')
       const stream = db.prepare('SELECT * FROM memory_streams WHERE id = ?').get(batch.streamId)
       if (stream && (stream.engine !== batch.engine || stream.session_id !== batch.sessionId || stream.project_id !== batch.projectId)) throw new MemoryError('stream_identity_conflict')
       const job = db.prepare('SELECT * FROM memory_jobs WHERE id = ?').get(batch.episodeId)
@@ -122,7 +123,7 @@ export class MemoryQueue {
       const controls = this.deps.controls()
       if (!controls.learn) throw new MemoryError('learning_off')
       if (controls.generation !== batch.generation) throw new MemoryError('generation_changed')
-      if (!this.deps.included(batch.projectId)) throw new MemoryError('source_ineligible')
+      if (!this.deps.included(batch.projectId) || !this.deps.sessionIncluded(batch.engine, batch.sessionId)) throw new MemoryError('source_ineligible')
       const stream = this.deps.db.prepare('SELECT * FROM memory_streams WHERE id = ?').get(batch.streamId)
       if (stream && (stream.engine !== batch.engine || stream.session_id !== batch.sessionId || stream.project_id !== batch.projectId)) throw new MemoryError('stream_identity_conflict')
       const fingerprint = digest(batch)
@@ -226,6 +227,12 @@ export class MemoryQueue {
     return this.deps.db.prepare('SELECT cursor FROM memory_streams WHERE id = ?').get(streamId)?.cursor as string | undefined ?? null
   }
 
+  /** An open transcript cursor may outlive its episode after correction, forgetting, or privacy. */
+  episodeOpen(streamId: string, episodeId: string): boolean {
+    const job = this.deps.db.prepare('SELECT stream_id,state FROM memory_jobs WHERE id=?').get(episodeId)
+    return job?.stream_id === streamId && ['open', 'source_incomplete'].includes(String(job.state))
+  }
+
   status(): { jobs: Partial<Record<JobState, number>>; oldestPendingAt: number | null; callsLastHour: number; capturedStreams: number } {
     const { db, now } = this.deps
     const counts = db.prepare('SELECT state, COUNT(*) AS count FROM memory_jobs GROUP BY state').all()
@@ -244,8 +251,10 @@ export class MemoryQueue {
   }
 
   private sources(jobId: string): SourceEvent[] {
-    return this.deps.db.prepare('SELECT source_id FROM memory_job_sources WHERE job_id = ? ORDER BY ordinal').all(jobId)
-      .flatMap(row => { const source = this.deps.source(String(row.source_id)); return source ? [source] : [] })
+    const sources = this.deps.db.prepare('SELECT source_id FROM memory_job_sources WHERE job_id = ? ORDER BY ordinal').all(jobId)
+      .map(row => this.deps.source(String(row.source_id)))
+    // Never quietly turn a partly private or missing episode into a different conversation.
+    return sources.every((source): source is SourceEvent => source !== null) ? sources : []
   }
 
   private release(id: string, state: JobState, error: string | null, availableAt: number): void {

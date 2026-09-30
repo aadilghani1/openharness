@@ -18,11 +18,16 @@
     "coldP95Ms": 42.2521, "timeouts": 0, "parentEventLoopP95Ms": 1.3128,
     "largestPacketBytes": 2491
   },
+  "afterPreLimitSourcePrivacyFiltering": {
+    "warmP50Ms": 1.3755, "warmP95Ms": 20.3543, "warmMaxMs": 23.5947,
+    "coldP95Ms": 36.883, "timeouts": 0, "parentEventLoopP95Ms": 1.2902,
+    "largestPacketBytes": 2491
+  },
   "queryPlanFinding": "The original plan used the scope index first and repeated MATCH for each project row. Driving the join from FTS once preserves access filtering before LIMIT and avoids those repeated scans.",
   "limitations": [
     "These are synthetic lexical requests, not a retrieval-quality benchmark.",
     "Cold means a new worker; the OS disk cache was not emptied.",
     "One local machine. Native hook delivery and model inference are not measured.",
-    "The three runs are engineering measurements, not a controlled hardware comparison or a confidence interval."
+    "The runs are engineering measurements, not a controlled hardware comparison or a confidence interval."
   ]
 }

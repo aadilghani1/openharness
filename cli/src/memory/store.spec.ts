@@ -57,6 +57,103 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+describe('session privacy', () => {
+  it('withholds records, evidence, history, support and topics, and permits forgetting while hidden', () => {
+    const record = learn()
+    const page = { id: 'private_topic', scope: record.scope, title: 'Debugging',
+      statements: [{ text: record.claim, supports: [{ memoryId: record.id, revision: 1, paths: ['/claim'] }] }] }
+    store.putTopic(page, access)
+    store.setSessionIncluded('claude', 'session_a', false)
+    expect(store.read(record.id, access)).toBeNull()
+    expect(store.source('event_a', access)).toBeNull()
+    expect(store.history(record.id, access)).toEqual([])
+    expect(store.support(record.id, access)).toBeNull()
+    expect(store.list(access)).toEqual([])
+    expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access).items).toEqual([])
+    expect(store.topic(page.id, access)).toBeNull()
+    expect(() => store.putTopic(page, access, 1)).toThrow('stale_dependency')
+    expect(() => store.ingest(source('private_new'))).toThrow('source_ineligible')
+    expect(store.forget(record.id, 1, access).deletedIds).toEqual([record.id])
+    store.setSessionIncluded('claude', 'session_a', true)
+    expect(store.ingest(source()).disposition).toBe('suppressed')
+  })
+
+  it('restores existing knowledge when its session is explicitly included again', () => {
+    const record = learn()
+    store.setSessionIncluded('claude', 'session_a', false)
+    const reopened = open()
+    expect(reopened.sessionPolicy('claude', 'session_a')).toEqual({ included: false, epoch: 1, liveFrom: 1_000 })
+    expect(reopened.read(record.id, access)).toBeNull()
+    reopened.setSessionIncluded('claude', 'session_a', true)
+    expect(store.read(record.id, access)?.id).toBe(record.id)
+    expect(store.sessionPolicy('claude', 'session_a').epoch).toBe(2)
+  })
+
+  it('hides supplementary private confirmations without withholding an independently public record', () => {
+    const record = learn()
+    const second = source('second', { engine: 'codex', sessionId: 'private_session', observedAt: 950 })
+    store.ingest(second)
+    store.propose(draft(second), access)
+    store.setSessionIncluded('codex', 'private_session', false)
+    expect(store.read(record.id, access)).not.toBeNull()
+    expect(store.support(record.id, access)).toEqual({ independentUserStatements: 1, verifiedObservations: 0,
+      distinctSessions: 1, lastObservedAt: 900 })
+  })
+
+  it('uses new public evidence for the same meaning without exposing the old private revision', () => {
+    const record = learn()
+    store.setSessionIncluded('claude', 'session_a', false)
+    const fresh = source('public_statement', { sessionId: 'public_session' })
+    store.ingest(fresh)
+    const published = store.propose(draft(fresh), access)
+    expect(published.record.id).toBe(record.id)
+    expect(published.record.revision).toBe(2)
+    expect(published.record.evidence.map(item => item.sourceEventId)).toEqual([fresh.id])
+    expect(store.history(record.id, access).map(item => item.revision)).toEqual([2])
+    expect(store.support(record.id, access)?.independentUserStatements).toBe(1)
+  })
+
+  it('withholds generated descendants even when they live in another public session', () => {
+    const parent = learn()
+    const derived = source('derived', { role: 'derived', sessionId: 'public_session',
+      rootIds: ['event_a'], derivedFrom: [{ memoryId: parent.id, revision: 1 }] })
+    store.ingest(derived)
+    const child = store.propose(draft(derived, { kind: 'reference', assertionType: 'observed_usage',
+      evidenceClass: 'imported', conflictKey: 'guide' }), access).record
+    store.setSessionIncluded('claude', 'session_a', false)
+    expect(store.source(derived.id, access)).toBeNull()
+    expect(store.read(child.id, access)).toBeNull()
+    expect(() => store.ingest({ ...derived, id: 'new_derived', nativeEventId: 'new_derived' })).toThrow('invalid_lineage')
+  })
+
+  it('does not let more than 120 private candidates crowd a public memory out of recall or listing', () => {
+    const publicEvent = source('public', { sessionId: 'public_session' })
+    store.ingest(publicEvent)
+    const publicRecord = store.propose(draft(publicEvent), access).record
+    for (let i = 0; i < 125; i++) {
+      const event = source(`private_${i}`)
+      store.ingest(event)
+      store.propose(draft(event, { claim: `Debugging bug reproducer ${i}`, conflictKey: `private_${i}` }), access)
+    }
+    store.setSessionIncluded('claude', 'session_a', false)
+    expect(store.list(access, 1).map(record => record.id)).toEqual([publicRecord.id])
+    expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access).items.map(record => record.id)).toEqual([publicRecord.id])
+  })
+
+  it('does not consult a private statement when admitting a new conflicting public statement', () => {
+    const hidden = learn()
+    store.setSessionIncluded('claude', 'session_a', false)
+    const event = source('public', { sessionId: 'public_session' })
+    store.ingest(event)
+    const fresh = store.propose(draft(event, { claim: 'Explain the state model first.' }), access).record
+    expect(fresh.state).toBe('active')
+    store.setSessionIncluded('claude', 'session_a', true)
+    expect(store.read(hidden.id, access)?.state).toBe('needs_verification')
+    expect(store.read(fresh.id, access)?.state).toBe('needs_verification')
+    expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access).items).toEqual([])
+  })
+})
+
 describe('coding memory ownership and admission', () => {
   it('persists sourced, conditional knowledge across reopen without tying it to an engine', () => {
     const record = learn()

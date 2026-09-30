@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { CodingMemoryStore } from './store.js'
+import { digest } from './admission.js'
+import { decodeMemoryRecord } from './native.js'
 import { NativeMemoryCapture, type CaptureSession } from './capture.js'
 import { QUEUE_OPERATIONS, type MemoryPort, type Operation, type Arguments, type Result } from './operations.js'
 
@@ -124,4 +126,49 @@ it('excludes copied history before the host-observed fork boundary', async () =>
     + user('A fresh statement in the fork.', 'fresh', now + 100) + answer())
   await capture.poll({ ...session, sessionId: 'fork', liveFrom: now + 50 })
   expect(claim().sources.map(source => source.text)).toEqual(['A fresh statement in the fork.'])
+})
+
+it('checks session and project exclusions before opening a transcript', async () => {
+  store.setSessionIncluded(session.engine, session.sessionId, false)
+  expect((await capture.poll(session)).reason).toBe('source_ineligible') // The path does not exist.
+  store.setSessionIncluded(session.engine, session.sessionId, true)
+  store.setProjectIncluded(session.projectId, false)
+  expect((await capture.poll(session)).reason).toBe('source_ineligible')
+  expect(store.learning.status().capturedStreams).toBe(0)
+})
+
+it.each(['session', 'project'] as const)('resumes after a private %s interval without replaying it or getting stuck on a cancelled episode', async kind => {
+  const include = (value: boolean) => kind === 'session' ? store.setSessionIncluded(session.engine, session.sessionId, value)
+    : store.setProjectIncluded(session.projectId, value)
+  await writeFile(session.transcriptPath, user('Before privacy.', 'before'))
+  await capture.poll(session)
+  now += 1_000
+  include(false)
+  await appendFile(session.transcriptPath, user('Inside the private interval.', 'private') + answer())
+  expect((await capture.poll(session)).reason).toBe('source_ineligible')
+  now += 1_000
+  include(true)
+  await appendFile(session.transcriptPath, user('After privacy.', 'after') + answer('A fresh reply.', 'fresh'))
+  expect(await capture.poll(session)).toEqual({ state: 'captured', sources: 2 })
+  expect(store.learning.status().jobs.cancelled).toBe(1)
+  expect(claim().sources.map(source => source.text)).toEqual(['After privacy.', 'A fresh reply.'])
+})
+
+it('resumes fresh learning after forgetting cancels an episode that is still being captured', async () => {
+  const input = user()
+  await writeFile(session.transcriptPath, input)
+  await capture.poll(session)
+  const access = { profileId: 'owner', projectIds: ['project'], includeProfile: false }
+  const part = decodeMemoryRecord('claude', input).parts[0]
+  const id = digest([session.profileId, session.engine, session.sessionId, part.nativeEventId])
+  const record = store.propose({ kind: 'working_preference', facet: 'changes', assertionType: 'stated_preference',
+    scope: { profileId: 'owner', projectId: 'project' }, claim: part.text, rationale: null, futureAction: part.text,
+    applicability: {}, exceptions: [], retrievalCues: ['changes'], evidenceClass: 'user_stated',
+    evidence: [{ sourceEventId: id, quote: part.text, paths: ['/claim', '/futureAction', '/applicability'] }],
+    conflictKey: 'change_size', validity: { validFrom: null, validUntil: null, recheckWhen: [] },
+  }, access).record
+  store.forget(record.id, 1, access)
+  await appendFile(session.transcriptPath, user('Use accessible contrast.', 'fresh') + answer())
+  expect(await capture.poll(session)).toEqual({ state: 'captured', sources: 2 })
+  expect(claim().sources.map(source => source.text)).toEqual(['Use accessible contrast.', 'Understood.'])
 })

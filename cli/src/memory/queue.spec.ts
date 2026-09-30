@@ -96,6 +96,22 @@ describe('durable coding episode capture', () => {
 })
 
 describe('model availability, leases, and idempotent publication', () => {
+  it('cancels private work and rejects late extraction, including episodes with derived private roots', () => {
+    store.learning.capture(batch())
+    const lease = claim()
+    const parent = store.propose(proposal(), access).record
+    const derived = event('echo', { sessionId: 'public_session', role: 'derived', rootIds: ['first'],
+      derivedFrom: [{ memoryId: parent.id, revision: 1 }] })
+    store.learning.capture(batch('echo', { streamId: 'another_stream', sessionId: 'public_session', events: [derived] }))
+    store.setSessionIncluded('claude', 'session', false)
+    expect(store.learning.status().jobs.cancelled).toBe(2)
+    expect(store.learning.finish(lease, [proposal()], target)).toEqual({ state: 'stale', reason: 'lease_changed' })
+    expect(store.learning.claim(target).state).toBe('idle')
+    expect(() => store.learning.capture(batch('private', { from: 'first', events: [] }))).toThrow('source_ineligible')
+    expect(() => store.learning.checkpoint({ streamId: 'stream', engine: 'claude', sessionId: 'session', projectId: 'project',
+      from: 'first', to: 'private', generation: store.controls().generation })).toThrow('source_ineligible')
+  })
+
   it('retains observations when the selected model is unavailable and resumes without fallback', () => {
     store.learning.capture(batch())
     expect(store.learning.claim({ state: 'unsupported' }).state).toBe('waiting_for_model')
