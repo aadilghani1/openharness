@@ -19,7 +19,12 @@ pub struct Opt { pub name: &'static str, pub scope: Scope, pub pane: bool, pub k
 /// The table's entry for `name` (or `name[3]`).
 pub fn find(name: &str) -> Option<&'static Opt> {
     let base = name.split('[').next().unwrap_or(name);
-    table::TABLE.iter().chain(table::HOOKS.iter()).find(|o| o.name == base)
+    static INDEX: OnceLock<HashMap<&'static str, &'static Opt>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = HashMap::new();
+        for option in table::TABLE.iter().chain(table::HOOKS.iter()) { index.entry(option.name).or_insert(option); }
+        index
+    }).get(base).copied()
 }
 
 /// tmux's options_match: a name as written, or the one option it is the start of (`stat` is
@@ -256,18 +261,19 @@ impl Store {
     }
 
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
-        let layers: Vec<Option<&BTreeMap<String, String>>> = if name.starts_with('@') {
-            vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
+        let definition = find(name);
+        let layers = if name.starts_with('@') {
+            [pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
         } else {
-            match find(name).map(|o| o.scope) {
-                Some(Scope::Server) => vec![Some(&self.server)],
-                Some(Scope::Session) => vec![Some(&self.session), Some(&self.global_session)],
-                Some(Scope::Window | Scope::Pane) => vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window)],
+            match definition.map(|o| o.scope) {
+                Some(Scope::Server) => [Some(&self.server), None, None, None, None, None],
+                Some(Scope::Session) => [Some(&self.session), Some(&self.global_session), None, None, None, None],
+                Some(Scope::Window | Scope::Pane) => [pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), None, None, None],
                 None => return None,
             }
         };
         // An array's item: from the nearest layer holding the array (none there is none).
-        if find(name).map(|o| o.array).unwrap_or(false) {
+        if definition.map(|o| o.array).unwrap_or(false) {
             let (base, index) = split_index(name);
             index?;
             return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => self.default_of(name, false) };
