@@ -51,6 +51,7 @@ class PaneGrid extends StatelessWidget {
     this.swarmMode = false,
     this.empty,
     this.soloFocused = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
@@ -61,6 +62,9 @@ class PaneGrid extends StatelessWidget {
   /// the tab's saved layout and zoom stay as they are (a phone shows one
   /// harness at a time; the same desk on a computer keeps its grid).
   final bool soloFocused;
+
+  /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
+  final WidgetBuilder? companionViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -74,6 +78,7 @@ class PaneGrid extends StatelessWidget {
             dragging: dragging,
             empty: empty,
             soloFocused: soloFocused,
+            companionViewer: companionViewer,
           );
         }
         final panes = notifier.panes;
@@ -88,6 +93,7 @@ class PaneGrid extends StatelessWidget {
           dragging: dragging,
           visible: visible,
           swarmMode: swarmMode,
+          companionViewer: companionViewer,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -235,11 +241,13 @@ class _SwarmCanvas extends StatefulWidget {
     required this.dragging,
     this.empty,
     this.soloFocused = false,
+    this.companionViewer,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
   final bool soloFocused;
+  final WidgetBuilder? companionViewer;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -575,6 +583,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
                                     solo: widget.soloFocused,
+                                    companionViewer: widget.companionViewer,
                                   ),
                                 ),
                               ),
@@ -1168,6 +1177,7 @@ class _PaneCell extends StatelessWidget {
     this.visible = true,
     this.swarmMode = false,
     this.solo = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
@@ -1175,6 +1185,7 @@ class _PaneCell extends StatelessWidget {
   final AgentDragRef? dragging;
   final bool visible;
   final bool swarmMode;
+  final WidgetBuilder? companionViewer;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
   /// dimming or focus ring, and no zoom, since it already fills the screen.
@@ -1275,13 +1286,16 @@ class _PaneCell extends StatelessWidget {
                       opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
                       child: child,
                     ),
-                    child: _PaneContent(
-                      notifier: notifier,
-                      pane: pane,
-                      single: _single,
-                      visible: visible,
-                      swarmMode: swarmMode,
-                    ),
+                    child: pane.isCompanion
+                        ? companionViewer?.call(context) ??
+                              const SizedBox.shrink()
+                        : _PaneContent(
+                            notifier: notifier,
+                            pane: pane,
+                            single: _single,
+                            visible: visible,
+                            swarmMode: swarmMode,
+                          ),
                   ),
                 ),
               ),
@@ -1942,7 +1956,10 @@ class _SwapZone extends StatelessWidget {
               child: IgnorePointer(
                 // Off entirely unless a pane is in flight, so the terminal
                 // underneath keeps every click the rest of the time.
-                ignoring: dragging == null || dragging.paneId == paneId,
+                ignoring:
+                    notifier.activeSwarm.isCompanions ||
+                    dragging == null ||
+                    dragging.paneId == paneId,
                 child: DragTarget<PaneDragRef>(
                   onAcceptWithDetails: (details) =>
                       notifier.reorderPane(details.data.paneId, paneId),
@@ -2186,7 +2203,7 @@ class _DropZone extends StatelessWidget {
         child,
         Positioned.fill(
           child: IgnorePointer(
-            ignoring: dragging == null,
+            ignoring: notifier.activeSwarm.isCompanions || dragging == null,
             child: DragTarget<AgentDragRef>(
               onAcceptWithDetails: (details) => notifier.assignAgentToPane(
                 paneId,

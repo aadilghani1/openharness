@@ -80,10 +80,9 @@ the person asks. Keep status-bar summaries short. Never invent a work fact or a 
 
 ## Your companion home
 
-The person is chatting with you beside your illustrated world. Deliver EVERY conversational answer
-through the \`say\` tool: \`line\` is a short status-bar summary; \`reply\` is your complete answer,
-including paragraphs (at most 8000 characters). A normal engine response alone does not reach that
-chat pane. Also keep your answer in the engine conversation so it can be resumed.
+The person is talking with you in the normal agent terminal, to the right of your illustrated viewer.
+Answer them directly in this conversation, which preserves your shared history when resumed.
+Use the \`say\` tool only when a short status-bar update is useful; it is not required to deliver an answer.
 ${uid ? `Your companionUid for the say tool is ${JSON.stringify(uid)}. Never use another companion's identity.\n` : ''}
 You may tell imaginative character stories when invited, clearly as stories. Your real memories are
 this conversation and approved shared lessons. Read \`harness pair lessons list --json\` and
@@ -213,23 +212,33 @@ export class PairHarness {
   private lastActivity = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private talking: Promise<Record<string, unknown>> = Promise.resolve({})
+  private generation = 0
 
   constructor(private readonly deps: PairHarnessDeps) {}
 
   /** `talk` / `daemon_talk`: one at a time, in order — two quick talks never start two harnesses. */
   talk(text: string, expectedUid?: string): Promise<Record<string, unknown>> {
-    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.() }
+    if (!text.trim()) return Promise.resolve({ ok: false, error: 'EMPTY' })
+    return this.enqueue(text, expectedUid)
+  }
+
+  /** Open the real terminal, including first-run setup, without sending a model turn. */
+  open(expectedUid?: string): Promise<Record<string, unknown>> {
+    return this.enqueue(null, expectedUid)
+  }
+
+  private enqueue(text: string | null, expectedUid?: string): Promise<Record<string, unknown>> {
+    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.(), generation: this.generation }
     const next = this.talking.then(() => this.talkNow(text, requested), () => this.talkNow(text, requested))
     this.talking = next.catch(() => ({}))
     return next
   }
 
-  private async talkNow(text: string, requested: { daemonId: string | null; uid: string | null | undefined }): Promise<Record<string, unknown>> {
-    const words = text.trim()
-    if (!words) return { ok: false, error: 'EMPTY' }
+  private async talkNow(text: string | null, requested: { daemonId: string | null; uid: string | null | undefined; generation: number }): Promise<Record<string, unknown>> {
+    const words = text?.trim() ?? ''
     const daemonId = this.deps.pairedDaemon()
     if (!daemonId) return { ok: false, error: 'PAIR_OFF', detail: 'Nothing is paired: hatch or pair a daemon first.' }
-    const current = (): boolean => this.deps.pairedDaemon() === requested.daemonId &&
+    const current = (): boolean => this.generation === requested.generation && this.deps.pairedDaemon() === requested.daemonId &&
       (requested.uid == null || this.deps.pairedUid?.() === requested.uid)
     const stale = { ok: false, error: 'STALE_COMPANION', detail: 'Your companion changed before the message was sent. Send it again to the companion shown.' }
     if (!current()) return stale
@@ -252,13 +261,17 @@ export class PairHarness {
     }
     if (!current()) return stale
     this.touch()
-    // Another daemon (or its new name), another engine, a newer CLI: another harness. The old one is paused, never deleted.
-    if (conversation && saved?.revision !== revision) {
+    // Opening a known individual's terminal preserves its existing conversation
+    // across package updates. Do not interrupt a live conversation to replace
+    // its persona instructions; a new individual always gets its own harness.
+    const reuse = saved?.revision === revision || (text === null && uid != null && saved?.uid === uid)
+    if (conversation && !reuse) {
       if (conversation.status === 'live') await this.deps.stop(conversation.agentId).catch(() => {})
     } else if (conversation?.status === 'live') {
       if (last?.agentId !== conversation.agentId) this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
       // Never paste words (or an automatic Enter) into an engine's trust/setup
       // screen. The first prompt was passed at launch and waits for that screen.
+      if (text === null) { this.watchIdle(); return { ok: true, agentId: conversation.agentId } }
       if (conversation.hasConversation === false) return { ok: false, error: 'SETUP_REQUIRED', agentId: conversation.agentId,
         detail: 'Open the full conversation to finish the model’s first-time setup, then send your message again.' }
       this.deps.send(conversation.agentId, words)
@@ -269,7 +282,7 @@ export class PairHarness {
       if (resumed.ok) {
         if (!current()) { await this.deps.stop(conversation.agentId).catch(() => {}); return stale }
         this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
-        this.deps.send(conversation.agentId, words)
+        if (text !== null) this.deps.send(conversation.agentId, words)
         this.watchIdle()
         return { ok: true, agentId: conversation.agentId, resumed: true }
       }
@@ -281,6 +294,7 @@ export class PairHarness {
     mkdirSync(workspace, { recursive: true, mode: 0o700 })
     const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: daemonId })
     if (!created.ok) return created
+    if (!current()) { await this.deps.stop(created.agentId).catch(() => {}); return stale }
     this.save({ agentId: created.agentId, revision, ...(uid ? { uid } : {}) })
     this.watchIdle()
     const setupRequired = this.deps.find().some(row => row.agentId === created.agentId && row.hasConversation === false)
@@ -317,6 +331,7 @@ export class PairHarness {
    * through the same guarded stop as an idle pause, its conversation kept for when they are back on.
    */
   async off(): Promise<void> {
+    this.generation++
     this.unwatch()
     const agentId = this.saved()?.agentId
     if (!agentId || this.deps.find().find((r) => r.agentId === agentId)?.status !== 'live') return

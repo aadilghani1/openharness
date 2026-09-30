@@ -258,7 +258,7 @@ class HarnessActivityMark extends StatelessWidget {
             ),
             visible:
                 visible &&
-                !app.activeSwarm.isUtility &&
+                !app.activeSwarm.isStore &&
                 !app.activeSwarm.isOrchestrator,
           ),
         );

@@ -100,10 +100,45 @@ describe('the instructions and the package', () => {
     expect(w.deps.send).not.toHaveBeenCalled()
   })
 
+  it('DSH opening preserves live and paused history across package revisions, scoped to the individual', async () => {
+    let uid = 'tim-one'
+    let name = 'Tim'
+    const w = world({ pairedUid: () => uid, pairedName: () => name })
+    await w.harness.open(uid)
+    w.rows[0]!.hasConversation = true
+    name = 'Little Tim'
+    expect(await w.harness.open(uid)).toMatchObject({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    uid = 'tim-two'
+    expect(await w.harness.open(uid)).toMatchObject({ started: true, agentId: 'pair-2' })
+    uid = 'tim-one'
+    expect(await w.harness.open(uid)).toMatchObject({ resumed: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(2)
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(await w.harness.open('tim-two')).toMatchObject({ error: 'STALE_COMPANION' })
+  })
+
+  it('disabling companions during startup pauses the late launch and never binds it', async () => {
+    let finish!: (result: { ok: true; agentId: string }) => void
+    const started = new Promise<{ ok: true; agentId: string }>(resolve => { finish = resolve })
+    const create = vi.fn(async () => started)
+    const stop = vi.fn(async () => {})
+    const w = world({ pairedUid: () => 'tim-one', create, stop })
+    const pending = w.harness.open('tim-one')
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await w.harness.off()
+    finish({ ok: true, agentId: 'late-pair' })
+    expect(await pending).toMatchObject({ error: 'STALE_COMPANION' })
+    expect(stop).toHaveBeenCalledWith('late-pair')
+    expect(w.harness.agentId()).toBeNull()
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
   it('pins the reply identity in the generated DSH and keeps memory claims grounded', () => {
     const text = pairPackage({ daemonId: 'tim', uid: 'tim-one', engine: 'claude', mcpCommand: ['h'], tokenFile: '/t' })['AGENTS.md']!.content
     expect(text).toContain('companionUid for the say tool is "tim-one"')
-    expect(text).toContain('Deliver EVERY conversational answer')
+    expect(text).toContain('Answer them directly in this conversation')
+    expect(text).not.toContain('Deliver EVERY conversational answer')
     expect(text).toContain('harness pair lessons list --json')
     expect(text).toContain('chatting never grants wider autonomy')
   })

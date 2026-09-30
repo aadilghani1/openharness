@@ -4612,6 +4612,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     talk: (text, uid) => pairTalk(text, uid),
+    open: (uid) => pairHarness.open(uid),
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -4942,6 +4943,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
       if (off) { reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
       void pairBrain!.onTalk(connId, payload, (frame) => { reply(frame) })
+    },
+    onDaemonOpen: (connId, payload, reply) => {
+      const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
+      if (off) { reply({ type: 'daemon_open_result', payload: { requestId: payload.requestId, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
+      void pairBrain!.onOpen(connId, payload, (frame) => { reply(frame) })
     },
     // Presence: whether the person is here (the zoo's away turns) always; the rest only while daemons are
     // on. Signed out, a window bound to this machine saying its guest zoo has the person's consent is what

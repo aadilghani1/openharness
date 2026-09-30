@@ -142,7 +142,7 @@ class WorkspacePaneContext {
   final String machineName, provider, location, detail;
   final String projectName;
   final String? branch;
-  String? get agentId => pane.isWeb ? pane.ownerAgentId : pane.agentId;
+  String? get agentId => pane.isViewer ? pane.ownerAgentId : pane.agentId;
   String? get engine => agent?.engine ?? pane.session?.engineId;
   String get modelLabel => modelLabelWithEffort(
     provider,
@@ -185,7 +185,7 @@ class WorkspacePaneContext {
     final pane = app.focusedPane;
     if (pane == null) return null;
     final machine = app.stateOf(pane.machineId);
-    final agentId = pane.isWeb ? pane.ownerAgentId : pane.agentId;
+    final agentId = pane.isViewer ? pane.ownerAgentId : pane.agentId;
     final agent = _agentFor(app, pane.machineId, agentId);
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineName = machine?.machine.displayName ?? pane.machineId;

@@ -139,6 +139,31 @@ describe('talking to it', () => {
     expect(w.deps.create).toHaveBeenCalledTimes(1)
   })
 
+  it('opening the DSH starts one terminal without a model prompt, and leaves setup for the person', async () => {
+    const w = world()
+    const [a, b] = await Promise.all([w.harness.open(), w.harness.open()])
+    expect(a).toMatchObject({ ok: true, agentId: 'pair-1', started: true })
+    expect(b).toEqual({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.deps.create.mock.calls[0]?.[0].prompt).toBe('')
+    w.rows[0]!.hasConversation = false
+    expect(await w.harness.open()).toEqual({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(await w.harness.talk('hi')).toMatchObject({ ok: false, error: 'SETUP_REQUIRED' })
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
+  it('opening a paused companion resumes its history without typing or starting another turn', async () => {
+    const w = world()
+    await w.harness.talk('remember this conversation')
+    w.rows[0]!.status = 'stopped'
+    w.rows[0]!.hasConversation = true
+    expect(await w.harness.open()).toEqual({ ok: true, agentId: 'pair-1', resumed: true })
+    expect(w.deps.resume).toHaveBeenCalledWith('pair-1')
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
   it('pauses when idle (conversation kept), not while it works, and resumes with a new token on the next talk', async () => {
     const w = world()
     await w.harness.talk('hi')

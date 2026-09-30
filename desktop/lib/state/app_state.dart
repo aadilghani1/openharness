@@ -1325,7 +1325,7 @@ class AppNotifier extends ChangeNotifier {
   String? _pendingStoreHarness;
 
   /// The companion's illustrated viewer and conversation, one per window.
-  /// Opening it never launches an engine; only sending a chat does that.
+  /// Its panes are bound only after the account's experimental gate is loaded.
   void openCompanions() {
     final existing = swarms.where((s) => s.isCompanions).firstOrNull;
     if (existing != null) {
@@ -1354,6 +1354,66 @@ class AppNotifier extends ChangeNotifier {
     );
     swarms.add(tab);
     selectSwarm(tab.id);
+  }
+
+  /// The built-in companion viewer uses the same canvas, focus, geometry and
+  /// terminal sessions as every DSH. These panes are derived from the enabled
+  /// account and current individual, never restored before that gate is known.
+  void syncCompanionViewer({required bool enabled, String? machineId}) {
+    var changed = false;
+    for (final tab in swarms.where((s) => s.isCompanions)) {
+      if (!enabled) {
+        for (final pane in tab.panes.toList()) {
+          tab.remove(pane);
+          if (!allPanes.contains(pane)) {
+            unawaited(_detachSession(pane, sendClose: true));
+          }
+          changed = true;
+        }
+      } else if (!tab.panes.any((p) => p.isCompanion)) {
+        final viewer = TerminalPane(
+          id: _nextPaneId++,
+          machineId: machineId ?? '',
+          kind: PaneKind.companion,
+        );
+        tab.panes.insert(0, viewer);
+        tab.focusedPaneId ??= viewer.id;
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  Future<void> showCompanionTerminal(String? machineId, String? agentId) async {
+    final tab = swarms.where((s) => s.isCompanions).firstOrNull;
+    final viewer = tab?.panes.where((p) => p.isCompanion).firstOrNull;
+    if (tab == null || viewer == null) return;
+    var changed =
+        viewer.ownerAgentId != agentId || viewer.machineId != (machineId ?? '');
+    viewer.ownerAgentId = agentId;
+    viewer.machineId = machineId ?? '';
+    for (final pane in tab.panes.where((p) => !p.isCompanion).toList()) {
+      if (pane.machineId == machineId && pane.agentId == agentId) continue;
+      tab.remove(pane);
+      if (!allPanes.contains(pane)) {
+        unawaited(_detachSession(pane, sendClose: true));
+      }
+      changed = true;
+    }
+    if (changed) notifyListeners();
+    if (machineId == null || agentId == null) return;
+    // Keep the product's name and its standard viewer-left/terminal-right split.
+    if (tab.paneSizes['2:manual'] == null) {
+      tab.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
+    }
+    await assignAgentToPane(
+      null,
+      machineId,
+      agentId,
+      swarmId: tab.id,
+      focus: false,
+      intent: tab == activeSwarm ? AttachIntent.person : AttachIntent.automatic,
+    );
   }
 
   /// The harness page [openStore] was asked for, handed over once. The Store
@@ -7474,7 +7534,7 @@ class AppNotifier extends ChangeNotifier {
 
   Iterable<({String machineId, String agentId})> _visibleOnTab() {
     if (lifecycle() != AppLifecycleState.resumed) return const [];
-    if (activeSwarm.isUtility || activeSwarm.isOrchestrator) return const [];
+    if (activeSwarm.isStore || activeSwarm.isOrchestrator) return const [];
     return [
       for (final pane in activeSwarm.panes)
         if (zoomedPaneId == null || pane.id == zoomedPaneId)
@@ -10741,7 +10801,7 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && !target.nameIsCustom) {
+    if (firstAgent && !target.nameIsCustom && !target.isCompanions) {
       final agent = machine.agents
           .where((agent) => agent.id == agentId)
           .firstOrNull;
@@ -11373,6 +11433,10 @@ class AppNotifier extends ChangeNotifier {
   Future<void> closePane(int paneId, {bool persist = true}) async {
     final pane = panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
+    if (activeSwarm.isCompanions) {
+      await closeSwarm(activeSwarmId, persist: persist);
+      return;
+    }
     if (pane.isWeb) {
       // A viewer closed by hand stays closed for THIS page: the agent's next
       // frame carries the same URL and must not reopen it. A different URL —
@@ -12984,6 +13048,7 @@ class AppNotifier extends ChangeNotifier {
       case 'daemon_act_result':
       case 'daemon_confirm_result':
       case 'daemon_talk_result':
+      case 'daemon_open_result':
       case 'pair_result':
       case 'daemon_plate':
         // Only from the loopback socket bound to this computer's harnessd.

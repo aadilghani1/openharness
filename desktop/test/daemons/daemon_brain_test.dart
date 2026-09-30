@@ -43,6 +43,32 @@ void main() {
   });
   tearDown(() => brain.dispose());
 
+  test('opening the terminal sends no words and pins the reply to the current individual', () async {
+    brain.bindConversation('account:test', 'tim-one');
+    final opening = brain.openConversation();
+    expect(sent.single.$1, 'daemon_open');
+    expect(sent.single.$2['companionUid'], 'tim-one');
+    expect(sent.single.$2.containsKey('text'), isFalse);
+    brain.receive('daemon_open_result', {
+      'requestId': sent.single.$2['requestId'],
+      'ok': true,
+      'agentId': 'pair-tim',
+    });
+    expect((await opening)['ok'], isTrue);
+    expect(brain.pairAgentId, 'pair-tim');
+    expect(brain.talk, isEmpty);
+    final stale = brain.openConversation();
+    final requestId = sent.last.$2['requestId'];
+    brain.bindConversation('account:test', 'gnu-one');
+    brain.receive('daemon_open_result', {
+      'requestId': requestId,
+      'ok': true,
+      'agentId': 'pair-tim',
+    });
+    expect((await stale)['error'], 'STALE_COMPANION');
+    expect(brain.pairAgentId, isNull);
+  });
+
   test('recent conversation survives a window restart, scoped to account and individual', () async {
     brain.bindConversation('account:one', 'tim-one');
     await Future<void>.delayed(Duration.zero);

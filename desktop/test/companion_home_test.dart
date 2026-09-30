@@ -8,6 +8,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/companions/companion_home.dart';
 import 'package:harness/companions/companion_story.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/widgets/pane_grid.dart';
+import 'package:harness/widgets/terminal_panel.dart';
+import 'package:xterm/xterm.dart';
 import 'package:harness/daemons/daemon_brain.dart';
 import 'package:harness/daemons/daemon_face.dart';
 import 'package:harness/daemons/illustrated_art.dart';
@@ -25,6 +31,7 @@ import 'package:harness/state/workspace_status.dart';
 import 'daemons/zoo_test.dart' show FakeZooTransport;
 import 'support/real_fonts.dart';
 import 'swarm_state_test.dart' show MemoryStore, createApp;
+import 'swarm_screen_test.dart' show terminal;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -117,6 +124,10 @@ void main() {
   late List<(String, Map<String, dynamic>)> sent;
   late GlobalKey boundary;
 
+  late AppNotifier workspace;
+  late TerminalSession conversation;
+  late List<TerminalBinaryFrame> input;
+
   Future<void> mount(
     WidgetTester tester, {
     Size size = const Size(1400, 950),
@@ -205,6 +216,17 @@ void main() {
         }
       }
     });
+    workspace = createApp(connected: true);
+    workspace.openCompanions();
+    workspace.syncCompanionViewer(enabled: true, machineId: 'm');
+    input = [];
+    conversation = terminal('a0', input)..agentName = 'Tim';
+    conversation.terminal.write(
+      '\x1b[1mTim\x1b[0m\r\n\r\nA little company for whatever you are making.\r\n\r\n> ',
+    );
+    workspace.adoptSessionForTest(conversation);
+    await workspace.showCompanionTerminal('m', 'a0');
+    workspace.focusPane(workspace.panes.first.id);
     boundary = GlobalKey();
     await tester.pumpWidget(
       RepaintBoundary(
@@ -220,11 +242,18 @@ void main() {
             child: child!,
           ),
           home: Scaffold(
-            body: CompanionHome(
-              face: face,
-              brain: brain,
-              onHatch: (_) {},
-              onOpenControls: (_) {},
+            body: ListenableBuilder(
+              listenable: workspace,
+              builder: (context, _) => PaneGrid(
+                notifier: workspace,
+                swarmMode: true,
+                companionViewer: (_) => CompanionHome(
+                  face: face,
+                  brain: brain,
+                  onHatch: (_) {},
+                  onOpenControls: (_) {},
+                ),
+              ),
             ),
           ),
         ),
@@ -235,6 +264,7 @@ void main() {
       face.dispose();
       zoo.dispose();
       brain.dispose();
+      workspace.dispose();
     });
   }
 
@@ -312,39 +342,59 @@ void main() {
     },
   );
 
-  testWidgets('chat sends the actual words once and shows the real reply', (
-    tester,
-  ) async {
-    await mount(tester);
-    await tester.enterText(
-      find.byKey(const ValueKey('companion-chat-input')),
-      'Hello Tim',
-    );
-    await tester.tap(find.byKey(const ValueKey('companion-chat-send')));
-    await tester.pump();
-    expect(sent.single.$1, 'daemon_talk');
-    expect(sent.single.$2['text'], 'Hello Tim');
-    await tester.tap(find.byKey(const ValueKey('companion-chat-send')));
-    expect(sent, hasLength(1));
-    brain.receive('daemon_talk_result', {
-      'requestId': sent.single.$2['requestId'],
-      'ok': true,
-      'sent': true,
-      'agentId': 'pair-one',
-    });
-    brain.receive('daemon_say', {
-      'id': 'hello',
-      'line': 'oh hi. what are we making?',
-      'mood': 'say',
-      'from': 'pair',
-      'actions': [],
-    });
-    await tester.pump();
-    expect(find.text('oh hi. what are we making?'), findsOneWidget);
-    expect(remote.batches, isEmpty);
-    await capture(tester, 'conversation');
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'DSH keeps its viewer left and real agent terminal right, including setup',
+    (tester) async {
+      await mount(tester);
+      final viewer = find.byKey(const ValueKey('companion-home'));
+      final terminalView = find.byType(TerminalPanel);
+      expect(terminalView, findsOneWidget);
+      expect(
+        tester.getRect(viewer).right,
+        lessThan(tester.getRect(terminalView).left),
+      );
+      expect(find.byKey(const ValueKey('companion-chat-input')), findsNothing);
+      expect(find.byTooltip('Open full conversation'), findsNothing);
+      expect(workspace.swarms, hasLength(1));
+      conversation.terminal.write(
+        '\r\nDo you trust the files in this folder?\r\n> Yes, I trust this folder\r\n',
+      );
+      await tester.pump();
+      final view = tester.widget<TerminalView>(find.byType(TerminalView));
+      expect(
+        view.terminal.buffer.getText(),
+        contains('Yes, I trust this folder'),
+      );
+      expect(view.terminal, same(conversation.terminal));
+      await capture(tester, 'conversation-setup');
+      // A real terminal key uses the shared binary stream exactly once, never a
+      // second chat API or automatic approval of the setup text above.
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: 'h',
+          selection: TextSelection.collapsed(offset: 1),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 30));
+      expect(input, hasLength(1));
+      expect(String.fromCharCodes(input.single.bytes), 'h');
+      expect(sent, isEmpty);
+      await tester.pump(const Duration(milliseconds: 350));
+      final session = workspace.panes.last.session;
+      final renderer = tester.state(find.byType(TerminalView));
+      workspace.newSwarm();
+      await tester.pump();
+      workspace.openCompanions();
+      await tester.pump();
+      expect(workspace.panes.last.session, same(session));
+      expect(tester.state(find.byType(TerminalView)), same(renderer));
+      expect(find.byType(TerminalView), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'memory book shows backend lessons and forget is an explicit action',

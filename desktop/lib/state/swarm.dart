@@ -142,7 +142,7 @@ class Swarm {
 
   Map<String, Object?> toJson() {
     final agents = panes
-        .where((p) => p.agentId != null)
+        .where((p) => !isCompanions && p.agentId != null)
         .toList(growable: false);
     return {
       'id': id,

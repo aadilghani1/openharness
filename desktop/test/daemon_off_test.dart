@@ -567,6 +567,7 @@ void main() {
     expect(frames, isEmpty);
 
     await setCreature(tester, true);
+    await tester.pump();
     expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
     expect(remote.fetches, greaterThan(0));
     expect(frames.where((frame) => frame.$1 == 'daemon_talk'), isEmpty);
@@ -581,6 +582,97 @@ void main() {
     expect(frames.where((frame) => frame.$1 == 'daemon_talk'), isEmpty);
     await unmount(tester);
   });
+
+  testWidgets(
+    'Companions opens its own DSH terminal and switches identities without an extra tab',
+    (tester) async {
+      app.stateOf('m')!.nodeOnline = true;
+      final seed = Zoo(
+        daemons: [
+          ZooDaemon(uid: 'tim-one', id: 'tim', hatched: '', egg: 'first'),
+          ZooDaemon(uid: 'gnu-one', id: 'gnu', hatched: '', egg: 'turn'),
+        ],
+        pair: 'tim-one',
+        firstEgg: true,
+      );
+      await mount(tester, on: true, seed: seed);
+      await app.handleEventForTest('m', {
+        'type': 'daemon_state',
+        'payload': {'pair': 'tim'},
+      });
+      await tester.pump();
+      expect(frames.where((f) => f.$1 == 'daemon_open'), isEmpty);
+      app.openCompanions();
+      await tester.pump();
+      await tester.pump();
+      final requests = frames.where((f) => f.$1 == 'daemon_open').toList();
+      expect(requests, hasLength(1));
+      expect(requests.single.$2['companionUid'], 'tim-one');
+      expect(requests.single.$2.containsKey('text'), isFalse);
+      app
+          .stateOf('m')!
+          .agents
+          .add(
+            const Agent(
+              id: 'pair-tim',
+              name: 'Tim',
+              engine: 'claude',
+              dsh: 'autonomous/pair',
+              terminalAvailable: true,
+              project: AgentProject(
+                name: 'Pair',
+                cwd: '/pair/workspace/tim-one',
+              ),
+            ),
+          );
+      await app.handleEventForTest('m', {
+        'type': 'daemon_open_result',
+        'payload': {
+          'requestId': requests.single.$2['requestId'],
+          'ok': true,
+          'agentId': 'pair-tim',
+        },
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(app.swarms, hasLength(1));
+      expect(app.activeSwarm.name, 'Companions');
+      expect(app.panes, hasLength(2));
+      expect(app.panes.first.isCompanion, isTrue);
+      expect(app.panes.last.agentId, 'pair-tim');
+      expect(app.panes.first.ownerAgentId, 'pair-tim');
+      expect(frames.where((f) => f.$1 == 'daemon_talk'), isEmpty);
+
+      zoo.pair('gnu-one');
+      await tester.pump();
+      await tester.pump();
+      expect(app.panes.where((p) => p.agentId == 'pair-tim'), isEmpty);
+      final next = frames.where((f) => f.$1 == 'daemon_open').last;
+      expect(next.$2['companionUid'], 'gnu-one');
+      await app.handleEventForTest('m', {
+        'type': 'daemon_open_result',
+        'payload': {
+          'requestId': next.$2['requestId'],
+          'ok': false,
+          'error': 'NO_ENGINE',
+        },
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.text('Install Claude Code or Codex to talk with your companion.'),
+        findsOneWidget,
+      );
+      await setCreature(tester, false);
+      await tester.pump();
+      expect(app.activeSwarm.panes, isEmpty);
+      final opens = frames.where((f) => f.$1 == 'daemon_open').length;
+      app.notifyListeners();
+      await tester.pump();
+      expect(frames.where((f) => f.$1 == 'daemon_open'), hasLength(opens));
+      await unmount(tester);
+    },
+  );
 
   testWidgets('disabling the experiment also closes an egg reveal', (
     tester,
@@ -849,6 +941,7 @@ void main() {
     final native = jsonEncode(nativeKeymapSnapshot(AppKeymap()));
     expect(native, contains('app.daemon_talk'));
     expect(await talkChord(tester), isTrue);
+    await tester.pump();
     expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
     expect(app.activeSwarm.isCompanions, isTrue);
     await unmount(tester);

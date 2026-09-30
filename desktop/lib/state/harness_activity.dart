@@ -78,11 +78,11 @@ HarnessActivity? harnessActivity(
 
 /// A viewer refers to its owner; showing the same harness twice adds no vote.
 HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
-  if (tab.isUtility || tab.isOrchestrator) return null;
+  if (tab.isStore || tab.isOrchestrator) return null;
   HarnessActivity? result;
   final seen = <(String, String)>{};
   for (final pane in tab.panes) {
-    final id = pane.isWeb ? pane.ownerAgentId : pane.agentId;
+    final id = pane.isViewer ? pane.ownerAgentId : pane.agentId;
     if (id == null || !seen.add((pane.machineId, id))) continue;
     final state = harnessActivity(app, pane.machineId, id);
     if (state != null && (result == null || state.index < result.index)) {
