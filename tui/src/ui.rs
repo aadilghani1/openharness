@@ -251,7 +251,9 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
         if surfaces {
             let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.pane_status(app.tab()));
-            buf.set_style(f.surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
+            // A lone or zoomed pane needs no focus treatment, including in its outer space.
+            let surface = if rects.len() == 1 { body } else { f.surface };
+            buf.set_style(surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
         }
         // choose-tree's tree, over the pane.
         if app.panes.get(id).map(|p| p.tree_top()).unwrap_or(false) {
@@ -287,10 +289,14 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let f = crate::pane_frame::frame(*rect, canvas, app.pane_status(app.tab()));
         let active = Some(*id) == app.focused();
         let style = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, Some(*id));
-        if let Some(outline) = f.outline.filter(|_| active) {
+        if let Some(outline) = f.outline.filter(|_| active && app.rects.len() > 1) {
             let lines = app.options.get("pane-border-lines", &app.tab().id, Some(*id)).unwrap_or_default();
             let (tl, tr, bl, br, hz, vt, _, _) = box_set(&lines);
-            let border = style.bg(theme::pane_palette().canvas);
+            // The thin outline is drawn over the pane's own background, so the canvas
+            // cannot leave a gray band between the content and the border glyphs.
+            let a = app.style_of("window-active-style", app.active, Some(*id));
+            let w = app.style_of("window-style", app.active, Some(*id));
+            let border = style.bg(a.bg.or(w.bg).unwrap_or(Color::Reset));
             let put = |buf: &mut Buffer, x, y, glyph| {
                 if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(glyph).set_style(border); }
             };

@@ -72,8 +72,11 @@ Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pa
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
 with one-cell gaps, inset terminal content and a thin outline around the focused pane. The
-surfaces follow the terminal's light/dark theme: the focused pane keeps full contrast;
-inactive dark panes use `rgb(64, 64, 64)` with softer text. Light terminals keep a light counterpart.
+surfaces follow the terminal's light/dark theme: the focused pane keeps full contrast and
+its background extends through the padding to the thin border;
+inactive dark panes use `rgb(64, 64, 64)` with softer text. This backdrop fills the padding
+and gaps up to the status bar. A lone or zoomed pane has no focus outline or gray surround.
+Light terminals keep a light counterpart.
 Explicit program colors and user styles stay intact. The muted green status bar has a continuous
 background, with tabs ordered `number:name* status` (previous window: `number:name- status`).
 Quota warnings read `Claude 100%`, with amber or red only on the percentage. Padding
@@ -86,9 +89,11 @@ its project and branch where the pane has room), `allow-set-title off` (a pane's
 harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps
 2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
 harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line:
-each window's most urgent harness state follows its name and tmux marker. Connection, quota,
+each window's most urgent harness state follows its name and tmux marker; idle dots are hidden
+in tabs and pane headers. Connection, quota,
 fleet counts, `machine:folder` and clock sit on the right. The git branch stays in its pane
-header, written `⑂ branch` without redundant punctuation.
+header, aligned to the right with its PR and written `⑂ branch` without redundant punctuation.
+Status-bar groups are separated by two spaces.
 One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).

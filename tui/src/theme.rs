@@ -447,10 +447,12 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
         Color::Rgb(c(ar, br), c(ag, bg), c(ab, bb))
     };
     let green = if light { Color::Rgb(58, 102, 48) } else { Color::Rgb(133, 181, 105) };
+    let inactive_surface = if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) };
     PanePalette {
-        canvas: if light { mix(bg, foreground, 14) } else { mix(bg, Color::Rgb(0, 0, 0), 45) },
+        // Inactive panes, gutters and outer space form one continuous backdrop.
+        canvas: inactive_surface,
         surface: bg,
-        inactive_surface: if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) },
+        inactive_surface,
         foreground, inactive_foreground: mix(foreground, bg, 9),
         muted: mix(foreground, bg, 30),
         header: if light { mix(bg, foreground, 12) } else { Color::Rgb(64, 64, 64) },
@@ -1273,7 +1275,7 @@ mod palette_tests {
                          (Color::Rgb(247, 247, 247), Color::Rgb(26, 26, 26))] {
             let p = super::pane_palette_for(Some((bg, fg)));
             assert_ne!(p.surface, p.inactive_surface);
-            assert_ne!(p.inactive_surface, p.canvas);
+            assert_eq!(p.inactive_surface, p.canvas);
             assert_eq!(p.surface, bg);
             assert_ne!(p.header, p.active_header);
             assert_eq!(p.foreground, fg);

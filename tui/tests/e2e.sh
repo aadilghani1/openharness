@@ -61,7 +61,9 @@ tmux_ send-keys -t t 'Mock\ Claude'
 expect "fuzzy filter narrows" "1/"
 # Enter, as tmux's chooser: the harness in a window of its own (not a split of this one).
 tmux_ send-keys -t t Enter
-expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude* ·"
+expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude*"
+idle_tab() { hn display -p "$(hn show -gwv window-status-current-format)"; }
+wait_eq "idle windows have no status dot" "1:Mock Claude*" idle_tab
 wait_eq "the harness window's one pane" "1" hn display -p '#{window_panes}'
 hn kill-window
 tmux_ send-keys -t t C-b s

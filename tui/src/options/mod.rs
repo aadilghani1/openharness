@@ -92,17 +92,17 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // Each pane's title row: the harness's name, then its state symbol, [watching — who
         // has it] when another window has the pane to type in, and its project and branch
         // where there is room. Git context stays here; the status bar keeps the location cue.
-        m.insert("pane-border-format".into(), " #{pane_title}#{?pane_agent_icon, #{pane_agent_mark},}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],}#{?pane_where, #[dim]· #{pane_where} #[nodim],}".into());
+        m.insert("pane-border-format".into(), " #{pane_title}#{?#{==:#{pane_agent_state},idle},,#{?pane_agent_icon, #{pane_agent_mark},}}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
         // Session and window navigation on the left; connection, quota, fleet, location and
         // clock on the right. A leading space keeps a full window list from running into it.
         m.insert("status-left".into(), "#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} ".into());
-        m.insert("status-right".into(), " #{?daemon_down,#[bold]daemon down#[nobold] ,}#{?usage_high,#{usage_high_mark} ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?pane_machine,#{=/12/…:pane_machine},#{host_short}}#{?pane_current_path,:#{=/18/…:#{b:pane_current_path}},#{?pane_project,:#{=/18/…:pane_project},}} %H:%M".into());
+        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_high,#{usage_high_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?pane_machine,#{=/12/…:pane_machine},#{host_short}}#{?pane_current_path,:#{=/18/…:#{b:pane_current_path}},#{?pane_project,:#{=/18/…:pane_project},}}  %H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other
         // flags, then the harness state. The selected tab needs no filled badge.
         for name in ["window-status-format", "window-status-current-format"] {
-            m.insert(name.into(), "#I:#{window_short_name}#{?window_active,*,#{?window_last_flag,-,}}#{s/[*-]//:window_flags}#{?window_agent_icon, #{window_agent_icon},}".into());
+            m.insert(name.into(), "#I:#{window_short_name}#{?window_active,*,#{?window_last_flag,-,}}#{s/[*-]//:window_flags}#{?#{==:#{window_agent_state},idle},,#{?window_agent_icon, #{window_agent_icon},}}".into());
         }
         // Unread activity and bells already carry #/! markers. Keep a continuous status
         // background and emphasize text instead of introducing inverted tab badges.

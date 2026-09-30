@@ -31,7 +31,7 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
+CONF.write_text('set -g automatic-rename off\nset -g status-right "#{usage_high_mark}  #{s/ /  /:fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -106,6 +106,18 @@ def background_at(x, y):
     return bg
 
 
+def background(hex_value):
+    raw = f'\x1b]11;{hex_value}\x07'.encode()
+    tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
+
+
+def pane_edge_background(pane, colour):
+    x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split())
+    points = ((x - 2, y - 3), (x + w + 1, y - 3), (x - 2, y + h + 1),
+              (x + w + 1, y + h + 1), (x - 1, y - 1), (x + w, y + h))
+    return all(background_at(col, row) == colour for col, row in points)
+
+
 def pane_background(pane):
     x, y, height = map(int, value('#{pane_left} #{pane_top} #{pane_height}', pane).split())
     return background_at(x, y + height - 2)
@@ -148,6 +160,8 @@ try:
     tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'test', '-x', '150', '-y', '42', command)
     started = True
     wait(lambda: 'Fix flaky login test' in tmux('capture-pane', '-p', '-t', 'test'), 'demo panes')
+    background('#000000')
+    wait(lambda: 'bg=#000000' in hn('show', '-gwv', 'window-active-style'), 'black terminal background')
     hn('select-layout', 'even-horizontal')
     panes = hn('list-panes', '-F', '#{pane_id}').splitlines()
     assert len(panes) == 3
@@ -161,9 +175,12 @@ try:
     active_bg = hn('show', '-gwv', 'window-active-style').split('bg=')[1]
     inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
     assert active_bg != inactive_bg
-    assert inactive_bg == '#404040'
+    assert active_bg == '#000000' and inactive_bg == '#404040'
     wait(lambda: pane_outline(first) and not pane_outline(second), 'thin outline only around the focused pane')
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
+    assert background_at(149, 0) == inactive_bg, 'gray backdrop includes outer padding'
+    wait(lambda: pane_edge_background(first, active_bg), 'focused background fills padding and border cells')
+    assert background_at(99, 20) == inactive_bg, 'gray backdrop includes the unfocused split gutter'
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
     assert tab.startswith(label + '* '), (tab, label)
@@ -205,6 +222,7 @@ try:
     wait(lambda: value('#{pane_id}') == second, 'C-b Right with insets')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'keyboard focus moves pane contrast')
     wait(lambda: pane_outline(second) and not pane_outline(first), 'keyboard focus moves the outline without stale borders')
+    wait(lambda: pane_edge_background(second, active_bg), 'focused border background follows keyboard selection')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == third, 'second C-b Right')
     keys('C-b', 'Right')
@@ -214,6 +232,11 @@ try:
     branch_context = value('#{pane_where}')
     assert '⑂ ' + value('#{pane_branch}') in branch_context, branch_context
     assert 'git:(' not in branch_context
+    wait(lambda: not pane_outline(first) and background_at(0, 0) == active_bg, 'zoomed pane has no border or gray surround')
+    assert background_at(0, 41) == normal_bg, 'status bar keeps its own color'
+    x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', first).split())
+    wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'branch and PR align to the right edge')
+    snapshot('panes-zoomed')
     keys('C-b', 'z')
     wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
     assert value('#{window_layout}') == original
@@ -316,14 +339,12 @@ try:
     hn('set', '-g', 'status-position', 'bottom')
     hn('set', '-g', 'status', 'on')
     # OSC replies are metadata, not keystrokes. Surface defaults follow live light/dark changes.
-    def background(hex_value):
-        raw = f'\x1b]11;{hex_value}\x07'.encode()
-        tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
     layout_before_theme = value('#{window_layout}')
     before = len(api()['inputs'])
     background('#f7f7f7')
     wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
     wait(lambda: pane_background(first) == '#f7f7f7' and pane_background(second) == '#e5e5e5', 'light focus contrast')
+    wait(lambda: pane_edge_background(first, '#f7f7f7'), 'light surface continues through the focus border')
     light_status = hn('show', '-gv', 'status-style')
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
@@ -333,6 +354,7 @@ try:
     assert hn('show', '-gwv', 'window-style') == 'fg=red,bg=blue'
     assert hn('show', '-gwv', 'window-active-style') == 'default'
     wait(lambda: pane_background(first) == 'colour4' and pane_background(second) == 'colour4', 'custom backgrounds win on active and inactive panes')
+    wait(lambda: pane_edge_background(first, 'colour4'), 'custom pane background continues through the focus border')
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
     assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
@@ -350,6 +372,14 @@ try:
         wait(lambda: value('#{client_width} #{client_height}') == f'{width} {height}', 'terminal resize')
         assert value('#{window_panes}') == '3'
     print('PASS pane UI: compact and one-cell terminals, return to full size', flush=True)
+
+    single = hn('new-window', '-n', 'single', '-P', '-F', '#{pane_id}', '/bin/sh')
+    wait(lambda: value('#{pane_id}') == single and value('#{window_panes}') == '1', 'single-pane window')
+    wait(lambda: not pane_outline(single) and background_at(0, 0) == '#101010', 'single pane has no outline or gray surround')
+    snapshot('panes-single')
+    hn('kill-window')
+    wait(lambda: value('#{window_id}') == current, 'return from single-pane window')
+    print('PASS pane UI: full backdrop, right-aligned context and single-pane presentation', flush=True)
 finally:
     if started:
         if OUTPUT:
