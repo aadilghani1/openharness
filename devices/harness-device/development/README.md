@@ -9,15 +9,16 @@ to point to when a developer builds.
 
 | Work | Branch | Starting commit | Device |
 | --- | --- | --- | --- |
-| Round development | `dev/firmware-round` | `aa0a583cb30d82af5f600cd8b0569899f960a0ed` | `44:1B:F6:85:52:18` |
+| Round development | `dev/firmware-round` | `aa0a583cb30d82af5f600cd8b0569899f960a0ed` | `90:70:69:F3:0E:2C` |
 | Pro development | `dev/firmware-pro` | `92283ad62f6876a363ecfae4d2466340d7e2dd0f` | `E8:F6:0A:E7:64:61` |
 | Production reference | Diego's approved release | Chosen by Diego | `28:84:85:90:65:94` |
 
 These assignments reflect the user's correction on 2026-09-30: **65:94 is
-production; the newly connected 52:18 is development.**
+production; 0E:2C is development.** The user explicitly reassigned 0E:2C
+from its previous production-reference role after 52:18 disconnected.
 
-`devices.json` is the development deployment allowlist. The previous production
-reference and orange terminal are also protected. New USB devices are excluded
+`devices.json` is the development deployment allowlist. The disconnected 52:18
+and orange terminal are protected. New USB devices are excluded
 until the user assigns them. Identify devices by their full MAC and detected
 silicon, never their case, character, port order, or mutable `/dev` name.
 
@@ -48,7 +49,7 @@ For the round target, use ESP-IDF **v5.5**, `esp32s3`, and the tracked defaults:
 ```sh
 idf.py -C devices/harness-device/firmware -B /private/tmp/harness-dev-round/build \
   -DIDF_TARGET=esp32s3 -DSDKCONFIG=/private/tmp/harness-dev-round/build/sdkconfig \
-  -DDEVICE_FORCE_PROD=1 build
+  -DDEVICE_FORCE_PROD=1 reconfigure build
 ```
 
 `DEVICE_FORCE_PROD=1` only prevents embedding local provisioning secrets. It is
@@ -74,7 +75,7 @@ Before opening a serial port or stopping the bridge, run from the correct branch
 
 ```sh
 python3 devices/harness-device/development/check_target.py \
-  --mac 44:1B:F6:85:52:18 --chip esp32s3
+  --mac 90:70:69:F3:0E:2C --chip esp32s3
 ```
 
 For Pro, use its branch, MAC, and `esp32p4`. The check reads the local allowlist;
@@ -98,7 +99,7 @@ On 2026-09-30, round `65:94` was running a local `aa0a583cb` build labeled
 `0218b52b9857f17e1d9ec66c52ac28ecc1377cb6f1ef99c93f4bc943c98d1652`.
 That image is **not** Diego's approved release. The user subsequently assigned
 65:94 to production testing and requested Diego's code there, with development
-moved to 52:18. If Diego uses the same version number, the updater cannot
+moved to 0E:2C. If Diego uses the same version number, the updater cannot
 distinguish these images: perform an explicit verified flash, not an automatic
 version comparison. Do not publish the old local image or use it to certify the
 customer update path.
