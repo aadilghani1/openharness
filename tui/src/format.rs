@@ -1321,8 +1321,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // The harness's symbol as its title draws it (#{pane_agent_icon}, styled): in its state's
         // colour, needs you bold, idle dim.
         "pane_agent_mark" => pane.and_then(|p| app.pane_state(p.id)).map(|s| agent_mark(s, app.tick)).unwrap_or_default(),
-        // Where the harness works: `project ⑂ branch`, then progressively shorter context
-        // as the pane narrows. The Unicode fork needs no patched icon font. A folder with
+        // Where the harness works: `machine:project ⎇ branch`, then progressively shorter context
+        // as the pane narrows. The Unicode branch marker needs no patched icon font. A folder with
         // no git shows its name.
         "pane_where" => pane.zip(agent).and_then(|(p, a)| {
             if a.branch.is_empty() && a.project.is_empty() { return None }
@@ -1330,14 +1330,15 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
             let left = 1 + crate::draw::format_width(&pane_heading(app, window, p.id));
             let pr = a.pr.as_ref().map(|p| format!(" {}", p.label())).unwrap_or_default();
-            // A pane on another machine says which (scp's way: gpu-box:ml-lab).
-            let far = (p.machine_id != app.fleet.local_id && !a.project.is_empty()).then(|| format!("{}:", app.fleet.machine_name(&p.machine_id))).filter(|m| m.len() > 1);
-            let far_project = far.as_ref().map(|m| format!("{m}{}", a.project));
-            // A folder that is not a git repository: its name alone (and the machine's).
-            if a.branch.is_empty() { return [far_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 3) }
-            [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} ⑂ {}{pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} ⑂ {}", a.branch)),
-                (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} ⑂ {}{pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} ⑂ {}", a.project, a.branch)),
-                (!pr.is_empty()).then(|| format!("⑂ {}{pr}", a.branch)), Some(format!("⑂ {}", a.branch)), Some(a.branch.clone())]
+            // Both local and remote panes name their machine when there is room.
+            // Drop it before project, branch or PR context as the pane narrows.
+            let machine = app.fleet.machine_name(&p.machine_id);
+            let qualified_project = (!machine.is_empty() && !a.project.is_empty()).then(|| format!("{machine}:{}", a.project));
+            if a.branch.is_empty() { return [qualified_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 3) }
+            [qualified_project.as_ref().filter(|_| !pr.is_empty()).map(|p| format!("{p} ⎇ {}{pr}", a.branch)),
+                (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} ⎇ {}{pr}", a.project, a.branch)),
+                qualified_project.as_ref().map(|p| format!("{p} ⎇ {}", a.branch)), (!a.project.is_empty()).then(|| format!("{} ⎇ {}", a.project, a.branch)),
+                (!pr.is_empty()).then(|| format!("⎇ {}{pr}", a.branch)), Some(format!("⎇ {}", a.branch)), Some(a.branch.clone())]
                 .into_iter().flatten().find(|c| room >= left + width(c) + 3)
         }).unwrap_or_default(),
         // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it

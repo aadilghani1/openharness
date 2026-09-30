@@ -102,7 +102,7 @@ harnesses waiting on you and the one in front; `set-titles-string` changes it), 
 each window's most urgent harness state follows its name and tmux marker; idle dots are hidden
 in tabs and pane headers. Connection, quota,
 fleet counts, `machine:folder` and clock sit on the right. The git branch stays in its pane
-header, aligned to the right with its PR and written `⑂ branch` without redundant punctuation.
+header, aligned to the right with its PR and written `⎇ branch` without redundant punctuation.
 Status-bar groups are separated by two spaces, with one space at each outer edge to align
 with the pane surfaces. The left session label always stays visible: the
 desk uses the local machine name, independent of the focused pane's machine on the right.
@@ -240,7 +240,8 @@ For your own formats: `#{fleet}` (the status line's counts, ready to drop into y
 paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row draws it),
 `#{pane_heading}` (the name, state and watcher label fitted to the pane header; `#{pane_title}`
 stays complete), `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
-`#{pane_branch}`, `#{pane_where}` (`project ⑂ branch #123` as far as it fits beside the title),
+`#{pane_branch}`, `#{pane_where}` (`machine:project ⎇ branch #123` as far as it fits beside the title;
+local and remote machine prefixes yield to project, branch and PR context in narrow panes),
 `#{pane_pr}` `#{pane_pr_state}` `#{pane_pr_url}` (the pull request for its branch), `#{pane_tokens}`
 and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),

@@ -302,20 +302,24 @@ try:
     wait(lambda: value('#{pane_id}') == third, 'second C-b Right')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == first, 'directional wrap')
-    keys('C-b', 'z')
-    wait(lambda: value('#{window_zoomed_flag}') == '1', 'zoom')
-    branch_context = value('#{pane_where}')
-    assert '⑂ ' + value('#{pane_branch}') in branch_context, branch_context
-    assert 'git:(' not in branch_context
-    wait(lambda: not pane_outline(first) and background_at(1, 1) == active_bg
-         and background_at(0, 0) == background_at(149, 40) == '#202020',
-         'zoomed pane keeps its focused surface inside the canvas')
-    wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
-    x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', first).split())
-    wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'branch and PR align to the right edge')
-    snapshot('panes-zoomed')
-    keys('C-b', 'z')
-    wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
+    for target in (first, third):
+        hn('select-pane', '-t', target)
+        keys('C-b', 'z')
+        wait(lambda: value('#{window_zoomed_flag}') == '1', 'zoom')
+        branch_context = value('#{pane_where}')
+        assert branch_context.startswith(value('#{pane_machine}:#{pane_project}') + ' '), branch_context
+        assert '⎇ ' + value('#{pane_branch}') in branch_context, branch_context
+        assert 'git:(' not in branch_context
+        wait(lambda: not pane_outline(target) and background_at(1, 1) == active_bg
+             and background_at(0, 0) == background_at(149, 40) == '#202020',
+             'zoomed pane keeps its focused surface inside the canvas')
+        wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
+        x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', target).split())
+        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'machine, project, branch and PR align to the right edge')
+        snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
+        keys('C-b', 'z')
+        wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
+    hn('select-pane', '-t', first)
     assert value('#{window_layout}') == original
     print('PASS pane UI: directional keys, wrap, zoom preserve layout structure', flush=True)
 
