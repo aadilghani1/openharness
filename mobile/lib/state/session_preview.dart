@@ -2,10 +2,9 @@
 /// search reaches the same session content the desktop's Open Agent picker
 /// does. Keep the two in step; the additions here are
 /// [SessionPreview.searchParts], which the phone's result rows quote from,
-/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard, and
-/// [SessionPreview.recap] with [SessionPreviewStore.isPending], for the recap
-/// under each row of the Harnesses list, and
-/// [SessionPreviewStore.maxInFlight], so that list's rows fill in faster.
+/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard,
+/// [SessionPreview.recap], for the recap a row of Find unfolds, and
+/// [SessionPreviewStore.maxInFlight], so those recaps arrive sooner.
 library;
 
 import 'dart:async';
@@ -152,25 +151,6 @@ class SessionPreviewStore extends ChangeNotifier {
   /// events; without this the copy taken before it stays the one searched
   /// until [freshFor] runs out and something happens to warm it again.
   void markStale(SessionPreviewKey key) => _records[key]?._attemptedAt = null;
-
-  /// Whether what [key] said is still to come: being read, queued to be, or
-  /// never read at all — what lets a row hold a placeholder for content on its
-  /// way rather than grow when it lands.
-  ///
-  /// ⚠️ **Never read counts.** Find warms the rows it draws one frame after
-  /// drawing them, so a row scrolled into view is not queued yet on its first
-  /// frame — and is about to be. A row that held nothing there and a
-  /// placeholder a frame later would flicker at the edge of every scroll.
-  ///
-  /// False for a key that can no longer be fetched: a queued read of it is
-  /// dropped without a word ([_drain]), and a placeholder waiting on it would
-  /// wait for ever. False, too, once a read has answered, even with nothing or
-  /// an error: that session has nothing to show, not something on its way.
-  bool isPending(SessionPreviewKey key) {
-    if (!canFetch(key)) return false;
-    if (_inFlight.contains(key) || _queue.contains(key)) return true;
-    return !(_records[key]?.fetched ?? false);
-  }
 
   SessionPreview _entry(SessionPreviewKey key) {
     final entry = _records.remove(key) ?? SessionPreview();
