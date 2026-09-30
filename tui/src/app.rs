@@ -513,6 +513,8 @@ pub struct App {
     pub started: Instant,
     pub daemon_down: bool,
     pub dsh: HashMap<String, Vec<Value>>,
+    /// A dismissed New Harness draft, including any pending creation receipt.
+    pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
     /// Each harness's selectable models (`models_list`), for ⌥I.
     pub models: HashMap<(String, String), Vec<Value>>,
     /// Each machine's local models (the grid): downloaded, running, available.
@@ -956,6 +958,7 @@ impl App {
             started: Instant::now(),
             daemon_down: false,
             dsh: HashMap::new(),
+            new_harness_draft: None,
             models: HashMap::new(),
             local_models: HashMap::new(),
             rtt: HashMap::new(),
@@ -4539,7 +4542,7 @@ impl App {
     /// before break-pane goes to its new window is looked at while the old one still is).
     fn update_focus_in(&mut self, pane: u64, focused: &mut Vec<u64>, notify: bool, current: usize) {
         let Some(w) = self.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
-        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }));
+        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }) | Some(crate::modal::Modal::NewHarness(_)));
         let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
         let client = !focus_events || self.terminal_focused;
         let is = w == current && self.tabs[w].focus == Some(pane) && client && !overlay;

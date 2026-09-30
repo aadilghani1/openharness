@@ -1,6 +1,5 @@
 //! The overlays and what their rows are: the fzf list's modes (harnesses, > commands, @ machines,
-//! # projects, : models, * store, ? help), needs input, new harness (machine → agent → folder →
-//! first message), layouts, and the
+//! # projects, : models, * store, ? help), needs input, the New Harness form, layouts, and the
 //! one-line prompts (rename, first message, send, link password).
 
 use ratatui::style::Style;
@@ -45,9 +44,6 @@ pub enum PickerKind {
     Layout,
     Help,
     Store,
-    NewMachine,
-    NewWhat { machine: String, cwd: Option<String> },
-    NewFolder { machine: String, what: What },
     /// A task routed to a harness; [voice]: the dial's spoken task it answers.
     Route { text: String, voice: Option<String> },
     /// `show-messages`, `list-keys`, `choose-buffer`.
@@ -62,8 +58,6 @@ pub enum PickerKind {
 pub enum PromptKind {
     RenameTab,
     RenameHarness { machine: String, agent: String },
-    NewPath { machine: String, what: What },
-    NewMessage { machine: String, what: What, cwd: Option<String>, worktree: bool },
     Send,
     Broadcast,
     LinkPassword { machine: String },
@@ -146,6 +140,8 @@ pub struct Complete { pub prompt: Prompt, pub list: Vec<String>, pub flag: Optio
 pub enum Modal {
     /// tmux's display-menu: a box of items, each with its key; Enter or the key runs one.
     Menu(Menu),
+    /// Compact New Harness form with searchable choices and a persistent draft.
+    NewHarness(Box<crate::new_harness::Form>),
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
     /// tmux `confirm-before`: `Confirm 'kill-pane'? (y/n)` in the status line; `key` answers
@@ -557,27 +553,6 @@ pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
         rows.push(Row::new(format!("dsh:{id}:{engine}"), name).extra(format!("{id} {description}")).group("From the Store")
             .lead(vec![span("◆ ", fg(theme::TEAL))]).detail(vec![span(description.to_string(), fg(theme::MUTED))]));
     }
-    rows
-}
-
-pub fn new_folder_rows(app: &App, machine: &str) -> Vec<Row> {
-    let home = app.homes.get(machine).cloned().unwrap_or_default();
-    let tilde = |p: &str| if !home.is_empty() && p.starts_with(&home) { format!("~{}", &p[home.len()..]) } else { p.to_string() };
-    let mut rows = vec![
-        Row::new("__new", "+ New project").group("Start").detail(vec![span(format!("{}/harnesses/<name>", tilde(&home)), fg(theme::MUTED))]),
-        Row::new("__path", "… Type a path").group("Start").detail(vec![span("any folder on that machine", fg(theme::MUTED))]),
-    ];
-    let mut agents: Vec<_> = app.fleet.agents.values().filter(|a| a.machine_id == machine && !a.cwd.is_empty()).collect();
-    agents.sort_by_key(|a| std::cmp::Reverse(a.created_at));
-    let mut seen = Vec::new();
-    for a in agents {
-        if seen.contains(&a.cwd) || seen.len() >= 40 { continue }
-        seen.push(a.cwd.clone());
-        let short = tilde(&a.cwd);
-        let leaf = short.rsplit('/').next().unwrap_or(&short).to_string();
-        rows.push(Row::new(a.cwd.clone(), leaf).extra(short.clone()).group("Recent folders").detail(vec![span(short, fg(theme::MUTED))]));
-    }
-    if !home.is_empty() { rows.push(Row::new(home.clone(), "~").group("Recent folders").detail(vec![span("home folder", fg(theme::MUTED))])) }
     rows
 }
 

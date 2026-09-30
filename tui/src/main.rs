@@ -31,6 +31,7 @@ mod input;
 mod layout;
 mod local;
 mod modal;
+mod new_harness;
 mod mouse;
 mod options;
 mod paste;

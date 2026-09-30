@@ -366,7 +366,16 @@ wss.on('connection', (ws) => {
     switch (type) {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
-      case 'dsh_list': return reply({ dsh: [] })
+      case 'git_project_info': return reply(process.env.MOCK_NEW_UI ? { isGit: !String(payload.path).includes('plain'), branch: 'main', branches: [
+        { ref: 'refs/heads/main', name: 'main', remote: false },
+        { ref: 'refs/heads/feature', name: 'feature', remote: false },
+        { ref: 'refs/heads/already-open', name: 'already-open', remote: false, worktree: '/home/demo/worktrees/already-open' },
+      ] } : { isGit: false })
+      case 'grid_models_list': return reply({ supportsModelLaunch: true, localModelEngines: ['codex', 'claude'], grids: [
+        { name: 'studio', own: true, models: [{ id: 'demo-model', node: 'studio' }] },
+      ] })
+      case 'codex_profiles_list': return reply({ profiles: [{ path: '/home/demo/.codex-work', label: 'Work' }] })
+      case 'dsh_list': return reply({ dsh: process.env.MOCK_NEW_UI ? [{ id: 'example/blender', name: 'Blender', engine: 'codex', engines: ['codex', 'claude'], installed: true }] : [] })
       // The agent accounts' limits, as the vendors answer (MOCK_USAGE: Claude's 5-hour window, %).
       case 'usage_read': return reply({ providers: [
         { provider: 'claude', account: 'acct-claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: Number(process.env.MOCK_USAGE || 42), resets_at: '2026-09-26T21:00:00Z' }, seven_day: { utilization: 18, resets_at: '2026-10-01T00:00:00Z' } } },
@@ -382,7 +391,7 @@ wss.on('connection', (ws) => {
         const r = a && RECAPS[a.name]
         return reply({ agentId: payload.agentId, events: r ? [{ kind: 'summary', recap: r[0], text: r[0] }] : [], asks: r ? [r[1]] : [] })
       }
-      case 'fs_list_dir': return reply({ path: '/home/demo', entries: [] })
+      case 'fs_list_dir': return reply({ path: process.env.MOCK_NEW_UI ? (payload.path || '/home/demo') : '/home/demo', entries: process.env.MOCK_NEW_UI && !String(payload.path).endsWith('/projects') ? [{ name: 'projects', isDir: true }] : [] })
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
@@ -399,6 +408,14 @@ wss.on('connection', (ws) => {
       }
       case 'agent_create': {
         dial.created = [...(dial.created || []), payload]
+        // The daemon's wire contract uses branchMode, not its internal existingBranch flag.
+        if (process.env.MOCK_NEW_UI && payload.branchName === 'feature' && payload.branchMode !== 'existing') {
+          return reply({ error: 'BRANCH_EXISTS', detail: 'Select the existing branch using branchMode.' })
+        }
+        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'fail-once' && !dial.failedCreate) {
+          dial.failedCreate = true
+          return setTimeout(() => reply({ error: 'CREATE_FAILED', detail: 'Fixture launch failure' }), 150)
+        }
         // Resuming a conversation Harness did not start: refused while it is open elsewhere.
         if (payload.resumeSessionId) {
           const x = EXTERNAL.find((e) => e.sessionId === payload.resumeSessionId)

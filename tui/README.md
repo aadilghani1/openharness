@@ -126,12 +126,32 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | | |
 |---|---|
 | `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list; `M-a` types an answer — an option's number, several for a multi-choice question, `1,3`, or your own words) |
-| `C-b N` `C-b T` | new harness (an agent: machine, agent, folder — `M-w` for a new git worktree of it, on a branch of its own — then its first message) / new terminal. Agents start in `@hn-permission-mode` (auto unless you `set -g @hn-permission-mode plan`, `acceptEdits`, `ask` …) |
+| `C-b N` `C-b T` | New Harness popup / new terminal. The popup keeps Agent, Project and Options together, with searchable choices. Options match desktop: Model, Approvals, applicable Profile, Branch and Worktree. |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
-In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
+`C-b N` opens the compact desktop-style New Harness form with Agent, Project, collapsed
+Options and New Harness. The initial destination is the local machine, with successful agent
+and project choices remembered. Explicit project commands keep their destination. Enter starts
+with the displayed choices; Up/Down moves between fields and previews their chooser. Enter,
+Right or typing enters the chooser. Tab switches between the form and chooser; Enter accepts
+an item and returns to New Harness. A second Enter starts it. Lowercase `C-b n` remains next window.
+
+Agent combines coding agents and installed Store harnesses; a Store harness then offers its
+compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
+machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
+a path. Options contains Model, agent-specific Approvals, Codex Profile, Branch and Worktree.
+Git projects default to a new worktree from main, as on desktop; missing main requires a branch
+choice. Models and profiles are checked on the selected machine before starting.
+
+Choosers sit beside the form, or occupy its column in narrow terminals. Escape returns through
+nested choosers and preserves a dismissed draft. Errors keep every choice and the creation receipt
+for retry; repeated Enter cannot submit a second request while one is pending. Input in the form
+never reaches a working pane. No reverse-video selection is used.
+
+
+In the harness and command lists, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
 `S-↑/↓` scrolls it, `M-/` wraps long rows (`--wrap`), `C-a C-e C-w C-u` edit the query, `enter`
 opens, `C-t` in a new window, `C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works
 (`'exact ^prefix suffix$ !not a | b`), and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`,
@@ -219,6 +239,7 @@ and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lin
 `#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
 `#{usage}` (the agent accounts' rate limits on the focused pane's machine: `claude 5h 42% week
 18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80% used).
+
 The status line uses `#{usage_remaining_mark}`: `Claude 0%  Codex 89%`, showing **remaining**
 allowance for every subscription with quota data, even when healthy. Each figure is the lowest
 remaining percentage across that account's reported windows. Amber starts at 20% left, red at
