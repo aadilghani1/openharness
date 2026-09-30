@@ -85,6 +85,17 @@ def scenario(mode, port, read_only=False):
     def layout(peer=False):
         return hn('display-message', '-p', '#{window_layout}', peer=peer)
 
+    def placed(peer=False):
+        cells = [r.split('|') for r in hn('list-panes', '-F',
+            '#{pane_id}|#{pane_title}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}', peer=peer).splitlines()]
+        return sorted(cells, key=lambda r: (int(r[3]), int(r[2])))
+
+    def names(peer=False):
+        return [r[1] for r in placed(peer)]
+
+    def desk_names():
+        return [titles[(p['machineId'], p['agentId'])] for p in api()['tabs'][0]['panes']]
+
     def columns(peer=False):
         rows = [row.split() for row in hn('list-panes', '-F', '#{pane_left} #{pane_top}', peer=peer).splitlines()]
         return len(rows) == 3 and len({r[0] for r in rows}) == 3 and len({r[1] for r in rows}) == 1
@@ -122,6 +133,9 @@ def scenario(mode, port, read_only=False):
             raise AssertionError('mock startup timeout')
         started = True
         start()
+        initial = api()['tabs'][0]['panes']
+        titles = {(p['machineId'], p['agentId']): row[1] for p, row in zip(initial, placed())}
+        assert len(titles) == 3
         before = layout()
         tmux('send-keys', '-t', 'main', 'C-b', 'Space')
         wait(columns, 'C-b Space must select even-horizontal and keep it')
@@ -144,6 +158,7 @@ def scenario(mode, port, read_only=False):
                 stable(chosen, .25)
                 wait(lambda: api()['tabs'][0]['layout'].get('presets', {}).get('3') == desktop_preset,
                      f'{name} publishes a desktop-compatible preset')
+                wait(lambda: names() == desk_names(), f'{name} shares the same pane order as desktop')
             print(f'PASS {mode}: all seven named layouts survive acknowledgements and share their presets', flush=True)
 
             # The server delays the first save. Without serialization the newer save wins
@@ -223,6 +238,63 @@ def scenario(mode, port, read_only=False):
         wait(rows, 'remote preset must still apply')
         stable(layout(), .3)
         print(f'PASS {mode}: deliberate remote preset still applies', flush=True)
+
+        # Desktop's drag sends pane.move without replacing the layout. This must
+        # change the order, not rebuild equal dividers or change the focused harness.
+        first, second = placed()[:2]
+        hn('select-pane', '-t', second[0])
+        hn('resize-pane', '-t', first[0], '-D', '2')
+        time.sleep(.4)
+        slots = [r[2:] for r in placed()]
+        focused = hn('display-message', '-p', '#{pane_id}')
+        moved = api()['tabs'][0]['panes'][-1]
+        before_names = names()
+        api('/api/desk/ops', {'ops': [{'op': 'pane.move', 'tabId': 'demo-1', **moved, 'index': 0}]})
+        wait(lambda: names() == desk_names() and names() != before_names, 'remote pane order must follow desktop')
+        assert [r[2:] for r in placed()] == slots, 'reordering changed divider sizes'
+        assert hn('display-message', '-p', '#{pane_id}') == focused, 'reordering moved focus to a different harness'
+        chosen = layout()
+        unrelated_update()
+        stable(chosen, .4)
+        print(f'PASS {mode}: desktop reorder keeps unequal dividers, pane identities and focus', flush=True)
+
+        # A simultaneous geometry change must use the new shared sequence too.
+        moved = api()['tabs'][0]['panes'][-1]
+        api('/api/desk/ops', {'ops': [
+            {'op': 'pane.move', 'tabId': 'demo-1', **moved, 'index': 0},
+            {'op': 'tab.layout', 'id': 'demo-1', 'layout': {'presets': {'3': 'cols3'}}}]})
+        wait(lambda: columns() and names() == desk_names(), 'remote geometry and order apply together')
+
+        # A removed/reopened harness can be inserted at the front rather than appended.
+        removed = api()['tabs'][0]['panes'][-1]
+        api('/api/desk/ops', {'ops': [{'op': 'pane.remove', 'tabId': 'demo-1', **removed}]})
+        wait(lambda: hn('display-message', '-p', '#{window_panes}') == '2', 'pane removed before reinsertion')
+        api('/api/desk/ops', {'ops': [{'op': 'pane.add', 'tabId': 'demo-1', **removed, 'index': 0}]})
+        wait(lambda: len(names()) == 3 and names() == desk_names(), 'reopened pane appears at the shared index')
+        print(f'PASS {mode}: simultaneous order/layout changes and insertion at the front', flush=True)
+
+        # Keyboard reordering travels in the other direction without bouncing back.
+        before_names = names()
+        tmux('send-keys', '-t', 'main', 'C-b', 'C-o')
+        wait(lambda: names() != before_names, 'C-b C-o rotates the panes')
+        chosen = layout()
+        if not read_only:
+            wait(lambda: names() == desk_names(), 'keyboard rotation publishes pane order')
+        unrelated_update()
+        stable(chosen, .5)
+        if not read_only:
+            source, target = [r[0] for r in placed()[:2]]
+            hn('swap-pane', '-s', source, '-t', target, '-d')
+            wait(lambda: names() == desk_names(), 'pane swap publishes pane order')
+        print(f'PASS {mode}: keyboard rotation and swaps preserve the shared sequence', flush=True)
+
+        if mode == 'normal' and not read_only:
+            # A fresh client may reuse numeric pane IDs in a different sequence.
+            # The shared identities, not the saved tmux IDs, decide placement.
+            start(peer=True)
+            wait(lambda: names(peer=True) == desk_names(), 'reopened client follows shared order')
+            hn('kill-server', peer=True, ok=False)
+            print('PASS normal: fresh client agrees with desktop after reorder', flush=True)
 
         # The reported case: a two-pane window, with the desktop serializing only
         # presets/sizes and dropping hn's native geometry a few seconds later.

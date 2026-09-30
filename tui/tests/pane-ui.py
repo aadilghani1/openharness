@@ -120,7 +120,9 @@ def background(hex_value):
 def pane_edge_background(pane, colour):
     x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split())
     points = ((x - 1, y - 2), (x + w, y - 2), (x - 1, y + h),
-              (x + w, y + h), (x - 1, y - 1), (x + w, y + h // 2))
+              (x + w, y + h), (x - 1, y - 1), (x + w, y + h // 2),
+              (x - 2, y - 3), (x + w + 1, y - 3), (x - 2, y + h + 1),
+              (x + w + 1, y + h + 1), (x + w // 2, y - 3), (x - 2, y + h // 2))
     return all(background_at(col, row) == colour for col, row in points)
 
 
@@ -139,9 +141,9 @@ def pane_outline(pane, kind=None):
                for glyphs in ([styles[kind]] if kind else styles.values()))
 
 
-def pane_outline_color(pane, foreground=True):
+def pane_title_color(pane, foreground=True):
     x, y = map(int, value('#{pane_left} #{pane_top}', pane).split())
-    return color_at(x - 2, y - 3, foreground=foreground)
+    return color_at(x - 1, y - 2, foreground=foreground)
 
 
 def snapshot(name):
@@ -188,15 +190,11 @@ try:
     inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
     assert active_bg != inactive_bg
     assert active_bg == '#000000' and inactive_bg == '#404040'
-    wait(lambda: pane_outline(first, 'thin') and pane_outline(second, 'thin') and pane_outline(third, 'thin'), 'separate thin outlines')
+    wait(lambda: not any(pane_outline(p) for p in (first, second, third)), 'pane backgrounds without outlines')
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
     assert background_at(149, 0) == '#202020', 'dark backdrop surrounds the pane cards'
-    wait(lambda: pane_edge_background(first, active_bg), 'focused background fills the area inside its outline')
-    assert background_at(49, 20) == background_at(99, 20) == '#202020', 'dark gaps separate independent outlines'
-    assert pane_outline_color(first) == '#e2e6eb'
-    assert pane_outline_color(second) == '#646464'
-    assert pane_outline_color(first, foreground=False) == active_bg
-    assert pane_outline_color(second, foreground=False) == inactive_bg
+    wait(lambda: pane_edge_background(first, active_bg), 'focused background fills through the pane edges')
+    assert background_at(49, 20) == background_at(99, 20) == '#202020', 'dark gaps separate pane backgrounds'
     assert pane_edge_background(second, inactive_bg)
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
@@ -228,21 +226,39 @@ try:
     assert location in value(default_status), (location, value(default_status))
     wait(lambda: location in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'bottom right shows the focused machine and folder')
     hn('set', '-g', 'status-right', custom_status)
+    default_left = hn('show', '-gv', 'status-left')
+    session = value('#{session_name}')
+    machine = value('#{pane_machine}')
+    hn('rename-session', machine)
+    assert value(default_left) == '', 'focused machine should not repeat on the left'
+    wait(lambda: not tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith('[' + machine + ']'), 'redundant machine label disappears')
+    keys('C-b')
+    wait(lambda: '›' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'prefix cue survives hidden session label')
+    keys('Escape')
+    hn('rename-session', 'work-review')
+    assert value(default_left).strip() == '[work-review]', 'distinct session labels remain visible'
+    hn('set', '-g', 'status-left', '[custom] ')
+    assert value(hn('show', '-gv', 'status-left')).strip() == '[custom]'
+    hn('set', '-gu', 'status-left')
+    hn('rename-session', session)
     for option in ('window-status-activity-style', 'window-status-bell-style'):
         assert hn('show', '-gwv', option) == 'bold'
     assert 'reverse' not in hn('show', '-gv', 'status-format[1]')
     wait(lambda: 'Claude 100%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'plain quota warning reaches the status row')
     hn('set', '-gw', 'pane-border-lines', 'double')
-    wait(lambda: pane_outline(first, 'double') and pane_outline(second, 'double'), 'explicit border line choice overrides thin default')
+    wait(lambda: not pane_outline(first) and not pane_outline(second), 'border line options do not draw outlines in pane appearance')
+    hn('set', '-g', '@hn-look', 'classic')
+    wait(lambda: '║' in tmux('capture-pane', '-p', '-t', 'test'), 'classic appearance keeps explicit border lines')
+    hn('set', '-g', '@hn-look', 'panes')
     hn('set', '-gwu', 'pane-border-lines')
     hn('set', '-w', 'pane-active-border-style', 'fg=#aabbcc,bg=#123456')
     hn('set', '-w', 'pane-border-style', 'fg=#778899,bg=#654321')
-    wait(lambda: pane_outline_color(first) == '#aabbcc' and pane_outline_color(second) == '#778899', 'window border colors override the palette')
-    assert pane_outline_color(first, foreground=False) == '#123456'
-    assert pane_outline_color(second, foreground=False) == '#654321'
+    wait(lambda: pane_title_color(first) == '#aabbcc' and pane_title_color(second) == '#778899', 'window border styles still customize pane titles')
+    assert pane_title_color(first, foreground=False) == '#123456'
+    assert pane_title_color(second, foreground=False) == '#654321'
     hn('set', '-wu', 'pane-active-border-style')
     hn('set', '-wu', 'pane-border-style')
-    wait(lambda: pane_outline(first, 'thin') and pane_outline(second, 'thin') and pane_outline_color(first) == '#e2e6eb', 'automatic border appearance restored')
+    wait(lambda: not pane_outline(first) and not pane_outline(second) and pane_edge_background(first, active_bg), 'borderless pane appearance restored')
     snapshot('panes-columns')
     print('PASS pane UI: whole-pane focus contrast, name before status, compact quota and location', flush=True)
 
@@ -262,8 +278,8 @@ try:
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == second, 'C-b Right with insets')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'keyboard focus moves pane contrast')
-    wait(lambda: pane_outline(second, 'thin') and pane_outline(first, 'thin') and pane_outline_color(second) == '#e2e6eb' and pane_outline_color(first) == '#646464', 'keyboard focus moves border brightness without stale borders')
-    wait(lambda: pane_edge_background(second, active_bg) and pane_outline_color(second, foreground=False) == active_bg and pane_outline_color(first, foreground=False) == inactive_bg, 'focused fill reaches the border after keyboard selection')
+    wait(lambda: not pane_outline(second) and not pane_outline(first), 'keyboard focus leaves no outlines')
+    wait(lambda: pane_edge_background(second, active_bg) and pane_edge_background(first, inactive_bg), 'background focus reaches all pane edges after keyboard selection')
     keys('C-b', 'Right')
     wait(lambda: value('#{pane_id}') == third, 'second C-b Right')
     keys('C-b', 'Right')
@@ -307,7 +323,7 @@ try:
     mouse(0, second_x, second_y - 2, release=True)
     wait(lambda: value('#{pane_id}') == second, 'click the pane header')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'mouse focus moves pane contrast')
-    wait(lambda: pane_outline(second, 'thin') and pane_outline(first, 'thin') and pane_outline_color(second) == '#e2e6eb' and pane_outline_color(first) == '#646464', 'mouse focus moves border brightness')
+    wait(lambda: not pane_outline(second) and not pane_outline(first), 'mouse focus leaves no outlines')
     assert len(api()['inputs']) == before, api()['inputs'][before:]
     mouse(0, border, 10)
     mouse(32, border + 3, 10)
@@ -385,7 +401,7 @@ try:
     background('#f7f7f7')
     wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
     wait(lambda: pane_background(first) == '#f7f7f7' and pane_background(second) == '#e5e5e5', 'light focus contrast')
-    wait(lambda: pane_edge_background(first, '#f7f7f7') and pane_outline_color(first, foreground=False) == '#f7f7f7', 'light surface fills the focused pane through its border')
+    wait(lambda: pane_edge_background(first, '#f7f7f7') and pane_title_color(first, foreground=False) == '#f7f7f7', 'light surface fills the focused pane through its padding')
     light_status = hn('show', '-gv', 'status-style')
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
@@ -395,7 +411,7 @@ try:
     assert hn('show', '-gwv', 'window-style') == 'fg=red,bg=blue'
     assert hn('show', '-gwv', 'window-active-style') == 'default'
     wait(lambda: pane_background(first) == 'colour4' and pane_background(second) == 'colour4', 'custom backgrounds win on active and inactive panes')
-    wait(lambda: pane_edge_background(first, 'colour4') and pane_outline_color(first, foreground=False) == 'colour4', 'custom pane background fills the focused pane through its border')
+    wait(lambda: pane_edge_background(first, 'colour4') and pane_title_color(first, foreground=False) == 'colour4', 'custom pane background fills the focused pane through its padding')
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
     assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
@@ -420,7 +436,7 @@ try:
     snapshot('panes-single')
     hn('kill-window')
     wait(lambda: value('#{window_id}') == current, 'return from single-pane window')
-    print('PASS pane UI: independent pane cards, right-aligned context and single-pane presentation', flush=True)
+    print('PASS pane UI: borderless pane surfaces, right-aligned context and single-pane presentation', flush=True)
 finally:
     if started:
         if OUTPUT:

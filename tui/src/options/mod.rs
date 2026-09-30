@@ -94,8 +94,9 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // where there is room. Git context stays here; the status bar keeps the location cue.
         m.insert("pane-border-format".into(), " #{pane_heading}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
         // Session and window navigation on the left; connection, quota, fleet, location and
-        // clock on the right. A leading space keeps a full window list from running into it.
-        m.insert("status-left".into(), "#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} ".into());
+        // clock on the right. Hide a session label that repeats the focused machine.
+        // A leading space keeps a full window list from running into the right side.
+        m.insert("status-left".into(), "#{?#{==:#{session_name},#{?pane_machine,#{pane_machine},#{host_short}}},#{?client_prefix,#[bold]›#[nobold] ,},#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} }".into());
         m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_high,#{usage_high_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?pane_machine,#{=/12/…:pane_machine},#{host_short}}#{?pane_current_path,:#{=/18/…:#{b:pane_current_path}},#{?pane_project,:#{=/18/…:pane_project},}}  %H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
@@ -665,7 +666,7 @@ mod tests {
         for name in defaults().keys() { assert!(find(name).is_some(), "{name}") }
         // tmux's own default, in the fixture; hn's status-left adds emphasis and a prefix cue.
         assert!(include_str!("../../tests/fixtures/tmux-3.5a-options.txt").contains("session status-left \"[#{session_name}] \""));
-        assert_eq!(defaults().get("status-left").map(String::as_str), Some("#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} "));
+        assert_eq!(defaults().get("status-left").map(String::as_str), Some("#{?#{==:#{session_name},#{?pane_machine,#{pane_machine},#{host_short}}},#{?client_prefix,#[bold]›#[nobold] ,},#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} }"));
         assert_eq!(defaults().get("status-interval").map(String::as_str), Some("15"));
     }
 

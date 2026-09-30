@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use crate::layout::Status;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect>, pub outline: Option<Rect> }
+pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect> }
 
 pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
     let mut outer = tile;
@@ -20,23 +20,24 @@ pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
         if tile.y == canvas.y || status == Status::Top { outer.y += 1; outer.height -= 1; }
         if tile.bottom() == canvas.bottom() || status == Status::Bottom { outer.height = outer.height.saturating_sub(1); }
     }
-    // Each normal-sized tile owns its outline; the layout's divider remains a gap.
-    // A lone or zoomed pane, and compact panes, keep their content space instead.
-    let outline = (tile != canvas && tile.width >= 12 && canvas.width >= 40
-        && tile.height >= 8 && canvas.height >= 12).then_some(outer);
-    let surface = if outline.is_some() {
-        Rect::new(outer.x + 1, outer.y + 1, outer.width - 2, outer.height - 2)
-    } else { outer };
-    let title = (surface.height > 1 && status != Status::Off).then(|| Rect::new(surface.x,
-        if status == Status::Bottom { surface.bottom() - 1 } else { surface.y }, surface.width, 1));
-    let mut content = surface;
+    // Fill the entire pane. The former outline cells are now blank padding, keeping
+    // title/content coordinates stable while focus is shown by the background alone.
+    let surface = outer;
+    let roomy = tile != canvas && tile.width >= 12 && canvas.width >= 40
+        && tile.height >= 8 && canvas.height >= 12;
+    let inner = if roomy {
+        Rect::new(surface.x + 1, surface.y + 1, surface.width - 2, surface.height - 2)
+    } else { surface };
+    let title = (inner.height > 1 && status != Status::Off).then(|| Rect::new(inner.x,
+        if status == Status::Bottom { inner.bottom() - 1 } else { inner.y }, inner.width, 1));
+    let mut content = inner;
     if title.is_some() {
         if status == Status::Top { content.y += 1; }
         content.height -= 1;
     }
     if content.width >= 12 { content.x += 1; content.width -= 2; }
     if content.height >= 10 { content.y += 1; content.height -= 2; }
-    Frame { surface, content, title, outline }
+    Frame { surface, content, title }
 }
 
 #[cfg(test)]
@@ -53,11 +54,7 @@ mod tests {
             assert_eq!(f.content.intersection(f.surface), f.content);
             assert!(f.content.width > 0 && f.content.height > 0);
             if let Some(title) = f.title { assert_eq!(title.intersection(f.content).height, 0); }
-            if let Some(outline) = f.outline {
-                assert_eq!(outline.intersection(tile), outline);
-                assert!(outline.x < f.surface.x && outline.y < f.surface.y);
-                assert!(outline.right() > f.surface.right() && outline.bottom() > f.surface.bottom());
-            }
+
         } } }
     }
 
@@ -66,19 +63,17 @@ mod tests {
         let canvas = Rect::new(0, 0, 120, 40);
         let left = frame(Rect::new(0, 0, 59, 40), canvas, Status::Top);
         let right = frame(Rect::new(60, 0, 60, 40), canvas, Status::Top);
-        assert_eq!(right.outline.unwrap().x - left.outline.unwrap().right(), 1);
-        assert_eq!(left.outline.unwrap().intersection(right.outline.unwrap()).width, 0);
-        assert_eq!(left.outline.unwrap().intersection(right.surface).width, 0);
-        assert_eq!(right.outline.unwrap().intersection(left.surface).width, 0);
+        assert_eq!(right.surface.x - left.surface.right(), 1);
+        assert_eq!(left.surface.intersection(right.surface).width, 0);
         let top = frame(Rect::new(0, 0, 120, 20), canvas, Status::Top);
         let bottom = frame(Rect::new(0, 20, 120, 20), canvas, Status::Top);
-        assert_eq!(bottom.outline.unwrap().y - top.outline.unwrap().bottom(), 1);
-        assert_eq!(top.outline.unwrap().intersection(bottom.outline.unwrap()).height, 0);
-        assert_eq!(top.outline.unwrap().intersection(bottom.surface).height, 0);
-        assert_eq!(bottom.outline.unwrap().intersection(top.surface).height, 0);
+        assert_eq!(bottom.surface.y - top.surface.bottom(), 1);
+        assert_eq!(top.surface.intersection(bottom.surface).height, 0);
         assert!(top.content.y > top.title.unwrap().y);
-        assert!(frame(canvas, canvas, Status::Top).outline.is_none());
-        // Short inner tiles share a title row without the normal outer gutter.
-        assert!(frame(Rect::new(20, 20, 40, 5), canvas, Status::Top).outline.is_none());
+        let single = frame(canvas, canvas, Status::Top);
+        assert_eq!(single.title.unwrap().y, single.surface.y);
+        // Compact and single panes give the extra padding back to their content.
+        let compact = frame(Rect::new(20, 20, 40, 5), canvas, Status::Top);
+        assert_eq!(compact.title.unwrap().y, compact.surface.y);
     }
 }

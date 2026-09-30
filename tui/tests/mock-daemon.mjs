@@ -265,6 +265,7 @@ const server = http.createServer((req, res) => {
         if (op.op === 'tab.rename') { const t = tab(op.id); if (t) { t.name = op.name; t.nameIsCustom = !!op.nameIsCustom } }
         if (op.op === 'tab.layout') { const t = tab(op.id); if (t) t.layout = op.layout }
         if (op.op === 'pane.add') { const t = tab(op.tabId); if (t && !t.panes.some((p) => p.agentId === op.agentId)) t.panes.splice(Math.min(op.index ?? t.panes.length, t.panes.length), 0, { machineId: op.machineId, agentId: op.agentId }) }
+        if (op.op === 'pane.move') { const t = tab(op.tabId); const at = t?.panes.findIndex((p) => p.machineId === op.machineId && p.agentId === op.agentId) ?? -1; if (at >= 0) { const [p] = t.panes.splice(at, 1); t.panes.splice(Math.max(0, Math.min(op.index, t.panes.length)), 0, p) } }
         if (op.op === 'pane.remove') { const t = tab(op.tabId); if (t) t.panes = t.panes.filter((p) => p.agentId !== op.agentId) }
       }
       desk.revision++

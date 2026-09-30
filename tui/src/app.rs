@@ -318,6 +318,8 @@ pub struct Tab {
     pub layout: Value,
     /// Last layout observed on the desk, separate from the local edit awaiting its reply.
     pub desk_layout: Value,
+    /// Last pane sequence received from the desk, independent of local tmux numbering.
+    desk_panes: Vec<(String, String)>,
     /// A named choice awaiting publication, separate from the last observed desk document.
     desk_preset: Option<(usize, &'static str)>,
 }
@@ -331,7 +333,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_preset: None }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None }
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -4500,6 +4502,7 @@ impl App {
     /// The desk windows whose layout changed here: their tmux layout to the desk (tab.layout).
     pub fn send_desk_layouts(&mut self) {
         if self.desk_layouts.is_empty() || !self.session_desk { return }
+        let mut ops = Vec::new();
         for id in std::mem::take(&mut self.desk_layouts) {
             let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else { continue };
             let Some(root) = tab.root.as_ref() else { continue };
@@ -4512,10 +4515,19 @@ impl App {
                 if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
                 tab.layout["presets"][count.to_string()] = json!(preset);
             }
-            if tab.layout == before { continue }
-            let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
-            self.desk_op(op);
+            if tab.layout != before { ops.push(json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout })); }
+            // Desktop uses the shared list in screen order, not our stable pane numbers.
+            // Publish both together, including swaps, rotations and mirrored layouts.
+            let panes: Vec<_> = desk_pane_ids(root).iter().filter_map(|id| self.panes.get(id))
+                .filter(|p| !crate::local::is_local(&p.machine_id))
+                .map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
+            if panes != tab.desk_panes {
+                for (index, (machine, agent)) in panes.iter().enumerate() {
+                    ops.push(json!({ "op": "pane.move", "tabId": tab.id, "machineId": machine, "agentId": agent, "index": index }));
+                }
+            }
         }
+        self.desk_ops(ops);
     }
 
     /// window_pane_update_focus: [pane] is focused when it is the current window's active pane,
@@ -4963,6 +4975,7 @@ impl App {
         tab.zoomed &= keep_zoom;
         self.sync_titles();
         self.fit_panes();
+        self.layout_changed(w);
     }
 
     /// next-layout / previous-layout (layout_set_next/previous): tmux's seven named layouts in its
@@ -5077,30 +5090,43 @@ impl App {
                         && desk_layout_changed(&tab.layout, &layout_doc, panes.len())
                         && acknowledged.get(&id) != Some(&layout_doc)
                         && !self.desk_layouts.contains(&id);
+                    let reordered = tab.desk_panes != panes && !self.desk_layouts.contains(&id);
+                    tab.desk_panes = panes.clone();
                     tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
-                    if relayout && missing_is_empty(&tab.panes(), &panes, &self.panes) {
-                        let ids = tab.panes();
-                        let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                        tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
+                    let missing = panes.iter().any(|want| !have.iter().any(|(_, key)| key == want));
+                    let extra: Vec<u64> = have.iter().filter(|(_, key)| !panes.contains(key)).map(|(pid, _)| *pid).collect();
+                    if !missing && extra.is_empty() {
+                        let ids: Vec<u64> = panes.iter().filter_map(|key| have.iter().find(|(_, k)| k == key).map(|(id, _)| *id)).collect();
+                        if relayout {
+                            let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
+                            tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                            if reordered { tab.order = ids; }
+                        } else if reordered {
+                            // A desktop drag changes only the sequence. Keep our exact
+                            // split sizes and the focused harness while changing places.
+                            if let Some(root) = &mut tab.root {
+                                if desk_pane_ids(root) != ids { desk_reorder(root, &ids); tab.order = ids; }
+                            }
+                        }
                         continue;
                     }
-                    let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
-                    let missing: Vec<&(String, String)> = panes.iter().filter(|want| !have.iter().any(|(_, k)| k == *want)).collect();
-                    let extra: Vec<u64> = have.iter().filter(|(_, k)| !panes.contains(k)).map(|(pid, _)| *pid).collect();
-                    if missing.is_empty() && extra.is_empty() { continue }
                     for pid in &extra {
                         let tab = &mut self.tabs[index];
                         tab.root = tab.root.take().and_then(|r| r.remove(*pid));
                         self.drop_pane(*pid);
                     }
-                    let mut new_ids = Vec::new();
-                    for (m, a) in missing { new_ids.push(self.new_pane_as(m, a, Some(crate::ids::desk(crate::ids::Kind::Pane, &format!("{m}:{a}"))))) }
+                    // Insertions belong at their shared index, including before an existing
+                    // pane. Never append all new panes after the old local sequence.
+                    let ids: Vec<u64> = panes.iter().map(|(m, a)| {
+                        have.iter().find(|(_, key)| &key.0 == m && &key.1 == a).map(|(id, _)| *id)
+                            .unwrap_or_else(|| self.new_pane_as(m, a, Some(crate::ids::desk(crate::ids::Kind::Pane, &format!("{m}:{a}")))))
+                    }).collect();
                     let tab = &mut self.tabs[index];
-                    let mut ids = tab.panes();
-                    ids.extend(new_ids.iter().copied());
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
                     tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.order = ids.clone();
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
                 // The same window another session has (link-window, a group), already read: that
@@ -5109,6 +5135,14 @@ impl App {
                     let Some(mut tab) = self.sessions.iter().flat_map(|s| s.tabs.iter()).find(|t| t.id == id && t.root.is_some()).cloned() else { continue };
                     tab.alerts = 0;
                     tab.on_desk = true;
+                    let have = tab.panes();
+                    let ids: Vec<_> = panes.iter().filter_map(|(m, a)| have.iter().copied().find(|id|
+                        self.panes.get(id).is_some_and(|p| &p.machine_id == m && &p.agent_id == a))).collect();
+                    if ids.len() == have.len() && ids.len() == panes.len() {
+                        if let Some(root) = &mut tab.root { desk_reorder(root, &ids); }
+                        tab.order = ids;
+                    }
+                    tab.desk_panes = panes.clone();
                     tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
                     if named { tab.name = name; tab.named = true }
@@ -5123,10 +5157,12 @@ impl App {
                     tab.id = id;
                     tab.named = named;
                     tab.on_desk = true;
+                    tab.desk_panes = panes.clone();
                     tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
                     tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.order = ids.clone();
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -5528,8 +5564,28 @@ pub const DESK_MAIN: (&str, &str) = ("50%", "50%");
 /// A desk tab's panes laid out: as another terminal left them (its tmux layout, fitted to this
 /// one's size), else its preset for that many panes.
 fn desk_root(doc: &Value, preset: Preset, ids: &[u64], w: u16, h: u16) -> Option<Node> {
-    doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
-        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))
+    let mut root = doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
+        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))?;
+    // Numeric pane IDs belong to one hn server. The desk's ordered identities are
+    // authoritative even if a saved native layout has stale or coincidentally matching IDs.
+    desk_reorder(&mut root, ids);
+    Some(root)
+}
+
+/// Desktop numbers its tiles across the top, then down; tmux tree traversal and
+/// pane numbering can differ (a mirrored layout, or columns containing stacks).
+fn desk_pane_ids(root: &Node) -> Vec<u64> {
+    let (w, h) = root.size();
+    let mut rects = Vec::new();
+    root.rects(Rect::new(0, 0, w, h), &mut rects);
+    rects.sort_by_key(|(_, r)| (r.y, r.x));
+    rects.into_iter().map(|(id, _)| id).collect()
+}
+
+fn desk_reorder(root: &mut Node, ids: &[u64]) {
+    let before = desk_pane_ids(root);
+    if before.len() != ids.len() { return }
+    root.relabel(&mut |old| before.iter().position(|p| *p == old).map(|i| ids[i]).unwrap_or(old));
 }
 
 fn preset_from_desk(id: &str, count: usize) -> Preset {
@@ -5576,11 +5632,6 @@ fn named_to_desk(named: layout::Named, count: usize) -> Option<&'static str> {
         (9, Tiled) => "balanced3",
         _ => return None,
     })
-}
-
-/// Whether a tab already shows exactly the desk's panes (only the layout changed).
-fn missing_is_empty(have: &[u64], want: &[(String, String)], panes: &HashMap<u64, Pane>) -> bool {
-    have.len() == want.len() && have.iter().all(|id| panes.get(id).map(|p| want.contains(&(p.machine_id.clone(), p.agent_id.clone()))).unwrap_or(false))
 }
 
 /// split-window's: where the new pane goes — beside a pane of a window (-t), before it (-b), across
@@ -5755,6 +5806,7 @@ mod desk_layout_tests {
         tab.on_desk = true;
         tab.layout = json!({"presets":{"3":"columns"}});
         tab.desk_layout = tab.layout.clone();
+        tab.desk_panes = (1..=3).map(|id| ("layout-peer".into(), format!("agent-{id}"))).collect();
         tab.root = layout::arrange(layout::Named::MainHorizontal, &[1, 2, 3], 120, 35, layout::Status::Top, ("80", "12"), ("0", "0"));
         tab.focus = Some(1);
         for id in 1..=3 {
@@ -5773,6 +5825,78 @@ mod desk_layout_tests {
     }
 
     fn geometry(app: &App) -> String { app.tabs[0].root.as_ref().unwrap().to_tmux() }
+
+    #[test]
+    fn remote_pane_reorder_keeps_dividers_and_focused_identity() {
+        let mut app = fixture();
+        app.tabs[0].order = vec![1, 2, 3];
+        app.tabs[0].focus = Some(2);
+        let mut expected = app.tabs[0].root.clone().unwrap();
+        expected.relabel(&mut |id| match id { 1 => 3, 2 => 1, 3 => 2, _ => id });
+        let mut update = desk(2, app.tabs[0].layout.clone());
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), expected.to_tmux());
+        assert_eq!(app.tabs[0].panes(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].focus, Some(2));
+        assert_eq!(app.panes.len(), 3);
+        assert!(app.panes.values().all(|p| matches!(p.phase, Phase::Live)));
+        update["revision"] = json!(3);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), expected.to_tmux());
+    }
+
+    #[test]
+    fn remote_order_and_layout_change_apply_together() {
+        let mut app = fixture();
+        let mut update = desk(2, json!({"presets":{"3":"rows"}}));
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(app.tabs[0].root.as_ref().unwrap().leaves(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].panes(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].focus, Some(1));
+    }
+
+    #[test]
+    fn saved_native_layout_uses_desk_order_instead_of_old_pane_numbers() {
+        let native = layout::arrange(layout::Named::EvenHorizontal, &[29, 31, 13], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        let root = desk_root(&json!({"tmux": native.to_tmux()}), Preset::Columns,
+            &[31, 13, 29], 120, 35).unwrap();
+        assert_eq!(root.leaves(), vec![31, 13, 29]);
+    }
+
+    #[test]
+    fn queued_local_rotation_survives_an_older_desk_snapshot() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read;
+        app.tabs[0].order = vec![1, 2, 3];
+        app.rotate(0, 1, false);
+        let chosen = geometry(&app);
+        let mut update = desk(2, app.tabs[0].layout.clone());
+        update["tabs"][0]["panes"].as_array_mut().unwrap().swap(0, 1);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        app.send_desk_layouts();
+        assert_eq!(geometry(&app), chosen);
+        // Once observed, the same snapshot is metadata, not a fresh reorder.
+        update["revision"] = json!(3);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        update["revision"] = json!(4);
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn shared_pane_sequence_is_spatial_not_tree_or_tmux_number_order() {
+        let mut root = layout::arrange(layout::Named::MainVerticalMirrored, &[1, 2, 3], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        assert_eq!(desk_pane_ids(&root), vec![2, 1, 3]);
+        desk_reorder(&mut root, &[3, 1, 2]);
+        assert_eq!(desk_pane_ids(&root), vec![3, 1, 2]);
+    }
 
     #[test]
     fn unchanged_remote_layout_does_not_undo_an_unsaved_local_edit() {

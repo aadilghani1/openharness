@@ -282,7 +282,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
 }
 
-/// Integrated titles and thin outlines: bright for focus, muted otherwise.
+/// Integrated titles on borderless pane surfaces. Background contrast identifies focus.
 /// Program cells retain their ANSI colours; moving focus changes no content dimensions or mouse coordinates.
 fn pane_chrome(buf: &mut Buffer, app: &App) {
     let canvas = app.window_area(app.tab());
@@ -297,20 +297,6 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let pane_bg = if active { a.bg.or(w.bg) } else { w.bg };
         let bg = if own(style_name) { style.bg.or(pane_bg) } else { pane_bg };
         let style = style.bg(bg.unwrap_or(Color::Reset));
-        if let Some(outline) = f.outline.filter(|_| app.rects.len() > 1) {
-            let lines = app.options.get("pane-border-lines", &app.tab().id, Some(*id)).unwrap_or_default();
-            let (tl, tr, bl, br, hz, vt, _, _) = box_set(&lines);
-            // Border glyphs share the pane's fill: a canvas-colored border cell would
-            // leave a visible half-cell gap between the outline and its interior.
-            let put = |buf: &mut Buffer, x, y, glyph| {
-                if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(glyph).set_style(style); }
-            };
-            let (right, bottom) = (outline.right() - 1, outline.bottom() - 1);
-            for x in outline.x + 1..right { put(buf, x, outline.y, hz); put(buf, x, bottom, hz); }
-            for y in outline.y + 1..bottom { put(buf, outline.x, y, vt); put(buf, right, y, vt); }
-            put(buf, outline.x, outline.y, tl); put(buf, right, outline.y, tr);
-            put(buf, outline.x, bottom, bl); put(buf, right, bottom, br);
-        }
         let Some(title) = f.title else { continue };
         let style = if own(style_name) { style } else {
             let palette = theme::pane_palette();
