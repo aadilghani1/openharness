@@ -3,6 +3,8 @@ import { join } from "path";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
+import { ensureTmuxOnPath, tmuxInstallDirectories } from "../lib/tmuxOnPath.js";
+import { TmuxBackend } from "../lib/tmuxBackend.js";
 
 // vitest runs from cli/, so this is cli/scripts/install.sh — the file published to the CDN.
 const installer = join(process.cwd(), "scripts", "install.sh");
@@ -284,6 +286,49 @@ describe("scripts/install.sh command contract", () => {
       expect(result.stdout).not.toContain("managed");
       expect(() => readFileSync(fetched, "utf8")).toThrow();
     } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("finds Homebrew tmux after the installer exits and creates the first harness pane", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-daemon-"));
+    const home = join(scratch, "home");
+    const prefix = join(scratch, "homebrew");
+    const bin = join(prefix, "bin");
+    const originalPath = process.env.PATH;
+    mkdirSync(home);
+    mkdirSync(bin, { recursive: true });
+    try {
+      writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+      writeCommand(bin, "brew", [
+        `if [ "$1" = shellenv ]; then printf 'export PATH="${bin}:$PATH"\\n'; fi`,
+        "exit 0",
+      ]);
+      writeCommand(bin, "tmux", [
+        'case "$1" in -V) printf "tmux 3.7c\\n" ;; new-session) printf "%%0\\n" ;; esac',
+      ]);
+      const daemonEnv = { HOME: home, PATH: scratch, HARNESS_HOMEBREW_PREFIXES: prefix };
+      const installed = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8", env: { ...daemonEnv, INSTALL_MODE: "standalone" },
+      });
+      expect(installed.status, installed.stderr).toBe(0);
+      expect(installed.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(home, ".harness/runtime/current-tmux"))).toBe(false);
+
+      // A child cannot export PATH back into its parent. Start the daemon with
+      // the original environment, as hn does in a fresh macOS user account.
+      process.env.PATH = daemonEnv.PATH;
+      expect(await new TmuxBackend().create({ label: "harness-first" })).toMatchObject({
+        state: "failed", reason: "tmux is unavailable",
+      });
+      expect(await ensureTmuxOnPath(daemonEnv, "/nonexistent/shell", join(home, ".harness/runtime"),
+        tmuxInstallDirectories(daemonEnv, "darwin"))).toMatchObject({ state: "adopted" });
+      process.env.PATH = daemonEnv.PATH;
+      expect(await new TmuxBackend().create({ label: "harness-first" })).toMatchObject({
+        state: "succeeded", runtime: { backend: "tmux", paneId: "%0" },
+      });
+    } finally {
+      process.env.PATH = originalPath;
       rmSync(scratch, { recursive: true, force: true });
     }
   });

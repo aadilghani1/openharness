@@ -1517,7 +1517,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error(`[tmux] unavailable: ${tmuxPath.reason} · install tmux and verify \`tmux -V\`,`
         + ' then restart — agents cannot be created or restored until then')
     } else if (tmuxPath.state === 'adopted') {
-      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.from} from the user's login shell`)
+      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.path} · ${tmuxPath.from}`)
     }
   }
   // The desktop's pane colours, for tmux's `window-style` (lib/hostTheme.ts): the last ones the app
