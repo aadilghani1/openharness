@@ -4540,6 +4540,9 @@ class AppNotifier extends ChangeNotifier {
     AttachIntent intent = AttachIntent.person,
   }) async {
     final person = intent == AttachIntent.person;
+    // ⚠️ **A person arriving does not wait out a reconnect backoff — see [_redialNow].** First,
+    // before anything below can return early on a machine that is not up.
+    if (person) _redialNow(machineId);
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
       selectedMachineId = machineId;
@@ -4590,6 +4593,29 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     await addAgentToSwarm(machineId, agentId, takeControl: person);
+  }
+
+  /// Dial [machineId] now if its socket is down and sitting out a reconnect backoff — somebody has
+  /// just arrived on one of its agents ([selectAgent]).
+  ///
+  /// ⚠️ **Why (owner, 2026-09-30).** A socket that fails several dials in a row waits longer before
+  /// each next one — 1, 2, 4, 8, 16, then 30 seconds (`WsConn._scheduleReconnect`) — and the only
+  /// thing that cut that short was the app coming back to the foreground ([handleAppResumed]).
+  /// Picking an agent in Find, swiping onto one, or tapping its terminal all waited it out: the
+  /// terminal sat on "Reconnecting…" for up to half a minute, for a machine that would have
+  /// answered the moment anything dialled it. A person looking at the agent is exactly who that
+  /// backoff was never meant to keep waiting.
+  ///
+  /// [WsConn.reconnectNow] decides whether there is anything to do — nothing for a socket that is
+  /// open or already dialling, nothing for one closed on purpose — so a healthy machine costs
+  /// nothing, and one that is still down costs one dial per arrival, which a person sets the pace
+  /// of. The connection is only ever the one the app already holds: building one here would dial
+  /// a machine the launch deliberately left alone (see [_autoConnectAndLoadMachines]).
+  ///
+  /// Not for a machine waiting on its link: that one comes back with a password, not a redial.
+  void _redialNow(String machineId) {
+    if (machineStates[machineId]?.needsLink == true) return;
+    _pool?[machineId]?.reconnectNow();
   }
 
   /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
