@@ -90,4 +90,37 @@ describe('the collection DSH supplies its intelligence', () => {
     expect(await result).toBeNull()
     expect(w.run.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
   })
+
+  it('binds extraction to the selected runtime and rejects a changed observed account', async () => {
+    const w = world()
+    w.set({ ...w.get(), accountKey: 'first-account' })
+    const before = w.brain.status().contextKey
+    let finish!: (result: { text: string }) => void
+    w.run.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const pending = w.brain.extract('coding evidence only', { timeoutMs: 1000, signal: new AbortController().signal })
+    await vi.waitFor(() => expect(w.run).toHaveBeenCalledWith('claude', expect.objectContaining({ prompt: 'coding evidence only', model: 'opus', effort: 'high' })))
+    w.set({ ...w.get(), accountKey: 'second-account' })
+    expect(w.brain.status().contextKey).not.toBe(before)
+    finish({ text: 'result from the previous account' })
+    expect(await pending).toBeNull()
+  })
+
+  it('rechecks native account metadata after extraction, including a new login at the same path', async () => {
+    const w = world()
+    let account: string | null = 'native-account-1'
+    const brain = new CompanionIntelligence({ ...w.deps, accountIdentity: async () => account })
+    const before = (await brain.extractionStatus()).contextKey
+    let finish!: (result: { text: string }) => void
+    w.run.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const pending = brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal })
+    await vi.waitFor(() => expect(w.run).toHaveBeenCalledOnce())
+    account = 'native-account-2'
+    expect((await brain.extractionStatus()).contextKey).not.toBe(before)
+    finish({ text: 'answer from old account' })
+    expect(await pending).toBeNull()
+    account = null
+    expect((await brain.extractionStatus()).state).toBe('waiting')
+    expect(await brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal })).toBeNull()
+    expect(w.run).toHaveBeenCalledOnce()
+  })
 })

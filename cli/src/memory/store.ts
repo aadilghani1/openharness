@@ -1,0 +1,701 @@
+/**
+ * Profile-owned SQLite core. The daemon integration supplies authenticated scope and runs this
+ * synchronous store outside its latency-sensitive thread. No provider calls or command execution.
+ */
+import { randomUUID } from 'node:crypto'
+import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
+import { builtinSqlite } from '../lib/sqliteRead.js'
+import { redact } from '../pair/learn/guard.js'
+import { admission, assertSafe, canonical, digest, proposalFingerprint } from './admission.js'
+import type { ProjectLocator } from './project.js'
+import type { Database } from './database.js'
+import { MemoryQueue, QUEUE_SCHEMA } from './queue.js'
+import {
+  canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
+  type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
+  type RecallItem, type RecallPacket, type RecallRequest, type SourceEvent, type TopicDraft, type TopicPage,
+} from './types.js'
+
+type Constructor = new (path: string, options?: Record<string, unknown>) => Database
+interface OpenOptions { directory: string; profileId: string; now?: () => number }
+type OpenResult = { ok: true; store: CodingMemoryStore } | { ok: false; reason: string }
+interface Controls { learn: boolean; recall: boolean; generation: number; captureEpoch: number; learnSince: number | null }
+
+const SCHEMA = 1
+const EMPTY = (status: RecallPacket['status'] = 'ok'): RecallPacket => ({ status, items: [], text: '', estimatedTokens: 0 })
+const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'not', 'to', 'of', 'for', 'in', 'on', 'is', 'it', 'with', 'this', 'that', 'please', 'can', 'you', 'we', 'our', 'my'])
+
+export class CodingMemoryStore {
+  private closed = false
+  private transactionDepth = 0
+  readonly learning: MemoryQueue
+  private constructor(private readonly db: Database, readonly profileId: string, private readonly now: () => number) {
+    this.learning = new MemoryQueue({ db, profileId, now, transaction: operation => this.transaction(operation),
+      controls: () => this.controls(), included: projectId => this.included(projectId),
+      ingest: (event, generation) => this.ingest(event, generation), source: id => this.rawSource(id),
+      propose: (draft, access, generation) => this.propose(draft, access, generation),
+    })
+  }
+
+  static open(options: OpenOptions): OpenResult {
+    let db: Database | undefined
+    try {
+      if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(options.profileId)) return { ok: false, reason: 'invalid_profile' }
+      const Database = builtinSqlite() as unknown as Constructor | null
+      if (!Database) return { ok: false, reason: 'sqlite_unavailable' }
+      mkdirSync(options.directory, { recursive: true, mode: 0o700 })
+      const path = join(options.directory, 'memory.sqlite')
+      if (existsSync(path) && (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink())) return { ok: false, reason: 'invalid_store_path' }
+      db = new Database(path)
+      chmodSync(path, 0o600)
+      db.exec('PRAGMA busy_timeout = 25; PRAGMA foreign_keys = ON;')
+      const meta = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_meta'").get()
+      if (meta) {
+        const owner = db.prepare("SELECT value FROM memory_meta WHERE key = 'profile'").get()?.value
+        const version = db.prepare("SELECT value FROM memory_meta WHERE key = 'schema'").get()?.value
+        if (owner !== options.profileId) throw new MemoryError('profile_mismatch')
+        if (version !== String(SCHEMA)) throw new MemoryError('schema_unsupported')
+      }
+      // No long-lived WAL containing deleted text. Both ordinary pages and FTS segments are scrubbed.
+      db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;')
+      const store = new CodingMemoryStore(db, options.profileId, options.now ?? Date.now)
+      store.transaction(() => {
+        db!.exec(`
+          CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, included INTEGER NOT NULL CHECK(included IN (0,1)));
+          CREATE TABLE IF NOT EXISTS project_locators (
+            locator_key TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id)
+          );
+          CREATE TABLE IF NOT EXISTS sources (
+            id TEXT PRIMARY KEY, native_key TEXT UNIQUE NOT NULL, project_id TEXT, digest TEXT NOT NULL, data TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS memories (
+            rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, revision INTEGER NOT NULL,
+            project_id TEXT, task_id TEXT, branch_id TEXT, scope_key TEXT NOT NULL, conflict_key TEXT NOT NULL,
+            state TEXT NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS memories_scope ON memories(project_id, state);
+          CREATE INDEX IF NOT EXISTS memories_conflicts ON memories(scope_key, conflict_key, state);
+          CREATE INDEX IF NOT EXISTS memories_fingerprint ON memories(fingerprint);
+          CREATE TABLE IF NOT EXISTS revisions (
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(memory_id, revision)
+          );
+          CREATE TABLE IF NOT EXISTS evidence (
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), quote TEXT NOT NULL,
+            PRIMARY KEY(memory_id, revision, source_id, quote)
+          );
+          CREATE INDEX IF NOT EXISTS evidence_source ON evidence(source_id);
+          CREATE TABLE IF NOT EXISTS memory_support (
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL,
+            root_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            quote TEXT NOT NULL, kind TEXT NOT NULL, session_key TEXT NOT NULL, observed_at INTEGER NOT NULL,
+            PRIMARY KEY(memory_id, fingerprint, root_id)
+          );
+          CREATE INDEX IF NOT EXISTS memory_support_source ON memory_support(source_id);
+          CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(claim, rationale, cues, tokenize='unicode61');
+          CREATE TABLE IF NOT EXISTS topics (
+            id TEXT PRIMARY KEY, revision INTEGER NOT NULL, project_id TEXT, scope_key TEXT NOT NULL, data TEXT
+          );
+          CREATE TABLE IF NOT EXISTS topic_dependencies (
+            topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+            PRIMARY KEY(topic_id, memory_id)
+          );
+          CREATE INDEX IF NOT EXISTS topic_parents ON topic_dependencies(memory_id);
+          CREATE TABLE IF NOT EXISTS source_dependencies (
+            source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+            PRIMARY KEY(source_id, memory_id)
+          );
+          CREATE INDEX IF NOT EXISTS source_parents ON source_dependencies(memory_id);
+          CREATE TABLE IF NOT EXISTS suppressed_sources (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS tombstones (id TEXT PRIMARY KEY, last_revision INTEGER NOT NULL, at INTEGER NOT NULL);
+          ${QUEUE_SCHEMA}
+        `)
+        db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('profile', ?)").run(options.profileId)
+        db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('schema', ?)").run(String(SCHEMA))
+        db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('controls', ?)").run(JSON.stringify({ learn: false, recall: false, generation: 0, captureEpoch: 0, learnSince: null }))
+        db!.exec("INSERT INTO memory_fts(memory_fts, rank) VALUES('secure-delete', 1)")
+      })
+      return { ok: true, store }
+    } catch (error) {
+      try { db?.close() } catch { /* Preserve the typed failure; no source text in diagnostics. */ }
+      return { ok: false, reason: error instanceof MemoryError ? error.code : 'store_unavailable' }
+    }
+  }
+
+  close(): void { if (!this.closed) { this.db.close(); this.closed = true } }
+
+  controls(): Controls {
+    return JSON.parse(String(this.db.prepare("SELECT value FROM memory_meta WHERE key = 'controls'").get()!.value)) as Controls
+  }
+
+  /** Trusted integration controls, not model-proposable fields. */
+  setControls(value: { learn: boolean; recall: boolean }): void {
+    if (typeof value.learn !== 'boolean' || typeof value.recall !== 'boolean') throw new MemoryError('invalid_input')
+    this.transaction(() => {
+      const previous = this.controls()
+      if (previous.learn === value.learn && previous.recall === value.recall) return
+      this.db.prepare("UPDATE memory_meta SET value = ? WHERE key = 'controls'")
+        .run(JSON.stringify({ ...value, generation: previous.generation + 1,
+          captureEpoch: previous.captureEpoch + (previous.learn !== value.learn ? 1 : 0),
+          learnSince: value.learn ? previous.learn ? previous.learnSince : this.now() : null }))
+    })
+  }
+
+  registerProject(projectId: string): void {
+    if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(projectId)) throw new MemoryError('invalid_input')
+    this.db.prepare('INSERT OR IGNORE INTO projects(id, included) VALUES(?, 1)').run(projectId)
+  }
+
+  projectForLocator(locator: ProjectLocator): string {
+    const key = this.locatorKey(locator)
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT project_id FROM project_locators WHERE locator_key = ?').get(key)
+      if (existing) return String(existing.project_id)
+      const id = randomUUID()
+      this.registerProject(id)
+      this.db.prepare('INSERT INTO project_locators(locator_key, project_id) VALUES(?, ?)').run(key, id)
+      return id
+    })
+  }
+
+  /** Explicit host-authorized alias for another clone; never inferred from a matching remote. */
+  linkProjectLocator(projectId: string, locator: ProjectLocator): void {
+    const key = this.locatorKey(locator)
+    this.transaction(() => {
+      if (!this.db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new MemoryError('unknown_project')
+      const previous = this.db.prepare('SELECT project_id FROM project_locators WHERE locator_key = ?').get(key)
+      if (previous && previous.project_id !== projectId) throw new MemoryError('project_identity_conflict')
+      this.db.prepare('INSERT OR IGNORE INTO project_locators(locator_key, project_id) VALUES(?, ?)').run(key, projectId)
+    })
+  }
+
+  setProjectIncluded(projectId: string, included: boolean): void {
+    if (typeof included !== 'boolean' || !this.db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new MemoryError('unknown_project')
+    this.transaction(() => {
+      this.db.prepare('UPDATE projects SET included = ? WHERE id = ?').run(included ? 1 : 0, projectId)
+      this.db.prepare('UPDATE topics SET data = NULL WHERE project_id = ?').run(projectId)
+      const controls = this.controls()
+      this.db.prepare("UPDATE memory_meta SET value = ? WHERE key = 'controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
+    })
+  }
+
+  ingest(input: SourceEvent, expectedGeneration = this.controls().generation): { disposition: 'created' | 'duplicate' | 'suppressed' } {
+    return this.ingestSource(input, expectedGeneration)
+  }
+
+  private ingestSource(input: SourceEvent, expectedGeneration: number, userAction = false): { disposition: 'created' | 'duplicate' | 'suppressed' } {
+    const source = parse(sourceSchema, input)
+    if (source.profileId !== this.profileId) throw new MemoryError('profile_mismatch')
+    if (!userAction && !this.controls().learn) throw new MemoryError('learning_off')
+    if (source.eligibility !== 'coding' || !this.included(source.projectId)) throw new MemoryError('source_ineligible')
+    // Native adapters preserve roles. Generated packets may only cite already known source roots.
+    if (source.role !== 'derived' && (source.rootIds.length !== 1 || source.rootIds[0] !== source.id)) throw new MemoryError('invalid_lineage')
+    const { text, ...metadata } = source
+    assertSafe(metadata)
+    const cleaned: SourceEvent = { ...source, text: redact(text) }
+    const key = digest([source.engine, source.sessionId, source.nativeEventId])
+    return this.transaction(() => {
+      const controls = this.controls()
+      if (!userAction && !controls.learn) throw new MemoryError('learning_off')
+      if (controls.generation !== expectedGeneration) throw new MemoryError('generation_changed')
+      if (!this.included(source.projectId)) throw new MemoryError('source_ineligible')
+      if (this.isSuppressed(cleaned)) return { disposition: 'suppressed' as const }
+      if (source.role === 'derived') {
+        const actualRoots = new Set<string>()
+        for (const parent of source.derivedFrom!) {
+          const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(parent.memoryId)
+          const record = row ? this.record(row) : null
+          if (!record || record.revision !== parent.revision || record.state !== 'active' || !this.current(record)) throw new MemoryError('invalid_lineage')
+          if (record.scope.projectId && record.scope.projectId !== source.projectId) throw new MemoryError('evidence_scope')
+          for (const key of ['taskId', 'branchId'] as const) {
+            if (record.scope[key] !== undefined && record.scope[key] !== source[key]) throw new MemoryError('evidence_scope')
+          }
+          for (const evidence of record.evidence) for (const root of this.rawSource(evidence.sourceEventId)!.rootIds) actualRoots.add(root)
+        }
+        if (canonical([...actualRoots].sort()) !== canonical([...new Set(source.rootIds)].sort())) throw new MemoryError('invalid_lineage')
+      }
+      const existing = this.db.prepare('SELECT id, digest FROM sources WHERE id = ? OR native_key = ?').get(source.id, key)
+      if (existing) {
+        if (existing.id !== source.id || existing.digest !== digest(cleaned)) throw new MemoryError('source_identity_conflict')
+        return { disposition: 'duplicate' as const }
+      }
+      this.db.prepare('INSERT INTO sources(id, native_key, project_id, digest, data) VALUES(?, ?, ?, ?, ?)')
+        .run(source.id, key, source.projectId, digest(cleaned), JSON.stringify(cleaned))
+      for (const parent of source.derivedFrom ?? []) this.db.prepare('INSERT INTO source_dependencies(source_id, memory_id, revision) VALUES(?, ?, ?)')
+        .run(source.id, parent.memoryId, parent.revision)
+      return { disposition: 'created' as const }
+    })
+  }
+
+  source(id: string, access: MemoryAccess): SourceEvent | null {
+    const source = this.rawSource(id)
+    return source && this.allowed({ profileId: source.profileId, ...(source.projectId ? { projectId: source.projectId } : {}),
+      ...(source.taskId ? { taskId: source.taskId } : {}), ...(source.branchId ? { branchId: source.branchId } : {}) }, access) ? source : null
+  }
+
+  propose(input: MemoryDraft, access: MemoryAccess, expectedGeneration = this.controls().generation): { record: MemoryRecord; disposition: 'created' | 'duplicate' } {
+    const draft = parse(draftSchema, input)
+    return this.transaction(() => {
+      this.assertWritable(draft.scope, access, expectedGeneration)
+      const state = this.validateEvidence(draft)
+      const fingerprint = proposalFingerprint(draft)
+      const duplicate = this.db.prepare("SELECT data FROM memories WHERE fingerprint = ? AND state != 'superseded'").get(fingerprint)
+      if (duplicate) {
+        const record = this.record(duplicate)
+        this.recordSupport(record, draft)
+        return { record, disposition: 'duplicate' as const }
+      }
+      const record: MemoryRecord = { ...draft, schemaVersion: 1, id: randomUUID(), revision: 1, state, createdAt: this.now(), updatedAt: this.now() }
+      this.withholdConflicts(record)
+      this.writeRecord(record)
+      this.recordSupport(record, draft)
+      return { record, disposition: 'created' as const }
+    })
+  }
+
+  revise(id: string, expectedRevision: number, input: MemoryDraft, access: MemoryAccess,
+    supersede: Array<{ id: string; revision: number }> = []): MemoryRecord {
+    return this.reviseRecord(id, expectedRevision, input, access, supersede)
+  }
+
+  /** Host-only explicit form submission. Automatic extraction must use propose/revise instead. */
+  correctFromUser(id: string, expectedRevision: number, input: Omit<MemoryDraft, 'evidence' | 'evidenceClass'>,
+    access: MemoryAccess, supersede: Array<{ id: string; revision: number }> = []): MemoryRecord {
+    return this.transaction(() => {
+      this.requireRecord(id, expectedRevision, access)
+      const eventId = randomUUID()
+      const fields = ['claim', 'rationale', 'futureAction', 'applicability', 'exceptions', 'validity', 'details'] as const
+      const evidence = fields.filter(field => input[field] !== undefined).map(field => ({
+        sourceEventId: eventId, quote: canonical(input[field]), paths: [`/${field}`],
+      }))
+      const draft = parse(draftSchema, { ...input, evidenceClass: 'user_stated', evidence })
+      this.assertWritable(draft.scope, access, this.controls().generation, true)
+      this.ingestSource({ id: eventId, profileId: this.profileId, projectId: draft.scope.projectId ?? null,
+        ...(draft.scope.taskId ? { taskId: draft.scope.taskId } : {}), ...(draft.scope.branchId ? { branchId: draft.scope.branchId } : {}),
+        engine: 'harness_viewer', sessionId: `correction:${id}`, nativeEventId: eventId, role: 'user',
+        eligibility: 'coding', observedAt: this.now(), rootIds: [eventId], text: canonical(input),
+      }, this.controls().generation, true)
+      return this.reviseRecord(id, expectedRevision, draft, access, supersede, true)
+    })
+  }
+
+  private reviseRecord(id: string, expectedRevision: number, input: MemoryDraft, access: MemoryAccess,
+    supersede: Array<{ id: string; revision: number }>, userAction = false): MemoryRecord {
+    const draft = parse(draftSchema, input)
+    return this.transaction(() => {
+      const previous = this.requireRecord(id, expectedRevision, access)
+      this.assertWritable(draft.scope, access, this.controls().generation, userAction)
+      // A correction is backed by a new actual user event, never an old quotation or an agent claim.
+      if (!draft.evidence.some(e => this.rawSource(e.sourceEventId)?.role === 'user'
+        && !previous.evidence.some(old => old.sourceEventId === e.sourceEventId))) throw new MemoryError('correction_requires_user_evidence')
+      const record: MemoryRecord = { ...draft, schemaVersion: 1, id, revision: previous.revision + 1,
+        state: this.validateEvidence(draft), createdAt: previous.createdAt, updatedAt: this.now() }
+      if (supersede.length > 32 || new Set(supersede.map(peer => peer.id)).size !== supersede.length) throw new MemoryError('invalid_resolution')
+      const peers = supersede.map(peer => this.requireRecord(peer.id, peer.revision, access))
+      for (const peer of peers) {
+        if (peer.id === id || canonical(peer.scope) !== canonical(record.scope) || peer.conflictKey !== record.conflictKey
+          || !['active', 'needs_verification'].includes(peer.state) || !conditionsOverlap(peer.applicability, record.applicability)) throw new MemoryError('invalid_resolution')
+      }
+      for (const peer of peers) this.writeRecord({ ...peer, revision: peer.revision + 1, state: 'superseded', updatedAt: this.now() })
+      this.withholdConflicts(record)
+      this.writeRecord(record)
+      this.recordSupport(record, draft)
+      this.learning.invalidateSources([...previous.evidence.map(evidence => evidence.sourceEventId),
+        ...this.db.prepare('SELECT source_id FROM memory_support WHERE memory_id=? AND fingerprint=?')
+          .all(previous.id, proposalFingerprint(asDraft(previous))).map(row => String(row.source_id)),
+      ])
+      return record
+    })
+  }
+
+  read(id: string, access: MemoryAccess): MemoryRecord | null {
+    const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(id)
+    if (!row) return null
+    const record = this.record(row)
+    return this.allowed(record.scope, access) ? record : null
+  }
+
+  history(id: string, access: MemoryAccess): MemoryRecord[] {
+    if (!this.read(id, access)) return []
+    return this.db.prepare('SELECT data FROM revisions WHERE memory_id = ? ORDER BY revision').all(id)
+      .map(row => this.record(row)).filter(record => this.allowed(record.scope, access))
+  }
+
+  support(id: string, access: MemoryAccess): MemorySupport | null {
+    const record = this.read(id, access)
+    if (!record) return null
+    const row = this.db.prepare(`SELECT SUM(kind='user_statement') AS users, SUM(kind='verified_observation') AS observations,
+      COUNT(DISTINCT session_key) AS sessions, MAX(observed_at) AS last FROM memory_support WHERE memory_id=? AND fingerprint=?`)
+      .get(id, proposalFingerprint(asDraft(record)))!
+    return { independentUserStatements: Number(row.users ?? 0), verifiedObservations: Number(row.observations ?? 0),
+      distinctSessions: Number(row.sessions), lastObservedAt: row.last as number | null }
+  }
+
+  list(access: MemoryAccess, limit = 100): MemoryRecord[] {
+    if (access.profileId !== this.profileId) return []
+    const filter = this.scopeFilter(access)
+    return this.db.prepare(`SELECT m.data FROM memories m WHERE ${filter.sql} ORDER BY m.rowid DESC LIMIT ?`)
+      .all(...filter.params, bounded(limit, 100, 1, 200)).map(row => this.record(row)).filter(record => this.allowed(record.scope, access))
+  }
+
+  recall(request: RecallRequest, access: MemoryAccess): RecallPacket {
+    if (access.profileId !== this.profileId) return EMPTY('denied')
+    if (!this.controls().recall) return EMPTY('off')
+    if (typeof request.query !== 'string') throw new MemoryError('invalid_input')
+    const actual = parse(conditionsSchema, request.conditions ?? {})
+    const excluded = request.excludeIds ?? []
+    if (!Array.isArray(excluded) || excluded.length > 1_000 || excluded.some(id => typeof id !== 'string' || id.length > 200)) throw new MemoryError('invalid_input')
+    const terms = [...new Set(request.query.slice(0, 4_000).normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])]
+      .filter(word => word.length >= 2 && !STOP_WORDS.has(word)).slice(0, 16)
+    if (!terms.length) return EMPTY()
+    const filter = this.scopeFilter(access)
+    const now = this.now()
+    // Quoted tokens contain no FTS operators. Scope/state filtering happens before candidate limiting.
+    // Drive the join from FTS once. A scope-index-first plan reruns MATCH for every project row
+    // (measured at ~160 ms for 10k rows); the fixed join order still filters access before LIMIT.
+    const rows = this.db.prepare(`WITH context(actual) AS (VALUES (?))
+      SELECT m.data FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
+      WHERE memory_fts MATCH ? AND m.state = 'active' AND ${filter.sql}
+      AND ${applicabilitySql("json_extract(m.data, '$.applicability')")}
+      AND NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.exceptions') exception
+        WHERE ${applicabilitySql("json_extract(exception.value, '$.when')")})
+      AND (json_extract(m.data, '$.validity.validFrom') IS NULL OR json_extract(m.data, '$.validity.validFrom') <= ?)
+      AND (json_extract(m.data, '$.validity.validUntil') IS NULL OR json_extract(m.data, '$.validity.validUntil') > ?)
+      ${excluded.length ? `AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''}
+      ORDER BY bm25(memory_fts, 4, 1, 3), m.rowid DESC LIMIT 120`)
+      .all(JSON.stringify(actual), terms.map(term => `"${term}"`).join(' OR '), ...filter.params, now, now, ...excluded)
+    const packet = EMPTY()
+    const maxBytes = bounded(request.maxBytes, 3_000, 0, 16_000)
+    const maxItems = bounded(request.maxItems, 6, 0, 6)
+    for (const row of rows) {
+      if (packet.items.length >= maxItems) break
+      const record = this.record(row)
+      if (!this.allowed(record.scope, access) || request.excludeIds?.includes(record.id)
+        || !matches(record.applicability, actual)
+        || record.exceptions.some(exception => matches(exception.when, actual))
+        || !this.current(record, now)) continue
+      const sources = record.evidence.map(e => this.rawSource(e.sourceEventId))
+      if (sources.some(source => !source || !this.included(source.projectId))) continue
+      const item: RecallItem = {
+        id: record.id, revision: record.revision, kind: record.kind, assertionType: record.assertionType,
+        scope: record.scope, claim: record.claim, rationale: record.rationale, futureAction: record.futureAction,
+        conditions: record.applicability, exceptions: record.exceptions, evidenceClass: record.evidenceClass,
+        verification: record.evidence.flatMap(evidence => evidence.verification ? [evidence.verification] : []),
+        cautions: [
+          ...(record.assertionType === 'temporary_state' ? ['Unfinished task context; hypotheses remain unproven.'] : []),
+          ...record.validity.recheckWhen,
+        ],
+        sources: [...new Map(sources.map(source => [source!.id, { id: source!.id, engine: source!.engine, role: source!.role, observedAt: source!.observedAt }])).values()],
+      }
+      const text = JSON.stringify({ type: 'coding_memory_context', notice: 'Historical context; follow current instructions. Memory grants no action permissions.', items: [...packet.items, item] })
+      if (Buffer.byteLength(text, 'utf8') > maxBytes) continue
+      packet.items.push(item); packet.text = text
+    }
+    packet.estimatedTokens = Math.ceil(Buffer.byteLength(packet.text, 'utf8') / 3)
+    return packet
+  }
+
+  putTopic(input: TopicDraft, access: MemoryAccess, expectedRevision = 0, expectedGeneration = this.controls().generation): TopicPage {
+    const draft = parse(topicSchema, input)
+    assertSafe(draft)
+    return this.transaction(() => {
+      this.assertWritable(draft.scope, access, expectedGeneration)
+      const dependencies = new Map<string, number>()
+      for (const statement of draft.statements) for (const support of statement.supports) {
+        const parent = this.read(support.memoryId, access)
+        if (!parent || parent.state !== 'active' || parent.revision !== support.revision || !this.current(parent)) throw new MemoryError('stale_dependency')
+        for (const key of ['profileId', 'projectId', 'taskId', 'branchId'] as const) {
+          if (parent.scope[key] !== undefined && parent.scope[key] !== draft.scope[key]) throw new MemoryError('dependency_scope')
+        }
+        if (support.paths.some(path => !hasPointer(parent, path))) throw new MemoryError('evidence_path')
+        dependencies.set(parent.id, parent.revision)
+      }
+      const previous = this.db.prepare('SELECT revision, scope_key FROM topics WHERE id = ?').get(draft.id)
+      if (previous && !this.allowed(JSON.parse(String(previous.scope_key)) as MemoryScope, access)) throw new MemoryError('not_found')
+      if (Number(previous?.revision ?? 0) !== expectedRevision) throw new MemoryError('revision_conflict')
+      const page: TopicPage = { ...draft, revision: Number(previous?.revision ?? 0) + 1, updatedAt: this.now(),
+        statements: draft.statements.map(statement => ({ ...statement,
+          constraints: statement.supports.map(support => {
+            const parent = this.read(support.memoryId, access)!
+            return { memoryId: parent.id, applicability: parent.applicability, exceptions: parent.exceptions, validity: parent.validity }
+          }),
+        })) }
+      this.db.prepare('INSERT INTO topics(id, revision, project_id, scope_key, data) VALUES(?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, project_id=excluded.project_id, scope_key=excluded.scope_key, data=excluded.data')
+        .run(page.id, page.revision, page.scope.projectId ?? null, canonical(page.scope), JSON.stringify(page))
+      this.db.prepare('DELETE FROM topic_dependencies WHERE topic_id = ?').run(page.id)
+      for (const [memoryId, revision] of dependencies) this.db.prepare('INSERT INTO topic_dependencies(topic_id, memory_id, revision) VALUES(?, ?, ?)').run(page.id, memoryId, revision)
+      return page
+    })
+  }
+
+  topic(id: string, access: MemoryAccess): TopicPage | null {
+    const row = this.db.prepare('SELECT data FROM topics WHERE id = ?').get(id)
+    if (!row || row.data === null) return null
+    const page = JSON.parse(String(row.data)) as TopicPage
+    if (!this.allowed(page.scope, access)) return null
+    for (const statement of page.statements) for (const support of statement.supports) {
+      const parent = this.read(support.memoryId, access)
+      if (!parent || parent.state !== 'active' || parent.revision !== support.revision || !this.current(parent)) return null
+    }
+    return page
+  }
+
+  forget(id: string, expectedRevision: number, access: MemoryAccess): { deletedIds: string[]; deletedTopicIds: string[]; alreadyDeliveredContent: 'not_erased' } {
+    return this.transaction(() => {
+      this.requireRecord(id, expectedRevision, access, true)
+      const affected = this.forgetDependencies(id)
+      const sourceIds = new Set<string>()
+      const topicIds = new Set<string>()
+      for (const record of affected) {
+        for (const row of this.db.prepare(`SELECT source_id FROM evidence WHERE memory_id = ?
+          UNION SELECT source_id FROM source_dependencies WHERE memory_id = ?
+          UNION SELECT source_id FROM memory_support WHERE memory_id = ?`).all(record.id, record.id, record.id)) sourceIds.add(String(row.source_id))
+        for (const row of this.db.prepare('SELECT topic_id FROM topic_dependencies WHERE memory_id = ?').all(record.id)) topicIds.add(String(row.topic_id))
+      }
+      for (const sourceId of sourceIds) {
+        const source = this.rawSource(sourceId)
+        for (const root of [sourceId, ...(source?.rootIds ?? [])]) this.db.prepare('INSERT OR IGNORE INTO suppressed_sources(key, at) VALUES(?, ?)').run(this.suppressionKey(root), this.now())
+      }
+      this.learning.invalidateSources(sourceIds)
+      for (const record of affected) {
+        this.invalidateTopics(record.id)
+        this.db.prepare('DELETE FROM memory_fts WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)').run(record.id)
+        this.db.prepare('DELETE FROM memories WHERE id = ?').run(record.id)
+        this.db.prepare('INSERT INTO tombstones(id, last_revision, at) VALUES(?, ?, ?)').run(record.id, record.revision, this.now())
+      }
+      for (const sourceId of sourceIds) {
+        const quotes = this.db.prepare('SELECT quote FROM evidence WHERE source_id = ? UNION SELECT quote FROM memory_support WHERE source_id = ?')
+          .all(sourceId, sourceId).map(row => String(row.quote))
+        if (!quotes.length) this.db.prepare('DELETE FROM sources WHERE id = ?').run(sourceId)
+        else {
+          // Shared events retain only the evidence spans still owned by remaining records.
+          const source = this.rawSource(sourceId)!
+          source.text = quotes.join('\n[…]\n')
+          this.db.prepare('UPDATE sources SET data = ? WHERE id = ?').run(JSON.stringify(source), sourceId)
+        }
+      }
+      return { deletedIds: affected.map(record => record.id), deletedTopicIds: [...topicIds], alreadyDeliveredContent: 'not_erased' as const }
+    })
+  }
+
+  private included(projectId: string | null | undefined): boolean {
+    return projectId == null || this.db.prepare('SELECT included FROM projects WHERE id = ?').get(projectId)?.included === 1
+  }
+
+  private locatorKey(locator: ProjectLocator): string {
+    if (!['git_common_directory', 'directory'].includes(locator.kind) || !isAbsolute(locator.path)
+      || locator.path.length > 4096 || /[\x00-\x1f\x7f]/.test(locator.path)) throw new MemoryError('invalid_locator')
+    return digest([locator.kind, locator.path])
+  }
+
+  private current(record: MemoryRecord, now = this.now()): boolean {
+    return (record.validity.validFrom === null || record.validity.validFrom <= now)
+      && (record.validity.validUntil === null || record.validity.validUntil > now)
+  }
+
+  private allowed(scope: MemoryScope, access: MemoryAccess): boolean {
+    return scope.profileId === this.profileId && canAccess(scope, access) && this.included(scope.projectId)
+  }
+
+  private rawSource(id: string): SourceEvent | null {
+    const row = this.db.prepare('SELECT data FROM sources WHERE id = ?').get(id)
+    return row ? JSON.parse(String(row.data)) as SourceEvent : null
+  }
+
+  private suppressionKey(root: string): string { return digest([this.profileId, root]) }
+  private isSuppressed(source: Pick<SourceEvent, 'id' | 'rootIds'>): boolean {
+    return [source.id, ...source.rootIds].some(root => !!this.db.prepare('SELECT key FROM suppressed_sources WHERE key = ?').get(this.suppressionKey(root)))
+  }
+
+  private validateEvidence(draft: MemoryDraft): MemoryState {
+    const sources = new Map<string, SourceEvent>()
+    for (const evidence of draft.evidence) {
+      if (this.isSuppressed({ id: evidence.sourceEventId, rootIds: [] })) throw new MemoryError('source_suppressed')
+      const source = this.rawSource(evidence.sourceEventId)
+      if (!source) throw new MemoryError('evidence_missing')
+      if (this.isSuppressed(source)) throw new MemoryError('source_suppressed')
+      if (!this.included(source.projectId)) throw new MemoryError('source_ineligible')
+      for (const dependency of source.derivedFrom ?? []) {
+        const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(dependency.memoryId)
+        const parent = row ? this.record(row) : null
+        if (!parent || parent.revision !== dependency.revision || parent.state !== 'active' || !this.current(parent)) throw new MemoryError('stale_dependency')
+      }
+      sources.set(source.id, source)
+    }
+    return admission(draft, sources)
+  }
+
+  private assertWritable(scope: MemoryScope, access: MemoryAccess, generation: number, userAction = false): void {
+    if (!this.allowed(scope, access)) throw new MemoryError('scope_denied')
+    const controls = this.controls()
+    if (!userAction && !controls.learn) throw new MemoryError('learning_off')
+    if (controls.generation !== generation) throw new MemoryError('generation_changed')
+  }
+
+  private requireRecord(id: string, revision: number, access: MemoryAccess, allowExcluded = false): MemoryRecord {
+    const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(id)
+    const record = row ? this.record(row) : null
+    if (!record || record.scope.profileId !== this.profileId || !canAccess(record.scope, access)
+      || (!allowExcluded && !this.included(record.scope.projectId))) throw new MemoryError('not_found')
+    if (record.revision !== revision) throw new MemoryError('revision_conflict')
+    return record
+  }
+
+  private withholdConflicts(record: MemoryRecord): void {
+    if (record.state !== 'active') return
+    const peers = this.db.prepare("SELECT data FROM memories WHERE scope_key = ? AND conflict_key = ? AND id != ? AND state IN ('active', 'needs_verification')")
+      .all(canonical(record.scope), record.conflictKey, record.id).map(row => this.record(row))
+      .filter(peer => peer.claim !== record.claim && conditionsOverlap(peer.applicability, record.applicability))
+    if (!peers.length) return
+    record.state = 'needs_verification'
+    for (const peer of peers) {
+      if (peer.state === 'needs_verification') continue
+      this.writeRecord({ ...peer, revision: peer.revision + 1, state: 'needs_verification', updatedAt: this.now() })
+    }
+  }
+
+  private writeRecord(record: MemoryRecord, invalidateDescendants = true): void {
+    this.invalidateTopics(record.id)
+    this.db.prepare(`INSERT INTO memories(id, revision, project_id, task_id, branch_id, scope_key, conflict_key, state, fingerprint, data)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,
+      project_id=excluded.project_id, task_id=excluded.task_id, branch_id=excluded.branch_id, scope_key=excluded.scope_key,
+      conflict_key=excluded.conflict_key, state=excluded.state, fingerprint=excluded.fingerprint, data=excluded.data`)
+      .run(record.id, record.revision, record.scope.projectId ?? null, record.scope.taskId ?? null, record.scope.branchId ?? null,
+        canonical(record.scope), record.conflictKey, record.state, proposalFingerprint(asDraft(record)), JSON.stringify(record))
+    this.db.prepare('INSERT INTO revisions(memory_id, revision, data) VALUES(?, ?, ?)').run(record.id, record.revision, JSON.stringify(record))
+    for (const evidence of record.evidence) this.db.prepare('INSERT OR IGNORE INTO evidence(memory_id, revision, source_id, quote) VALUES(?, ?, ?, ?)')
+      .run(record.id, record.revision, evidence.sourceEventId, evidence.quote)
+    const rowid = this.db.prepare('SELECT rowid FROM memories WHERE id = ?').get(record.id)!.rowid
+    this.db.prepare('DELETE FROM memory_fts WHERE rowid = ?').run(rowid)
+    if (record.state === 'active') this.db.prepare('INSERT INTO memory_fts(rowid, claim, rationale, cues) VALUES(?, ?, ?, ?)')
+      .run(rowid, record.claim, record.rationale, record.retrievalCues.join(' '))
+    if (invalidateDescendants) {
+      // Follow only the evidence of each current record, not obsolete historical dependencies.
+      // UNION terminates even when successive revisions form a cycle between record identities.
+      const descendants = this.db.prepare(`WITH RECURSIVE affected(id) AS (
+        SELECT e.memory_id FROM source_dependencies d JOIN evidence e ON e.source_id = d.source_id
+          JOIN memories m ON m.id = e.memory_id AND m.revision = e.revision
+          WHERE d.memory_id = ? AND d.revision != ?
+        UNION SELECT e.memory_id FROM affected a JOIN source_dependencies d ON d.memory_id = a.id
+          JOIN evidence e ON e.source_id = d.source_id JOIN memories m ON m.id = e.memory_id AND m.revision = e.revision
+      ) SELECT m.data FROM affected a JOIN memories m ON m.id = a.id WHERE m.id != ?`).all(record.id, record.revision, record.id)
+      for (const row of descendants) {
+        const dependent = this.record(row)
+        if (!['active', 'tentative'].includes(dependent.state)) continue
+        this.writeRecord({ ...dependent, revision: dependent.revision + 1, state: 'needs_verification', updatedAt: this.now() }, false)
+      }
+    }
+  }
+
+  private recordSupport(record: MemoryRecord, draft: MemoryDraft): void {
+    if (['inferred', 'imported'].includes(draft.evidenceClass)) return
+    for (const evidence of draft.evidence) {
+      if (!evidence.paths.includes('/claim')) continue
+      const source = this.rawSource(evidence.sourceEventId)!
+      const kind = source.role === 'user' ? 'user_statement'
+        : source.role === 'tool' && evidence.verification ? 'verified_observation' : null
+      // Derived summaries and assistant repetitions never create independent confirmation.
+      if (!kind || source.derivedFrom) continue
+      for (const root of source.rootIds) this.db.prepare(`INSERT OR IGNORE INTO memory_support
+        (memory_id, fingerprint, root_id, source_id, quote, kind, session_key, observed_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(record.id, proposalFingerprint(draft), root, source.id, evidence.quote, kind,
+          digest([source.engine, source.sessionId]), source.observedAt)
+    }
+  }
+
+  private forgetDependencies(id: string): MemoryRecord[] {
+    const pending = [id]
+    const affected = new Map<string, MemoryRecord>()
+    while (pending.length) {
+      const current = pending.pop()!
+      if (affected.has(current)) continue
+      const row = this.db.prepare('SELECT data FROM memories WHERE id = ?').get(current)
+      if (!row) continue
+      affected.set(current, this.record(row))
+      for (const dependent of this.db.prepare(`SELECT DISTINCT e.memory_id FROM source_dependencies d
+        JOIN evidence e ON e.source_id = d.source_id WHERE d.memory_id = ?`).all(current)) pending.push(String(dependent.memory_id))
+      for (const owned of this.db.prepare(`SELECT source_id, quote FROM evidence WHERE memory_id = ?
+        UNION SELECT source_id, quote FROM memory_support WHERE memory_id = ?`).all(current, current)) {
+        const source = this.rawSource(String(owned.source_id))
+        if (!source) continue
+        for (const shared of this.db.prepare(`SELECT memory_id, quote FROM evidence WHERE source_id = ?
+          UNION SELECT memory_id, quote FROM memory_support WHERE source_id = ?`).all(owned.source_id, owned.source_id)) {
+          // A broad quote can contain forgotten knowledge even when its record has a different claim.
+          // Conservatively forget that dependent record rather than preserve the deleted excerpt.
+          if (quotesOverlap(source.text, String(owned.quote), String(shared.quote))) pending.push(String(shared.memory_id))
+        }
+      }
+    }
+    return [...affected.values()]
+  }
+
+  private invalidateTopics(memoryId: string): void {
+    this.db.prepare('UPDATE topics SET data = NULL WHERE id IN (SELECT topic_id FROM topic_dependencies WHERE memory_id = ?)').run(memoryId)
+  }
+
+  private scopeFilter(access: MemoryAccess): { sql: string; params: unknown[] } {
+    if (access.projectIds.length > 1_000) throw new MemoryError('scope_too_broad')
+    const clauses: string[] = []
+    const params: unknown[] = []
+    if (access.includeProfile) clauses.push('m.project_id IS NULL')
+    if (access.projectIds.length) {
+      clauses.push(`(m.project_id IN (${access.projectIds.map(() => '?').join(',')}) AND m.project_id IN (SELECT id FROM projects WHERE included = 1))`)
+      params.push(...access.projectIds)
+    }
+    return { sql: `(${clauses.join(' OR ') || '0'}) AND (m.task_id IS NULL OR m.task_id = ?) AND (m.branch_id IS NULL OR m.branch_id = ?)`, params: [...params, access.taskId ?? null, access.branchId ?? null] }
+  }
+
+  private record(row: Record<string, unknown>): MemoryRecord { return JSON.parse(String(row.data)) as MemoryRecord }
+
+  private transaction<T>(operation: () => T): T {
+    const level = this.transactionDepth
+    this.db.exec(level ? `SAVEPOINT memory_${level}` : 'BEGIN IMMEDIATE')
+    this.transactionDepth++
+    try {
+      const result = operation()
+      this.db.exec(level ? `RELEASE memory_${level}` : 'COMMIT')
+      return result
+    } catch (error) {
+      try { this.db.exec(level ? `ROLLBACK TO memory_${level}; RELEASE memory_${level}` : 'ROLLBACK') } catch { /* Original failure is more useful. */ }
+      throw error
+    } finally {
+      this.transactionDepth--
+    }
+  }
+}
+
+/** Same scalar/array overlap semantics as matches(), applied before the candidate limit. */
+function applicabilitySql(required: string): string {
+  return `NOT EXISTS (SELECT 1 FROM json_each(${required}) requirement WHERE NOT EXISTS (
+    SELECT 1 FROM json_each((SELECT actual FROM context)) actual WHERE actual.key = requirement.key AND CASE
+      WHEN requirement.type = 'array' AND actual.type = 'array' THEN EXISTS (
+        SELECT 1 FROM json_each(requirement.value) r, json_each(actual.value) a WHERE r.type = a.type AND r.value = a.value)
+      WHEN requirement.type = 'array' THEN EXISTS (
+        SELECT 1 FROM json_each(requirement.value) r WHERE r.type = actual.type AND r.value = actual.value)
+      WHEN actual.type = 'array' THEN EXISTS (
+        SELECT 1 FROM json_each(actual.value) a WHERE a.type = requirement.type AND a.value = requirement.value)
+      ELSE requirement.type = actual.type AND requirement.value = actual.value END))`
+}
+
+function asDraft(record: MemoryRecord): MemoryDraft {
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated, ...draft } = record
+  return draft
+}
+
+function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : fallback
+}
+
+function quotesOverlap(text: string, first: string, second: string): boolean {
+  for (let a = text.indexOf(first); a !== -1; a = text.indexOf(first, a + 1)) {
+    // An overlapping occurrence starts no earlier than this and ends after a.
+    const b = text.indexOf(second, Math.max(0, a - second.length + 1))
+    if (b !== -1 && b < a + first.length) return true
+  }
+  return false
+}
