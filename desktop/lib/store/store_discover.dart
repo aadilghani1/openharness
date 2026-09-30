@@ -333,7 +333,7 @@ class _FeaturedStory extends StatelessWidget {
                     ),
                     Icon(
                       AppIcons.arrowRight,
-                      size: 15,
+                      size: 16,
                       color: grid.AppPalette.textSecondary,
                     ),
                   ],

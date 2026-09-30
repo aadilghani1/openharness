@@ -424,6 +424,11 @@ void main() {
         );
         expect(parts[1].foreground, isNot(palette.foreground));
         expect(parts[3].foreground, isNot(palette.foreground));
+        expect(
+          parts[1].foreground,
+          parts[3].foreground,
+          reason: 'Exhausted allowance shares quiet amber with low allowance.',
+        );
         for (final index in [0, 2, 4, 5]) {
           expect(parts[index].foreground, palette.foreground);
         }

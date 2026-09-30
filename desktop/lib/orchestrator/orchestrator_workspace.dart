@@ -122,7 +122,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
             children: [
               Icon(
                 AppIcons.sparkles,
-                size: 17,
+                size: 16,
                 color: grid.AppPalette.swarmAccent,
               ),
               const SizedBox(width: 10),

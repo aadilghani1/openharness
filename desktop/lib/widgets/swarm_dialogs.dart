@@ -182,7 +182,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
                           onPressed: machineId == null || picking
                               ? null
                               : browse,
-                          icon: const Icon(AppIcons.folderOpen, size: 17),
+                          icon: const Icon(AppIcons.folderOpen, size: 16),
                           label: Text(
                             path ?? 'Choose folder',
                             maxLines: 1,

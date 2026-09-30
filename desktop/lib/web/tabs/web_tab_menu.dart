@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../../state/app_state.dart';
@@ -83,7 +84,7 @@ List<Widget> webTabMenuRows(
           visualDensity: VisualDensity.compact,
           iconSize: 16,
           onPressed: () => close(closeChoice),
-          icon: const Icon(Icons.close),
+          icon: const Icon(AppIcons.close),
         ),
       ],
     ),

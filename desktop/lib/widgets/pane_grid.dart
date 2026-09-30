@@ -2208,7 +2208,7 @@ class _PaneStatus extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           )
-                        : Icon(icon, size: 26, color: AppColors.mutedStrong),
+                        : Icon(icon, size: 24, color: AppColors.mutedStrong),
                   ),
                   const SizedBox(height: 10),
                   Flexible(

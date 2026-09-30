@@ -14,16 +14,20 @@ abstract final class AppIcons {
   /// A quiet close mark in tabs and pane headers, inside the full click target.
   static const double closeSize = 12;
 
+  static const aArrowDown = LucideIcons.aArrowDown400;
+  static const aArrowUp = LucideIcons.aArrowUp400;
   static const activity = LucideIcons.activity400;
   static const arrowDownToLine = LucideIcons.arrowDownToLine400;
   static const arrowDownWideNarrow = LucideIcons.arrowDownWideNarrow400;
   static const arrowLeft = LucideIcons.arrowLeft400;
   static const arrowRight = LucideIcons.arrowRight400;
+  static const arrowRightLeft = LucideIcons.arrowRightLeft400;
   static const arrowRightToLine = LucideIcons.arrowRightToLine400;
   static const arrowUp = LucideIcons.arrowUp400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
   static const bell = LucideIcons.bell400;
   static const bellRing = LucideIcons.bellRing400;
+  static const bookOpen = LucideIcons.bookOpen400;
   static const bot = LucideIcons.bot400;
   static const box = LucideIcons.box400;
   static const brainCircuit = LucideIcons.brainCircuit400;
@@ -54,9 +58,9 @@ abstract final class AppIcons {
   static const code = LucideIcons.code400;
   static const coins = LucideIcons.coins400;
   static const columns2 = LucideIcons.columns2400;
-  static const rows2 = LucideIcons.rows2400;
   static const command = LucideIcons.command400;
   static const copy = LucideIcons.copy400;
+  static const copyPlus = LucideIcons.copyPlus400;
   static const cornerDownLeft = LucideIcons.cornerDownLeft400;
   static const cpu = LucideIcons.cpu400;
   static const database = LucideIcons.database400;
@@ -67,6 +71,7 @@ abstract final class AppIcons {
   static const eye = LucideIcons.eye400;
   static const eyeOff = LucideIcons.eyeOff400;
   static const file = LucideIcons.file400;
+  static const fileDown = LucideIcons.fileDown400;
   static const fileText = LucideIcons.fileText400;
   static const film = LucideIcons.film400;
   static const flaskConical = LucideIcons.flaskConical400;
@@ -79,9 +84,11 @@ abstract final class AppIcons {
   static const gitBranch = LucideIcons.gitBranch400;
   static const globe = LucideIcons.globe400;
   static const hand = LucideIcons.hand400;
+  static const heart = LucideIcons.heart400;
   static const history = LucideIcons.history400;
   static const hourglass = LucideIcons.hourglass400;
   static const house = LucideIcons.house400;
+  static const imagePlus = LucideIcons.imagePlus400;
   static const info = LucideIcons.info400;
   static const keyboard = LucideIcons.keyboard400;
   static const laptop = LucideIcons.laptop400;
@@ -94,6 +101,7 @@ abstract final class AppIcons {
   static const logIn = LucideIcons.logIn400;
   static const logOut = LucideIcons.logOut400;
   static const maximize = LucideIcons.maximize400;
+  static const menu = LucideIcons.menu400;
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
@@ -115,12 +123,17 @@ abstract final class AppIcons {
   static const power = LucideIcons.power400;
   static const radioTower = LucideIcons.radioTower400;
   static const refreshCw = LucideIcons.refreshCw400;
+  static const rocket = LucideIcons.rocket400;
   static const rotateCcw = LucideIcons.rotateCcw400;
+  static const rotateCw = LucideIcons.rotateCw400;
+  static const rows2 = LucideIcons.rows2400;
   static const search = LucideIcons.search400;
   static const searchX = LucideIcons.searchX400;
   static const send = LucideIcons.send400;
   static const server = LucideIcons.server400;
+  static const settings = LucideIcons.settings400;
   static const shapes = LucideIcons.shapes400;
+  static const share = LucideIcons.share400;
   static const shield = LucideIcons.shield400;
   static const shieldCheck = LucideIcons.shieldCheck400;
   static const shieldOff = LucideIcons.shieldOff400;
@@ -134,9 +147,11 @@ abstract final class AppIcons {
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;
   static const starHalf = LucideIcons.starHalf400;
+  static const sun = LucideIcons.sun400;
   static const terminal = LucideIcons.terminal400;
   static const trash2 = LucideIcons.trash2400;
   static const triangleAlert = LucideIcons.triangleAlert400;
+  static const type = LucideIcons.type400;
   static const unlink = LucideIcons.unlink400;
   static const unplug = LucideIcons.unplug400;
   static const usb = LucideIcons.usb400;

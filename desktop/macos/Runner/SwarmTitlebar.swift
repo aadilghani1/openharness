@@ -4,7 +4,7 @@ import ImageIO
 
 /// The native counterpart of AppIcons: regular monochrome system outlines.
 /// Controls share one optical size; hover changes ink, never the silhouette.
-private enum HarnessControlSymbols {
+enum HarnessControlSymbols {
   static let size: CGFloat = 16
   static let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
   static func image(_ name: String, description: String? = nil) -> NSImage? {

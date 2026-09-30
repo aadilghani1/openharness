@@ -7285,7 +7285,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       height: workspaceBarControlHeight(context),
       child: Icon(
         AppIcons.search,
-        size: 17,
+        size: 16,
         color: theme.foreground.withValues(
           alpha: !_shortcutsEnabled
               ? .28

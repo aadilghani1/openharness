@@ -40,6 +40,12 @@ void main() {
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
+          rootBundle.load(
+            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
+          ),
+        ))
+        .load();
     final serif = [
       '/System/Library/Fonts/Supplemental/Georgia.ttf',
       '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',

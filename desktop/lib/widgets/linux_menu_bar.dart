@@ -1,9 +1,10 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/runtime_platform.dart';
+import '../shared/theme/app_pane_icon.dart';
 import '../core/test_run.dart';
 import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -230,39 +231,39 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
     return [
       _appRow(
         key: 'menu-bar-about',
-        icon: LucideIcons.info300,
+        icon: AppIcons.info,
         label: 'About Harness',
         action: 'showAbout',
       ),
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-customize',
-        icon: LucideIcons.palette300,
+        icon: AppIcons.palette,
         label: 'Customize Harness',
         action: 'customize',
       ),
       _swarmRow(
         key: 'menu-bar-settings',
-        icon: LucideIcons.settings300,
+        icon: AppIcons.settings,
         label: 'Settings…',
         action: 'settings',
       ),
       const AppMenuDivider(),
       _appRow(
         key: 'menu-bar-shortcuts',
-        icon: LucideIcons.keyboard300,
+        icon: AppIcons.keyboard,
         label: 'Keyboard Shortcuts…',
         action: 'showShortcuts',
       ),
       _appRow(
         key: 'menu-bar-check-for-updates',
-        icon: LucideIcons.refreshCw300,
+        icon: AppIcons.refreshCw,
         label: 'Check for Updates…',
         action: 'checkForUpdates',
       ),
       _appRow(
         key: 'menu-bar-flash-firmware',
-        icon: LucideIcons.zap300,
+        icon: AppIcons.zap,
         label: 'Flash Firmware…',
         action: 'flashFirmware',
       ),
@@ -286,32 +287,32 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
     return [
       _swarmRow(
         key: 'menu-bar-new-harness',
-        icon: LucideIcons.plus300,
+        icon: AppIcons.plus,
         label: 'New Harness',
         action: 'newAgent',
       ),
       _swarmRow(
         key: 'menu-bar-open-harness',
-        icon: LucideIcons.folderOpen300,
+        icon: AppIcons.folderOpen,
         label: 'Open Harness',
         action: 'addAgent',
       ),
       _swarmRow(
         key: 'menu-bar-clone-agent',
-        icon: LucideIcons.copyPlus300,
+        icon: AppIcons.copyPlus,
         label: 'Clone Harness',
         action: 'cloneAgent',
       ),
       _swarmRow(
         key: 'menu-bar-restart-agent',
-        icon: LucideIcons.rotateCw300,
+        icon: AppIcons.rotateCw,
         label: 'Restart Harness',
         action: 'restartAgent',
         enabled: _paneAction('restartAgent'),
       ),
       _swarmRow(
         key: 'menu-bar-share-agent',
-        icon: LucideIcons.share300,
+        icon: AppIcons.share,
         label: 'Share Harness',
         action: 'shareAgent',
         enabled: _paneAction('shareAgent'),
@@ -319,54 +320,54 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-new-tab',
-        icon: LucideIcons.squarePlus300,
+        icon: AppIcons.squarePlus,
         label: 'New Tab',
         action: 'new',
       ),
       _swarmRow(
         key: 'menu-bar-rename-tab',
-        icon: LucideIcons.pencil300,
+        icon: AppIcons.pencil,
         label: 'Rename Tab',
         action: 'renameActive',
       ),
       _swarmRow(
         key: 'menu-bar-close-tab',
-        icon: LucideIcons.x300,
+        icon: AppIcons.close,
         label: 'Close Tab',
         action: 'closeActive',
       ),
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-split-right',
-        icon: LucideIcons.panelRight300,
+        leading: const AppPaneIcon(AppPaneSymbol.splitRight, size: 16),
         label: 'Split Right',
         action: 'splitRight',
         enabled: state.enabled && state.canFind,
       ),
       _swarmRow(
         key: 'menu-bar-split-down',
-        icon: LucideIcons.panelBottom300,
+        leading: const AppPaneIcon(AppPaneSymbol.splitDown, size: 16),
         label: 'Split Down',
         action: 'splitDown',
         enabled: state.enabled && state.canFind,
       ),
       _swarmRow(
         key: 'menu-bar-zoom-pane',
-        icon: LucideIcons.focus300,
+        leading: const AppPaneIcon(AppPaneSymbol.zoom, size: 16),
         label: 'Zoom Pane',
         action: 'zoomPane',
         enabled: state.enabled && state.canFind,
       ),
       _swarmRow(
         key: 'menu-bar-move-pane',
-        icon: LucideIcons.arrowRightLeft300,
+        icon: AppIcons.arrowRightLeft,
         label: 'Move Pane to Tab',
         action: 'movePaneToTab',
         enabled: state.enabled && state.canFind,
       ),
       _swarmRow(
         key: 'menu-bar-close-pane',
-        icon: LucideIcons.x300,
+        icon: AppIcons.close,
         label: 'Close Pane',
         action: 'closePane',
         enabled: state.enabled && state.canClosePane,
@@ -401,7 +402,7 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-commands',
-        icon: LucideIcons.command300,
+        icon: AppIcons.command,
         label: 'Search Commands…',
         action: 'commands',
       ),
@@ -414,26 +415,26 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
     return [
       _appRow(
         key: 'menu-bar-layout',
-        icon: LucideIcons.layoutGrid300,
+        icon: AppIcons.layoutGrid,
         label: 'Layout…',
         action: 'showLayout',
       ),
       const AppMenuDivider(),
       _appRow(
         key: 'menu-bar-reset-font-size',
-        icon: LucideIcons.type300,
+        icon: AppIcons.type,
         label: 'Default Font Size',
         action: 'resetTerminalFontSize',
       ),
       _appRow(
         key: 'menu-bar-bigger-font',
-        icon: LucideIcons.aArrowUp300,
+        icon: AppIcons.aArrowUp,
         label: 'Bigger',
         action: 'increaseTerminalFontSize',
       ),
       _appRow(
         key: 'menu-bar-smaller-font',
-        icon: LucideIcons.aArrowDown300,
+        icon: AppIcons.aArrowDown,
         label: 'Smaller',
         action: 'decreaseTerminalFontSize',
       ),
@@ -452,31 +453,31 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-sessions',
-        icon: LucideIcons.terminal300,
+        icon: AppIcons.terminal,
         label: 'Harnesses',
         action: 'sessions',
       ),
       _swarmRow(
         key: 'menu-bar-notifications',
-        icon: LucideIcons.bell300,
+        icon: AppIcons.bell,
         label: 'Harnesses Needing Input…',
         action: 'notifications',
       ),
       _swarmRow(
         key: 'menu-bar-machines',
-        icon: LucideIcons.server300,
+        icon: AppIcons.server,
         label: 'Machines',
         action: 'machineList',
       ),
       _swarmRow(
         key: 'menu-bar-models',
-        icon: LucideIcons.cpu300,
+        icon: AppIcons.cpu,
         label: 'Models',
         action: 'models',
       ),
       _swarmRow(
         key: 'menu-bar-machine-monitor',
-        icon: LucideIcons.activity300,
+        icon: AppIcons.activity,
         label: 'Machine Monitor',
         action: 'manageMachines',
       ),
@@ -599,7 +600,7 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
       // over the swarm channel as `keymapCommand`.
       _swarmRow(
         key: 'menu-bar-quick-start',
-        icon: LucideIcons.rocket300,
+        icon: AppIcons.rocket,
         label: 'Quick Start',
         action: 'keymapCommand',
         args: const {'command': 'keyboard.quick_start'},
@@ -607,14 +608,14 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
       ),
       _appRow(
         key: 'menu-bar-keyboard-practice',
-        icon: LucideIcons.keyboard300,
+        icon: AppIcons.keyboard,
         label: 'Keyboard Practice',
         action: 'keyboardPractice',
       ),
       const AppMenuDivider(),
       _appRow(
         key: 'menu-bar-export-logs',
-        icon: LucideIcons.fileDown300,
+        icon: AppIcons.fileDown,
         label: 'Export Logs…',
         action: 'exportLogs',
       ),

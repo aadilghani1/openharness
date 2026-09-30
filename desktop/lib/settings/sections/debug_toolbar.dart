@@ -134,7 +134,7 @@ class DebugPillLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 13, color: ink),
+        Icon(icon, size: 14, color: ink),
         const SizedBox(width: 6),
         Text(label, style: AppType.label(color: ink)),
       ],

@@ -1689,7 +1689,7 @@ class _QuietLinkState extends State<_QuietLink> {
           widget.child ?? Text(widget.label!),
           if (url != null) ...[
             const SizedBox(width: 3),
-            Icon(AppIcons.arrowUpRight, size: 13, color: color),
+            Icon(AppIcons.arrowUpRight, size: 14, color: color),
           ],
         ],
       ),

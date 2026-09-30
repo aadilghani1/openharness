@@ -8,12 +8,14 @@ import '../core/open_in_browser.dart';
 import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
+import '../shared/theme/app_pane_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
 import '../theme/app_theme.dart';
 import '../viewer/interactive_viewer.dart';
+import 'agent_drag.dart';
 import 'engine_identity.dart';
 import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
@@ -272,7 +274,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
     return SizedBox(
       height: compact ? 38 : 46,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.only(
+          left: 14,
+          right: grid.AppDesktop.paneCloseInset,
+        ),
         child: Row(
           children: [
             EngineMark(
@@ -418,45 +423,27 @@ class _ViewerActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget action(String tooltip, IconData icon, VoidCallback? callback) =>
-        IconButton(
-          tooltip: tooltip,
-          onPressed: callback,
-          icon: Icon(icon, size: 16),
-          style: ButtonStyle(
-            fixedSize: const WidgetStatePropertyAll(Size(28, 28)),
-            minimumSize: const WidgetStatePropertyAll(Size(28, 28)),
-            padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            visualDensity: VisualDensity.standard,
-            shape: WidgetStatePropertyAll(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) {
-                return grid.AppPalette.textFaint;
-              }
-              if (states.contains(WidgetState.hovered) ||
-                  states.contains(WidgetState.focused)) {
-                return AppColors.text;
-              }
-              return AppColors.mutedStrong.withValues(alpha: .8);
-            }),
-            overlayColor: WidgetStatePropertyAll(grid.AppSurface.hoverFill),
-          ),
-        );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        action('Reload viewer', AppIcons.refreshCw, onReload),
-        const SizedBox(width: 2),
-        action(
-          zoomed ? 'Restore harnesses' : 'Zoom viewer',
-          zoomed ? AppIcons.minimize : AppIcons.maximize,
-          onZoom,
+        PaneHeaderButton(
+          label: 'Reload viewer',
+          icon: AppPaneSymbol.reload,
+          onPressed: onReload,
         ),
-        const SizedBox(width: 2),
-        action('Close viewer', AppIcons.close, onClose),
+        PaneHeaderButton(
+          label: zoomed ? 'Restore harnesses' : 'Zoom viewer',
+          command: 'pane.zoom',
+          icon: zoomed ? AppPaneSymbol.restore : AppPaneSymbol.zoom,
+          onPressed: onZoom,
+        ),
+        PaneHeaderButton(
+          label: 'Close viewer',
+          command: 'pane.close',
+          icon: AppPaneSymbol.close,
+          iconSize: AppIcons.closeSize,
+          onPressed: onClose,
+        ),
       ],
     );
   }
@@ -484,7 +471,7 @@ class _Notice extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 26, color: AppColors.mutedStrong),
+            Icon(icon, size: 24, color: AppColors.mutedStrong),
             const SizedBox(height: 10),
             Text(
               title,

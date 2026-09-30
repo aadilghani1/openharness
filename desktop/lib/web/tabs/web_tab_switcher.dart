@@ -1,7 +1,8 @@
+import 'package:harness/shared/theme/app_icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../../shared/theme/app_theme.dart' as grid;
@@ -84,7 +85,7 @@ class WebTabSwitcher extends StatelessWidget {
             ),
             // An icon, not "▾": the terminal face may have no such glyph.
             Icon(
-              LucideIcons.chevronDown,
+              AppIcons.chevronDown,
               size: 14,
               color: theme.foreground.withValues(alpha: .75),
             ),

@@ -528,7 +528,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
             Icon(AppIcons.cloud, size: 16, color: DesktopChrome.muted),
             const SizedBox(width: 10),
             Expanded(child: Text(action.label)),
-            Icon(AppIcons.chevronRight, size: 17, color: DesktopChrome.muted),
+            Icon(AppIcons.chevronRight, size: 16, color: DesktopChrome.muted),
           ],
         ),
       );

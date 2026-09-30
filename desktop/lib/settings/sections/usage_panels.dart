@@ -6,7 +6,6 @@
 /// handed — none reads a store — so the pane can be driven from a fixture.
 library;
 
-
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
@@ -737,7 +736,7 @@ class UsageEmptyState extends StatelessWidget {
             children: [
               Icon(
                 AppIcons.chartNoAxesColumn,
-                size: 15,
+                size: 16,
                 color: AppPalette.textFaint,
               ),
               const SizedBox(width: 8),

@@ -234,7 +234,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                           icon: const Icon(
                             AppIcons.close,
                             color: grid.AppPalette.commandMuted,
-                            size: 19,
+                            size: 20,
                           ),
                         ),
                       if (!narrow)
@@ -430,7 +430,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                       ? null
                       : controller.dismiss,
                   tooltip: 'Dismiss results',
-                  icon: const Icon(AppIcons.close, size: 15),
+                  icon: const Icon(AppIcons.close, size: 16),
                 ),
               ],
             ),
@@ -626,7 +626,7 @@ class _HarnessCommandBarState extends State<HarnessCommandBar> {
                   children: [
                     Icon(
                       AppIcons.bell,
-                      size: 17,
+                      size: 16,
                       color: grid.AppPalette.swarmAccent,
                     ),
                     const SizedBox(width: 10),

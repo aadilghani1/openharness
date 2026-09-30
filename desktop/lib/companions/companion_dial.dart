@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../daemons/illustrated_art.dart';
@@ -127,7 +128,7 @@ class CompanionDial extends StatelessWidget {
                 ),
               ),
               icon: Icon(
-                syncing ? Icons.sync_rounded : Icons.favorite_outline_rounded,
+                syncing ? AppIcons.refreshCw : AppIcons.heart,
                 size: 16,
               ),
               label: Text(
@@ -159,11 +160,7 @@ class CompanionDial extends StatelessWidget {
       children: [
         Row(
           children: [
-            Icon(
-              Icons.radio_button_checked_rounded,
-              size: 19,
-              color: AppColors.textSoft,
-            ),
+            Icon(AppIcons.circleDot, size: 20, color: AppColors.textSoft),
             const SizedBox(width: 10),
             Expanded(
               child: Text(

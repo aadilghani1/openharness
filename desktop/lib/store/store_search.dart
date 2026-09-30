@@ -239,7 +239,7 @@ class _Field extends StatelessWidget {
                 children: [
                   Icon(
                     AppIcons.search,
-                    size: 15,
+                    size: 16,
                     color: grid.AppPalette.textSecondary,
                   ),
                   const SizedBox(width: 8),

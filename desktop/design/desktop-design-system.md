@@ -164,6 +164,9 @@ of the native footer. Popovers have no independent full-window veil.
 
 ## Icons
 
+The [icon design system](icon-design-system.md) defines the complete vocabulary,
+size roles, state treatment, deliberate exceptions and audit workflow.
+
 `AppIcons` owns one monochrome outline vocabulary: the regular (400) Lucide
 family with rounded ends and joins. Use its named constants, never raw Material
 icons, alternate stroke weights or text characters for app actions. A close
@@ -346,8 +349,8 @@ pane headers. Do not repeat model or effort in the footer. Context honors Custom
 status face, fields, colors and shell/Powerline treatment. Recent-harness
 context uses that same renderer's monochrome presentation to stay secondary.
 Use compact labels such as “Claude 0%  Codex 50%”, separated by whitespace only.
-Provider names stay neutral. Color only the remaining percentage: red at 0%,
-amber above 0% through 20%, neutral above 20% or when unavailable. Use shared
+Provider names stay neutral. Color only the remaining percentage: quiet amber
+from 0% through 20%, neutral above 20% or when unavailable. Use shared
 semantic ink adjusted to remain readable on the selected workspace surface;
 the number always conveys the state independently of color. These percentages are
 remaining, not used. Use the same deduplicated accounts, limiting window and

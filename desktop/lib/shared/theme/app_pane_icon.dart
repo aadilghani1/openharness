@@ -4,30 +4,36 @@ import 'package:flutter/material.dart';
 
 import 'app_icons.dart';
 
-enum AppPaneSymbol { splitDown, splitRight, zoom, restore, close }
+enum AppPaneSymbol { splitDown, splitRight, zoom, restore, reload, close }
 
 /// Optical variants for the small, repeated pane controls. The split and zoom
 /// outlines keep Lucide's 24-unit grid, two-unit stroke and round caps, with
 /// four-unit corners that remain visibly rounded at 14 points.
 class AppPaneIcon extends StatelessWidget {
-  const AppPaneIcon(
-    this.symbol, {
-    super.key,
-    required this.color,
-    this.size = 14,
-  });
+  const AppPaneIcon(this.symbol, {super.key, this.color, this.size = 14});
 
   final AppPaneSymbol symbol;
-  final Color color;
+  final Color? color;
   final double size;
 
   @override
-  Widget build(BuildContext context) => symbol == AppPaneSymbol.close
-      ? Icon(AppIcons.close, color: color, size: size)
-      : CustomPaint(
-          size: Size.square(size),
-          painter: _PaneIconPainter(symbol, color),
-        );
+  Widget build(BuildContext context) {
+    final glyph = switch (symbol) {
+      AppPaneSymbol.close => AppIcons.close,
+      AppPaneSymbol.reload => AppIcons.refreshCw,
+      _ => null,
+    };
+    if (glyph != null) return Icon(glyph, color: color, size: size);
+    final theme = IconTheme.of(context);
+    final ink = color ?? theme.color ?? const Color(0xFF000000);
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _PaneIconPainter(
+        symbol,
+        ink.withValues(alpha: ink.a * (theme.opacity ?? 1)),
+      ),
+    );
+  }
 }
 
 class _PaneIconPainter extends CustomPainter {
@@ -81,7 +87,8 @@ class _PaneIconPainter extends CustomPainter {
           canvas.translate(-12, -12);
         }
       case AppPaneSymbol.close:
-        break; // The close mark always uses AppIcons.close.
+      case AppPaneSymbol.reload:
+        break; // These delegate to the catalogue's font glyphs above.
     }
     canvas.restore();
   }

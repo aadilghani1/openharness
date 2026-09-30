@@ -339,7 +339,8 @@ void main() {
     await tester.pump();
     expect(opened, [Uri.parse('http://127.0.0.1:4179/')]);
     // Its own close control, and no way to end an agent from it.
-    expect(find.byTooltip('Close viewer'), findsOneWidget);
+    final closeViewer = find.byTooltip(RegExp(r'^Close viewer(?: · .+)?$'));
+    expect(closeViewer, findsOneWidget);
     // Stop remains a command, not a pane-header control. Viewer visibility
     // is also available through View and command search.
     expect(find.byTooltip('Stop Harness'), findsNothing);
@@ -368,7 +369,7 @@ void main() {
     // One status in the viewer's title, and nothing on the terminal's: the
     // phase under way here, since the deck is neither ready nor failing.
     final viewerHeader = find.ancestor(
-      of: find.byTooltip('Close viewer'),
+      of: closeViewer,
       matching: find.byType(WebPanePanel),
     );
     expect(
@@ -383,7 +384,7 @@ void main() {
     expect(find.text('Build'), findsNothing);
     expect(find.text('1 warning'), findsNothing, reason: 'the phase wins');
     expect(find.textContaining('·  Viewer'), findsNothing);
-    await tester.tap(find.byTooltip('Close viewer'));
+    await tester.tap(closeViewer);
     await tester.pumpAndSettle();
     expect(_viewers(app), isEmpty);
     expect(tester.takeException(), isNull);

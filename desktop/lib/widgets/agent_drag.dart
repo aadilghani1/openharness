@@ -84,7 +84,7 @@ class PaneHeaderButton extends StatelessWidget {
   const PaneHeaderButton({
     super.key,
     required this.label,
-    required this.command,
+    this.command,
     required this.icon,
     this.iconSize = 14,
     this.onPressed,
@@ -92,7 +92,8 @@ class PaneHeaderButton extends StatelessWidget {
 
   static const width = 28.0;
 
-  final String label, command;
+  final String label;
+  final String? command;
   final AppPaneSymbol icon;
   final double iconSize;
   final VoidCallback? onPressed;
@@ -104,7 +105,9 @@ class PaneHeaderButton extends StatelessWidget {
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
-    final hint = KeymapTheme.of(context)?.hint(command);
+    final hint = command == null
+        ? null
+        : KeymapTheme.of(context)?.hint(command!);
     return WorkspaceBarControl(
       label: label,
       tooltip: [label, if (hint != null && hint.isNotEmpty) hint].join(' · '),

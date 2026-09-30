@@ -129,7 +129,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   onPressed: widget.onTry == null
                       ? null
                       : () => widget.onTry!(example.prompt),
-                  icon: const Icon(AppIcons.sparkles, size: 17),
+                  icon: const Icon(AppIcons.sparkles, size: 16),
                   label: const Text('Try this prompt'),
                   style: FilledButton.styleFrom(
                     backgroundColor: grid.AppPalette.accent,
@@ -150,7 +150,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                       entry: widget.entry,
                       example: example,
                     ),
-                    icon: const Icon(AppIcons.play, size: 17),
+                    icon: const Icon(AppIcons.play, size: 16),
                     label: const Text('Watch recorded run'),
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size(0, 46),

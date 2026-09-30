@@ -158,7 +158,7 @@ uses the limiting window and expires under the same rules. Different accounts
 remain distinct. Unknown usage shows “—”; exhausted usage shows “0%”. Hover
 explains remaining percentages and reset windows; click opens Subscriptions.
 Separate accounts with whitespace, without dot separators. Provider names stay
-neutral; only percentages carry warning ink: red at zero, amber through 20%,
+neutral; only percentages carry quiet amber ink from zero through 20%,
 neutral above 20% or when unavailable. Resolve the same readable colors for the
 Flutter and native footers against the chosen workspace background.
 No account or usage reading is invented for this footer.

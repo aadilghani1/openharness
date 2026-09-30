@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/widgets/app_menu.dart';
@@ -101,7 +102,7 @@ class _CompanionEnginePickerState extends State<CompanionEnginePicker> {
                     : CompanionEnginePicker.label(widget.engine!),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.expand_more_rounded, size: 16),
+              const Icon(AppIcons.chevronDown, size: 16),
             ],
           ),
         ),

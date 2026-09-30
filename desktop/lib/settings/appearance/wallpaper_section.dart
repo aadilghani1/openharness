@@ -297,7 +297,7 @@ class _CustomCardState extends State<_CustomCard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        Icons.add_photo_alternate_outlined,
+                        AppIcons.imagePlus,
                         color: grid.AppPalette.textSecondary,
                       ),
                       const SizedBox(height: 6),

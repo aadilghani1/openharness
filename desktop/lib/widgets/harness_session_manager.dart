@@ -430,7 +430,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                             children: [
                               Icon(
                                 AppIcons.layers,
-                                size: 25,
+                                size: 24,
                                 color: AppPalette.textFaint,
                               ),
                               const SizedBox(height: 12),

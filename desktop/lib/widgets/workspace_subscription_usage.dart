@@ -1,7 +1,7 @@
 import 'package:flutter/painting.dart';
 
 import '../shared/theme/status_line_style.dart';
-import '../theme/app_theme.dart';
+import '../shared/theme/app_theme.dart';
 
 enum WorkspaceUsageTone { normal, low, exhausted }
 
@@ -14,8 +14,8 @@ class WorkspaceSubscriptionUsage {
   String get text => segments.map((part) => part.text).join();
   final String detail;
 
-  /// Names stay neutral. Only a known remaining percentage carries urgency;
-  /// use the model picker's 20% low-water mark and reserve red for exhaustion.
+  /// Names stay neutral. Low and exhausted allowance share quiet amber;
+  /// a subscription limit is not an application error.
   List<StatusLinePaintSegment> paintSegments({
     required Color foreground,
     required Color surface,
@@ -25,8 +25,8 @@ class WorkspaceSubscriptionUsage {
         part.text,
         statusLineInkOnSurface(switch (part.tone) {
           WorkspaceUsageTone.normal => foreground,
-          WorkspaceUsageTone.low => AppColors.warning,
-          WorkspaceUsageTone.exhausted => AppColors.danger,
+          WorkspaceUsageTone.low ||
+          WorkspaceUsageTone.exhausted => AppPalette.usageLow,
         }, surface),
         null,
       ),
