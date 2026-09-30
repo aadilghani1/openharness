@@ -11,6 +11,8 @@ import 'package:harness/state/status_menu.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_status.dart';
 
+import 'keymap_host_test.dart' show key;
+import 'support/resource_picker.dart';
 import 'swarm_attention_test.dart' show waitingQuestion;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -283,6 +285,22 @@ void main() {
       await select('clearStatusNotifications', {'receipts': rows()});
       expect(rows(), isEmpty);
       expect(updates.last['unread'], 0);
+
+      // Open Harness from an empty notification menu still opens the normal
+      // picker, ready for typing, and selecting a session reuses its pane.
+      await select('addAgent', {});
+      expect(resourceScope('#'), findsOneWidget);
+      final input = tester.widget<TextField>(resourceField);
+      expect(input.focusNode!.hasFocus, isTrue);
+      await tester.enterText(resourceField, 'Agent 0');
+      await tester.pumpAndSettle();
+      await selectResource(tester, 'a0');
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(resourceField, findsNothing);
+      expect(app.activeSwarmId, originalTab);
+      expect(app.focusedPane?.agentId, 'a0');
+      expect(app.allPanes.where((p) => p.agentId == 'a0'), hasLength(1));
 
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pumpWidget(const SizedBox());

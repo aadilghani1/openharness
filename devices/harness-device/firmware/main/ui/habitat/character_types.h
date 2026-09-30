@@ -48,12 +48,6 @@ typedef struct {
      * WORKING means "an agent is busy" at home and "your words are on their way" here.
      */
     bool voice;
-    /*
-     * Whether there is another tab, and another pane in this one, to choose. A skin that draws the
-     * tab and the agent's name as the doors to those lists (Focus) marks them with ⌄ only when
-     * there is somewhere to go: a door to a list of one is an invitation with nothing behind it.
-     */
-    bool more_tabs, more_panes;
     uint16_t ink, foreground, dim;
 } ht_character_face_t;
 

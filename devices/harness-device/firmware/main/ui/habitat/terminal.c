@@ -267,7 +267,13 @@ bool ht_text(ht_scene_t *s, int x, int y, int w, const ht_font_t *font, uint16_t
     r->font = font;
     r->fg = fg;
     r->bg = bg;
-    display_copy(r->text,sizeof r->text,text,NULL,font,w / font->width);
+    if (ht_pfont(font)) {
+        // Proportional: the caller fitted it in pixels (ht_fit_width / ht_lv_label); the
+        // column budget below would count glyphs against the space's advance and cut it short.
+        size_t n = text ? strnlen(text, sizeof r->text - 1) : 0;
+        memcpy(r->text, text ? text : "", n);
+        r->text[n] = 0;
+    } else display_copy(r->text,sizeof r->text,text,NULL,font,w / font->width);
     // A run is one line. Multi-line callers split before constructing runs.
     for (char *p=r->text; *p; p++) if (*p=='\n') *p=' ';
     return true;
@@ -298,6 +304,234 @@ void ht_center(ht_scene_t *s, int y, const ht_font_t *font, uint16_t fg, const c
     int w = imin(n * font->width, HT_WIDTH - 80);
     ht_text(s, (HT_WIDTH - w) / 2, y, w, font, fg, s->background, visible);
 }
+// ── PROPORTIONAL TEXT ──────────────────────────────────────────────────────────────────────────
+// The Focus skin's faces carry a glyph per codepoint with its own advance. Everything below is the
+// fixed-cell code's counterpart measured in pixels; nothing above changes for a mono atlas.
+// One looked-up glyph: which face drew it (the run's, or its fallback) and its index there.
+typedef struct { const ht_pfont_t *face; const ht_glyph_t *g; int index; } pglyph_t;
+static int pindex(const ht_pfont_t *f, uint32_t cp)
+{
+    int lo = 0, hi = (int)f->count - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (f->codes[mid] == cp) return mid;
+        if (f->codes[mid] < cp) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+}
+static bool plookup(const ht_pfont_t *f, uint32_t cp, pglyph_t *out)
+{
+    int i = pindex(f, cp);
+    if (i >= 0) { *out = (pglyph_t){f, &f->glyphs[i], i}; return true; }
+    if (f->fallback && (i = pindex(f->fallback, cp)) >= 0) {
+        *out = (pglyph_t){f->fallback, &f->fallback->glyphs[i], i};
+        return true;
+    }
+    if (cp != '?' && (i = pindex(f, '?')) >= 0) { *out = (pglyph_t){f, &f->glyphs[i], i}; return true; }
+    return false;
+}
+// LVGL's class kerning between two glyphs of one face, in 1/16 px (kern_scale 16 cancels its >> 4).
+static int pkern(const pglyph_t *a, const pglyph_t *b)
+{
+    if (a->face != b->face || !a->face->kern_values) return 0;
+    unsigned l = a->face->kern_left[a->index], r = b->face->kern_right[b->index];
+    return l && r ? a->face->kern_values[(l - 1) * a->face->kern_right_count + (r - 1)] : 0;
+}
+static uint32_t peek(const char *p)
+{
+    return *p ? ht_utf8_next(&p) : 0;
+}
+/*
+ * How far `cp` moves the pen when `next` follows it — lv_font_fmt_txt.c's own arithmetic: the
+ * advance in 1/16 px plus the pair's kerning, rounded to a whole pixel for this letter. A fixed-cell
+ * font answers its cell width.
+ */
+static int pair_advance(const ht_font_t *f, uint32_t cp, uint32_t next)
+{
+    const ht_pfont_t *pf = ht_pfont(f);
+    if (!pf) return f->width;
+    pglyph_t g, n;
+    if (!plookup(pf, cp, &g)) return 0;
+    int kv = next && plookup(pf, next, &n) ? pkern(&g, &n) : 0;
+    return ((int)g.g->adv + kv + 8) >> 4;
+}
+int ht_measure(const ht_font_t *font, const char *text)
+{
+    int w = 0;
+    for (const char *p = text ? text : ""; *p;) {
+        uint32_t cp = ht_utf8_next(&p);
+        w += pair_advance(font, cp, peek(p));
+    }
+    return w;
+}
+/*
+ * LVGL 9.5's word wrap, as the live firmware was configured (LV_TXT_BREAK_CHARS " ,.;:-_)}",
+ * LV_TXT_LINE_BREAK_LONG_LEN 0): lv_text_get_next_word and lv_text_get_next_line, letter spacing 0.
+ * A break character is a word of its own, so a line keeps the spaces it broke at — and a centred
+ * line is centred on a width that counts them, which is what LVGL draws and so what this does.
+ */
+static bool lv_break_char(uint32_t c) { return c && c < 0x80 && strchr(" ,.;:-_)}", (int)c); }
+static size_t lv_next_word(const char *t, const ht_font_t *f, int max, bool all, int *word_w)
+{
+    const char *p = t, *stop = NULL, *brk = NULL;
+    int cur = 0, n = 0;
+    *word_w = 0;
+    while (*p) {
+        const char *at = p;
+        uint32_t c = ht_utf8_next(&p);
+        n++;
+        cur += pair_advance(f, c, peek(p));
+        if (!brk && cur > max) { brk = at; if (all) break; }
+        if (c == '\n' || c == '\r' || lv_break_char(c)) {
+            if (at == t && !brk) *word_w = cur;
+            n--;
+            stop = n ? at : p;
+            break;
+        }
+        if (!brk) *word_w = cur;
+    }
+    if (!brk) return (size_t)((stop ? stop : p) - t);
+    if (all) return (size_t)(brk - t);
+    *word_w = 0;
+    return 0;
+}
+// The next line of `txt` at `width`; returns where the one after it starts. `all` breaks inside
+// words, as LVGL does on the last visible line of a LONG_DOT label.
+static const char *lv_next_line(const char *txt, int width, const ht_font_t *f, bool all)
+{
+    size_t i = 0;
+    int max = width;
+    bool newline = false;
+    while (txt[i] && max > 0) {
+        int ww;
+        size_t adv = lv_next_word(txt + i, f, max, all || i == 0, &ww);
+        max -= ww;
+        if (!adv) break;
+        i += adv;
+        if (txt[0] == '\n' || txt[0] == '\r') { newline = true; break; }
+        if (txt[i] == '\n' || txt[i] == '\r') { i++; newline = true; break; }
+    }
+    const char *end = txt + i;
+    if (!i && *txt) ht_utf8_next(&end);
+    if (!newline) while (*end == ' ') end++;
+    return end;
+}
+// lv_text_get_width: the last letter kerns against whatever follows it, past `len` or not.
+static int lv_width(const ht_font_t *f, const char *txt, size_t len)
+{
+    int w = 0;
+    for (const char *p = txt; *p && p < txt + len;) {
+        uint32_t c = ht_utf8_next(&p);
+        w += pair_advance(f, c, peek(p));
+    }
+    return w;
+}
+static int lv_layout(ht_lv_label_t *l, const ht_font_t *f, int width, int lines, bool dots)
+{
+    l->lines = l->w = 0;
+    for (const char *p = l->text; *p;) {
+        bool last = dots && l->lines == lines - 1;
+        const char *end = lv_next_line(p, width, f, last);
+        if (l->lines < HT_LV_LINES) {
+            ht_lv_line_t *ln = &l->line[l->lines];
+            ln->at = (uint16_t)(p - l->text);
+            ln->len = (uint16_t)(end - p);
+            ln->w = (int16_t)lv_width(f, p, ln->len);
+            ln->x = (int16_t)((width - ln->w) / 2);
+            if (ln->w > l->w) l->w = ln->w;
+        }
+        l->lines++;
+        p = end;
+    }
+    return l->lines;
+}
+int ht_lv_label(ht_lv_label_t *l, const ht_font_t *font, const char *text, int width, int lines,
+                bool dots)
+{
+    snprintf(l->text, sizeof l->text, "%s", text ? text : "");
+    if (lines > HT_LV_LINES) lines = HT_LV_LINES;
+    int need = lv_layout(l, font, width, lines, false);
+    if (dots) lv_layout(l, font, width, lines, true);
+    size_t cps = 0;
+    for (const char *p = l->text; *p; ht_utf8_next(&p)) cps++;
+    /*
+     * LV_LABEL_LONG_DOT (lv_label.c refr_text): the letter under `width - 3 dots` on the last line
+     * that shows becomes the first of three '.', and the rest of the text goes.
+     */
+    if (dots && need > lines && need > 1 && cps > 3) {
+        const ht_lv_line_t *ln = &l->line[lines - 1];
+        int px = width - 3 * pair_advance(font, '.', '.'), x = ln->x;
+        const char *line = l->text + ln->at, *dot = line;
+        for (const char *p = line; *p && p < line + ln->len;) {
+            const char *at = p;
+            uint32_t c = ht_utf8_next(&p);
+            int gw = pair_advance(font, c, peek(p));
+            dot = at;
+            if (px < x + gw || p >= line + ln->len) break;
+            x += gw;
+        }
+        size_t id = (size_t)(dot - l->text), len = strlen(l->text);
+        while (id && id + 3 > len) { do id--; while (id && ((uint8_t)l->text[id] & 0xc0) == 0x80); }
+        size_t k = 0;
+        for (; k < 3 && l->text[id + k]; k++) l->text[id + k] = '.';
+        l->text[id + k] = 0;
+        lv_layout(l, font, width, lines, dots);
+    }
+    if (l->lines > lines) l->lines = lines;
+    return need;
+}
+int ht_fit_width(char *dst, size_t cap, const char *text, int width, const ht_font_t *font)
+{
+    static const char ellipsis[] = "\xe2\x80\xa6";
+    if (!cap) return 0;
+    const char *src = text ? text : "";
+    size_t n = strnlen(src, cap - 1);
+    memcpy(dst, src, n);
+    dst[n] = 0;
+    for (char *q = dst; *q; q++) if (*q == '\n') *q = ' ';
+    int whole = ht_measure(font, dst);
+    if (whole <= width) return whole;
+    int room = width - ht_measure(font, ellipsis), used = 0;
+    const char *p = dst, *end = dst;
+    while (*p) {
+        const char *at = p;
+        uint32_t cp = ht_utf8_next(&p);
+        int a = pair_advance(font, cp, peek(p));
+        if (used + a > room) break;
+        used += a;
+        end = p;
+        (void)at;
+    }
+    while (end > dst && end[-1] == ' ') end--;
+    size_t keep = (size_t)(end - dst);
+    if (keep + sizeof ellipsis > cap) keep = cap > sizeof ellipsis ? cap - sizeof ellipsis : 0;
+    memcpy(dst + keep, ellipsis, sizeof ellipsis);
+    return ht_measure(font, dst);
+}
+bool ht_icon(ht_scene_t *s, int x, int y, const ht_icon_t *icon)
+{
+    if (s->count >= HT_RUNS || !icon || !icon->w) return false;
+    ht_run_t *r = &s->runs[s->count++];
+    memset(r, 0, sizeof *r);
+    // Not text, but the rest of the compositor reads every run's font; it is never drawn.
+    r->x = x; r->y = y; r->w = icon->w; r->font = &ht_mono_16;
+    r->sprite = (ht_sprite_t){.pixels = icon->px, .alpha = icon->a, .width = icon->w,
+                              .height = icon->h, .lvgl = true};
+    return true;
+}
+bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border)
+{
+    if (s->count >= HT_RUNS || w <= 0 || h <= 0) return false;
+    ht_run_t *r = &s->runs[s->count++];
+    memset(r, 0, sizeof *r);
+    // A box is not text, but the rest of the compositor reads every run's font; it is never drawn.
+    r->x = x; r->y = y; r->w = w; r->font = &ht_mono_16; r->fg = r->bg = fill;
+    if (radius > w / 2) radius = w / 2;
+    if (radius > h / 2) radius = h / 2;
+    r->box.h = (uint16_t)h; r->box.fill = fill; r->box.border = border; r->box.radius = (uint8_t)radius;
+    return true;
+}
+
 static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom)
 {
     if (!text || !*text) return;
@@ -399,6 +633,7 @@ int ht_wrap(ht_scene_t *s, int x, int y, int w, int lines, int skip, const ht_fo
 ht_rect_t ht_run_bounds(const ht_run_t *r)
 {
     if (r->sprite.width) return (ht_rect_t){r->x,r->y,r->sprite.width,r->sprite.height};
+    if (r->box.h) return (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h};
     if (r->arc) {
         const char *p = r->text; int count = 0;
         while (*p && count < HT_ARC_COLS) { ht_utf8_next(&p); count++; }
@@ -561,7 +796,11 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                     damage_add(d, shimmer_band(next), rows);
                     continue;
                 }
-                if (!old->sprite.width && !next->sprite.width && !old->arc && !next->arc && old->x == next->x && old->y == next->y && old->w == next->w &&
+                // Fixed-cell text only: a proportional run's glyphs move when one before them
+                // changes width, and a box has no cells. Both repaint their whole bounds instead.
+                if (!old->sprite.width && !next->sprite.width && !old->arc && !next->arc &&
+                    !old->box.h && !next->box.h && !ht_pfont(old->font) && !ht_pfont(next->font) &&
+                    old->x == next->x && old->y == next->y && old->w == next->w &&
                     old->font == next->font && old->fg == next->fg && old->bg == next->bg) {
                     const char *p = old->text, *q = next->text;
                     int cell = 0, first = -1, last = -1;
@@ -615,16 +854,18 @@ static void fill(uint16_t *p, size_t n, uint16_t c)
     for (size_t i = 0; i < n; i++)
         p[i] = c;
 }
-uint16_t ht_blend(uint16_t fg, uint16_t bg, unsigned alpha)
+// An `a`-in-`levels` mix: 3 for fixed-cell 2-bit glyphs, 15 for 4-bit ones, 16 for box corners (0 = all bg, `levels` = all fg).
+static uint16_t mix(uint16_t fg, uint16_t bg, unsigned a, unsigned levels)
 {
-    unsigned r = (((fg >> 11) * alpha + (bg >> 11) * (3 - alpha)) + 1) / 3;
-    unsigned g = ((((fg >> 5) & 63) * alpha + ((bg >> 5) & 63) * (3 - alpha)) + 1) / 3;
-    unsigned b = (((fg & 31) * alpha + (bg & 31) * (3 - alpha)) + 1) / 3;
+    unsigned half = levels / 2;
+    unsigned r = ((fg >> 11) * a + (bg >> 11) * (levels - a) + half) / levels;
+    unsigned g = (((fg >> 5) & 63) * a + ((bg >> 5) & 63) * (levels - a) + half) / levels;
+    unsigned b = ((fg & 31) * a + (bg & 31) * (levels - a) + half) / levels;
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
 static uint16_t blend(uint16_t fg, uint16_t bg, unsigned alpha)
 {
-    return panel16(ht_blend(fg, bg, alpha));
+    return panel16(mix(fg, bg, alpha, 3));
 }
 
 // The small ASCII artwork uses only a handful of characters. Expand each used
@@ -925,6 +1166,7 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
     }
 }
+static uint16_t lv_mix24_16(uint16_t src, uint16_t dst, unsigned a);
 static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     const ht_sprite_t *s=&r->sprite;
@@ -943,11 +1185,121 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
                 do{at++;x++;}while(x<right && (!s->alpha || s->alpha[at]==255));
                 size_t n=at-first;memcpy(dst,s->pixels+first,n*2);dst+=n;continue;
             }
+            if(s->lvgl){*dst=panel16(lv_mix24_16(panel16(s->pixels[at]),panel16(*dst),a));at++;dst++;x++;continue;}
             uint16_t fg=panel16(s->pixels[at]),bg=panel16(*dst);
             unsigned red=((fg>>11)*a+(bg>>11)*(255-a)+127)/255;
             unsigned green=(((fg>>5)&63)*a+((bg>>5)&63)*(255-a)+127)/255;
             unsigned blue=((fg&31)*a+(bg&31)*(255-a)+127)/255;
             *dst++=panel16((red<<11)|(green<<5)|blue);at++;x++;
+        }
+    }
+}
+// lv_color_16_16_mix, as LVGL 9.5 blends a glyph's coverage into an RGB565 frame.
+static uint16_t lv_mix16(uint16_t c1, uint16_t c2, uint8_t mix)
+{
+    if (mix == 255) return c1;
+    if (mix == 0 || c1 == c2) return mix ? c1 : c2;
+    mix = (uint8_t)(((uint32_t)mix + 4) >> 3);
+    uint32_t bg = (uint32_t)(c2 | ((uint32_t)c2 << 16)) & 0x7E0F81Fu;
+    uint32_t fg = (uint32_t)(c1 | ((uint32_t)c1 << 16)) & 0x7E0F81Fu;
+    uint32_t result = ((((fg - bg) * mix) >> 5) + bg) & 0x7E0F81Fu;
+    return (uint16_t)((result >> 16) | result);
+}
+// lv_color_24_16_mix with a 565 source: how LVGL blends an ARGB8888 image into an RGB565 frame.
+static uint16_t lv_mix24_16(uint16_t src, uint16_t dst, unsigned a)
+{
+    if (!a) return dst;
+    if (a == 255) return src;
+    unsigned inv = 255 - a;
+    return (uint16_t)(((((src >> 11) * a + (dst >> 11) * inv) << 3) & 0xF800) +
+                      (((((src >> 5) & 63) * a + ((dst >> 5) & 63) * inv) >> 3) & 0x07E0) +
+                      (((src & 31) * a + (dst & 31) * inv) >> 8));
+}
+/*
+ * A PROPORTIONAL RUN, drawn the way LVGL draws a label: each letter's box at `pen + ofs_x` and
+ * `top + (line - base) - box_h - ofs_y` (precomputed as oy), its 4-bit coverage as opacity v * 17,
+ * blended into whatever is already on the frame — so text laid on a card blends into the card. The
+ * pen moves by the pair advance, kerning included. Nothing is filled behind the run. Clipped to the
+ * run's bounds, which are also its damage.
+ */
+static void prop_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    const ht_pfont_t *f = ht_pfont(r->font);
+    int x1 = imax(clip.x, r->x), x2 = imin(clip.x + clip.w, r->x + r->w);
+    int y1 = imax(clip.y, r->y), y2 = imin(clip.y + clip.h, r->y + f->base.height);
+    if (x1 >= x2 || y1 >= y2) return;
+    int pen = r->x;
+    for (const char *p = r->text; *p && pen < x2;) {
+        uint32_t cp = ht_utf8_next(&p);
+        pglyph_t g;
+        if (!plookup(f, cp, &g)) continue;
+        int adv = pair_advance(r->font, cp, peek(p));
+        const ht_glyph_t *gl = g.g;
+        // A fallback face's letter sits on this face's baseline.
+        int gx = pen + gl->ox, gy = r->y + f->ascent - g.face->ascent + gl->oy;
+        int xa = imax(x1, gx), xb = imin(x2, gx + gl->w), ya = imax(y1, gy), yb = imin(y2, gy + gl->h);
+        const uint8_t *bits = g.face->base.pixels + gl->offset;
+        for (int y = ya; y < yb; y++) {
+            uint16_t *dst = out + (y - clip.y) * clip.w + xa - clip.x;
+            for (int x = xa; x < xb; x++, dst++) {
+                unsigned k = (unsigned)((y - gy) * gl->w + (x - gx));
+                unsigned v = (bits[k >> 1] >> ((k & 1) ? 0 : 4)) & 15;
+                if (v) *dst = panel16(lv_mix16(r->fg, panel16(*dst), (uint8_t)(v * 17)));
+            }
+        }
+        pen += adv;
+    }
+}
+static uint32_t isqrt(uint32_t v)
+{
+    uint32_t r = 0, bit = 1u << 30;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; } else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+/*
+ * A ROUNDED BOX, analytically: full coverage everywhere but the four corner squares, where each
+ * pixel's coverage is its centre's distance from the corner's centre against the radius, in
+ * sixteenths of a pixel. The border is the same test one pixel in. Blended onto whatever is
+ * already there, so a box on the canvas and a box on a card both antialias correctly.
+ */
+static void box_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    int bx = r->x, by = r->y, bw = r->w, bh = r->box.h, rad = r->box.radius;
+    int x1 = imax(clip.x, bx), x2 = imin(clip.x + clip.w, bx + bw);
+    int y1 = imax(clip.y, by), y2 = imin(clip.y + clip.h, by + bh);
+    if (x1 >= x2) return;
+    bool edged = r->box.border != r->box.fill;
+    uint16_t pf = panel16(r->box.fill), pb = panel16(edged ? r->box.border : r->box.fill);
+    for (int y = y1; y < y2; y++) {
+        uint16_t *row = out + (y - clip.y) * clip.w - clip.x;
+        bool corner_row = y < by + rad || y >= by + bh - rad;
+        if (!corner_row) {
+            // The straight middle: one border pixel each side, the fill between. Most of a card.
+            int left = imax(x1, bx + 1), right = imin(x2, bx + bw - 1);
+            if (x1 == bx) row[bx] = pb;
+            if (right > left) fill(row + left, (size_t)(right - left), pf);
+            if (x2 == bx + bw) row[bx + bw - 1] = pb;
+            continue;
+        }
+        bool edge_row = y == by || y == by + bh - 1;
+        int cy = y < by + rad ? by + rad : by + bh - rad;
+        int dy = y * 16 + 8 - cy * 16;
+        for (int x = x1; x < x2; x++) {
+            int cx = x < bx + rad ? bx + rad : x >= bx + bw - rad ? bx + bw - rad : -1;
+            if (cx < 0) { row[x] = edge_row ? pb : pf; continue; }
+            // A corner pixel: coverage from its centre's distance to the corner's centre.
+            int dx = x * 16 + 8 - cx * 16;
+            int d = (int)isqrt((uint32_t)(dx * dx + dy * dy));
+            int o = rad * 16 + 8 - d, in = (rad - 1) * 16 + 8 - d;
+            if (o <= 0) continue;
+            unsigned outer = o >= 16 ? 16 : (unsigned)o, inner = in <= 0 ? 0 : in >= 16 ? 16 : (unsigned)in;
+            uint16_t c = !edged || inner == 16 ? r->box.fill : inner == 0 ? r->box.border
+                       : mix(r->box.fill, r->box.border, inner, 16);
+            row[x] = outer == 16 ? panel16(c) : panel16(mix(c, panel16(row[x]), outer, 16));
         }
     }
 }
@@ -961,7 +1313,9 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
         if (!intersect(box, clip))
             continue;
         if (r->sprite.width) { sprite_raster(r, clip, out); continue; }
+        if (r->box.h) { box_raster(r, clip, out); continue; }
         if (r->arc) { arc_raster(r, clip, out); continue; }
+        if (ht_pfont(f)) { prop_raster(r, clip, out); continue; }
         int y1 = imax(clip.y, r->y), y2 = imin(clip.y + clip.h, r->y + f->height),
             x1 = imax(clip.x, r->x), x2 = imin(clip.x + clip.w, r->x + r->w);
         if (r->bg != s->background)

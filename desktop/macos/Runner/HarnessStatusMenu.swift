@@ -115,11 +115,12 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     }
     menu.addItem(.separator())
     add("New Harness…", "newAgent", enabled: enabled)
+    add("Open Harness…", "addAgent", enabled: enabled)
     let clear = add("Clear All Notifications", "clearStatusNotifications",
                     enabled: enabled && !entries.isEmpty)
     clear.representedObject = entries
     menu.addItem(.separator())
-    add("Open Harness", "openWindow")
+    add("Show Harness", "openWindow")
     add("Settings…", "settings", enabled: enabled)
     menu.addItem(.separator())
     add("Quit Harness", "quit")

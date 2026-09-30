@@ -197,11 +197,11 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('render_agents') + function('tabs_move') + function('tab_name') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_list')
+code += function('render_agents') + function('tabs_move') + function('tab_name') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'ui_notify_task_done', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -244,10 +244,6 @@ static void dispatch(action_t a) {
     else if (a.kind == A_RETURN || a.kind == A_LATEST) { if(a.kind==A_RETURN)returns++; visit_action(a); }
     else if (a.kind == A_PET) boops++;
     else if (a.kind == A_TAB_LIST) tabs_open();                   // mirrors ui_habitat.c's dispatch
-    else if (a.kind == A_PANE_PREV || a.kind == A_PANE_NEXT) {   // mirrors ui_habitat.c's dispatch
-        int i = s.active < 0 ? 0 : (s.active + (a.kind == A_PANE_NEXT ? 1 : s.count - 1)) % s.count;
-        action_t pane = {.kind = A_AGENT}; COPY(pane.id, s.agents[i].id); dispatch(pane);
-    }
     else if (a.kind == A_AGENT) {
         switches++; s.active = !strcmp(a.id, "b") ? 1 : 0; view(AGENT);
     } else if (a.kind == A_SETTINGS) view(SETTINGS);
@@ -1760,27 +1756,9 @@ int main(int argc, char **argv) {
     workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
     habitat_touch(true, 233, 142, 1000); habitat_touch(true, 247, 152, 1400); habitat_touch(false, 247, 152, 1900);
     assert(s.view == AGENTS);
-    // ⌄ marks each door only when there is another to choose.
-    {
-        workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
-        int downs = 0;
-        for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, HT_DOWN)) downs++;
-        assert(downs == 2);   // four tabs, two panes
-        s.tab_count = 1; s.count = 1; scene_take(); downs = 0;
-        for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, HT_DOWN)) downs++;
-        assert(downs == 0);
-    }
-    // THE PANE ARROWS either side of the Focus microphone: a sideways swipe, as buttons, and only when
-    // the tab has another agent to go to.
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait(dir, "focus-arrows");
-    tap(1000, 98, 388); assert(switches == 1 && s.active == 1 && !starts);
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
-    tap(1000, 368, 388); assert(switches == 1 && s.active == 1 && !starts);
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();   // a thumb, not a tap
-    habitat_touch(true, 98, 388, 1000); habitat_touch(true, 110, 400, 1400); habitat_touch(false, 110, 400, 1800);
-    assert(switches == 1 && !starts);
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count = 1; scene_take();
-    tap(1000, 98, 388); tap(1200, 368, 388); assert(!switches && !starts);   // one agent: no arrows at all
+    // No pane arrows beside the microphone (the owner took them out): a tap there is nothing.
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    tap(1000, 98, 388); tap(1200, 368, 388); assert(!switches && !starts);
     /*
      * THE BELL DOES NOT COUNT THE AGENT ON THE FACE. Standing on "a", its question arrives: it shows in
      * the recap's place and the bell stays dark — a +1 there read as another agent asking. Move to
@@ -1792,22 +1770,40 @@ int main(int argc, char **argv) {
         ui_notif_replace(&asked,1); scene_take();
         assert(s.view==HOME && s.active==0 && !action_enabled(A_INBOX));
         s.active=1; scene_take(); assert(action_enabled(A_INBOX));   // the bell, drawn at the top on Focus
-        bool one = false;   // bell and count are separate runs there, so the count is read on its own
-        for (int i = 0; i < scene.count; i++) if (scene.runs[i].y == 8 && !strcmp(scene.runs[i].text, "1")) one = true;
-        assert(one);
+        bool bell = false, one = false;   // the blue pill: the bell, and its count beside it
+        for (int i = 0; i < scene.count; i++) {
+            if (scene.runs[i].font == &ht_lv_montserrat_14.base && !strcmp(scene.runs[i].text, HT_LV_BELL)) bell = true;
+            if (scene.runs[i].font == &ht_lv_montserrat_22.base && !strcmp(scene.runs[i].text, "1")) one = true;
+        }
+        assert(bell && one);
         s.active=0; scene_take(); assert(!action_enabled(A_INBOX));
+    }
+    // THE FOCUS INBOX: the close pill, then a column of cards — machine, mark or dot + agent, message.
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
+    {
+        cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",.summary="Retry queue shipped."},
+                               {.agent_id="b",.name="Landing page",.machine="Studio Mac",.summary="Hero and pricing are in."}};
+        ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait(dir, "focus-inbox");
+        assert(s.view == INBOX && scene.background == BG);   // black, like the face
+        int cards = 0;
+        for (int i = 0; i < s.hit_count; i++) cards += s.hits[i].action == A_NOTICE;
+        assert(cards == 2);
+        tap(1000, 233, 190); assert(desktop_opens == 1 && !strcmp(opened_agent, "a"));   // a card opens its agent
+        ui_notif_open(); scene_take(); tap(2000, 233, 32); assert(s.view == HOME);        // the cross goes back
     }
     // An open question on Focus: shown on the home face, in the recap's place, and nowhere else.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     {
-        cable_notif_t asked={.question=true,.summary="Which database should the retry queue use?"};
-        COPY(asked.agent_id, s.agents[0].id); COPY(asked.name, s.agents[0].name);
-        // A pill under the bell, as on glass: the two must not touch.
+        // The question on the face, and another agent's news so the bell is up: the tab pill sits
+        // under the blue bell, as on glass, and the two must not touch.
+        cable_notif_t asked[2]={{.question=true,.summary="Which database should the retry queue use?"},
+                                {.agent_id="b",.name="Website",.summary="The site is deployed."}};
+        COPY(asked[0].agent_id, s.agents[0].id); COPY(asked[0].name, s.agents[0].name);
         s.tab_count=1; COPY(s.tabs[0].id,"tab-0"); COPY(s.tabs[0].name,"Daily life"); COPY(s.selected_tab,"tab-0");
-        ui_notif_replace(&asked,1); scene_take(); portrait(dir, "focus-question");
-        assert(s.view == HOME);
+        ui_notif_replace(asked,2); scene_take(); portrait(dir, "focus-question");
+        assert(s.view == HOME && action_enabled(A_INBOX));
         uint16_t gap[HT_WIDTH];
-        for (int y = 42; y < 61; y++) {   // the bell's ink ends at 41, the pill's rim starts at 61
+        for (int y = 55; y < 68; y++) {   // the bell pill ends at 54, the tab pill starts at 68
             ht_raster(&scene, (ht_rect_t){0, y, HT_WIDTH, 1}, gap);
             for (int x = 0; x < HT_WIDTH; x++) assert(gap[x] == 0);
         }
@@ -1859,7 +1855,7 @@ int main(int argc, char **argv) {
 
     // And NOT the middle of the glass. The creature skins start speech from anywhere on the creature;
     // Focus has a button for it, and the middle is the recap being read.
-    for (int y = 120; y <= 360; y += 40) {
+    for (int y = 120; y <= 340; y += 40) {   // the microphone's 80 px button starts at 353
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
         tap(1000, 233, y);
         assert(!starts);
@@ -2027,7 +2023,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
-                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'terminal.c'),
+                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'terminal.c'),
                     str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui')],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):

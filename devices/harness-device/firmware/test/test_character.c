@@ -259,14 +259,10 @@ static void focus_face(void)
          "L\u01b0\u1ee3ng b\u1ed9 nh\u1edb \u0111\u00e3 gi\u1ea3m v\u00e0 ki\u1ec3m tra l\u1ea1i.", HT_CHARACTER_IDLE, 0, 0},
     };
     int expected = -1;
-    // Every case twice: with the ⌄ doors and without. Same runs either way, and the longest names
-    // with a ⌄ after them are the ones that would reach the bezel if its cell were not budgeted.
-    for (unsigned k = 0; k < 2 * (sizeof cases / sizeof cases[0]); k++) {
-        unsigned i = k / 2;
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         ht_character_face_t f = {.recipient = cases[i].name, .tab = cases[i].tab,
             .engine = cases[i].engine, .activity = cases[i].activity, .elapsed = cases[i].elapsed,
             .status = "", .hint = "", .detail = "", .mood = cases[i].mood,
-            .more_tabs = k & 1, .more_panes = k & 1,
             .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
         f.pose.level = cases[i].level;
         ht_scene_t scene; ht_scene_clear(&scene, 0);
@@ -279,14 +275,15 @@ static void focus_face(void)
                 assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);   // property 2
     }
     /*
-     * A NAME TOO LONG FOR ITS ROW ends in "...", within its budget: the pill holds 20 glyphs (18
-     * beside its ⌄), the agent's row 20 beside the badge (18 beside the badge and the ⌄). Cut by
-     * the raster instead, it reads as a typo — "Deploy latest firmwa" — and the eye stops on it.
+     * A NAME TOO LONG FOR ITS ROW ends in "...", as LVGL's LONG_DOT cut it, within its budget in
+     * PIXELS: the tab pill's name gets 314 (the widest a round pill this high can be inside r 230),
+     * the agent's name what the 384 px row leaves beside its mark. Cut by the raster instead, it
+     * reads as a typo.
      */
-    for (int more = 0; more < 2; more++) {
+    {
         ht_character_face_t f = {.recipient = long_name, .tab = long_tab, .engine = "claude",
             .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
-            .more_tabs = more, .more_panes = more, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, "");
         int found = 0;
@@ -294,11 +291,10 @@ static void focus_face(void)
             const ht_run_t *r = &scene.runs[i];
             size_t n = strlen(r->text);
             if (n < 3 || strcmp(r->text + n - 3, "...")) continue;
-            int glyphs = 0;
-            for (const char *p = r->text; *p; glyphs++) ht_utf8_next(&p);
-            if (r->font == &ht_mono_20) { assert(glyphs == (more ? 18 : 20)); found |= 1; }
-            if (r->font == &ht_mono_28) { assert(glyphs == (more ? 18 : 20)); found |= 2; }
-            assert(r->w >= glyphs * r->font->width);   // the raster never cuts it
+            int w = ht_measure(r->font, r->text);
+            assert(w <= r->w);   // the raster never cuts it
+            if (r->font == &ht_lv_montserrat_24.base) { assert(w <= 314); found |= 1; }
+            if (r->font == &ht_lv_geist_med_38.base) { assert(w <= 384 - 28 - 10); found |= 2; }
         }
         assert(found == 3);
     }
@@ -339,10 +335,10 @@ static void focus_face(void)
     }
 
     /*
-     * The upper half reads on one rhythm: pill, name, body, with the same air above the name as
-     * below it. Measured as INK, not as cells — the pill's fill reaches its cell's edge while the
-     * name's glyphs sit inside theirs, so equal cell gaps render unequal by three pixels and the
-     * lower one looks the looser. Banded off the raster, which is the only place that is visible.
+     * WHERE THE LIVE FIRMWARE PUTS THEM (0.0.86, assets/lvgl/SPEC.md): the pill's box at y 68, 41
+     * tall; the name's line from 119; the recap card at 41,191, 384 x 119. Without a card the block
+     * is centred: a working name at 176, its pill at 125 and its status at 248; a resting one at 172.
+     * A drift here is a drift from the dial the owner compares this with.
      */
     {
         ht_character_face_t f = {.recipient = "Payments refactor", .tab = "Harness repo",
@@ -350,24 +346,32 @@ static void focus_face(void)
             .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, "Shipped the retry queue and the webhook tests.");
-        ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
-        int band[3][2], bands = 0, start = -1;
-        for (int y = 0; y <= HT_HEIGHT && bands < 3; y++) {
-            bool ink = false;
-            for (int x = 0; y < HT_HEIGHT && x < HT_WIDTH && !ink; x++) ink = full[y * HT_WIDTH + x];
-            if (ink && start < 0) start = y;
-            if (!ink && start >= 0) { band[bands][0] = start; band[bands][1] = y - 1; bands++; start = -1; }
-        }
-        assert(bands == 3);
-        int above = band[1][0] - band[0][1] - 1, below = band[2][0] - band[1][1] - 1;
-        assert(above == below);
+        const ht_run_t *pill = &scene.runs[0], *name = &scene.runs[3], *card = &scene.runs[5];
+        assert(pill->box.h == 41 && pill->y == 68);
+        assert(name->font == &ht_lv_geist_med_38.base && name->y == 119 && !strcmp(name->text, "Payments refactor"));
+        assert(card->box.h == 119 && card->x == 41 && card->y == 191 && card->w == 384 && card->box.radius == 28);
+        // The mark: the 28 px box centred on the name's 51 px line, 10 px before the name.
+        assert(scene.runs[2].sprite.pixels == ht_icon_engine28[0].px && scene.runs[2].y == 119 + 11);
+        assert(name->x == scene.runs[2].x + 38);
+
+        f.activity = "Working"; f.elapsed = 34;
+        ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        assert(scene.runs[0].y == 125 && scene.runs[3].y == 176);
+        assert(scene.runs[8].y == 248 && scene.runs[8].font == &ht_lv_geist_med_32.base &&
+               !strcmp(scene.runs[8].text, "Simmering\xe2\x80\xa6 34s"));   // the gerund for 30..35 s
+
+        f.activity = ""; f.elapsed = 0;
+        ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        assert(scene.runs[3].y == 172 && scene.runs[9].y == 172 + 51 + 21 &&
+               !strcmp(scene.runs[9].text, "No activity yet"));
     }
 
-    // Stated as its parts rather than as a number: the tab pill (its outline, its name and the ⌄
-    // after it), the agent's row (the engine mark on its own run so it can be coloured without a
-    // per-cell palette, the name, and its ⌄), the live status, and the four recap rows the octopus
-    // reads its summary in. The two ⌄ runs are emitted empty when there is nothing else to choose.
-    assert(expected == 3 + 3 + 1 + 4);
+    // Stated as its parts rather than as a number: the tab pill (its box and its name), the header
+    // (mark, two name lines), the recap card (its box and two lines), the live status and
+    // "No activity yet" (two lines). Each is emitted empty when it has nothing to say.
+    assert(expected == 2 + 3 + 3 + 1 + 2);
 }
 
 static void footer_layout(void)

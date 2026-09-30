@@ -99,17 +99,26 @@ do {
   try check(status.menu.items.contains { $0.title == "Review" }, "The next opening reflects the new tab group")
 
   status.update(["enabled": false, "statusMenuEntries": rows])
-  try check(!status.item("newAgent").isEnabled && !status.item("settings").isEnabled &&
+  try check(!status.item("newAgent").isEnabled && !status.item("addAgent").isEnabled && !status.item("settings").isEnabled &&
             !status.item("clearStatusNotifications").isEnabled, "A modal disables workspace actions")
   status.click(status.item("openWindow"))
-  try check(reveals == 3, "Open Harness remains available during a modal")
+  try check(reveals == 3, "Show Harness remains available during a modal")
   status.update(["enabled": true, "statusMenuEntries": []])
   try check(status.menu.items.first?.title == "No unread notifications" &&
             !status.item("clearStatusNotifications").isEnabled, "An empty inbox is explicit and cannot be cleared")
+  let open = status.menu.items.first { $0.title == "Open Harness…" }!
+  status.click(open)
+  try check(emitted.last?.0 == "addAgent" && reveals == 4,
+            "Open Harness reveals the window and opens the existing-session picker even with no notifications")
+  let beforeShow = emitted.count
+  status.click(status.menu.items.first { $0.title == "Show Harness" }!)
+  try check(reveals == 5 && emitted.count == beforeShow,
+            "Show Harness only reveals the app, without opening a picker")
   status.update([:])
   try check(!status.menu.items.contains { $0.identifier?.rawValue == "openStatusHarness" }, "Sign-out removes all conversation data")
-  try check(status.item("openWindow").isEnabled && status.item("quit").isEnabled,
-            "The signed-out menu still offers Open and Quit")
+  try check(status.item("openWindow").isEnabled && status.item("quit").isEnabled &&
+            !status.item("addAgent").isEnabled,
+            "The signed-out menu still offers Show and Quit, but cannot open the session picker")
   // Exercise the actual AppKit status button: the displayed number must agree
   // with the notification rows, with a bare icon after the last read.
   func checkCounter() throws {

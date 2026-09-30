@@ -11,8 +11,17 @@
 #include <zlib.h>
 #endif
 
+#ifdef HABITAT_NO_COMPANION_ART
+/*
+ * A Focus-only build carries no artwork (main/CMakeLists.txt): the pack is empty, no cache is
+ * allocated, and a sprite that names an asset is dropped rather than decoded. Nothing selects an
+ * illustrated companion in that build, so this is the belt to HABITAT_FOCUS_ONLY's braces.
+ */
+static const uint8_t companion_pack_start[1], *const companion_pack_end = companion_pack_start;
+#else
 extern const uint8_t companion_pack_start[] __asm__("_binary_companion_art_pack_start");
 extern const uint8_t companion_pack_end[] __asm__("_binary_companion_art_pack_end");
+#endif
 typedef struct { uint8_t *memory; uint32_t revision; ht_sprite_t sprite; } cache_t;
 static cache_t cache[COMPANION_ROLES];
 
@@ -54,6 +63,9 @@ static void shrink(uint8_t *memory, unsigned sw, unsigned sh, unsigned dw, unsig
 
 void ht_illustrated_init(void)
 {
+#ifdef HABITAT_NO_COMPANION_ART
+    return;
+#endif
     for (unsigned i = 0; i < COMPANION_ROLES; i++) {
         if (cache[i].memory) continue;
 #ifdef ESP_PLATFORM
@@ -71,6 +83,10 @@ void ht_illustrated_prepare(ht_scene_t *scene)
     for (unsigned i = 0; i < scene->count; i++) {
         ht_sprite_t *sprite = &scene->runs[i].sprite;
         if (!sprite->asset) continue;
+#ifdef HABITAT_NO_COMPANION_ART
+        *sprite = (ht_sprite_t){0};
+        continue;
+#endif
         const companion_asset_t *asset = sprite->asset;
         assert(asset->role < COMPANION_ROLES);
         unsigned role = asset->role;

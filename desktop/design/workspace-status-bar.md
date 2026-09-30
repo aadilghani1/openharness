@@ -228,11 +228,14 @@ do not hide notification groups. Project and machine context stays in row
 tooltips. Read sessions disappear; an empty inbox says “No unread
 notifications.” Blue dots mark unread rows. Long titles truncate with
 their full text and context in tooltips; unavailable rows are disabled. Rows
-stay in place while the menu is open. New Harness, Clear All Notifications,
-Open Harness, Settings, and Quit follow the conversations. The window's titlebar
+stay in place while the menu is open. New Harness and Open Harness open the
+same creation and existing-session pickers as the workspace commands. Clear All
+Notifications, Show Harness, Settings, and Quit follow. Show Harness only brings
+the app window forward and stays available when workspace actions are disabled.
+The window's titlebar
 has search and Store without a duplicate bell.
 
-![Native notification menu grouped by tabs, rendered with synthetic sessions](images/notification-tab-groups.png)
+![Native notification menu entries rendered offscreen with synthetic sessions](images/notification-tab-groups.png)
 
 Clear All acknowledges only the notifications in the displayed snapshot. Newer
 results and replacement questions stay unread. Opening a conversation restores

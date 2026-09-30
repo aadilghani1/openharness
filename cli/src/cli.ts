@@ -3458,6 +3458,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
   const agentReconciler = new TerminalAgentReconciler({
+    // The hook server starts before restore. Its early SessionStart hints must not run a full
+    // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
+    deferUntilStart: true,
     current: () => registry.list(),
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
