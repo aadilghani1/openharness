@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import { TerminalStreamManager } from './terminalStreamManager.js'
@@ -28,12 +28,27 @@ async function eventually(predicate: () => boolean | Promise<boolean>, timeoutMs
 run('TmuxControlStream real tmux', () => {
   const session = `harness-stream-${randomUUID().slice(0, 8)}`
   let paneId = ''
+  let socketRoot = ''
 
   beforeAll(async () => {
-    paneId = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, 'bash', '--noprofile', '--norc'])
+    // A managed client must not attach to a developer's existing server of another tmux version.
+    socketRoot = await mkdtemp(join(tmpdir(), 'harness-stream-server-'))
+    vi.stubEnv('TMUX_TMPDIR', socketRoot)
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
   })
 
   afterAll(async () => {
+    await tmux(['kill-server']).catch(() => {})
+    vi.unstubAllEnvs()
+    await rm(socketRoot, { recursive: true, force: true })
+  })
+
+  beforeEach(async () => {
+    paneId = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, 'bash', '--noprofile', '--norc'])
+  })
+
+  afterEach(async () => {
     await tmux(['kill-session', '-t', session]).catch(() => { /* exact disposable session only */ })
   })
 
@@ -90,6 +105,28 @@ run('TmuxControlStream real tmux', () => {
     await opened.value.close()
     expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('110x35')
     expect(closedReason === '' || closedReason === 'closed').toBe(true)
+  })
+
+  it('opens and resizes narrow and short panes without flooring them to desktop dimensions', async () => {
+    const opened = await TmuxControlStream.open(paneId, { cols: 30, rows: 8 }, {
+      onData: () => {}, onClose: () => {},
+    })
+    expect(opened.state).toBe('succeeded')
+    try {
+      if (opened.state !== 'succeeded') return
+      expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('30x8')
+      for (const size of [{ cols: 1, rows: 1 }, { cols: 39, rows: 11 }, { cols: 120, rows: 40 }]) {
+        expect((await opened.value.resize(size)).state).toBe('succeeded')
+        expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe(`${size.cols}x${size.rows}`)
+        opened.value.beginSnapshot()
+        const snapshot = await opened.value.snapshot()
+        expect(snapshot.state).toBe('succeeded')
+        if (snapshot.state === 'succeeded') expect(snapshot.value).toMatchObject(size)
+        opened.value.endSnapshot()
+      }
+    } finally {
+      if (opened.state === 'succeeded') await opened.value.close()
+    }
   })
 
   it('delivers a multi-chunk paste to the pane whole and in order', async () => {

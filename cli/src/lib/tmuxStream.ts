@@ -13,9 +13,9 @@ import {
   type TmuxRuntimeRef,
 } from './terminalTypes.js'
 
-const MIN_COLS = 40
+const MIN_COLS = 1
 const MAX_COLS = 300
-const MIN_ROWS = 12
+const MIN_ROWS = 1
 const MAX_ROWS = 120
 // One `send-keys -H` line carries two hex characters plus a space per byte. tmux accepts a command
 // line built from 8192 such bytes and rejects 16384 with `%error`, so this leaves a 4x margin.

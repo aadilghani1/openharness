@@ -1445,6 +1445,31 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:invalid-project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder')
+    const create = vi.fn()
+    socket.onCreateAgent = create
+    try {
+      socket.handleLocalFrame('local:invalid-project', { type: 'agent_create', payload: {
+        requestId: 'invalid', creationId: randomUUID(), engine: 'codex', projectSource: 'remote',
+        repositoryUrl: 'https://private-token@github.com/owner/repo',
+      } })
+      await vi.waitFor(() => expect(frames).toContainEqual({ type: 'agent_create_result', payload: {
+        requestId: 'invalid', error: 'INVALID_REPOSITORY',
+        detail: 'Enter a GitHub HTTPS or SSH URL, or owner/repository.',
+      } }))
+      expect(JSON.stringify(frames)).not.toContain('private-token')
+      expect(prepare).not.toHaveBeenCalled()
+      expect(create).not.toHaveBeenCalled()
+    } finally {
+      await socket.unregisterLocalClient('local:invalid-project')
+      await socket.stop()
+    }
+  })
+
   it.each([
     { projectSource: 'remote', repositoryUrl: 'owner/repo' },
     { projectSource: 'worktree', gitSource: '/remote/repo', branchRef: 'refs/heads/main' },

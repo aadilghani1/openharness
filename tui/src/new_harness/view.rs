@@ -1,5 +1,28 @@
 //! Terminal rendering of the compact desktop form.
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
+
+// Keep the recovery instruction readable, including long project names and wide glyphs.
+fn error_lines(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.width() + 1 + word.width() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        for glyph in word.graphemes(true) {
+            if !line.is_empty() && line.width() + glyph.width() > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push_str(glyph);
+        }
+    }
+    lines.push(line);
+    lines
+}
 
 fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
     if width == 0 {
@@ -52,20 +75,24 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     let (x, y, form_w, form_h) = (r.x, r.y, r.width, r.height);
     let (child_w, child_h) = (form_w, form_h);
     let fields = form.fields();
+    let errors = error_lines(&form.error, form_w.saturating_sub(4) as usize);
+    let error_h = errors.len().min(form_h.saturating_sub(4).max(1) as usize) as u16;
     form.area = r;
     if form.child.is_none() || side || !form.child_active {
         panel(buf, r, base);
-        let gap = if form_h >= fields.len() as u16 * 2 + 3 {
+        let fields_h = form_h - error_h + 1;
+        let error_y = r.bottom() - 1 - error_h;
+        let gap = if fields_h >= fields.len() as u16 * 2 + 3 {
             2
         } else {
             1
         };
-        let capacity = ((form_h.saturating_sub(5) / gap) + 1) as usize;
+        let capacity = ((fields_h.saturating_sub(5) / gap) + 1) as usize;
         let focus = fields.iter().position(|f| *f == form.focus).unwrap_or(0);
         let skip = focus.saturating_sub(capacity - 1);
         for (row, field) in fields.iter().skip(skip).take(capacity).enumerate() {
-            let fy = r.y + 2 + row as u16 * gap;
-            if fy >= r.bottom() - 2 {
+            let fy = r.y + if form_h < 5 { 0 } else { 2 } + row as u16 * gap;
+            if fy >= error_y {
                 break;
             }
             let active = *field == form.focus;
@@ -102,18 +129,10 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
             form.hits
                 .push((Rect::new(r.x + 1, fy, r.width - 2, 1), *field));
         }
-        put(
-            buf,
-            r.x + 2,
-            r.bottom() - 2,
-            r.width - 4,
-            &form.error,
-            if form.error.is_empty() {
-                muted
-            } else {
-                base.patch(theme::fg(theme::DANGER))
-            },
-        );
+        for (row, line) in errors.iter().take(error_h as usize).enumerate() {
+            put(buf, r.x + 2, error_y + row as u16, r.width - 4, line,
+                base.patch(theme::fg(theme::DANGER)));
+        }
     }
     if !side && !form.child_active {
         return None;

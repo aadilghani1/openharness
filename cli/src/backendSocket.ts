@@ -2652,7 +2652,9 @@ export class BackendSocket {
           let projectFolder
           try { projectFolder = parseProjectFolder(payload) }
           catch (error) {
-            reply(type, requestId, { error: error instanceof ProjectFolderError ? error.code : 'INVALID_PROJECT_SOURCE' }); return
+            reply(type, requestId, error instanceof ProjectFolderError
+              ? { error: error.code, detail: error.message }
+              : { error: 'INVALID_PROJECT_SOURCE' }); return
           }
           // A terminal opens where a terminal app would — the home directory — when the client names
           // no folder; every other engine works IN a folder and must be told which.
