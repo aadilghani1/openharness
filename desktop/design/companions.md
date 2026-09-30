@@ -12,8 +12,7 @@ editorial serif titles, readable system-sans prose, softly tinted worlds, and
 the established illustrated characters. Workspace chrome remains unchanged.
 Colours follow the app palette. The shared DSH canvas owns the viewer-left,
 terminal-right split, resizing, scrolling, keyboard focus and terminal zoom.
-Narrow windows retain the standard canvas behaviour rather than replacing the
-terminal with a chat agent terminal. Character animation respects Reduce
+Narrow windows retain the standard canvas behaviour. Character animation respects Reduce
 Motion, the motion setting, background windows, and inactive tabs.
 
 Top-bar click and the Daemon command open the home. Talk to daemon focuses its
@@ -34,7 +33,8 @@ from the device's acknowledgement, including the individual UID, growth stage,
 seed, colour and markings. Offline, updating, and older firmware states remain
 explicit. A collection preview cannot send an unowned companion to the dial.
 
-Memories shows the actual hatch date, XP and approved shared lessons. Read and
+Memories shows the actual hatch date, XP, approved shared lessons, and whether
+the collection's selected model is ready to review queued observations. Read and
 forget use the existing local lesson interface. Forget is explicitly labelled as
 affecting all agents and retains the learner's revision history. Pending lessons
 still need the established person-only approval flow.
@@ -47,19 +47,26 @@ separate Pair tab or full-conversation button is needed. No trust prompt is
 auto-accepted. The experiment being off, or a background restored tab, cannot
 start an engine.
 
-Each individual UID keeps its own workspace and conversation. Opening the same
-individual after a package update preserves its live or paused history. A
-companion change during startup refuses the stale result instead of displaying
-another individual's terminal. Disabling the experiment cancels an in-flight
-launch and detaches the derived views. Closing a pane closes the companion tab;
-it never deletes the conversation. Reopening reuses the same terminal session
-when another tab already shows it.
+One persistent DSH workspace and conversation serves the owned collection.
+Switching companions keeps the same terminal, conversation, model and shared
+lessons; the selected character's context updates on the next real user prompt.
+Each individual retains its own name, story, appearance and growth. Existing
+installations adopt the selected individual's conversation in place and preserve
+the other saved conversations. Collections from different accounts remain
+separate. Opening the collection after a package update preserves its live or
+paused history. A companion change during startup refuses a stale result.
+Disabling the experiment cancels an in-flight launch and detaches the derived
+views. Closing a pane closes the companion tab; it never deletes the
+conversation. Reopening reuses the same terminal session when another tab
+already shows it.
 
 The `say` tool remains available for short status-bar updates and compatible
 older clients. Normal conversation answers are delivered directly by the engine
 in its terminal. Chatting uses the person's model usage and grants no wider
 autonomy. Consent, guarded tool permissions and shared-lesson approval remain in
 force.
+
+![Shared lesson readiness and approved memories, rendered with synthetic fixture data](companion-memories.png)
 
 Keep this behind the existing Experimental companion gate. A restored tab with
 the experiment off does not load the collection or start an agent.
