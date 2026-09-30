@@ -363,6 +363,16 @@ Companion and sharing controls sit after usage without shifting the context.
 at page scale. Related settings use grouping and whitespace. Existing artwork,
 terminal previews, native toolbar/footer components and domain-specific visuals
 retain their meaning. Read-only loading/error views use the same hierarchy.
+
+**macOS notification menu** — one Notifications section with up to five unread
+session rows and a route to the full inbox. Use a 13-point semibold session title,
+12-point status and tab/machine context, and a 13-point message preview capped
+at two lines. Retain the full text in accessibility and tooltips. Questions
+precede results; each kind is newest first. Mark all read belongs beside the
+heading. Working is a collapsed disclosure with compact title/context rows
+and observed elapsed time. The unread count excludes work in progress. Use
+native menu selection and system colors; no inner cards or decorative borders.
+Settings stays in the application menu; this menu ends with Show Harness and Quit.
 Pane-resize guidance is app navigation: use the shared popover surface, system
 type and wrapping keyboard hints. It must not look like terminal output.
 
