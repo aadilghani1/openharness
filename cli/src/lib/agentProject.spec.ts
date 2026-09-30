@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { appendFile, mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, rm, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -56,6 +56,44 @@ describe('owning-machine project metadata', () => {
     expect(await agentProject(null)).toBeNull()
     expect(await agentProject('relative')).toBeNull()
     expect(await agentProject('/tmp/unsafe\n')).toBeNull()
+  })
+
+  it('discovers a missing historical folder when it becomes a checkout again', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-missing-')); roots.push(root)
+    const cwd = join(root, 'checkout')
+    const reader = createAgentProjectReader()
+    expect(await reader.read(cwd, 0)).toMatchObject({ cwd, root: null, branch: null })
+    await writeFile(cwd, 'not a directory')
+    expect(await reader.read(cwd, 20_000)).toMatchObject({ cwd, root: null, branch: null })
+    await rm(cwd); await mkdir(cwd)
+    execFileSync('git', ['-C', cwd, 'init', '-b', 'returned'], { stdio: 'pipe' })
+    expect(await reader.read(cwd, 40_000)).toMatchObject({ cwd, root: await realpath(cwd), branch: 'returned' })
+  })
+
+  it('keeps the repository identity through symlinked and nested worktree paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-paths-')); roots.push(root)
+    const repo = join(root, 'main repository'); await mkdir(repo)
+    const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
+    git('init', '-b', 'main')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+    const linked = join(root, 'linked'); git('worktree', 'add', '-b', 'topic', linked)
+    await mkdir(join(linked, 'nested'))
+    const alias = join(root, 'alias'); await symlink(linked, alias, 'dir')
+    const reader = createAgentProjectReader()
+    for (const cwd of [linked, join(linked, 'nested'), alias, join(alias, 'nested')]) {
+      expect(await reader.read(cwd)).toMatchObject({ cwd, name: 'main repository', root: await realpath(linked), branch: 'topic', worktree: true })
+    }
+    const mainAlias = join(root, 'main alias'); await symlink(repo, mainAlias, 'dir')
+    expect(await reader.read(mainAlias)).toMatchObject({ cwd: mainAlias, root: await realpath(repo), branch: 'main' })
+    expect(await reader.read(mainAlias)).not.toHaveProperty('worktree')
+  })
+
+  it('retains separate path reads when a symlink resolves to a newline in the repository name', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-newline-')); roots.push(root)
+    const repo = join(root, 'repository\nname'); await mkdir(repo)
+    execFileSync('git', ['-C', repo, 'init', '-b', 'main'], { stdio: 'pipe' })
+    const alias = join(root, 'alias'); await symlink(repo, alias, 'dir')
+    expect(await createAgentProjectReader().read(alias)).toMatchObject({ cwd: alias, name: 'repository\nname', root: await realpath(repo), branch: 'main' })
   })
 
   it('uses exact branch keys and the last config value, including empty and valueless overrides', async () => {

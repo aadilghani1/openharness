@@ -76,6 +76,26 @@ async function projectConfig(cwd: string, branch: string | null) {
   return { remote: values.get('remote.origin.url') ?? null, pending: marker !== null && values.get(marker) === 'placeholder' }
 }
 
+/** One discovery process for both paths. Absolute output preserves linked
+ * worktree names even when cwd is a subdirectory or a symlink. */
+async function repositoryPaths(cwd: string): Promise<{ root: string; common: string | null } | null> {
+  try {
+    if (!(await stat(cwd)).isDirectory()) return null
+  } catch (error) {
+    // Historical sessions can point at deleted temporary folders. Other stat
+    // failures still defer to Git rather than asserting that a checkout is gone.
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return null
+  }
+  const output = await git(cwd, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'])
+  if (!output) return null
+  const paths = output.split('\n')
+  if (paths.length === 2 && paths.every(isAbsolute)) return { root: paths[0], common: paths[1] }
+  // Older Git prints an unrecognised --path-format flag literally. Ambiguous
+  // output (including a newline in a physical path) retains the separate reads.
+  const root = await git(cwd, ['rev-parse', '--show-toplevel'])
+  return root ? { root, common: await git(root, ['rev-parse', '--git-common-dir']) } : null
+}
+
 // Only four folders run Git at once, including cache refreshes.
 let running = 0
 const waiting: Array<() => void> = []
@@ -83,13 +103,13 @@ async function inspect(cwd: string): Promise<AgentProject> {
   if (running >= 4) await new Promise<void>(resolve => waiting.push(resolve))
   else running++
   try {
-    const root = await git(cwd, ['rev-parse', '--show-toplevel'])
-    if (!root) return { name: basename(cwd) || cwd, cwd, root: null, remote: null, branch: null }
+    const paths = await repositoryPaths(cwd)
+    if (!paths) return { name: basename(cwd) || cwd, cwd, root: null, remote: null, branch: null }
+    const { root, common } = paths
     // A checkout on no branch still says where it is, as the desktop's own reader does.
     const branch = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
       ?? await git(cwd, ['rev-parse', '--short', 'HEAD']).then(sha => sha && `Detached ${sha}`)
     const { remote, pending } = await projectConfig(cwd, branch)
-    const common = await git(root, ['rev-parse', '--git-common-dir'])
     // A linked worktree is named for its repository, not its folder.
     const main = common && basename(common) === '.git' ? dirname(resolve(root, common)) : root
     return {
