@@ -362,7 +362,8 @@ class _AgentHomeState extends State<AgentHome> {
   ///
   /// In order:
   ///  - a machine just unlocked has the first claim, once it has an agent to offer;
-  ///  - otherwise the pager already up keeps the screen, wherever its own swipes have taken it;
+  ///  - otherwise the pager already up keeps the screen, wherever its own swipes have taken it —
+  ///    and through its machine going away for a moment ([_awayEntryFor]);
   ///  - failing that the agent this screen last held, then the first agent of the tab the phone
   ///    was last in ([_firstOfLastTab]), then the most recently active one — a home screen with no
   ///    list behind it cannot afford to show nothing while agents exist;
@@ -405,6 +406,11 @@ class _AgentHomeState extends State<AgentHome> {
       // A real deletion still takes the pager away, through [_dropPagerIfShownAgentWasDeleted].
       final pending = _pendingEntryFor(entries, opened);
       if (pending != null) return pending;
+      // ⚠️ **Its machine away for a moment is not the agent gone either — see [_awayEntryFor].**
+      // Falling through here is what sent the screen to another machine's agent seconds after an
+      // agent was picked in Find, and kept it there once the machine came back.
+      final away = _awayEntryFor(opened);
+      if (away != null) return away;
     }
     final showing = _showing;
     if (showing != null) {
@@ -627,6 +633,42 @@ class _AgentHomeState extends State<AgentHome> {
             !entry.agent.isStopped,
       )
       .firstOrNull;
+
+  /// The entry naming [agent] while its MACHINE is away for a moment — offline, or redialling with
+  /// no list to show — so the agent is missing from [entries] altogether rather than listed and
+  /// unopenable ([_pendingEntryFor]). Built from the machine's own list, which going away leaves
+  /// exactly as it was.
+  ///
+  /// Null once the machine answers (a loaded list without the agent is a real deletion, which
+  /// [_dropPagerIfShownAgentWasDeleted] handles), when it wants its password (nothing comes back
+  /// until somebody enters it), for a machine no longer on the account, and for a stopped agent,
+  /// whose terminal is not coming back on its own.
+  ///
+  /// ⚠️ **Why the pager holds on here rather than falling back (owner, 2026-09-30).** [entries]
+  /// only carries the machines [phoneMachineListsAgents] lets through, and a machine drops out of
+  /// it the moment it reads offline — which a timed-out request (`_recoverStaleSession` in
+  /// `app_state.dart`) or a `node_status` push makes it do for a few seconds, while it redials and
+  /// comes straight back. The agent on screen went with it: [_target] found neither the pager's
+  /// agent nor [_showing], and settled for the first agent of the last tab — on ANOTHER machine,
+  /// one still answering. A pager was built around that one, and when the machine came back a
+  /// second later nothing moved the screen back, because a pager that is up is never moved. Seen
+  /// as: pick "hn" in Find and two seconds later the phone is back on the agent it launched on;
+  /// pick "cmd p" and twenty seconds later, the same again.
+  ///
+  /// Held with no deadline, on purpose. The terminal on screen already says its machine is offline
+  /// or reconnecting and reattaches by itself when it answers, and Find leaves it at any time — a
+  /// screen that swaps to another agent on its own, under somebody reading, is the bug.
+  AgentEntry? _awayEntryFor(({String machineId, String agentId}) agent) {
+    final machine = widget.notifier.stateOf(agent.machineId);
+    if (machine == null || phoneMachineListsAgents(machine)) return null;
+    if (phoneMachineStatusOf(machine) == PhoneMachineStatus.needsPassword) {
+      return null;
+    }
+    final held = machine.agents
+        .where((listed) => listed.id == agent.agentId && !listed.isStopped)
+        .firstOrNull;
+    return held == null ? null : AgentEntry(machine: machine, agent: held);
+  }
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
