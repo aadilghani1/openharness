@@ -43,6 +43,9 @@ const env = {
 const options = { env, cwd: root, timeout: 20_000, encoding: 'utf8' }
 const server = createServer()
 let version
+let hnVersion = '0.1.2'
+let hnBadChecksum = false
+const hnBytes = () => Buffer.from(`#!/bin/sh\nprintf 'hn ${hnVersion} (tmux 3.5a)\\n'\n`)
 const requests = []
 server.on('request', (request, response) => {
   requests.push(request.url)
@@ -52,7 +55,13 @@ server.on('request', (request, response) => {
       cli: { url: `${base}/cli.js`, sha256: sha(bytes), size: bytes.length },
       notify: { url: `${base}/notify.mjs`, sha256: sha(notify), size: notify.length },
     } }))
-  } else if (request.url === '/cli.js') response.end(bytes)
+  } else if (request.url === '/hn-metadata.json') {
+    const nativeBytes = hnBytes()
+    response.end(JSON.stringify({ version: hnVersion, builds: {
+      [`${process.platform}-${process.arch}`]: { url: `${base}/harness-tui`, sha256: hnBadChecksum ? 'a'.repeat(64) : sha(nativeBytes), size: nativeBytes.length },
+    } }))
+  } else if (request.url === '/harness-tui') response.end(hnBytes())
+  else if (request.url === '/cli.js') response.end(bytes)
   else if (request.url === '/notify.mjs') response.end(notify)
   else { response.statusCode = 404; response.end() }
 })
@@ -119,7 +128,46 @@ try {
     assert.match(output, /^hn \d+\.\d+\.\d+ \(tmux /)
     console.log(`PASS repaired hn launcher runs the frozen native release: ${output}`)
   }
-  assert(requests.every(url => ['/metadata.json', '/cli.js', '/notify.mjs'].includes(url)), JSON.stringify(requests))
+  rmSync(hn)
+  await run(harness, ['version'], options)
+
+  // An existing hn used to stay old forever when the CLI said it was already current.
+  const managed = join(home, '.harness', 'bin', 'harness-tui')
+  mkdirSync(dirname(managed), { recursive: true })
+  const managedEnv = { ...env, HARNESS_TUI_MANIFEST_URL: `${base}/hn-metadata.json` }
+  delete managedEnv.HARNESS_TUI_BIN
+  const managedOptions = { ...options, env: managedEnv }
+  const oldHn = Buffer.from("#!/bin/sh\nprintf 'hn 0.1.1 (tmux 3.5a)\\n'\n")
+  writeFileSync(managed, oldHn, { mode: 0o755 })
+  const hnUpdate = await run(harness, ['update'], managedOptions)
+  assert(hnUpdate.stdout.includes(`Already on the latest version (v${version})`), hnUpdate.stdout)
+  assert(hnUpdate.stdout.includes('Installed hn 0.1.2'), hnUpdate.stdout)
+  assert.equal(sha(readFileSync(managed)), sha(hnBytes()))
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+  const downloaded = requests.filter(url => url === '/harness-tui').length
+  await run(harness, ['update'], managedOptions)
+  assert.equal(requests.filter(url => url === '/harness-tui').length, downloaded)
+  console.log('PASS an already-current CLI upgrades hn; the next hn launch uses it without repeated downloads')
+
+  hnVersion = '0.1.3'
+  hnBadChecksum = true
+  const failedHn = await run(harness, ['update'], managedOptions)
+  assert(failedHn.stderr.includes('hn update failed'), failedHn.stderr)
+  assert(failedHn.stdout.includes('Already on the latest version'), failedHn.stdout)
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+  hnBadChecksum = false
+  await run(harness, ['update'], managedOptions)
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.3 /)
+  console.log('PASS hn checksum failure preserves the installation and does not block CLI updates; retry succeeds')
+
+  hnVersion = '0.1.2'
+  await run(harness, ['update'], managedOptions)
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.3 /)
+  rmSync(managed)
+  await run(harness, ['tui', '--install'], managedOptions)
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+  console.log('PASS no automatic downgrade; explicit first install still works')
+  assert(requests.every(url => ['/metadata.json', '/cli.js', '/notify.mjs', '/hn-metadata.json', '/harness-tui'].includes(url)), JSON.stringify(requests))
 } finally {
   server.closeAllConnections()
   if (server.listening) await new Promise(done => server.close(done))

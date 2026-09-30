@@ -234,6 +234,8 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
+import { updateTui } from './tui/install.js'
+import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
@@ -535,6 +537,7 @@ function spawnDaemonChild(extraEnv: Record<string, string>): ReturnType<typeof s
  */
 const daemonBoot: {
   updater: Poller | null
+  tuiUpdater: Poller | null
   /** The hook server, once bound — the only thing a mid-boot handoff has to release. */
   hookServer: Server | null
   /** Its Unix-socket twin (lib/localSocket.ts), when one could be opened. Read by `/api/status`. */
@@ -545,7 +548,7 @@ const daemonBoot: {
   safeMode: string | null
   handingOff: boolean
   applyStagedUpdate: (version: string) => void | Promise<void>
-} = { updater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
+} = { updater: null, tuiUpdater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
 
 /**
  * Hand the machine to a newer build without finishing start-up.
@@ -563,6 +566,7 @@ const daemonBoot: {
 function bootHandoff(version: string): void {
   if (daemonBoot.handingOff) return
   daemonBoot.handingOff = true
+  daemonBoot.tuiUpdater?.stop()
   runBootHandoff(VERSION, version, {
     // The hook port has no fallback: a successor that cannot bind it is a daemon that does not come up.
     closeServer: () => {
@@ -1244,6 +1248,16 @@ async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: str
   return true
 }
 
+/** Both updaters manage only the installed bundle, never a checkout or a canary. */
+function isInstalledCli(): boolean {
+  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
+  try {
+    const running = statSync(SCRIPT_PATH)
+    const installed = statSync(installedCli)
+    return running.dev === installed.dev && running.ino === installed.ino
+  } catch { return SCRIPT_PATH === installedCli }
+}
+
 /** `harness update` — force the self-update NOW instead of waiting for the daemon's
  *  background poll. Checks the manifest; if a newer build exists it stops any running daemon first (so
  *  its poller can't race our staging), swaps in the new bytes, then relaunches on them. No-op on a
@@ -1265,6 +1279,12 @@ async function updateCommand(force: boolean): Promise<void> {
     process.exit(0)
   }
   console.log(`▸ Checking for updates…  (current v${VERSION})`)
+  // hn has its own release cadence. An already-current CLI must still refresh an installed hn;
+  // a failed optional download must not stop the CLI from updating.
+  if (isInstalledCli()) {
+    try { await updateTui((line) => console.log(line)) }
+    catch (error) { console.warn(`  hn update failed; continuing with the CLI update: ${error instanceof Error ? error.message : error}`) }
+  }
   let entry: UpdateEntry | null = null
   try { entry = await fetchManifest(env.ADAPTER_UPDATE_URL, env.ADAPTER_UPDATE_KEY) }
   catch (e) { console.error(`✗ Could not reach the update manifest: ${e instanceof Error ? e.message : e}`); process.exit(1) }
@@ -1467,9 +1487,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
   // the published bundle into ~/.harness/cli and restart, hijacking the version you're developing.
   // Match by inode so symlinks/realpath don't fool it; fall back to a path compare.
-  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-  let isInstalledCopy = SCRIPT_PATH === installedCli
-  try { isInstalledCopy = statSync(SCRIPT_PATH).ino === statSync(installedCli).ino } catch { /* keep path compare */ }
+  const isInstalledCopy = isInstalledCli()
+  daemonBoot.tuiUpdater = startTuiUpdater({
+    currentVersion: VERSION,
+    isInstalledCopy,
+    disabled: env.ADAPTER_UPDATE_DISABLE,
+    intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
+    slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+  })
   if (isInstalledCopy && !env.ADAPTER_UPDATE_DISABLE) {
     daemonBoot.updater = startSelfUpdater({
       currentVersion: VERSION,
@@ -6543,6 +6568,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.log(`[update] applying ${VERSION} → ${newVersion} — restarting daemon`)
     registry.flush()
     daemonBoot.updater?.stop()
+    daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
@@ -6653,6 +6679,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void cableRef?.stop()
     deviceLinkRef?.stop()
     daemonBoot.updater?.stop()
+    daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)

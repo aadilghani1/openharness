@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { findTuiBinary, opensClient, platformKey, tuiCommand } from './index.js'
 
 // No test may start a real binary, daemon or login flow, or make a network request.
-vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }))
+vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: vi.fn() }))
 const ok = { status: 0, signal: null, pid: 0, stdout: '', stderr: '', output: [] }
 
 describe('harness tui launcher', () => {
