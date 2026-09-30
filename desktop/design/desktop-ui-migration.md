@@ -319,3 +319,33 @@ unmerged.
   Computer Use native pipe startup failed”. Automatic approval review timed out
   twice before a native integration test could launch; no native test executed
   in this checkpoint. Physical VoiceOver and AppKit IME remain unverified.
+
+### Native journey verification, 2026-09-30
+
+- The existing fixture launches successfully without the optional sleep-control
+  wrapper. The earlier automatic-review timeout no longer prevents native test
+  execution. A complete creation/search run passes **19 native journeys**;
+  the newly included History checks pass **6 native journeys** in a subsequent
+  process. Both use the macOS engine, fake transports and in-memory workspaces.
+- The first creation/search run passed 18 journeys and observed an unexpected
+  `r` in one nominally empty prompt. That journey passed in isolation, then all
+  19 passed together with explicit checks that both the editor and controller
+  were empty before Return. No production input code changed. The unexpected
+  input's source was not established; the first run is not counted as passing.
+- History's native checks cover initial focus, bidirectional Tab traversal,
+  Close versus result activation, synthetic composition, terminal focus return,
+  and bounded light/dark layouts at normal and 200% text. This strengthens
+  engine-level evidence; it does not establish physical AppKit IME or VoiceOver.
+- Supporting documentation now agrees with the current system: centered tab
+  name/status groups, Command hints beside the name, shared plus icons,
+  whitespace-separated usage, model/close pane headers, and focused Git context
+  in the footer. Draft, project and worktree ownership rules are unchanged.
+- The independent completion review found no further concrete UI source
+  contradiction. Final live visual continuity, physical VoiceOver and AppKit IME
+  remain unverified while native app control is unavailable. These are the
+  remaining completion gaps; further styling without a demonstrated defect is
+  optional polish.
+- Scoped fixture analysis is clean and the normal `lib/main.dart` review app
+  was rebuilt after native tests. A final app-control attempt still returns
+  “Sky Computer Use native pipe startup failed”, so no live visual review is
+  claimed for this checkpoint.

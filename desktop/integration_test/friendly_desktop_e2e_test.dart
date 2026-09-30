@@ -6,11 +6,12 @@ import 'package:window_manager/window_manager.dart';
 
 import '../test/desktop_dialog_interaction_test.dart' as interactions;
 import '../test/desktop_compact_launch_test.dart' as compact;
+import '../test/desktop_history_dialog_test.dart' as history;
 
-/// Exercise launch and composer journeys in the macOS engine/window.
+/// Exercise creation, search and History in the macOS engine/window.
 ///
-/// Run serially with other native fixtures, keeping the display awake:
-/// caffeinate -d -i -u env FLUTTER_TEST=1 flutter test -d macos --no-pub \
+/// Run serially with other native fixtures:
+/// FLUTTER_TEST=1 flutter test -d macos --no-pub \
 ///   integration_test/friendly_desktop_e2e_test.dart
 /// If this host throttles background native frames, run all four shards in
 /// separate sequential processes with --total-shards=4 --shard-index=0..3.
@@ -43,4 +44,5 @@ void main() {
   });
   interactions.main(nativeSmoke: true);
   compact.main(nativeSmoke: true);
+  history.main();
 }

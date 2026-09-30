@@ -11,7 +11,7 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-Claude 0% · Codex 50%                     M2 > openharness > branch-name > #439
+Claude 0%  Codex 50%                      M2 > openharness > branch-name > #439
 ```
 
 The context follows the focused pane. The branch stays clickable in the
@@ -34,13 +34,15 @@ is code, and uses machine names for the same project on different computers.
 Tabs with identical contents can still share a name; their positions distinguish
 them, and holding Command reveals their actual shortcut hints. Preserve the full name for inspection when its visible label is truncated.
 
-Align names left in compact, content-sized tabs, capped at 240 points. Use the
+Center each name and its adjacent status as one group in compact, content-sized
+tabs, capped at 240 points. An idle name centers on its own. Use the
 shared 10-point upper corners, 8-point outward lower shoulders and 6-point top
 inset. Keep space after `+` available for dragging the window. Scroll overflow
 and reveal the selected tab on keyboard navigation. Narrow viewports can show
 smaller tabs while preserving their controls.
-The right accessory reveals × on hover and actual shortcut hints while Command
-is held, without moving the title. Cmd-W, remapped shortcuts, native menu access,
+The right accessory reveals × on hover. While Command is held, the actual
+shortcut replaces the status beside the name without changing the tab width.
+Hover never moves the title. Cmd-W, remapped shortcuts, native menu access,
 and middle-click closing remain available.
 Preserve reorder, rename, keyboard focus, and terminal sessions. Cmd-T opens a
 tab. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
@@ -58,13 +60,13 @@ the workspace. See the design system for their system type and surface colors.
 
 ![Agnoster PR hover and a selected tab joining the workspace, rendered with synthetic data](images/workspace-bar-hover.png)
 
-Do not show a tooltip that repeats a visible tab name (the numeric prefix does
-not make it a different name). Show a different underlying name or the full
-label when it is truncated. Keep action hints on symbols and status links.
+Do not show a tooltip that repeats a visible tab name. Show a different underlying
+name or the full label when it is truncated. Keep action hints on symbols and
+status links.
 
-The new-tab `+` uses a plain-text control: no resting
-box, with bold text on hover or keyboard
-focus. Keep its New Tab tooltip and shortcut hint.
+The new-tab action uses the shared plus icon, with no resting box. Hover and
+keyboard focus increase its emphasis without changing the glyph or its bounds.
+Keep its New Tab tooltip and shortcut hint.
 
 ### Harness activity
 

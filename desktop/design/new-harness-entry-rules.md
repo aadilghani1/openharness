@@ -132,15 +132,16 @@ without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
 A worktree is a temporary folder, never a project: a harness is known by the
-folder it was started in and its repository's branch. Pane headers read
-`folder › branch`, with the machine first only for another computer: the folder
-the harness started in (a subfolder as itself, a checkout's root — a
-worktree's too — as its repository), which does not follow the agent's shell,
-and the branch with the same icon everywhere. A checkout on no branch — a
-commit an agent checked out to read or test — shows no branch; the tooltip says
-`No branch: on commit 65281563`. Worktree folders are never shown; the header's
-tooltip has the full path. Cut short, the folder shortens in the
-middle before the branch does. A folder inside a linked
+folder it was started in and its repository's branch. The focused workspace
+footer shows machine, project, branch and PR together using the user's selected
+status style. Pane headers keep harness identity, the model control and close
+action; they do not repeat project or branch context. The project label is the
+folder the harness started in (a subfolder as itself, a checkout's root — a
+worktree's too — as its repository), and does not follow the agent's shell.
+Detached checkouts do not invent a branch name; full path and checkout details
+remain available through the context controls. Worktree implementation folders
+are not everyday project labels. See [workspace-status-bar.md](workspace-status-bar.md)
+for context actions and compact layout. A folder inside a linked
 worktree (the focused pane's, or one typed or browsed) shows as the same folder
 in the repository's main checkout, so Cmd-N from a worktree pane starts beside
 it rather than inside it. Worktrees Start made are never offered as recent

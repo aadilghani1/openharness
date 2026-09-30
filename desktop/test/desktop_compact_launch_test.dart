@@ -352,6 +352,8 @@ void main({bool nativeSmoke = false}) {
     );
     expect(_focused(tester, _task), isTrue);
     await capture(tester, fixture, 'composer-dark');
+    expect(tester.widget<TextField>(_task).controller!.text, isEmpty);
+    expect(fixture.box.task, isEmpty);
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(fixture.app.launches, hasLength(1));
