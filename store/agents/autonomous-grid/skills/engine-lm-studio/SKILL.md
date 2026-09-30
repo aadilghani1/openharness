@@ -70,7 +70,7 @@ serve the file with Grid's engine instead.
 
 ## Join Harness Compute
 
-    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name NAME
+    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name MACHINE
 
 `/v1` is required: with the bare root, Grid's capability probe records structured output as unsupported [run].
 Grid's own detector finds LM Studio only on 1234 [run].
@@ -103,3 +103,5 @@ Grid's own detector finds LM Studio only on 1234 [run].
 | `lms get … -y` shows a spinner forever | it downloads in the background [run]; never start a download without the go-ahead |
 | a foreign GGUF must appear in LM Studio | `lms import -l -y --user-repo <user>/<repo> FILE.gguf`: **without `-l` it moves the file** [doc]; the file name must end in `.gguf` and the link must point at the real file, not a temp copy [run] |
 | 401 from `/v1/models` | authentication is on in the person's settings [doc]; do not turn it off |
+| a model already on disk is not in `lms ls` | no download: an **MLX folder** is symlinked as `~/.lmstudio/models/<publisher>/<name>` → the folder, then `lms ls` lists it [run]; a **GGUF** goes in with `lms import -l` (row above). Neither copies |
+| answers come back as reasoning only; no request switch turns thinking off | some models keep thinking under LM Studio whatever the request says [run]. That is not a failure: `fleet verify` asks once more with room to think and passes, noting it. Never hand-test switches with `curl` (it cost minutes [run]); tell the person replies will be slower, and offer a model that can switch it off if they want that |

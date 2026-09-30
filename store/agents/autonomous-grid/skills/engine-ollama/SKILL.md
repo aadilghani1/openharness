@@ -18,13 +18,18 @@ Tags: `[doc]` official page above, `[run]` seen on the tested machine, `[?]` unv
 
 - **Ollama is already answering** (`fleet models` lists `kind: ollama`): adopt it as it is; it is the
   person's app, so never restart or reconfigure it without asking.
-- **Ollama is installed but stopped, or its settings do not fit the job**: do not start it. Its models
-  are GGUF files that Grid's engine serves in place — link the blob into `~/.grid/models` and
-  `join --serve` [run]. That also gives the context you choose instead of Ollama's default.
-- Start Ollama yourself only when Grid's engine refuses a blob Ollama runs (Ollama ships its own engine
-  for some new architectures [?]); then use the start below.
-- Never `ollama create` to reuse a file from another app: it copies the whole file into Ollama's blobs
-  (+624 MB for a 640 MB GGUF) [run]. Never `ollama pull` without the person's go-ahead: it downloads.
+- **The person asked for Ollama and it is not running**: start it yourself (below) — it is theirs to
+  want, and an engine that is off is the normal case, not a reason to switch [run].
+- **Ollama is stopped and nobody asked for it**: leave it off. Its models are GGUF files that Grid's
+  engine serves in place — link the blob into `~/.grid/models` and `join --serve` [run], with the
+  context you choose instead of Ollama's default.
+- Start Ollama unasked only when Grid's engine refuses a blob Ollama runs (Ollama ships its own engine
+  for some new architectures [?]).
+- A GGUF from another app enters Ollama only by `ollama create` (a `Modelfile` with `FROM <file>`), and
+  that **copies the whole file** into Ollama's store (+624 MB for a 640 MB GGUF) [run]. So never do it
+  unasked; when the person wants Ollama and it has nothing suitable, offer it with the size it adds on
+  disk, beside the no-copy choice (the same file on Grid's engine). Never `ollama pull` without the
+  go-ahead: it downloads.
 
 ## MLX inside Ollama (Apple silicon)
 
@@ -86,7 +91,7 @@ Then `GET /api/ps` must show the model with `context_length` ≥ 65536 [doc]; le
 
 ## Join Harness Compute
 
-    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <model>:<tag> --advertise-as ALIAS --name NAME
+    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <model>:<tag> --advertise-as ALIAS --name MACHINE
 
 `/v1` is required: without it `/models` and `/chat/completions` answer 404, and Grid's capability probe
 records JSON output as unsupported without any error [run]. Grid's own detector finds Ollama only on

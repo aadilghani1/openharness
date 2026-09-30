@@ -88,7 +88,7 @@ returns; log `run/vllm-P.log`.)
 - Verify: `"$GRID_FLEET" verify --at http://127.0.0.1:P/v1 --model <id> --kind vllm` (bounded, narrated).
 - Ready: PID alive; log shows `Application startup complete.` [run] (minutes for a big model); `GET /health`
   → 200 and `GET /v1/models` lists `<id>` [run]; one bounded answer; one tool call.
-- Join: `"$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name NAME`. `/v1` is required —
+- Join: `"$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name MACHINE`. `/v1` is required —
   without it `/models` and `/chat/completions` answer 404 [run]. `--api-key` guards only `/v1` routes [doc].
 - Thinking off for everyday use: the recipe's guide names the flag when there is one
   (`--default-chat-template-kwargs '{"enable_thinking": false}'` in the recipes that document it [doc]).

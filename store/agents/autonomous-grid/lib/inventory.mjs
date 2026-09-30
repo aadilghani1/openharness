@@ -155,7 +155,9 @@ async function walk(dir, depth, visit, budget) {
   if (depth < 0 || budget.dirs-- <= 0) return;
   let entries;
   try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
-  if (entries.some(e => e.name === 'config.json') && entries.some(e => e.name.endsWith('.safetensors'))) await visit('folder', dir);
+  // A weight index with no weights yet is a download that started, which the table must show.
+  if (entries.some(e => e.name === 'config.json')
+    && entries.some(e => e.name.endsWith('.safetensors') || e.name === 'model.safetensors.index.json')) await visit('folder', dir);
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name) && entry.name !== 'blobs') await walk(path, depth - 1, visit, budget); }
@@ -198,14 +200,27 @@ function hubName(path) {
 
 async function describeFolder(dir) {
   const config = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'));
-  let bytes = 0;
-  for (const name of await readdir(dir)) if (name.endsWith('.safetensors')) bytes += (await stat(join(dir, name))).size;
+  // Complete = every weight file the folder names is really there. `stat` follows the Hugging Face
+  // cache's links to the real blobs, so a link whose blob never arrived counts as missing. Said here so
+  // an agent never re-checks by hand — one did, measured the links instead of the blobs, and wrongly
+  // decided a complete model was not on disk [run].
+  const present = new Map();
+  for (const name of await readdir(dir)) {
+    if (!name.endsWith('.safetensors')) continue;
+    const size = (await stat(join(dir, name)).catch(() => null))?.size;
+    if (size) present.set(name, size);
+  }
+  const index = await readFile(join(dir, 'model.safetensors.index.json'), 'utf8').then(JSON.parse).catch(() => null);
+  const expected = index?.weight_map ? [...new Set(Object.values(index.weight_map))] : [...present.keys()];
+  const missingFiles = expected.filter(name => !present.has(name)).length;
+  const bytes = [...present.values()].reduce((sum, size) => sum + size, 0);
   const mlx = Boolean(config.quantization?.bits) || /mlx/i.test(dir);
   const template = await readFile(join(dir, 'chat_template.jinja'), 'utf8')
     .catch(async () => JSON.parse(await readFile(join(dir, 'tokenizer_config.json'), 'utf8')).chat_template ?? '')
     .catch(() => '');
   return {
     format: mlx ? 'mlx' : 'safetensors', bytes,
+    complete: expected.length > 0 && missingFiles === 0, missingFiles, weightFiles: expected.length,
     config: {
       architecture: config.architectures?.[0] ?? config.model_type ?? null,
       contextLength: config.max_position_embeddings ?? config.text_config?.max_position_embeddings ?? null,
@@ -229,7 +244,7 @@ export async function scanModels({ roots = defaultRoots(), minBytes = 50 * 1024 
     try {
       if (found.kind === 'folder') {
         Object.assign(entry, await describeFolder(realPath));
-        if (entry.bytes < minBytes) return;
+        if (entry.bytes < minBytes && !entry.missingFiles) return; // a small folder is noise; a started download is news
       } else {
         if (info.size < minBytes) return;
         const header = await readGguf(realPath);
@@ -553,7 +568,9 @@ export function summarize({ machine, engines, models, joined = [] }, contextToke
     const note = [runnable ? '' : `no engine this machine can run reads ${m.format}${m.format === 'mlx' ? ' (Apple silicon only)' : ''}`,
       mlxCopy ? `an MLX copy is on disk (${mlxCopy}): serve that one on this Mac unless vision is needed` : '',
       m.gguf?.unsupportedTensorTypes?.length ? `llama.cpp cannot load (tensor type ${m.gguf.unsupportedTensorTypes.join(', ')})` : '',
-      facts.contextLength && facts.contextLength < contextTokens ? `context ${facts.contextLength} < ${contextTokens}` : '', m.error ?? ''].filter(Boolean).join('; ');
+      facts.contextLength && facts.contextLength < contextTokens ? `context ${facts.contextLength} < ${contextTokens}` : '',
+      m.missingFiles ? `download unfinished: ${m.missingFiles} of ${m.weightFiles} weight files missing` : '',
+      m.error ?? ''].filter(Boolean).join('; ');
     lines.push([
       m.format.padEnd(11), gb(m.bytes).padStart(8), String(facts.contextLength ?? '—').padStart(8),
       (kv ? gb(kv * contextTokens) : '—').padStart(10), String(facts.toolCalls ?? '?').padEnd(5), (m.projector ? 'yes' : 'no').padEnd(6),

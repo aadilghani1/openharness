@@ -88,6 +88,30 @@ test('scan finds models other apps downloaded, names them, and reports one entry
   assert.equal(byName.plain.format, 'safetensors');
   assert.ok(byName.plain.readableBy.includes('vllm'));
   assert.ok(byName['qwen2.5-0.5b'].readableBy.includes('llama.cpp'));
+  assert.equal(byName['mlx-community/Tiny-4bit'].complete, true);
+});
+
+test('a model folder says whether every weight file is really there, following the cache links to the blobs', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'home-'));
+  const hub = join(home, '.cache', 'huggingface', 'hub');
+  const done = join(hub, 'models--org--Done-4bit', 'snapshots', 'a');
+  await put(join(hub, 'models--org--Done-4bit', 'blobs', 'b1'), 'weights-1');
+  await put(join(done, 'config.json'), JSON.stringify({ quantization: { bits: 4 } }));
+  await put(join(done, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { a: 'model-1.safetensors' } }));
+  await symlink(join(hub, 'models--org--Done-4bit', 'blobs', 'b1'), join(done, 'model-1.safetensors'));
+  const half = join(hub, 'models--org--Half-4bit', 'snapshots', 'a');
+  await put(join(half, 'config.json'), JSON.stringify({ quantization: { bits: 4 } }));
+  await put(join(half, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { a: 'model-1.safetensors', b: 'model-2.safetensors' } }));
+  await put(join(half, 'model-1.safetensors'), 'weights-1');
+  await symlink(join(hub, 'models--org--Half-4bit', 'blobs', 'never-arrived'), join(half, 'model-2.safetensors'));
+
+  const { models } = await scanModels({ roots: [{ source: 'huggingface', path: hub }], minBytes: 1024 });
+  const byName = Object.fromEntries(models.map(model => [model.name, model]));
+  assert.equal(byName['org/Done-4bit'], undefined, 'a complete folder below the size floor is still noise');
+  assert.equal(byName['org/Half-4bit'].complete, false);
+  assert.equal(byName['org/Half-4bit'].missingFiles, 1, 'a link whose blob never arrived is missing');
+  const text = summarize({ machine: { platform: 'darwin', arch: 'arm64', accelerators: [], engines: [], canRun: ['mlx-lm'], listeningPorts: [] }, engines: [], models });
+  assert.match(text, /org\/Half-4bit .*download unfinished: 1 of 2 weight files missing/);
 });
 
 test('the summary table lists every model of every format, with the reasons one cannot be used', () => {

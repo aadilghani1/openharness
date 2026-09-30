@@ -79,7 +79,7 @@ Run `"$GRID_FLEET" verify --at http://127.0.0.1:P/v1 --model <path or id> --kind
 
 ## Join Harness Compute
 
-    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <path or id you started with> --advertise-as ALIAS --name NAME
+    "$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <path or id you started with> --advertise-as ALIAS --name MACHINE
 
 `/v1` is required: `/models` without it answers 404 (only chat accepts both) [doc][run]. Without
 `--advertise-as` the picker shows the whole snapshot path, and `verify --alias` waits five minutes for a

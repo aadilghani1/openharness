@@ -20,7 +20,11 @@ question those answers cover.
 
 **Ask through a tool, not prose.** Every "ask" means the question tool with real options — the
 intent questions, the model shortlist, every go-ahead before a slow step. A question mark in a
-paragraph is not a stop. **Talk the way Harness talks:** short, declarative, second person; say what
+paragraph is not a stop. When no question tool is offered (some modes have none [run]): the *purpose*
+question falls back to a stated default ("general chat and coding — say if it is for something else")
+and the work goes on; a download, a copy, a replacement or a restart of what is serving is asked in
+one short message with numbered options, and the turn **ends there** until the person answers.
+**Talk the way Harness talks:** short, declarative, second person; say what
 is true and what happens next; no "I'd be happy to", no exclamation marks; a thing that is not set
 up is said plainly and stopped at, the way a failed build is reported.
 
@@ -36,7 +40,10 @@ engines silently.
    active, engines installed, what it can run, ports in use), memory and swap now, engines already
    answering with their `--at` URL, grids this computer is joined to (`joined`), and one row per model file on disk of every format (size, context,
    cache at 64K, tool calls, vision, which engines read it). Read the table; do not filter it yourself.
-   Drop `--summary` for the full JSON only when a field you need is not in the table. A request that
+   Drop `--summary` for the full JSON only when a field you need is not in the table. The table is
+   checked: a model folder without "download unfinished" has every weight file on disk, sizes are the
+   real files' — never re-check with `du`, `find` or `ls` [run: a hand check read the cache's links and
+   dropped a complete model]. A request that
    does not say what the model is for ("I have some models, can we run one?") gets the purpose question
    right after this table — question tool, before reading any skill: a person waited 6 minutes for
    one [run]. Everything this flow needs is on this page; open a skill only where a step names it.
@@ -59,6 +66,8 @@ engines silently.
    `"$GRID_FLEET" run --thinking off -- join GRID --serve NAME.gguf --advertise-as ALIAS --name MACHINE-ALIAS
    --ctx-size CTX --endpoint-port PORT --reasoning-budget 0` plus `--max-concurrency 1` on a remote grid or
    `--parallel 1` on a local one (`--max-concurrency` is remote-only), PORT not in `listeningPorts`.
+   `--name` is always the **machine** (as the grid page will show it: the computer's name, plus the alias
+   when one computer serves several) — never a model name on its own [run: a Mac was listed as a model].
 6. `"$GRID_FLEET" verify --at http://127.0.0.1:PORT/v1 --model ALIAS --kind llama.cpp --grid GRID --alias ALIAS`
    — `--alias` is the `--advertise-as` name; `--model` is what the engine itself lists. Run it right after
    the start, without `| tail` or `| head` — it waits by itself and narrates; pass its progress on. Every

@@ -77,7 +77,7 @@ returns (log `run/sglang-P.log`).
 - Verify: `"$GRID_FLEET" verify --at http://127.0.0.1:P/v1 --model <id> --kind sglang` (bounded, narrated).
 - Ready: the log says `The server is fired up and ready to roll!` [doc]; `GET /health` → 200;
   `GET /health_generate` generates one token [doc]; `GET /v1/models` lists `<id>`; one bounded answer; one tool call.
-- Join: `"$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name NAME`. Grid's detector has
+- Join: `"$GRID_FLEET" run -- join GRID --at http://127.0.0.1:P/v1 -m <id> --advertise-as ALIAS --name MACHINE`. Grid's detector has
   no SGLang probe and would mislabel it on 8000 or 8080 [run], so always `--at`, always with `/v1`.
 - Thinking off per request: `"chat_template_kwargs": {"enable_thinking": false}` where the cookbook page shows it [doc].
 
