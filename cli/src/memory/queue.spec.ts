@@ -119,6 +119,7 @@ describe('model availability, leases, and idempotent publication', () => {
     store.close()
     store = open()
     expect(store.learning.status().jobs.waiting_for_model).toBe(1)
+    now += 60_000
     expect(claim().sources).toHaveLength(1)
   })
 

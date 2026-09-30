@@ -1,15 +1,29 @@
 /** Observe native login identity without retaining or returning credentials. No network or refresh. */
 import { createHash } from 'node:crypto'
 import { open } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
+import { oneShotParentEnv } from '../lib/loginShellEnv.js'
+
+export function memoryCodexHome(selected?: string | null, home = homedir(), environment = oneShotParentEnv()): string | null {
+  const path = selected || environment.CODEX_HOME || join(home, '.codex')
+  return isAbsolute(path) ? path : null
+}
+
+/** Only native login files select the extraction account; ambient keys cannot override it. */
+export function nativeMemoryEnvironment(): NodeJS.ProcessEnv {
+  const parent = oneShotParentEnv()
+  return { PATH: parent.PATH, HOME: homedir(), TMPDIR: tmpdir(), LANG: parent.LANG || 'en_US.UTF-8', TERM: 'dumb' }
+}
 
 export async function memoryAccountIdentity(input: { engine: string; codexHome?: string | null },
-  home = homedir(), environment: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  home = homedir(), environment: NodeJS.ProcessEnv = oneShotParentEnv()): Promise<string | null> {
   // These providers are not the selected native subscription supported by the initial adapter.
   if (input.engine === 'claude' && (environment.ANTHROPIC_BASE_URL || environment.ANTHROPIC_AUTH_TOKEN
     || environment.CLAUDE_CONFIG_DIR || environment.CLAUDE_CODE_OAUTH_TOKEN || environment.ANTHROPIC_API_KEY)) return null
-  const path = input.engine === 'codex' ? join(input.codexHome || environment.CODEX_HOME || join(home, '.codex'), 'auth.json')
+  if (input.engine === 'codex' && (environment.CODEX_API_KEY || environment.OPENAI_API_KEY || environment.OPENAI_BASE_URL)) return null
+  const codexHome = memoryCodexHome(input.codexHome, home, environment)
+  const path = input.engine === 'codex' ? codexHome && join(codexHome, 'auth.json')
     : input.engine === 'claude' ? join(home, '.claude.json') : null
   if (!path) return null
   let handle

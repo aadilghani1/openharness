@@ -67,6 +67,7 @@ it('extracts scoped knowledge through one selected target and retains its exact 
   expect(store.learning.status().jobs.learned).toBe(1)
   expect((await new MemoryLearner(memory, provider).tick()).state).toBe('idle')
   expect(provider.run).toHaveBeenCalledOnce()
+  expect(provider.target).toHaveBeenCalledTimes(2)
 })
 
 it('records a no-useful-memory result separately from unavailable intelligence', async () => {
@@ -75,6 +76,8 @@ it('records a no-useful-memory result separately from unavailable intelligence',
   expect(await learner.tick()).toEqual({ state: 'waiting_for_model' })
   expect(store.learning.status().jobs.no_useful_memory).toBeUndefined()
   expect(store.learning.status().jobs.waiting_for_model).toBe(1)
+  expect((await learner.tick()).state).toBe('idle')
+  expect(provider.target).toHaveBeenCalledOnce()
   now += 60_001
   provider.run = vi.fn(async () => '{"proposals":[]}')
   expect(await learner.tick()).toEqual({ state: 'no_useful_memory', learned: 0 })

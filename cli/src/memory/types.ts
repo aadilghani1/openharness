@@ -28,6 +28,7 @@ export const sourceSchema = z.object({
   observedAt: timestamp, rootIds: z.array(id).min(1).max(32),
   derivedFrom: z.array(z.object({ memoryId: id, revision: z.number().int().positive() }).strict()).min(1).max(32).optional(),
   text: z.string().min(1).max(32_000), verification: verificationSchema.optional(),
+  retention: z.literal('evidence_only').optional(),
 }).strict().refine(value => value.role === 'derived' ? !!value.derivedFrom : !value.derivedFrom, 'derived source needs memory lineage')
   .refine(value => (!value.taskId && !value.branchId) || value.projectId !== null, 'task and branch source need a project')
 

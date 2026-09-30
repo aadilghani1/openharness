@@ -10,7 +10,7 @@ import { redact } from '../pair/learn/guard.js'
 import { admission, assertSafe, canonical, digest, proposalFingerprint } from './admission.js'
 import type { ProjectLocator } from './project.js'
 import type { Database } from './database.js'
-import { MemoryQueue, QUEUE_SCHEMA } from './queue.js'
+import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
   type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
@@ -21,6 +21,8 @@ type Constructor = new (path: string, options?: Record<string, unknown>) => Data
 interface OpenOptions { directory: string; profileId: string; now?: () => number }
 type OpenResult = { ok: true; store: CodingMemoryStore } | { ok: false; reason: string }
 interface Controls { learn: boolean; recall: boolean; generation: number; captureEpoch: number; learnSince: number | null }
+export interface MemoryPreferences { learn: boolean; recall: boolean }
+interface Compaction { compactedSources: number; deletedSources: number; removedBytes: number }
 
 const SCHEMA = 1
 const EMPTY = (status: RecallPacket['status'] = 'ok'): RecallPacket => ({ status, items: [], text: '', estimatedTokens: 0 })
@@ -39,6 +41,7 @@ export class CodingMemoryStore {
         return source && this.sourceIncluded(source) ? source : null
       },
       propose: (draft, access, generation) => this.propose(draft, access, generation),
+      compact: sourceIds => { this.compactSources(sourceIds) },
     })
   }
 
@@ -80,6 +83,13 @@ export class CodingMemoryStore {
           );
           CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY, native_key TEXT UNIQUE NOT NULL, project_id TEXT, digest TEXT NOT NULL, data TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS source_lifecycle (
+            source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+            captured_at INTEGER NOT NULL, needs_compaction INTEGER NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS retired_sources (
+            id_hash TEXT PRIMARY KEY, native_key TEXT UNIQUE NOT NULL, digest TEXT NOT NULL
           );
           CREATE TABLE IF NOT EXISTS memories (
             rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, revision INTEGER NOT NULL,
@@ -129,6 +139,8 @@ export class CodingMemoryStore {
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('profile', ?)").run(options.profileId)
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('schema', ?)").run(String(SCHEMA))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('controls', ?)").run(JSON.stringify({ learn: false, recall: false, generation: 0, captureEpoch: 0, learnSince: null }))
+        db!.prepare("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('preferences',?)").run(JSON.stringify({ learn: true, recall: true }))
+        db!.prepare('INSERT OR IGNORE INTO source_lifecycle(source_id,captured_at,needs_compaction) SELECT id,?,1 FROM sources').run(store.now())
         db!.exec("INSERT INTO memory_fts(memory_fts, rank) VALUES('secure-delete', 1)")
       })
       return { ok: true, store }
@@ -142,6 +154,19 @@ export class CodingMemoryStore {
 
   controls(): Controls {
     return JSON.parse(String(this.db.prepare("SELECT value FROM memory_meta WHERE key = 'controls'").get()!.value)) as Controls
+  }
+
+  preferences(): MemoryPreferences {
+    return JSON.parse(String(this.db.prepare("SELECT value FROM memory_meta WHERE key='preferences'").get()!.value)) as MemoryPreferences
+  }
+
+  /** Requested controls survive a temporary experimental/consent/account gate closing. */
+  setPreferences(value: MemoryPreferences): void {
+    if (typeof value.learn !== 'boolean' || typeof value.recall !== 'boolean') throw new MemoryError('invalid_input')
+    this.transaction(() => {
+      this.db.prepare("UPDATE memory_meta SET value=? WHERE key='preferences'").run(JSON.stringify({ learn: value.learn, recall: value.recall }))
+      this.setControls(value)
+    })
   }
 
   /** Trusted integration controls, not model-proposable fields. */
@@ -196,7 +221,7 @@ export class CodingMemoryStore {
       const controls = this.controls()
       this.db.prepare("UPDATE memory_meta SET value = ? WHERE key = 'controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
       this.db.prepare(`UPDATE memory_jobs SET state='cancelled', lease_token=NULL, lease_until=0, source_digest=NULL,
-        last_error='project_privacy_changed', updated_at=? WHERE project_id=? AND state NOT IN ('learned','no_useful_memory','cancelled')`)
+        last_error='project_privacy_changed', updated_at=? WHERE project_id=? AND state NOT IN ${TERMINAL_JOB_STATES}`)
         .run(this.now(), projectId)
       if (!included) this.cancelHiddenSources()
       else this.reconcileVisibleConflicts()
@@ -230,7 +255,7 @@ export class CodingMemoryStore {
       this.db.prepare("UPDATE memory_meta SET value=? WHERE key='controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
       this.db.prepare(`UPDATE memory_jobs SET state='cancelled', lease_token=NULL, lease_until=0, source_digest=NULL,
         last_error='session_privacy_changed', updated_at=? WHERE stream_id IN
-        (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ('learned','no_useful_memory','cancelled')`)
+        (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ${TERMINAL_JOB_STATES}`)
         .run(this.now(), engine, sessionId)
       // Derived input can belong to a different stream while retaining this session's source roots.
       if (!included) this.cancelHiddenSources()
@@ -240,11 +265,11 @@ export class CodingMemoryStore {
     })
   }
 
-  ingest(input: SourceEvent, expectedGeneration = this.controls().generation): { disposition: 'created' | 'duplicate' | 'suppressed' } {
+  ingest(input: SourceEvent, expectedGeneration = this.controls().generation): { disposition: 'created' | 'duplicate' | 'suppressed' | 'retired' } {
     return this.ingestSource(input, expectedGeneration)
   }
 
-  private ingestSource(input: SourceEvent, expectedGeneration: number, userAction = false): { disposition: 'created' | 'duplicate' | 'suppressed' } {
+  private ingestSource(input: SourceEvent, expectedGeneration: number, userAction = false): { disposition: 'created' | 'duplicate' | 'suppressed' | 'retired' } {
     const source = parse(sourceSchema, input)
     if (source.profileId !== this.profileId) throw new MemoryError('profile_mismatch')
     if (!userAction && !this.controls().learn) throw new MemoryError('learning_off')
@@ -261,6 +286,11 @@ export class CodingMemoryStore {
       if (controls.generation !== expectedGeneration) throw new MemoryError('generation_changed')
       if (!this.included(source.projectId)) throw new MemoryError('source_ineligible')
       if (this.isSuppressed(cleaned)) return { disposition: 'suppressed' as const }
+      const receipt = this.db.prepare('SELECT id_hash,native_key,digest FROM retired_sources WHERE id_hash=? OR native_key=?').get(digest(source.id), key)
+      if (receipt) {
+        if (receipt.id_hash !== digest(source.id) || receipt.native_key !== key || receipt.digest !== digest(cleaned)) throw new MemoryError('source_identity_conflict')
+        return { disposition: 'retired' as const }
+      }
       if (source.role === 'derived') {
         const actualRoots = new Set<string>()
         for (const parent of source.derivedFrom!) {
@@ -283,6 +313,7 @@ export class CodingMemoryStore {
       }
       this.db.prepare('INSERT INTO sources(id, native_key, project_id, digest, data) VALUES(?, ?, ?, ?, ?)')
         .run(source.id, key, source.projectId, digest(cleaned), JSON.stringify(cleaned))
+      this.db.prepare('INSERT INTO source_lifecycle(source_id,captured_at,needs_compaction) VALUES(?,?,1)').run(source.id, this.now())
       for (const parent of source.derivedFrom ?? []) this.db.prepare('INSERT INTO source_dependencies(source_id, memory_id, revision) VALUES(?, ?, ?)')
         .run(source.id, parent.memoryId, parent.revision)
       return { disposition: 'created' as const }
@@ -293,6 +324,48 @@ export class CodingMemoryStore {
     const source = this.rawSource(id)
     return source && this.sourceIncluded(source) && this.allowed({ profileId: source.profileId, ...(source.projectId ? { projectId: source.projectId } : {}),
       ...(source.taskId ? { taskId: source.taskId } : {}), ...(source.branchId ? { branchId: source.branchId } : {}) }, access) ? source : null
+  }
+
+  /** No model calls. Completed work retains only evidence; unreviewed raw input expires after a week. */
+  maintain(): Compaction & { expiredJobs: number } {
+    return this.transaction(() => {
+      const expiredJobs = this.learning.expire()
+      const rows = this.db.prepare(`SELECT l.source_id FROM source_lifecycle l WHERE l.needs_compaction=1
+        AND (l.captured_at<=? OR EXISTS (SELECT 1 FROM memory_job_sources js JOIN memory_jobs j ON j.id=js.job_id
+          WHERE js.source_id=l.source_id AND j.state IN ${TERMINAL_JOB_STATES}))
+        AND NOT EXISTS (SELECT 1 FROM memory_job_sources js JOIN memory_jobs j ON j.id=js.job_id
+          WHERE js.source_id=l.source_id AND j.state NOT IN ${TERMINAL_JOB_STATES})
+        ORDER BY l.captured_at LIMIT 512`).all(this.now() - PENDING_RETENTION_MS)
+      const result = this.compactSources(rows.map(row => String(row.source_id)))
+      this.learning.pruneMetadata()
+      return { ...result, expiredJobs }
+    })
+  }
+
+  private compactSources(ids: string[]): Compaction {
+    const result: Compaction = { compactedSources: 0, deletedSources: 0, removedBytes: 0 }
+    for (const id of new Set(ids)) {
+      if (this.db.prepare(`SELECT 1 FROM memory_job_sources js JOIN memory_jobs j ON j.id=js.job_id
+        WHERE js.source_id=? AND j.state NOT IN ${TERMINAL_JOB_STATES} LIMIT 1`).get(id)) continue
+      const row = this.db.prepare('SELECT * FROM sources WHERE id=?').get(id)
+      if (!row) continue
+      const quotes = this.db.prepare('SELECT quote FROM evidence WHERE source_id=? UNION SELECT quote FROM memory_support WHERE source_id=?')
+        .all(id, id).map(row => String(row.quote))
+      if (!quotes.length) {
+        // Content-free receipts preserve idempotency when an old native record is replayed.
+        this.db.prepare('INSERT OR IGNORE INTO retired_sources(id_hash,native_key,digest) VALUES(?,?,?)').run(digest(id), row.native_key, row.digest)
+        this.db.prepare('DELETE FROM sources WHERE id=?').run(id)
+        result.deletedSources++; result.removedBytes += Buffer.byteLength(String(row.data))
+      } else {
+        const source = JSON.parse(String(row.data)) as SourceEvent
+        const text = retainExcerpts(source.text, quotes)
+        const data = JSON.stringify({ ...source, text, retention: 'evidence_only' })
+        this.db.prepare('UPDATE sources SET data=? WHERE id=?').run(data, id)
+        this.db.prepare('UPDATE source_lifecycle SET needs_compaction=0 WHERE source_id=?').run(id)
+        result.compactedSources++; result.removedBytes += Math.max(0, Buffer.byteLength(String(row.data)) - Buffer.byteLength(data))
+      }
+    }
+    return result
   }
 
   propose(input: MemoryDraft, access: MemoryAccess, expectedGeneration = this.controls().generation): { record: MemoryRecord; disposition: 'created' | 'duplicate' } {
@@ -544,7 +617,8 @@ export class CodingMemoryStore {
         else {
           // Shared events retain only the evidence spans still owned by remaining records.
           const source = this.rawSource(sourceId)!
-          source.text = quotes.join('\n[…]\n')
+          source.text = retainExcerpts(source.text, quotes)
+          source.retention = 'evidence_only'
           this.db.prepare('UPDATE sources SET data = ? WHERE id = ?').run(JSON.stringify(source), sourceId)
         }
       }
@@ -769,6 +843,23 @@ export class CodingMemoryStore {
       this.transactionDepth--
     }
   }
+}
+
+function retainExcerpts(text: string, quotes: string[]): string {
+  const spans = quotes.map(quote => {
+    const start = text.indexOf(quote)
+    if (start < 0) throw new MemoryError('evidence_mismatch')
+    return { start, end: start + quote.length }
+  }).sort((a, b) => a.start - b.start)
+  const merged: Array<{ start: number; end: number }> = []
+  for (const span of spans) {
+    const previous = merged.at(-1)
+    if (previous && span.start <= previous.end) previous.end = Math.max(previous.end, span.end)
+    else merged.push({ ...span })
+  }
+  // A one-character separator never expands the original source size. Each exact evidence span
+  // survives; the retention marker makes clear that surrounding conversation text was removed.
+  return merged.map(span => text.slice(span.start, span.end)).join('\n')
 }
 
 /** Apply source privacy before LIMIT, so private candidates cannot crowd out usable knowledge. */

@@ -1,16 +1,17 @@
 /** Fresh, bounded Claude extraction. No reuse of a worker created under an older login. */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { homedir, tmpdir } from 'node:os'
+import { nativeMemoryEnvironment } from './account.js'
 import type { OneShotOptions } from '../lib/oneshot.js'
 import { MemoryError } from './types.js'
 import { runInferenceProcess } from './inferenceProcess.js'
 
 const exec = promisify(execFile)
 const CERTIFIED_CLAUDE_VERSIONS = new Set(['2.1.285'])
-export async function claudeMemoryCapability(): Promise<{ supported: boolean; version: string | null }> {
+export async function claudeMemoryCapability(signal?: AbortSignal): Promise<{ supported: boolean; version: string | null }> {
   try {
-    const result = await exec(process.env.CLAUDE_PATH || 'claude', ['--version'], { timeout: 2_000, maxBuffer: 2_000 })
+    const result = await exec(process.env.CLAUDE_PATH || 'claude', ['--version'], { timeout: 5_000, maxBuffer: 2_000,
+      env: nativeMemoryEnvironment(), ...(signal ? { signal } : {}) })
     const version = /^(\d+\.\d+\.\d+) \(Claude Code\)$/.exec(result.stdout.trim())?.[1] ?? null
     return { supported: !!version && CERTIFIED_CLAUDE_VERSIONS.has(version), version }
   } catch { return { supported: false, version: null } }
@@ -18,14 +19,15 @@ export async function claudeMemoryCapability(): Promise<{ supported: boolean; ve
 
 export async function runClaudeMemoryInference(options: OneShotOptions): Promise<{ text: string }> {
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
-  if (!(await claudeMemoryCapability()).supported) throw new MemoryError('claude_version_uncertified')
+  const capability = await claudeMemoryCapability(options.signal)
+  if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
+  if (!capability.supported) throw new MemoryError('claude_version_uncertified')
   const args = ['--print', '--verbose', '--output-format', 'stream-json', '--no-session-persistence', '--safe-mode',
     '--disable-slash-commands', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--model', options.model ?? '', ...(options.effort ? ['--effort', options.effort] : [])]
   // The native subscription is selected before invocation. Custom-provider/env-token routes are
   // unavailable in the account adapter, rather than silently falling back to another credential.
-  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: homedir(), TMPDIR: tmpdir(),
-    LANG: process.env.LANG || 'en_US.UTF-8', TERM: 'dumb', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
+  const env: NodeJS.ProcessEnv = { ...nativeMemoryEnvironment(), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
   return runInferenceProcess(options, process.env.CLAUDE_PATH || 'claude', args, env, event => {
     if (event.type === 'system') {
       if (event.subtype === 'init' && (!Array.isArray(event.tools) || event.tools.length)) return { error: 'inference_tool_or_error' }

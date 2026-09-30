@@ -56,6 +56,11 @@ export class MemoryLearner {
     const controller = new AbortController()
     this.controller = controller
     try {
+      // Looking up the native model/account may spawn a version probe. An idle or deferred queue
+      // must not do that on every host tick, nor warm a provider just to discover there is no work.
+      const pending = await this.memory.request('pendingReview', [])
+      assertActive(controller.signal)
+      if (pending !== 'ready') return { state: pending }
       const target = await this.inference.target()
       if (controller.signal.aborted) return { state: 'cancelled' }
       const claim = await this.memory.request('claim', [target])

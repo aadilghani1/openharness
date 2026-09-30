@@ -24,10 +24,11 @@ const emit = (type: string, item?: unknown) => `console.log(${JSON.stringify(JSO
 it('uses the selected model/account and disables the certified execution features', async () => {
   const capture = join(directory, 'launch.json')
   program(`require('node:fs').writeFileSync(${JSON.stringify(capture)}, JSON.stringify({args:process.argv.slice(2),
-    profile:process.env.CODEX_HOME, tmux:process.env.TMUX, prompt:input}));
+    profile:process.env.CODEX_HOME, tmux:process.env.TMUX, apiKey:process.env.CODEX_API_KEY, prompt:input}));
     ${emit('thread.started')} ${emit('turn.started')} ${emit('item.completed', { type: 'agent_message', text: '{"proposals":[]}' })}
     ${emit('turn.completed')}`)
   vi.stubEnv('TMUX', 'terminal-context')
+  vi.stubEnv('CODEX_API_KEY', 'unselected-ambient-key')
   const result = await runCodexMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'selected-model',
     effort: 'xhigh', codexHome: join(directory, 'selected-account'), timeoutMs: 3000 })
   expect(result.text).toBe('{"proposals":[]}')
@@ -37,6 +38,7 @@ it('uses the selected model/account and disables the certified execution feature
   expect(launch.profile).toBe(join(directory, 'selected-account'))
   expect(launch.prompt).toBe('synthetic evidence')
   expect(launch.tmux).toBeUndefined()
+  expect(launch.apiKey).toBeUndefined()
 })
 
 it.each(['command_execution', 'mcp_tool_call', 'error'])('refuses a %s item even when a final answer follows', async type => {
@@ -63,5 +65,14 @@ it('aborts a background process and does not accept its later answer', async () 
   const result = runCodexMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model', signal: controller.signal })
   const assertion = expect(result).rejects.toThrow('inference_cancelled')
   setTimeout(() => controller.abort(), 100)
+  await assertion
+})
+
+it('cancels while checking the native version without misreporting an unsupported release', async () => {
+  writeFileSync(binary, `#!${process.execPath}\nsetTimeout(() => console.log('codex-cli 0.159.0'), 10000);\n`, { mode: 0o700 })
+  const controller = new AbortController()
+  const result = runCodexMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model', signal: controller.signal })
+  const assertion = expect(result).rejects.toThrow('inference_cancelled')
+  setTimeout(() => controller.abort(), 50)
   await assertion
 })

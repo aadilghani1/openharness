@@ -2,8 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { OneShotOptions } from '../lib/oneshot.js'
-import { oneShotParentEnv } from '../lib/loginShellEnv.js'
-import { scrubTerminalContext } from '../lib/terminalEnvironment.js'
+import { memoryCodexHome, nativeMemoryEnvironment } from './account.js'
 import { MemoryError } from './types.js'
 import { runInferenceProcess } from './inferenceProcess.js'
 
@@ -15,10 +14,10 @@ export const CODEX_MEMORY_DISABLED_FEATURES = ['shell_tool', 'unified_exec', 'ap
   'remote_plugin', 'view_image', 'code_mode_host', 'tool_suggest', 'workspace_dependencies', 'skill_search', 'sleep_tool',
   'goals', 'memories', 'shell_snapshot', 'enable_request_compression', 'daemon_auto_start'] as const
 
-export async function codexMemoryCapability(): Promise<{ supported: boolean; version: string | null }> {
+export async function codexMemoryCapability(signal?: AbortSignal): Promise<{ supported: boolean; version: string | null }> {
   try {
     const result = await exec(process.env.CODEX_PATH || 'codex', ['--version'], {
-      timeout: 2_000, maxBuffer: 2_000, env: scrubTerminalContext({ ...oneShotParentEnv() }),
+      timeout: 5_000, maxBuffer: 2_000, env: nativeMemoryEnvironment(), ...(signal ? { signal } : {}),
     })
     const version = /^(?:codex-cli|codex) (\d+\.\d+\.\d+)\s*$/.exec(result.stdout.trim())?.[1] ?? null
     return { supported: !!version && CERTIFIED_CODEX_VERSIONS.has(version), version }
@@ -28,15 +27,17 @@ export async function codexMemoryCapability(): Promise<{ supported: boolean; ver
 /** The remaining request_user_input tool is unusable in exec mode; any error/tool item rejects this run. */
 export async function runCodexMemoryInference(options: OneShotOptions): Promise<{ text: string }> {
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
-  if (!(await codexMemoryCapability()).supported) throw new MemoryError('codex_version_uncertified')
+  const capability = await codexMemoryCapability(options.signal)
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
+  if (!capability.supported) throw new MemoryError('codex_version_uncertified')
   if (!options.model || Buffer.byteLength(options.prompt) > 120_000) throw new MemoryError('invalid_inference_input')
   const args = ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check',
     '--ignore-user-config', '--ignore-rules', '--model', options.model,
     '-c', 'web_search="disabled"', ...CODEX_MEMORY_DISABLED_FEATURES.flatMap(feature => ['--disable', feature]),
     ...(options.effort ? ['-c', `model_reasoning_effort="${options.effort}"`] : []), '-']
-  const childEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-  if (options.codexHome) childEnv.CODEX_HOME = options.codexHome
+  const codexHome = memoryCodexHome(options.codexHome)
+  if (!codexHome) throw new MemoryError('inference_unavailable')
+  const childEnv = { ...nativeMemoryEnvironment(), CODEX_HOME: codexHome }
   return runInferenceProcess(options, process.env.CODEX_PATH || 'codex', args, childEnv, event => {
     const item = event.item as { type?: string; text?: string } | undefined
     if (event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed') {
