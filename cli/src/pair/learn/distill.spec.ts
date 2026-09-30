@@ -128,6 +128,12 @@ describe('the model (opt-in)', () => {
     expect(await d.distill(steps)).toEqual({ lesson: null, why: 'cap' })
     expect(oneshot).toHaveBeenCalledTimes(6)
   })
+
+  it('keeps provider usage-limit notices out of lessons and preserves the observation for retry', async () => {
+    const { d } = distiller("You've hit your weekly limit · resets Oct 3 at 12am (America/New_York)")
+    expect(await d.review('review recent conversations')).toEqual({ text: null, failure: 'usage-limit' })
+    expect(await d.distill(steps)).toEqual({ lesson: null, why: 'usage-limit' })
+  })
 })
 
 describe('the guard on every lesson', () => {

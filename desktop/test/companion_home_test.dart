@@ -562,6 +562,34 @@ void main() {
     expect(find.text('Stop review'), findsOneWidget);
     expect(tester.widget<TextButton>(review).onPressed, isNull);
     expect(sent.where((s) => s.$1 == 'daemon_act'), isEmpty);
+    // A provider quota pause keeps the job, explains the cause and lets the
+    // person retry after changing the model in the same agent pane.
+    await tester.ensureVisible(find.text('Refresh memories'));
+    await tester.tap(find.text('Refresh memories'));
+    await tester.pump();
+    brain.receive('pair_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': true,
+      'lessons': [],
+      'learning': {
+        'state': 'ready',
+        'model': 'opus',
+        'history': {
+          'state': 'waiting',
+          'error': 'usage-limit',
+          'total': 10,
+          'reviewed': 0,
+        },
+      },
+    });
+    await tester.pump();
+    expect(
+      find.textContaining('Your chosen model has reached its usage limit.'),
+      findsOneWidget,
+    );
+    expect(find.text('Retry review'), findsOneWidget);
+    expect(tester.widget<TextButton>(review).onPressed, isNotNull);
+    expect(sent.where((s) => s.$1 == 'daemon_act'), isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
 

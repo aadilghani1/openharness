@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConversationReview } from './conversationReview.js'
 import { LessonStore } from './store.js'
-import { LessonDistiller } from './distill.js'
+import { LessonDistiller, type DistillWhy } from './distill.js'
 import type { RecentConversationTurn } from '../../lib/sessionSearch/store.js'
 import { projectHash } from './types.js'
 
@@ -23,7 +23,7 @@ const candidate = (sources = ['1']) => JSON.stringify({ lessons: [{ sources, rea
 function world(rows = [row()], response: string | null = candidate()) {
   let scope: string | null = 'collection-a', ready = true, now = NOW
   const store = new LessonStore({ root: join(dir, 'lessons'), now: () => now, git: null })
-  const review = vi.fn(async (_prompt: string, _signal?: AbortSignal) => ({ text: response }))
+  const review = vi.fn(async (_prompt: string, _signal?: AbortSignal): Promise<{ text: string | null; failure?: DistillWhy }> => ({ text: response }))
   const turns = vi.fn(() => ({ rows, more: false, indexing: 0 }))
   const deps = { directory: dir, scope: () => scope, pairedDaemon: () => scope ? 'tim' : null,
     intelligence: () => ({ state: ready ? 'ready' as const : 'waiting' as const }),
@@ -117,6 +117,22 @@ describe('explicit conversation review', () => {
     w.set({ now: NOW + 120_000 }); await w.history.tick()
     expect(w.history.status()).toMatchObject({ state: 'failed', reviewed: 0 })
     expect(w.store.pending()).toHaveLength(0)
+  })
+
+  it('keeps a usage-limited snapshot across restarts and allows an explicit retry of that same window', async () => {
+    const w = world()
+    w.review.mockResolvedValueOnce({ text: null, failure: 'usage-limit' })
+    w.history.start(24); await w.settled()
+    expect(w.history.status()).toMatchObject({ state: 'waiting', error: 'usage-limit', reviewed: 0, retryAt: NOW + HOUR })
+    w.set({ now: NOW + 60_000 })
+    const restarted = w.restart()
+    await restarted.tick()
+    expect(w.review).toHaveBeenCalledTimes(1)
+    restarted.start(24)
+    await vi.waitFor(() => expect(restarted.status()?.state).toBe('complete'))
+    expect(w.turns).toHaveBeenCalledTimes(1)
+    expect(w.store.pending()).toHaveLength(1)
+    expect(w.store.approved()).toHaveLength(0)
   })
 
   it('accepts a narrower explicit window and refuses invalid durations or a missing companion', () => {

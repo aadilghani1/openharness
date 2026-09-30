@@ -116,6 +116,8 @@ class DaemonHistoryReview {
   final bool more;
   final String? error;
   bool get active => const ['queued', 'reviewing', 'waiting'].contains(state);
+  bool get canRetry =>
+      state == 'failed' || (state == 'waiting' && error == 'usage-limit');
   static DaemonHistoryReview? fromJson(Object? raw) {
     if (raw is! Map || raw['state'] is! String) return null;
     int n(String key, [int fallback = 0]) =>
@@ -146,6 +148,9 @@ class DaemonHistoryReview {
     }
     if (state == 'waiting' && error == 'cap') {
       return '$reviewed of $total conversation turns reviewed. The rest will continue when the hourly review allowance resets.';
+    }
+    if (state == 'waiting' && error == 'usage-limit') {
+      return 'Your chosen model has reached its usage limit. Your conversations are queued and we’ll check again later. You can also choose another model in the agent pane, then retry this review.';
     }
     if (state == 'failed') {
       return 'The review could not finish. Your progress and any proposed lessons are kept. Retry to continue.';
@@ -222,6 +227,9 @@ class DaemonLearning {
     }
     if (pending > 0) {
       return 'A useful lesson is waiting for your approval. It will be shared with your agents once you approve it.';
+    }
+    if (lastOutcome == 'usage-limit') {
+      return 'Your chosen model has reached its usage limit. Your observations are kept for a later review.';
     }
     if (['failed', 'timeout', 'no-model'].contains(lastOutcome)) {
       return 'The last review could not finish. Your observations are queued for another try.';

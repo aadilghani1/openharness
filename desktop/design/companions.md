@@ -44,6 +44,8 @@ stopped. Approved lessons, the actual hatch date and XP follow the inbox. Forget
 all agents and retains the learner's revision history. Lessons remain local to this
 computer; this is not cross-machine memory sync.
 
+![Pending memory review with source evidence and guarded approval, using synthetic fixture data](companion-memory-inbox.png)
+
 Opening the home starts or resumes the existing pair DSH through a UI-only local
 socket request, without a prompt, pasted text or Enter key. The complete engine
 conversation appears in the right pane. First-time login, folder trust and tool

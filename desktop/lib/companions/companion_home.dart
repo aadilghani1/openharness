@@ -812,10 +812,11 @@ class _CompanionHomeState extends State<CompanionHome> {
             spacing: 8,
             children: [
               _button(
-                history?.state == 'failed'
+                history?.canRetry == true
                     ? 'Retry review'
                     : 'Look back over 24 hours',
-                _lessons.busy || history?.active == true
+                _lessons.busy ||
+                        (history?.active == true && history?.canRetry != true)
                     ? null
                     : () => unawaited(_lessons.reviewRecent()),
                 key: const ValueKey('memory-review-recent'),

@@ -193,9 +193,9 @@ export class ConversationReview {
 
   private retry(job: Job, error: string): void {
     job.error = error
-    if (error !== 'cap' && error !== 'no-model') job.attempts++
+    if (!['cap', 'no-model', 'usage-limit'].includes(error)) job.attempts++
     job.state = job.attempts >= 3 ? 'failed' : 'waiting'
-    job.retryAt = this.deps.now() + (error === 'cap' ? HOUR : 60_000)
+    job.retryAt = this.deps.now() + (['cap', 'usage-limit'].includes(error) ? HOUR : 60_000)
     this.save()
   }
 }

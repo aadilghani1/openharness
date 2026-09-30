@@ -33,7 +33,7 @@ export const DISTILL_HOURLY_CAP = 6
 const HOUR_MS = 60 * 60_000
 
 export type DistillWhy = 'nothing' | 'no-template' | 'refused' | 'bad-json' | 'too-long' | 'bad-name' | 'empty'
-  | 'timeout' | 'failed' | 'no-model' | 'cap'
+  | 'timeout' | 'failed' | 'no-model' | 'cap' | 'usage-limit'
 
 export type DistillSource = 'template' | 'model' | 'borrowed'
 
@@ -61,7 +61,13 @@ export class LessonDistiller {
     if (signal?.aborted) return { text: null, failure: 'failed' }
     if (!this.deps.oneshot || this.deps.modelEnabled?.() !== true) return { text: null, failure: 'no-model' }
     if (!this.takeCall()) return { text: null, failure: 'cap' }
-    return this.ask(redact(prompt, { home: this.deps.home ?? null }), signal)
+    const result = await this.ask(redact(prompt, { home: this.deps.home ?? null }), signal)
+    // Claude can return a successful text envelope containing its usage-limit
+    // notice. It is neither lesson JSON nor a judgment that nothing was learned.
+    if (result.text && /^\s*you(?:['’]ve| have) (?:hit|reached) your (?:[\w-]+\s+){0,3}limit\b/i.test(result.text)) {
+      return { text: null, failure: 'usage-limit' }
+    }
+    return result
   }
 
   /** The one lesson in this signal, or why there is none. Never throws. */
@@ -69,7 +75,7 @@ export class LessonDistiller {
     let why: DistillWhy = 'no-template'
     if (this.deps.oneshot && this.deps.modelEnabled?.() === true) {
       const { text, failure } = await this.review(distillPrompt(signal, { home: this.deps.home ?? null }))
-      if (failure === 'cap') return { lesson: null, why: 'cap' }
+      if (failure === 'cap' || failure === 'usage-limit') return { lesson: null, why: failure }
       why = failure ?? 'bad-json'
       if (text !== null) {
         const parsed = parseDistilled(text)

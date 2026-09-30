@@ -40,7 +40,10 @@ class _MemoryReviewTextState extends State<MemoryReviewText> {
       if (!mounted || _read) return;
       final view = widget.viewport.currentContext?.findRenderObject();
       if (view is! RenderBox || !view.attached || !view.hasSize) return;
-      final visible = view.localToGlobal(Offset.zero) & view.size;
+      final window = Offset.zero & MediaQuery.sizeOf(context);
+      final visible = (view.localToGlobal(Offset.zero) & view.size).intersect(
+        window,
+      );
       for (var i = 0; i < _keys.length; i++) {
         if (_seen.contains(i)) continue;
         final box = _keys[i].currentContext?.findRenderObject();

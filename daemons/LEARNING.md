@@ -106,6 +106,9 @@ budget. Larger reviews continue in the background, including after daemon restar
 No observed model means waiting, not choosing another model. Cancellation or disabling
 the experiment discards in-flight results. Reviewed turn hashes and existing lessons
 prevent overlapping reviews from repeating suggestions.
+Provider usage-limit notices keep the same snapshot queued with an hourly retry and a
+clear waiting state. The person can change the model in the agent pane and retry sooner;
+the learner never switches providers or credentials on its own.
 
 Each batch can propose up to three guarded lessons, with a reason, cited conversation
 titles, dates, turns and redacted evidence. Every lesson stays pending. The inbox offers

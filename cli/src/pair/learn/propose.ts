@@ -198,7 +198,7 @@ export class PairLearner {
       const result = await this.deps.distiller.distill(signal).catch((): Distilled => ({ lesson: null, why: 'failed' }))
       if (!this.deps.pairedDaemon() || (this.deps.queueFile && path !== this.deps.queueFile()) ||
         (this.deps.intelligence && this.deps.intelligence().state !== 'ready')) return
-      const retry = !result.lesson && ['timeout', 'failed', 'no-model', 'cap'].includes(result.why)
+      const retry = !result.lesson && ['timeout', 'failed', 'no-model', 'cap', 'usage-limit'].includes(result.why)
       this.queue = this.queue.filter(s => s.key !== signal.key)
       // Keep failures, but don't let one troublesome observation starve the rest.
       if (retry) this.queue.push(signal)
