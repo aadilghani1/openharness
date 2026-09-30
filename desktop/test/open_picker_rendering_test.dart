@@ -100,7 +100,10 @@ void main() {
         expect(panel.color, DesktopChrome.surface);
         expect(field.style!.color, grid.AppPalette.textPrimary);
         expect(field.cursorColor, grid.AppPalette.textPrimary);
-        expect(editor.selectionColor, pane.theme.selection);
+        expect(
+          editor.selectionColor,
+          DefaultSelectionStyle.of(tester.element(input)).selectionColor,
+        );
         final row = find.byKey(ValueKey(search.selected!.id));
         expect(tester.widget<ListTile>(row).selected, isTrue);
         expect(tester.getSize(row).height, greaterThan(40));
@@ -236,7 +239,10 @@ void main() {
         );
         expect(field.style!.color, grid.AppPalette.textPrimary);
         expect(field.cursorColor, grid.AppPalette.textPrimary);
-        expect(editor.selectionColor, pane.theme.selection);
+        expect(
+          editor.selectionColor,
+          DefaultSelectionStyle.of(tester.element(setupInput)).selectionColor,
+        );
         expect(field.style!.fontFamily, grid.AppType.body().fontFamily);
         expect(field.style!.fontSize, 14);
         expect(box.selected?.id, selectedOption);

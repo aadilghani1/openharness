@@ -203,7 +203,7 @@ void main() {
       );
 
       for (final (model, label) in [
-        (available, 'Suggested'),
+        (available, 'Not downloaded'),
         (downloaded, 'Downloaded'),
         (running, 'Running'),
       ]) {
@@ -760,7 +760,10 @@ void main() {
           ],
         };
         await mount(tester, app: app, query: ':Large model');
-        expect(find.text('needs 16 GB'), findsOneWidget);
+        expect(
+          find.text('needs 16 GB · ${thisComputerName()} has 8.0 GB'),
+          findsOneWidget,
+        );
         expect(find.text('Resting until your next message'), findsOneWidget);
         expect(
           find.text(window == 7200 ? '3 req / 2h' : '3 req / 2m'),

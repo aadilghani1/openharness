@@ -11,6 +11,7 @@ import 'desktop_chrome.dart';
 import 'box_chrome.dart' show ReadlineKeys;
 import 'swarm_switcher.dart';
 import 'swarm_search_input.dart';
+import 'key_hints.dart';
 
 /// A desktop command palette over the existing search and activation pipeline.
 /// Category buttons edit the same query as keyboard prefixes; no second index.
@@ -24,6 +25,7 @@ class DesktopSearchPanel extends StatelessWidget {
     required this.onClose,
     required this.onRefocus,
     required this.previewBuilder,
+    this.hostBar,
   });
 
   final SwarmSearchController search;
@@ -32,6 +34,7 @@ class DesktopSearchPanel extends StatelessWidget {
   final ValueChanged<SwarmSearchSelection> onChoose;
   final VoidCallback onClose, onRefocus;
   final Widget Function() previewBuilder;
+  final Widget? hostBar;
 
   static const maxWidth = 1120.0;
   static const maxHeight = 680.0;
@@ -74,6 +77,7 @@ class DesktopSearchPanel extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                ?hostBar,
                 if (search.split != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -146,33 +150,37 @@ class DesktopSearchPanel extends StatelessWidget {
                           icon: const Icon(AppIcons.columns2, size: 18),
                         ),
                       ),
-                      _toolbarButton(
-                        context,
-                        key: const ValueKey('search-close'),
-                        tooltip: 'Close search',
-                        onPressed: onClose,
-                        icon: const Icon(AppIcons.close, size: 18),
-                      ),
+                      if (hostBar == null)
+                        _toolbarButton(
+                          context,
+                          key: const ValueKey('search-close'),
+                          tooltip: 'Close search',
+                          onPressed: onClose,
+                          icon: const Icon(AppIcons.close, size: 18),
+                        ),
                     ],
                   ),
                 ),
-                ListenableBuilder(
-                  listenable: search,
-                  builder: (context, _) => SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 14),
-                    child: _SearchScopes(
-                      selected: _prefix,
-                      onRefocus: onRefocus,
-                      onChanged: (prefix) {
-                        final words = search.wordsQuery;
-                        search.setQuery(
-                          prefix.isEmpty ? words : '$prefix $words'.trimRight(),
-                        );
-                      },
+                if (hostBar == null)
+                  ListenableBuilder(
+                    listenable: search,
+                    builder: (context, _) => SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 14),
+                      child: _SearchScopes(
+                        selected: _prefix,
+                        onRefocus: onRefocus,
+                        onChanged: (prefix) {
+                          final words = search.wordsQuery;
+                          search.setQuery(
+                            prefix.isEmpty
+                                ? words
+                                : '$prefix $words'.trimRight(),
+                          );
+                        },
+                      ),
                     ),
                   ),
-                ),
                 Flexible(
                   child: ListenableBuilder(
                     listenable: search,
@@ -191,31 +199,33 @@ class DesktopSearchPanel extends StatelessWidget {
                     ),
                   ),
                 ),
-                Divider(height: 1, color: DesktopChrome.rim),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 11,
-                  ),
-                  child: ListenableBuilder(
-                    listenable: search,
-                    builder: (context, _) => Wrap(
-                      spacing: 20,
-                      runSpacing: 8,
-                      children: [
-                        _hint(context, 'picker.next', 'Browse'),
-                        _hint(
-                          context,
-                          'picker.accept',
-                          search.selected == null
-                              ? 'Open'
-                              : search.actionLabel(search.selected!),
-                        ),
-                        _hint(context, 'picker.cancel', 'Close'),
-                      ],
+                if (KeyHints.visibleOf(context)) ...[
+                  Divider(height: 1, color: DesktopChrome.rim),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 11,
+                    ),
+                    child: ListenableBuilder(
+                      listenable: search,
+                      builder: (context, _) => Wrap(
+                        spacing: 20,
+                        runSpacing: 8,
+                        children: [
+                          _hint(context, 'picker.next', 'Browse'),
+                          _hint(
+                            context,
+                            'picker.accept',
+                            search.selected == null
+                                ? 'Open'
+                                : search.actionLabel(search.selected!),
+                          ),
+                          _hint(context, 'picker.cancel', 'Close'),
+                        ],
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
             ),
           ),

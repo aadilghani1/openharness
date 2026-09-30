@@ -90,7 +90,7 @@ void main() {
     );
     for (
       var i = 0;
-      i < 20 && find.text('Opening shared agent…').evaluate().isNotEmpty;
+      i < 20 && find.text('Opening shared harness…').evaluate().isNotEmpty;
       i++
     ) {
       await tester.pump(const Duration(milliseconds: 10));
@@ -166,7 +166,7 @@ void main() {
       await tester.pump(const Duration(seconds: 10));
       for (
         var i = 0;
-        i < 20 && find.text('Opening shared agent…').evaluate().isNotEmpty;
+        i < 20 && find.text('Opening shared harness…').evaluate().isNotEmpty;
         i++
       ) {
         await tester.pump(const Duration(milliseconds: 10));

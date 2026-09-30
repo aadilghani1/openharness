@@ -82,7 +82,7 @@ HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   HarnessActivity? result;
   final seen = <(String, String)>{};
   for (final pane in tab.panes) {
-    final id = pane.isWeb ? pane.ownerAgentId : pane.agentId;
+    final id = pane.isViewer ? pane.ownerAgentId : pane.agentId;
     if (id == null || !seen.add((pane.machineId, id))) continue;
     final state = harnessActivity(app, pane.machineId, id);
     if (state != null && (result == null || state.index < result.index)) {

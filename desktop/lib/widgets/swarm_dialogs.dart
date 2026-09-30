@@ -31,7 +31,7 @@ Future<String?> showSwarmRenameDialog(
     title: 'Rename Tab',
     name: name,
     fieldKey: const Key('tab-rename-input'),
-    fieldLabel: 'Tab name',
+    fieldLabel: 'Swarm name',
     maxLength: 80,
   ),
 );

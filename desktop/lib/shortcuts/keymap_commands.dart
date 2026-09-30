@@ -117,6 +117,7 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.newSwarm,
     nativeAction: 'new',
+    keywords: ['tab'],
   ),
   const HarnessCommand(
     'swarm.close',
@@ -124,31 +125,35 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.closeSwarm,
     nativeAction: 'closeActive',
+    keywords: ['tab'],
   ),
   // The live table binds no chord to it any more (⌘⇧T is New Terminal), so
   // `keys` comes back empty: a palette and menu command a person may give a
   // key of their own in keybindings.jsonc.
   const HarnessCommand(
     'swarm.reopen',
-    'Reopen closed tab or pane',
+    'Reopen closed swarm or pane',
     ShortcutGroup.navigate,
     action: ShortcutAction.reopenClosedSwarm,
     nativeAction: 'reopen',
+    keywords: ['tab'],
   ),
   const HarnessCommand(
     'swarm.next',
-    'Next Tab',
+    'Next Swarm',
     ShortcutGroup.navigate,
     action: ShortcutAction.nextSwarm,
     nativeAction: 'next',
+    keywords: ['tab'],
     repeatable: true,
   ),
   const HarnessCommand(
     'swarm.previous',
-    'Previous Tab',
+    'Previous Swarm',
     ShortcutGroup.navigate,
     action: ShortcutAction.previousSwarm,
     nativeAction: 'previous',
+    keywords: ['tab'],
     repeatable: true,
   ),
   const HarnessCommand(
@@ -157,6 +162,7 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     action: ShortcutAction.renameSwarm,
     nativeAction: 'renameActive',
+    keywords: ['tab'],
   ),
   const HarnessCommand(
     'navigation.back',
@@ -191,8 +197,9 @@ final harnessCommands = <HarnessCommand>[
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
       'swarm.select_$i',
-      'Select tab $i',
+      'Select swarm $i',
       ShortcutGroup.navigate,
+      keywords: const ['tab'],
       extraKeys: ['cmd+$i'],
     ),
   for (var i = 1; i <= 9; i++)
@@ -255,7 +262,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'pane.move_to_tab',
-    'Move the pane to another tab',
+    'Move the pane to another swarm',
     ShortcutGroup.panes,
     action: ShortcutAction.movePaneToTab,
     nativeAction: 'movePaneToTab',
@@ -475,7 +482,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'machines.refresh',
-    'Refresh machines and agents',
+    'Refresh machines and harnesses',
     ShortcutGroup.actions,
     action: ShortcutAction.reload,
     nativeAction: 'reload',
@@ -494,7 +501,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'team.open',
-    'Swarm conversation: view this tab’s collaboration',
+    'Swarm conversation: view this swarm’s collaboration',
     ShortcutGroup.actions,
     action: ShortcutAction.team,
     keywords: [
@@ -775,7 +782,7 @@ final harnessCommands = <HarnessCommand>[
     ('project_new', null, 'Name a new project'),
     ('project_existing', null, 'Open an existing project'),
     ('project_repository', null, 'Clone a GitHub repository'),
-    ('project_machine', null, 'Choose the new agent’s machine'),
+    ('project_machine', null, 'Choose the new harness’s machine'),
     ('project_browse', 'ctrl+o', 'Browse folders on the selected machine'),
   ])
     HarnessCommand(

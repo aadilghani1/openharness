@@ -236,7 +236,13 @@ function readStdin() {
   })
 }
 
-function post(port, path, body) {
+function boundedPrompt(prompt) {
+  // An oversized/escape-heavy prompt must still announce its submission so the daemon
+  // clears earlier scope. Keep the serialized field within the hook receiver's bounds.
+  return Buffer.byteLength(JSON.stringify(prompt)) <= 128 * 1024 ? prompt : ''
+}
+
+function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const credential = readHookCredential()
@@ -255,8 +261,16 @@ function post(port, path, body) {
         timeout: Math.max(1, Math.min(500, remainingBudget())),
       },
       (res) => {
-        res.resume()
-        res.on('end', () => resolve((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300))
+        let response = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => { if (response.length < 16_384) response += chunk })
+        res.on('end', () => {
+          const ok = (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300
+          if (ok && onResponse && response.length <= 16_384) {
+            try { onResponse(JSON.parse(response)) } catch { /* Unavailable context never blocks a turn. */ }
+          }
+          resolve(ok)
+        })
       }
     )
     req.on('error', () => resolve(false))
@@ -1425,6 +1439,7 @@ async function main() {
       engine,
       hookEvent: grokEventName,
       sessionId,
+      ...(grokEventName === 'UserPromptSubmit' && typeof input.prompt === 'string' ? { prompt: boundedPrompt(input.prompt) } : {}),
       transcriptPath,
       cwd,
       ...terminalHookFields(tmuxPane),
@@ -1540,8 +1555,8 @@ async function main() {
   }
 
   // SessionStart or UserPromptSubmit (the catch hook) → register the session. Registration is
-  // idempotent, so re-registering on every prompt is cheap. (We print nothing to stdout, so this
-  // never injects context into a UserPromptSubmit turn.)
+  // idempotent, so re-registering on every prompt is cheap. Ordinary agents receive no context.
+  // Only the daemon's verified collection agent receives its current companion persona.
   // Command Code fires SessionStart BEFORE it writes the transcript, and the daemon validates the path
   // (realpath) — sending one that isn't on disk yet gets the whole registration rejected. Announce
   // without it; the session is registered again with the real path on the first Stop. Scoped to
@@ -1557,6 +1572,8 @@ async function main() {
     engine,
     hookEvent: event,
     sessionId: input.session_id || input.conversation_id,
+    ...(event === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex') && typeof input.prompt === 'string'
+      ? { prompt: boundedPrompt(input.prompt) } : {}),
     transcriptPath,
     // Devin's payload carries no cwd; the hook process inherits the session's working directory.
     cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : (input.cwd || (engine === 'devin' ? process.cwd() : undefined)),
@@ -1566,10 +1583,17 @@ async function main() {
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
-  const ok = await post(port, '/api/hook/session-start', body)
+  const ok = await post(port, '/api/hook/session-start', body, (response) => {
+    if (event !== 'UserPromptSubmit' || (engine !== 'claude' && engine !== 'codex')) return
+    if (typeof response.additionalContext !== 'string' || !response.additionalContext || response.additionalContext.length > 8_000) return
+    hookOutput = JSON.stringify({ hookSpecificOutput: {
+      hookEventName: 'UserPromptSubmit', additionalContext: response.additionalContext,
+    } })
+  })
   if (!ok) await fallbackRegister(input, engine, tmuxPane)
 }
 
+let hookOutput = null
 main()
   .catch(() => {})
   .finally(() => {
@@ -1581,6 +1605,7 @@ main()
     // — there `decision` is required, and `{}` reads as a denial (measured: every tool call of the turn
     // came back "Tool call denied by pre-tool hook").
     // Copilot parses stdout as JSON too; `{}` is the documented no-op for every event installed here.
-    if (e === 'cursor' || e === 'hermes' || e === 'agy' || e === 'copilot') process.stdout.write('{}\n', () => process.exit(0))
+    if (hookOutput) process.stdout.write(`${hookOutput}\n`, () => process.exit(0))
+    else if (e === 'cursor' || e === 'hermes' || e === 'agy' || e === 'copilot') process.stdout.write('{}\n', () => process.exit(0))
     else process.exit(0)
   })

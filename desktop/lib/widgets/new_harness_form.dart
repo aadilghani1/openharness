@@ -335,7 +335,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   String _label(_Row row) => switch (row) {
     _Row.advanced => 'Options',
     _Row.project => widget.desktop ? 'Repo' : 'Project',
-    _Row.agent => 'Agent',
+    _Row.agent => box.harnessId == null ? 'Agent' : 'Harness',
     _Row.model => 'Model',
     _Row.branch => 'Branch',
     _Row.worktree => 'Worktree',

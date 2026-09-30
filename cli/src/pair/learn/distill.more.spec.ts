@@ -42,7 +42,7 @@ describe('the model budget', () => {
     const d = new LessonDistiller({ oneshot, modelEnabled: () => true, now: () => now, hourlyCap: 1 })
     expect(await d.distill(steps())).toMatchObject({ lesson: null, why: 'nothing', source: 'model' })
     now += 59 * 60_000
-    expect(await d.distill(steps())).toMatchObject({ source: 'template' })
+    expect(await d.distill(steps())).toEqual({ lesson: null, why: 'cap' })
     expect(oneshot).toHaveBeenCalledTimes(1)
     now += 60_000
     expect(await d.distill(steps())).toMatchObject({ source: 'model' })

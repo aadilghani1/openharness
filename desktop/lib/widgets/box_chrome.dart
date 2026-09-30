@@ -79,12 +79,32 @@ class DesktopTabBorder extends ShapeBorder {
   }
 }
 
+/// Box ink at [alpha] for rims, hairlines and washes: white on a dark palette,
+/// the palette's own ink on a light one.
+Color boxInk(double alpha) {
+  final palette = grid.AppTheme.palette.value;
+  return palette.isDark
+      ? Colors.white.withValues(alpha: alpha)
+      : palette.foreground.withValues(alpha: alpha);
+}
+
+/// Box ink at [alpha] for text and icons. White at 54% is 5.4:1 on Graphite's
+/// workspace, but the same share of near-black is only 3.4:1 on Paper's, so a
+/// light palette never drops below 68% (4.9:1 on its darkest field).
+Color boxText(double alpha) =>
+    boxInk(grid.AppTheme.palette.value.isDark || alpha > .68 ? alpha : .68);
+
+/// Error text in a box: the pale orange reads on a dark field and vanishes on
+/// a light one.
+Color get boxErrorText =>
+    grid.AppTheme.pick(grid.AppPalette.dangerFill, Colors.orangeAccent);
+
 /// Fixed UI typography for shared dialogs. Setup screens opt into the
 /// terminal's size explicitly so zoom does not resize unrelated controls.
 TextStyle boxMonoStyle({Color? color, FontWeight? weight, double? height}) =>
     grid.AppType.mono(
       height: height ?? 1.35,
-      color: color ?? Colors.white,
+      color: color ?? boxText(1),
       fontWeight: weight,
     );
 
@@ -103,12 +123,10 @@ class TerminalBox extends StatelessWidget {
         color: grid.AppPalette.swarmField,
         surfaceTintColor: Colors.transparent,
         shape: docked
-            ? Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: .24)),
-              )
+            ? Border(top: BorderSide(color: boxInk(.24)))
             : RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-                side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+                side: BorderSide(color: boxInk(.24)),
               ),
         clipBehavior: Clip.antiAlias,
         child: DefaultTextStyle.merge(style: boxMonoStyle(), child: child),
@@ -122,7 +140,7 @@ double boxRowHeight(TextScaler scale) =>
     (scale.scale(grid.AppType.monoSize) * 1.35 + 8).clamp(26, double.infinity);
 
 /// Key hints, shortcut glyphs and counts: the box's meta line.
-const kBoxFaint = Colors.white54;
+Color get kBoxFaint => boxText(.54);
 TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
 
 /// Keep the user's actual binding, printed like a terminal's local key guide.
@@ -157,9 +175,7 @@ class BoxRowHighlight extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       animationDuration: Duration.zero,
-      color: highlighted
-          ? Colors.white.withValues(alpha: .10)
-          : Colors.transparent,
+      color: highlighted ? boxInk(.10) : Colors.transparent,
       borderRadius: BorderRadius.circular(terminal ? 0 : 6),
       // No clip: nothing in a row overflows it, and an antialiased rounded clip
       // per row was paid again on every arrow key.
@@ -251,7 +267,7 @@ class BoxHintStrip extends StatelessWidget {
                   maxLines: 3,
                   minLines: 1,
                   style: boxMonoStyle(
-                    color: isError ? Colors.orangeAccent : Colors.white70,
+                    color: isError ? boxErrorText : boxText(.70),
                   ),
                 ),
               ),
@@ -289,7 +305,7 @@ class BoxHintStrip extends StatelessWidget {
                         children: [
                           TextSpan(
                             text: boxKeyLabel(hint.keys),
-                            style: const TextStyle(color: Colors.white70),
+                            style: TextStyle(color: boxText(.70)),
                           ),
                           TextSpan(text: '  ${hint.label}'),
                         ],
@@ -309,7 +325,7 @@ class BoxHintStrip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: .08)),
+          top: BorderSide(color: boxInk(.08)),
         ),
       ),
       child: Column(

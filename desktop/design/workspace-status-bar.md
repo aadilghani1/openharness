@@ -17,7 +17,9 @@ Claude 0%  Codex 50%                      M2 > openharness > branch-name > #439
 The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. Empty New Tabs have no footer.
 
-## Tabs on the left
+The optional Experimental creature sits after Store in a fixed 44pt slot.
+Tim and eggs use bundled bitmap art; hovering opens a full-size preview without
+changing focus. The slot reserves no space when disabled. See [daemons](daemons.md).
 
 Each tab shows a compact name without a permanent number prefix. A user-entered name always wins:
 once renamed, keep it across pane changes, closing/reopening, and saved layout
@@ -45,7 +47,7 @@ shortcut replaces the status beside the name without changing the tab width.
 Hover never moves the title. Cmd-W, remapped shortcuts, native menu access,
 and middle-click closing remain available.
 Preserve reorder, rename, keyboard focus, and terminal sessions. Cmd-T opens a
-tab. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
+swarm. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
 on harnesses. Cmd-Shift-P opens commands (`>`). The projects list has
 no New Project/Open Folder row. Projects with an open pane in any tab come first;
 each group is alphabetical. Pane focus and navigation history do not change that
@@ -91,7 +93,7 @@ explain each symbol.
 | `\|\|` | Paused | Muted foreground |
 | `⊘` | Offline | Muted foreground |
 
-A tab shows its most urgent member in the order above, counting a harness and
+A swarm shows its most urgent member in the order above, counting a harness and
 its viewers once. For an individual harness, offline/paused/launch state takes
 precedence; a current question takes precedence over working. A new turn masks
 old results. Seeing a completion clears its unread check, but viewing a failed
@@ -173,7 +175,7 @@ A model update must repaint the label without reopening or retargeting the pane.
 The observed subscription model does not select a Local row in the picker.
 
 Zoom and Stop remain keyboard/menu actions. Cmd-Shift-W closes the focused pane
-view, Cmd-W closes the tab, and Cmd-Enter toggles pane zoom. Closing a view
+view, Cmd-W closes the swarm, and Cmd-Enter toggles pane zoom. Closing a view
 keeps its harness running; Stop Harness remains a separate command with its
 existing confirmation. Preserve explicit user keymap overrides.
 
@@ -284,7 +286,7 @@ time. Git remains the source of branch names for every engine. When several
 branches have equal recent evidence, show the count instead of selecting one.
 
 Details use two plain tabs: **Pull requests** and **Branches**. The heading is
-the session name and shared repository; do not append “Work” or “Recent work.”
+the harness name and shared repository; do not append “Work” or “Recent work.”
 Pull requests is the default, with one row per PR regardless of branch reuse.
 Put the title on the left and the state on the right. Below it, show the PR number,
 head/base branches and GitHub date. Use terminal green for Open, magenta for

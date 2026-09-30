@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/sleep_aware.dart';
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
@@ -149,12 +150,12 @@ class WsConn {
     if (_closing) return Future<void>.error(StateError('WS closed'));
     final ready = Completer<void>();
     _readinessWaiters.add(ready);
-    return ready.future
-        .timeout(
-          timeout,
-          onTimeout: () => throw const WsRequestTimeout('machine_select'),
-        )
-        .whenComplete(() => _readinessWaiters.remove(ready));
+    // Awake time: a wait begun before the lid closed must not expire on the wake (see sleep_aware).
+    return awakeTimeout<void>(
+      ready.future,
+      timeout,
+      onTimeout: () => throw const WsRequestTimeout('machine_select'),
+    ).whenComplete(() => _readinessWaiters.remove(ready));
   }
 
   void _settleReadiness([String? failure]) {
@@ -614,7 +615,10 @@ class WsConn {
   }) {
     final requestId = _newRequestId();
     final completer = Completer<Map<String, dynamic>>();
-    final timer = Timer(timeout, () {
+    // Awake time, not wall time: a request asked just before the lid closed used to "time out" on the
+    // first turn after it opened, its answer a second behind — and a timed-out inventory is what
+    // marks a machine offline (measured 2026-09-29 19:06:11).
+    final timer = SleepAwareTimer(timeout, () {
       _pending.remove(requestId);
       _queue.removeWhere(
         (f) =>

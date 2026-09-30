@@ -259,7 +259,7 @@ class _RestartAgentPromptState extends State<_RestartAgentPrompt> {
                   if (_fresh) ...[
                     const SizedBox(height: 12),
                     DesktopPromptMessage(
-                      'Started a new conversation. The previous session could not be resumed.',
+                      'Started a new conversation. The previous conversation could not be resumed.',
                       color: grid.AppPalette.warn,
                     ),
                   ],

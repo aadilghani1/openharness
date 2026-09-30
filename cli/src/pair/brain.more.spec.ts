@@ -607,7 +607,7 @@ describe('the brain: a guest window', () => {
     expect([pair.mock.calls, autonomy.mock.calls, consent.mock.calls]).toEqual([[], [], []])
     w.brain.onPresence('local:window', { pair: 7, autonomy: null, consent: 'yes' })
     w.brain.onPresence('local:window', { pair: 'ada', autonomy: 'act-on-key', consent: true })
-    expect(pair.mock.calls).toEqual([[null], ['ada']])
+    expect(pair.mock.calls).toEqual([[null, undefined], ['ada', undefined]])
     expect(autonomy.mock.calls).toEqual([[null], ['act-on-key']])
     expect(consent.mock.calls).toEqual([[false], [true]])
   })

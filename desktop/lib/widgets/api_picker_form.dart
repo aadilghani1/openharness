@@ -559,7 +559,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
         : terminalContentStyle(color: theme.foreground);
     final muted = desktop
         ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
-        : terminalContentStyle(color: theme.foreground.withValues(alpha: .54));
+        : terminalContentStyle(color: theme.muted);
     final errorStyle = desktop
         ? DesktopChrome.text(
             size: 12,

@@ -60,7 +60,7 @@ static void lines(ht_scene_t *s, int y, int width, int count, const ht_font_t *f
     const char *rest = text;
     for (int row = 0; row < count; row++) {
         int w = widths ? widths[row] : width;
-        const char *begin = rest, *end = ht_take_line(&rest, w / font->width);
+        const char *begin = rest, *end = ht_take_display_line(&rest, w / font->width, font);
         char line[HT_TEXT_BYTES];
         size_t n = (size_t)(end - begin);
         if (n >= sizeof line) n = sizeof line - 1;
@@ -91,16 +91,10 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
     // Summary text has no action glyph. Only incomplete prose gets an ellipsis;
     // the desktop action lives in the inbox footer. Bound cached UTF-8 input.
     char marked[7 * HT_TEXT_BYTES + 4];
-    size_t used = 0;
-    const char *p = recap ? recap : "";
-    while (*p) {
-        const char *start = p;
-        ht_utf8_next(&p);
-        size_t bytes = (size_t)(p - start);
-        if (used + bytes + 4 > sizeof marked) break;
-        memcpy(marked + used, start, bytes);
-        used += bytes;
-    }
+    // Normalize before the character budget and round-screen line wrapping.
+    // The stored message remains untouched; ⅓ occupies three display cells.
+    ht_display_text(marked,sizeof marked - 3,recap,font);
+    size_t used = strlen(marked);
     while (used && marked[used - 1] == ' ') used--;
     marked[used] = 0;
     if (used >= 2 && !strcmp(marked + used - 2, " +"))
@@ -140,12 +134,28 @@ void ht_recap_lines(ht_scene_t *s, int y, uint16_t ink, const char *recap)
 void ht_inbox_card(ht_scene_t *s, const char *mark, const char *name,
                    const char *message, uint16_t foreground, uint16_t status_ink)
 {
+    ht_inbox_card_badged(s, mark, name, message, foreground, status_ink, NULL, 0);
+}
+void ht_inbox_card_badged(ht_scene_t *s, const char *mark, const char *name,
+                          const char *message, uint16_t foreground, uint16_t status_ink,
+                          const char *badge, uint16_t badge_ink)
+{
     // One balanced text block. A fixed 28 px gap separates label and message,
     // whether they take two lines or six. No divider or empty reserved rows.
+    /*
+     * With a badge the status mark goes, and the NAME carries the status colour instead — the
+     * design's reading of this row (a green name for a finished turn), and what stops "claude ?"
+     * reading as two marks in a row. Without one the mark stays: on a creature skin it is the only
+     * thing on the card that says done, failed or asking.
+     */
     char title[HT_TEXT_BYTES];
-    snprintf(title, sizeof title, "%s %s", mark, name);
+    if (badge) snprintf(title, sizeof title, "%s", name);
+    else snprintf(title, sizeof title, "%s %s", mark, name);
     int start = s->count;
-    lines(s, 0, 374, 2, &ht_mono_28, foreground, title, true, NULL);
+    // The badge spends part of the title's width, so the title is wrapped in what is left. Without
+    // this the pair is wider than the row it was measured for and its ends reach the bezel.
+    int badge_w = badge ? ht_engine.width + 8 : 0;
+    lines(s, 0, 374 - badge_w, 2, &ht_mono_28, badge ? status_ink : foreground, title, true, NULL);
     while (s->count > start && !s->runs[s->count - 1].text[0]) s->count--;
     int body = s->count;
     recap_lines(s, 0, 391, HT_CHARACTER_RECAP_ROWS, false, NULL,
@@ -156,7 +166,14 @@ void ht_inbox_card(ht_scene_t *s, const char *mark, const char *name,
     int top = 72 + (310 - title_height - 28 - body_height) / 2;
     for (int i = start; i < s->count; i++)
         s->runs[i].y += i < body ? top : top + title_height + 28;
-    if (body > start) {
+    if (body > start && badge) {
+        // The badge leads the FIRST title line, and the pair is centred together.
+        ht_run_t *r = &s->runs[start];
+        int x = (HT_WIDTH - badge_w - r->w) / 2;
+        r->x = x + badge_w;
+        ht_text(s, x, r->y, ht_engine.width, &ht_engine, badge_ink, s->background, badge);
+    }
+    if (body > start && !badge) {
         // Put the colored symbol in its own immutable run. Avoid a shared
         // mutable per-cell palette between the compositor's two scene buffers.
         ht_run_t *r = &s->runs[start];
@@ -167,14 +184,17 @@ void ht_inbox_card(ht_scene_t *s, const char *mark, const char *name,
 }
 void ht_notification_bell(ht_scene_t *s, unsigned count, uint16_t ink)
 {
+    ht_notification_bell_at(s, count, ink, HT_NOTIFICATION_Y);
+}
+void ht_notification_bell_at(ht_scene_t *s, unsigned count, uint16_t ink, int y)
+{
     char number[12];
     snprintf(number, sizeof number, "%u", count);
     int digits = count ? (int)strlen(number) * ht_mono_28.width : 0;
     int width = ht_bell_footer.width + (count ? 8 + digits : 0);
     int x = (HT_WIDTH - width) / 2;
-    ht_text(s, x, HT_NOTIFICATION_Y, ht_bell_footer.width, &ht_bell_footer,
-            ink, s->background, HT_BELL);
-    if (count) ht_text(s, x + ht_bell_footer.width + 8, HT_NOTIFICATION_Y, digits,
+    ht_text(s, x, y, ht_bell_footer.width, &ht_bell_footer, ink, s->background, HT_BELL);
+    if (count) ht_text(s, x + ht_bell_footer.width + 8, y, digits,
                        &ht_mono_28, ink, s->background, number);
 }
 static void recipient(ht_scene_t *s, const ht_character_face_t *f, int y)
@@ -207,8 +227,8 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
     // Keep slots stable through long titles and animation; damage stays local.
     static const int reading_widths[] = {396, 396, 384, 372, 348, 324, 276};
     static const int brief_widths[] = {372, 348, 324};
-    // Larger summaries occupy the center of the circle, with the last row
-    // above the footer. Narrow lower rows keep every glyph inside the bezel.
+    // Larger summaries occupy the center of the circle, with the last row above the footer. Narrow
+    // lower rows keep every glyph inside the bezel.
     static const int roomy_widths[] = {408, 408, 391, 340};
     if (result && f->roomy_reading) recap_lines(s, HT_CHARACTER_READING_TEXT_Y,
         408, HT_CHARACTER_RECAP_ROWS, false, roomy_widths, f->foreground, recap,

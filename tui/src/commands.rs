@@ -41,6 +41,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("list-keys", "lsk", "Key bindings (-T a table, -1N one key)"),
     ("keys", "keys", "Every key binding, searched as you type (C-b ? lists them as tmux does)"),
     ("answer-harness", "answer", "Answer a harness's question: answer -t name 2 (its second choice), 1,3, or your own words"),
+    ("open-viewer", "view", "Open viewer in your browser (-t harness, -p print link, -c copy, -w browser app)"),
     ("open-harness", "openh", "A harness into a window of its own (-h/-v beside/below -t's pane, -d not gone to): open-harness -s name"),
     ("list-windows", "lsw", "The windows (-F a format)"),
     ("list-panes", "lsp", "The panes (-a/-s every window, -t one, -F a format)"),
@@ -213,16 +214,22 @@ fn is_vim_command(cmd: &str) -> bool {
 /// percentage): the size and whether it is a percentage, or tmux's error ("size invalid").
 fn split_size(app: &App, words: &Words) -> Result<Option<(u16, bool)>, String> {
     let fit = |n: i64| n.min(u16::MAX as i64) as u16;
+    // args_percentage_and_expand uses format_expand, not format_expand_time. In particular,
+    // musl strftime rejects a trailing percent sign and turns an ordinary size into "".
+    let expand_size = |value: &str| match app.current() {
+        Some((w, p)) => crate::format::expand(app, value, w, Some(p), false),
+        None => crate::format::expand(app, value, app.active, None, false),
+    };
     if let Some(l) = opt(words, "-l") {
         // args_percentage_and_expand: no "empty" here — an empty size is an invalid number.
-        let l = expand(app, &l);
+        let l = expand_size(&l);
         return match l.strip_suffix('%') {
             Some(n) => strtonum(n, 0, 100).map(|n| Some((fit(n), true))),
             None => strtonum(&l, 0, i32::MAX as i64).map(|n| Some((fit(n), false))),
         }.map_err(|e| format!("size {e}"));
     }
     match opt(words, "-p") {
-        Some(p) => strtonum(&expand(app, &p), 0, 100).map(|n| Some((fit(n), true))).map_err(|e| format!("size {e}")),
+        Some(p) => strtonum(&expand_size(&p), 0, 100).map(|n| Some((fit(n), true))).map_err(|e| format!("size {e}")),
         None => Ok(None),
     }
 }
@@ -1234,6 +1241,7 @@ fn run_words(app: &mut App, words: &[String]) {
 /// hn keeps outside the store — the prefix, the mouse, a window's synchronize-panes …
 fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: Option<usize>) {
     let name = name.to_string();
+    if name == "@hn-look" { app.redraw_all = true; app.fit_panes(); app.push_theme(); }
     // alerts_reset_all: every window's silence timer starts again.
     if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
     if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
@@ -3460,6 +3468,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.modal = Some(Modal::Confirm { prompt, command, key, enter_yes: flag(words, "-y") });
             app.wait_cli = app.capture.is_some() && !flag(words, "-b");
         }
+        "open-viewer" => {
+            let options = match crate::viewer::Options::parse(&words[1..]) { Ok(o) => o, Err(e) => return app.error(e) };
+            let key = match harness_target(app, words) {
+                Ok(Some(k)) => k,
+                Ok(None) => match input::focused_key(app) { Some(k) => k, None => return app.error("no harness here — use view -t <harness>") },
+                Err(e) => return app.error(e),
+            };
+            crate::viewer::show(app, key, options);
+        }
         "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
         "new-terminal" => input::run(app, "terminal"),
         // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
@@ -3609,6 +3626,18 @@ mod tests {
         assert_eq!(split("display-menu Swap l { swap-window -t :-1 } '' Kill X { kill-window }"), vec![vec!["display-menu", "Swap", "l", "swap-window -t :-1", "", "Kill", "X", "kill-window"]]);
         for yes in ["vim", "nvim", "vi", "view", "gvim", "vimdiff", "nvimdiff", "lvim", "fzf", "/usr/bin/nvim", "vimx"] { assert!(is_vim_command(yes), "{yes}") }
         for no in ["zsh", "bash", "claude", "node", "vite", "vim-server", "less"] { assert!(!is_vim_command(no), "{no}") }
+    }
+
+    #[tokio::test]
+    async fn split_percentages_expand_formats_without_strftime() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let app = App::new(19789, sink, (80, 24));
+        let size = |flag: &str, value: &str| split_size(&app, &Words::plain(vec!["split-window".into(), flag.into(), value.into()]));
+        assert_eq!(size("-l", "35%"), Ok(Some((35, true))));
+        assert_eq!(size("-l", "#{client_width}%"), Ok(Some((80, true))));
+        assert_eq!(size("-l", "35"), Ok(Some((35, false))));
+        assert_eq!(size("-p", "35"), Ok(Some((35, true))));
+        for flag in ["-l", "-p"] { assert_eq!(size(flag, "%H"), Err("size invalid".into())); }
     }
 
     #[test]

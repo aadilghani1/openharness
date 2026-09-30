@@ -98,7 +98,7 @@ void main() {
       await mount(tester, app);
       final close = find.byKey(ValueKey('tab-close:${second.id}'));
       expect(close.hitTestable(), findsNothing);
-      final label = find.text('Second tab');
+      final label = find.byKey(ValueKey('tab-label:${second.id}'));
       final tab = find.byKey(ValueKey(second.id));
       final nameBounds = tester.getRect(label);
       expect(nameBounds.left, greaterThan(tester.getRect(tab).left));

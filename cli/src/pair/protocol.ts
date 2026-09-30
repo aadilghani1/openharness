@@ -147,9 +147,9 @@ export { isDenyClass } from './classify.js'
 
 // ── local frames (loopback only) ────────────────────────────────────────────────────────────────────
 
-export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result', 'daemon_confirm_result', 'daemon_plate'])
+export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result', 'daemon_open_result', 'daemon_confirm_result', 'daemon_plate'])
 /** Taken only over the daemon's Unix socket, and all but presence only from a window (localWsServer.ts). */
-export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_shown', 'daemon_confirm'])
+export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_open', 'daemon_shown', 'daemon_confirm'])
 /**
  * An individual's art (pair/plateService.ts): `daemon_plate_get { requestId, uid, id, seed, size, version,
  * mood }` → `daemon_plate { requestId, uid, size, version, mood, frames: [{ rows, mats }], frameMs }` or
@@ -186,6 +186,10 @@ export interface DaemonSay {
   about: { machineId: string; agentId: string; requestId?: string }
   mood: DaemonMood
   line: string
+  /** Full conversational answer for the companion viewer. Never a status line or an action. */
+  reply?: string
+  /** The paired individual when the answer was emitted; viewers reject another individual's reply. */
+  companionUid?: string
   actions: DaemonAction[]
   ttlMs: number
   /**

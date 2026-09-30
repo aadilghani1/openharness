@@ -617,9 +617,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
           width: cell.width * 10,
           child: Text(
             '$label >',
-            style: terminalContentStyle(
-              color: theme.foreground.withValues(alpha: .54),
-            ),
+            style: terminalContentStyle(color: theme.muted),
           ),
         ),
         Expanded(
@@ -789,9 +787,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
                             : DesktopChrome.muted,
                       )
                     : terminalContentStyle(
-                        color: !_busy && _error
-                            ? theme.yellow
-                            : theme.foreground.withValues(alpha: .54),
+                        color: !_busy && _error ? theme.yellow : theme.muted,
                       ),
               ),
             ),
@@ -879,9 +875,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
                 ].join('  ·  '),
                 style: desktop
                     ? DesktopChrome.metadata()
-                    : terminalContentStyle(
-                        color: theme.foreground.withValues(alpha: .54),
-                      ),
+                    : terminalContentStyle(color: theme.muted),
               ),
             ),
           ],

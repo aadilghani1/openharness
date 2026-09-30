@@ -104,7 +104,7 @@ class _UsageProviderPaneState extends State<UsageProviderPane> {
           const SizedBox(height: 12),
           UsageBreakdownCard(
             title: 'By project',
-            subtitle: 'Grouped by the folder each session ran in.',
+            subtitle: 'Grouped by the folder each conversation ran in.',
             rows: breakdownByProject(provider, entries),
           ),
           const SizedBox(height: 12),
@@ -157,7 +157,7 @@ class _Figures extends StatelessWidget {
         footnote: 'read nothing from cache',
       ),
       UsageStatCard(
-        label: 'Sessions / turns',
+        label: 'Conversations / turns',
         value: '${report.sessions} / ${report.turns}',
         icon: AppIcons.folderKanban,
       ),
@@ -272,7 +272,7 @@ class _DisabledCard extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 520),
             child: Text(
               'Reads the logs the ${provider.label} CLI already keeps on this '
-              'computer to show token, model and session figures. Nothing is '
+              'computer to show token, model and conversation figures. Nothing is '
               'read until you switch it on.',
               style: AppType.body(
                 height: 1.45,

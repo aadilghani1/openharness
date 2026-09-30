@@ -332,7 +332,7 @@ class _LinkMachineScreenState extends State<LinkMachineScreen> {
                               Text(
                                 _submitting
                                     ? 'Connecting continues if you close this prompt.'
-                                    : 'Your previous agent will reconnect automatically after linking.',
+                                    : 'Your previous harness will reconnect automatically after linking.',
                                 style: DesktopChrome.metadata(),
                               ),
                               const SizedBox(height: 8),

@@ -1,9 +1,8 @@
 # Harness desktop design system
 
 The canonical system for everything around terminal panes. This supersedes
-older BIOS, bracket-button and mixed desktop recipes. The experiment remains
-on `experiment/friendly-desktop`, unmerged. The user's latest direction is the
-authority: refine one system, then use it everywhere.
+older BIOS, bracket-button and mixed desktop recipes. The user-approved
+direction is the authority: refine one system, then use it everywhere.
 
 ## Character
 

@@ -354,10 +354,10 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
   Widget _home() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text('Connect the agents already doing your work.', style: style),
+      Text('Connect the harnesses already doing your work.', style: style),
       _gap(),
       Text(
-        'Give each teammate a role. Questions and answers travel between their existing sessions, across engines and machines.',
+        'Give each teammate a role. Questions and answers travel between their existing harnesses, across engines and machines.',
         style: faint,
       ),
       _gap(),
@@ -384,7 +384,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
         child: model.loading
             ? _loadingRows()
             : model.teams.isEmpty
-            ? Text('No teams yet. Start with two sessions.', style: faint)
+            ? Text('No teams yet. Start with two harnesses.', style: faint)
             : ListView(
                 children: [
                   for (final team in model.teams)
@@ -446,13 +446,13 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
         _gap(.5),
         _field(
           _search,
-          'Find a session',
+          'Find a harness',
           key: const Key('team-search'),
           changed: (_) => setState(() {}),
         ),
         _gap(.5),
         Text(
-          '${model.newMembers.length} selected · Connect introduces the team to these sessions.',
+          '${model.newMembers.length} selected · Connect introduces the team to these harnesses.',
           style: faint,
         ),
         _gap(),
@@ -461,7 +461,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
             key: const Key('team-candidates'),
             children: [
               if (candidates.isEmpty)
-                Text('No matching agent sessions.', style: faint),
+                Text('No matching harnesses.', style: faint),
               for (final candidate in candidates) ...[
                 _line(
                   candidate.name,
@@ -639,8 +639,8 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
       context,
       builder: (context) => _TeamChoice(
         title: candidates.isEmpty
-            ? 'No additional sessions available'
-            : 'Connect an existing session',
+            ? 'No additional harnesses available'
+            : 'Connect an existing harness',
         choices: [
           for (final c in candidates)
             (
@@ -714,7 +714,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                     ),
                     if (!adding)
                       _action(
-                        'Open session',
+                        'Open harness',
                         () => Navigator.pop(context, 'open'),
                       ),
                     if (!adding &&

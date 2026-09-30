@@ -35,7 +35,7 @@ static void tick(ht_character_t *c, uint32_t now, ht_character_mood_t mood,
 
 static void clocks(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_t c = {0}; assert(ht_character_select(&c, id));
         tick(&c, UINT32_MAX - 49, HT_CHARACTER_WORKING, false, true, false, 0);
         tick(&c, 50, HT_CHARACTER_WORKING, false, true, false, 0);
@@ -91,7 +91,7 @@ static void clocks(void)
         assert(!memcmp(&before, &c.motion, sizeof before));
         assert(!ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == (ht_character_id_t)id);
         assert(!ht_character_select(&c, (ht_character_id_t)-1));
-        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_COUNT));
+        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_ILLUSTRATED_TIM));
         assert(!c.motion.initialized && !c.motion.reaction.initialized);
         tick(&c, 10000, (ht_character_mood_t)255, false, true, false, 0);
         assert(c.motion.reaction.mood == HT_CHARACTER_IDLE);
@@ -105,7 +105,7 @@ static void portraits(void)
     ht_character_face_t f = {.recipient = "Parser helper", .status = "Working", .hint = "tap to talk",
         .detail = "A carried paragraph", .foreground = 0xffff, .ink = 0xafe0, .dim = 0x7777, .roomy_reading = true};
     ht_scene_clear(&a, ht_rgb(0x181818)); redraw(NULL, &a);
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_select(&c, id);
         for (int size = HT_CHARACTER_FULL; size <= HT_CHARACTER_QUICK; size++) {
             for (int mood = HT_CHARACTER_IDLE; mood < HT_CHARACTER_MOODS; mood++) {
@@ -156,7 +156,7 @@ static void portraits(void)
 
 static void delivery_and_caption(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
         ht_character_t c = {0}; ht_character_select(&c, id);
         c.motion.next_ms = 1000;
         assert(!ht_character_delivery_tick(&c, 100, true, 0, true)); // Restored mail only holds.
@@ -188,10 +188,19 @@ static void delivery_and_caption(void)
     assert(ht_character_caption_ink(0xffff, 0x18c3, 255) == 0xffff);
 }
 
+/*
+ * ht_character_layout()'s recap contract: four roomy rows, ninety characters, an ellipsis past that.
+ *
+ * Only the skins that GO THROUGH that layout are measured here. Focus owns its whole face and has
+ * its own grid — three recap rows, because the fourth slot is its status line — so measuring it
+ * against these numbers would be testing one layout with another layout's ruler. focus_face() below
+ * is its ruler.
+ */
 static void recap_budget(void)
 {
-    for (int id = 0; id < HT_CHARACTER_COUNT; id++) for (int unicode = 0; unicode < 2; unicode++)
+    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) for (int unicode = 0; unicode < 2; unicode++)
         for (int length = 89; length <= 91; length++) {
+            if (id == HT_CHARACTER_FOCUS) continue;
             ht_character_t c = {0}; ht_character_select(&c, id);
             ht_character_face_t f = {.roomy_reading=true, .single_label=true, .foreground=0xffff};
             char input[400] = "", visible[400] = "";
@@ -215,6 +224,150 @@ static void recap_budget(void)
                 if (full[y*HT_WIDTH+x])
                     assert((x-233)*(x-233)+(y-233)*(y-233)<230*230);
         }
+}
+
+/*
+ * THE FOCUS FACE.
+ *
+ * Two properties, and both are invisible until they are wrong on glass:
+ *
+ *  1. The run count and their order never change with the state. ht_damage() diffs run index against
+ *     run index and repaints the whole 466x466 the moment either moves, so a face that drops a row
+ *     when it has nothing to say costs a full frame every time it changes its mind. An earlier draft
+ *     did exactly that — and worse, ht_text() refuses a zero-width run, so the empty row silently
+ *     overwrote the run BEFORE it and the engine mark disappeared.
+ *  2. Nothing lands outside the bezel. Every width on that face is the chord at its row's BOTTOM
+ *     edge, which is the measurement that is easy to take from the wrong edge.
+ */
+static void focus_face(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    assert(!strcmp(ht_character_name(HT_CHARACTER_FOCUS), "Focus"));
+    const char *long_name = "A pane with a name far wider than the glass can hold";
+    const char *long_tab = "A workspace whose name also overruns the pill";
+    const char *recap = "Shipped the retry queue and the webhook tests pass on the first run, "
+                        "then tidied the parser.";
+    struct { const char *tab, *name, *engine, *activity, *recap; ht_character_mood_t mood;
+             uint16_t elapsed; uint8_t level; } cases[] = {
+        {"", "", "", "", "", HT_CHARACTER_IDLE, 0, 0},
+        {"Harness repo", "Payments refactor", "claude", "", recap, HT_CHARACTER_IDLE, 0, 0},
+        {"Harness repo", "Payments refactor", "claude", "Coalescing", "", HT_CHARACTER_WORKING, 34, 0},
+        {"Harness repo", "Payments refactor", "codex", "", "", HT_CHARACTER_LISTENING, 0, 4},
+        {long_tab, long_name, "opencode", "Simmering", recap, HT_CHARACTER_WORKING, 65535, 2},
+        {"Ti\u1ebfng Vi\u1ec7t", "\u0110\u00e3 s\u1eeda xong ph\u1ea7n flush", "claude", "",
+         "L\u01b0\u1ee3ng b\u1ed9 nh\u1edb \u0111\u00e3 gi\u1ea3m v\u00e0 ki\u1ec3m tra l\u1ea1i.", HT_CHARACTER_IDLE, 0, 0},
+    };
+    int expected = -1;
+    // Every case twice: with the ⌄ doors and without. Same runs either way, and the longest names
+    // with a ⌄ after them are the ones that would reach the bezel if its cell were not budgeted.
+    for (unsigned k = 0; k < 2 * (sizeof cases / sizeof cases[0]); k++) {
+        unsigned i = k / 2;
+        ht_character_face_t f = {.recipient = cases[i].name, .tab = cases[i].tab,
+            .engine = cases[i].engine, .activity = cases[i].activity, .elapsed = cases[i].elapsed,
+            .status = "", .hint = "", .detail = "", .mood = cases[i].mood,
+            .more_tabs = k & 1, .more_panes = k & 1,
+            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        f.pose.level = cases[i].level;
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, cases[i].recap);
+        if (expected < 0) expected = scene.count;
+        assert(scene.count == expected);   // property 1
+        ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+        for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+            if (full[y * HT_WIDTH + x])
+                assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);   // property 2
+    }
+    /*
+     * A NAME TOO LONG FOR ITS ROW ends in "...", within its budget: the pill holds 20 glyphs (18
+     * beside its ⌄), the agent's row 20 beside the badge (18 beside the badge and the ⌄). Cut by
+     * the raster instead, it reads as a typo — "Deploy latest firmwa" — and the eye stops on it.
+     */
+    for (int more = 0; more < 2; more++) {
+        ht_character_face_t f = {.recipient = long_name, .tab = long_tab, .engine = "claude",
+            .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
+            .more_tabs = more, .more_panes = more, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        int found = 0;
+        for (int i = 0; i < scene.count; i++) {
+            const ht_run_t *r = &scene.runs[i];
+            size_t n = strlen(r->text);
+            if (n < 3 || strcmp(r->text + n - 3, "...")) continue;
+            int glyphs = 0;
+            for (const char *p = r->text; *p; glyphs++) ht_utf8_next(&p);
+            if (r->font == &ht_mono_20) { assert(glyphs == (more ? 18 : 20)); found |= 1; }
+            if (r->font == &ht_mono_28) { assert(glyphs == (more ? 18 : 20)); found |= 2; }
+            assert(r->w >= glyphs * r->font->width);   // the raster never cuts it
+        }
+        assert(found == 3);
+    }
+
+    /*
+     * THE VOICE FACE, both halves of it, every frame.
+     *
+     * It is the same skin through the same entry point — ui_habitat.c sets `voice` and Focus owns
+     * the whole glass — so the constant-run rule applies across the two states as well as within
+     * them: recording and sending must emit the same runs in the same order, or a person watching a
+     * clip go out gets a full 466x466 repaint at the moment the meter stops. The bars reach 121 px
+     * and the sparkles sit on a 66 px pitch, both of which are wider and taller than anything the
+     * home face draws, so the bezel is checked here again rather than assumed from above.
+     */
+    {
+        int voice_runs = -1;
+        for (int sending = 0; sending < 2; sending++)
+            for (int frame = 0; frame < 15; frame++) {
+                ht_character_face_t f = {.recipient = "", .tab = "", .engine = "", .activity = "",
+                    .status = "", .hint = "", .detail = "", .voice = true,
+                    .mood = sending ? HT_CHARACTER_WORKING : HT_CHARACTER_LISTENING,
+                    .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+                ht_scene_t scene; ht_scene_clear(&scene, 0);
+                c.motion.frame = (uint8_t)frame;
+                ht_character_face(&scene, &c, &f, 0xffff, recap);
+                if (voice_runs < 0) voice_runs = scene.count;
+                assert(scene.count == voice_runs);
+                ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+                int ink = 0;
+                for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+                    if (full[y * HT_WIDTH + x]) {
+                        ink++;
+                        assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+                    }
+                assert(ink > 0);   // a voice screen that drew nothing would pass every rule above
+            }
+        c.motion.frame = 0;
+    }
+
+    /*
+     * The upper half reads on one rhythm: pill, name, body, with the same air above the name as
+     * below it. Measured as INK, not as cells — the pill's fill reaches its cell's edge while the
+     * name's glyphs sit inside theirs, so equal cell gaps render unequal by three pixels and the
+     * lower one looks the looser. Banded off the raster, which is the only place that is visible.
+     */
+    {
+        ht_character_face_t f = {.recipient = "Payments refactor", .tab = "Harness repo",
+            .engine = "claude", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
+            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "Shipped the retry queue and the webhook tests.");
+        ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+        int band[3][2], bands = 0, start = -1;
+        for (int y = 0; y <= HT_HEIGHT && bands < 3; y++) {
+            bool ink = false;
+            for (int x = 0; y < HT_HEIGHT && x < HT_WIDTH && !ink; x++) ink = full[y * HT_WIDTH + x];
+            if (ink && start < 0) start = y;
+            if (!ink && start >= 0) { band[bands][0] = start; band[bands][1] = y - 1; bands++; start = -1; }
+        }
+        assert(bands == 3);
+        int above = band[1][0] - band[0][1] - 1, below = band[2][0] - band[1][1] - 1;
+        assert(above == below);
+    }
+
+    // Stated as its parts rather than as a number: the tab pill (its outline, its name and the ⌄
+    // after it), the agent's row (the engine mark on its own run so it can be coloured without a
+    // per-cell palette, the name, and its ⌄), the live status, and the four recap rows the octopus
+    // reads its summary in. The two ⌄ runs are emitted empty when there is nothing else to choose.
+    assert(expected == 3 + 3 + 1 + 4);
 }
 
 static void footer_layout(void)
@@ -277,6 +430,7 @@ int main(void)
 {
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
-    clocks(); portraits(); delivery_and_caption(); recap_budget(); footer_layout(); inbox_layout();
+    clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
+    footer_layout(); inbox_layout();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

@@ -1,3 +1,4 @@
+#include "illustrated.h"
 // Direct text -> RGB565 -> QSPI DMA. No LVGL initialization or object pool.
 #include "runtime.h"
 #include "perf_bench.h"
@@ -45,6 +46,8 @@ static uint16_t *pixels[2];
 static ht_scene_t scenes[2];
 static bool painted;
 static atomic_bool asleep, force_frame;
+// Panel IO belongs to the renderer, including brightness changes.
+static atomic_uint requested_brightness = 40;
 static atomic_uint last_activity;
 static int64_t input_us;
 static portMUX_TYPE stats_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -56,6 +59,8 @@ enum { RENDER_MODEL, RENDER_POWER, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
        RENDER_SUBMIT, RENDER_HEALTH, RENDER_WAIT };
 static atomic_uint render_stage, render_progress_ms;
 static esp_timer_handle_t render_guard;
+// The CO5300's power-on register sequence. The Pro has no equivalent here: the ST7703's own
+// init lives inside waveshare/esp_lcd_st7703 and is applied by esp_lcd_panel_init().
 static const co5300_lcd_init_cmd_t init_cmds[] = {
     {0xFE, (uint8_t[]){0x20}, 1, 0},
     {0x19, (uint8_t[]){0x10}, 1, 0},
@@ -178,16 +183,33 @@ void habitat_perf_get(habitat_perf_t *out)
     *out = stats;
     portEXIT_CRITICAL(&stats_lock);
 }
+// THE DMA FENCE, in the two shapes the two panels report it.
+//
+// Both say the same thing — the pixels draw_bitmap was given have landed, so the buffer the CPU handed
+// over is free again — and both give the same semaphore, which is the only thing the strip loop waits
+// on. The dial reports it on the panel IO (a QSPI transfer finished); the Pro reports it on the DPI
+// panel (a copy into the scanned framebuffer finished).
+//
+// On the Pro this MUST be on_color_trans_done and not on_refresh_done. The latter fires when the panel
+// has finished SCANNING a frame, which is what a buffer-switch scheme waits for; ours copies, so
+// waiting on the scan would fence against the wrong event and stall the first strip forever. The same
+// distinction is written up at length in ui/panel_pro.c, which learned it the hard way.
+static bool fence_release(void)
+{
+    ui_perf_flush_done();
+    BaseType_t wake = pdFALSE;
+    xSemaphoreGiveFromISR(dma_done, &wake);
+    // Both drivers act on this return to decide whether to yield out of the ISR — the QSPI IO one and
+    // the DPI one (esp_lcd_panel_dpi.c). Saying so is the contract; yielding here as well is not.
+    return wake == pdTRUE;
+}
 static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event,
                        void *ctx)
 {
     (void)io;
     (void)event;
     (void)ctx;
-    ui_perf_flush_done();
-    BaseType_t wake = pdFALSE;
-    xSemaphoreGiveFromISR(dma_done, &wake);
-    return wake == pdTRUE;
+    return fence_release();
 }
 void display_lock_at(const char *who)
 {
@@ -223,7 +245,9 @@ void display_wake(void)
 }
 void display_set_brightness(uint8_t value)
 {
-    (void)value; /* Palette brightness is applied once per scene, not per pixel. */
+    unsigned percent = ((unsigned)value * 100 + 127) / 255;
+    atomic_store(&requested_brightness, percent < 8 ? 8 : percent);
+    habitat_render_notify();
 }
 static void wait_dma(void)
 {
@@ -342,6 +366,7 @@ static void render_task(void *arg)
     ESP_ERROR_CHECK(esp_timer_start_periodic(render_guard, 1000000));
     int front = 0;
     bool panel_on = true;
+    unsigned applied_brightness = 101;
     for (;;) {
         ESP_ERROR_CHECK(esp_task_wdt_reset());
 #ifdef DEVICE_RENDER_FAULT
@@ -367,6 +392,13 @@ static void render_task(void *arg)
         ht_perf_tag_t tag = octopus_perf_capture(&scenes[front ^ 1], fresh);
 #endif
         display_unlock();
+        unsigned brightness = atomic_load(&requested_brightness);
+        if (brightness != applied_brightness) {
+            render_progress(RENDER_POWER);
+            ESP_ERROR_CHECK(esp_lcd_panel_co5300_set_brightness(panel, brightness));
+            applied_brightness = brightness;
+            ESP_LOGI("habitat", "OLED brightness %u%%", brightness);
+        }
         bool on = !display_is_asleep();
         if (on != panel_on) {
             render_progress(RENDER_POWER);
@@ -384,6 +416,7 @@ static void render_task(void *arg)
 #ifdef DEVICE_OCTOPUS_BENCH
             int64_t damage_started = esp_timer_get_time();
 #endif
+            ht_illustrated_prepare(&scenes[front ^ 1]);
             ht_damage(painted && !force ? &scenes[front] : NULL, &scenes[front ^ 1], &damage);
 #ifdef DEVICE_OCTOPUS_BENCH
             uint32_t damage_us = (uint32_t)(esp_timer_get_time() - damage_started);
@@ -418,6 +451,7 @@ static void render_task(void *arg)
 }
 void display_init(void)
 {
+    ht_illustrated_init();
     model_lock = xSemaphoreCreateRecursiveMutex();
     dma_done = xSemaphoreCreateBinary();
     assert(model_lock && dma_done);
@@ -448,11 +482,13 @@ void display_init(void)
         assert(pixels[i]);
     }
     display_bump_activity();
-    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 6144, NULL, 5, &renderer, 1) ==
+    // The ROM inflater keeps its Huffman tables on the calling task's stack.
+    // Illustrated companions can become active at any time over the USB link.
+    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 24576, NULL, 5, &renderer, 1) ==
            pdPASS);
     touch_init();
-    ESP_LOGI("habitat",
-             "direct C renderer: two %d-byte internal DMA buffers; 40MHz QSPI; no LVGL heap",
-             HT_WIDTH * STRIP_LINES * 2);
+    ESP_LOGI("habitat", "direct C renderer on a %dpx face: two %d-byte internal DMA buffers over %s",
+             HT_WIDTH, HT_WIDTH * STRIP_LINES * 2,
+             "40MHz QSPI");
 }
 void display_init_ota(void) { display_init(); }

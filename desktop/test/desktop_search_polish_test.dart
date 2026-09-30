@@ -743,9 +743,22 @@ void main() {
               of: preview,
               matching: find.text('Machine'),
             );
+            await tester.scrollUntilVisible(
+              machineLabel,
+              100,
+              scrollable: find
+                  .descendant(of: preview, matching: find.byType(Scrollable))
+                  .first,
+            );
+            await tester.pumpAndSettle();
             final labelRect = tester.getRect(machineLabel);
             final machineValue = tester.getRect(
-              find.descendant(of: preview, matching: find.text('M2')),
+              find.descendant(
+                of: preview,
+                matching: find.text(
+                  '${thisComputerName()[0].toUpperCase()}${thisComputerName().substring(1)}',
+                ),
+              ),
             );
             expect(labelRect.height, lessThan(12 * layout.scale * 1.6));
             if (layout.name == 'narrow') {
@@ -1203,6 +1216,7 @@ void main() {
         final search = resources.search(tester);
         await key(tester, LogicalKeyboardKey.enter);
         expect(search.managing, isTrue);
+        await key(tester, LogicalKeyboardKey.arrowRight);
         await key(tester, LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         expect(find.byType(MachinePickerForm), findsOneWidget);

@@ -70,7 +70,7 @@ class StatsSummaryCards extends StatelessWidget {
         ),
         child: Center(
           child: Text(
-            'Start your first agent to begin tracking.',
+            'Start your first harness to begin tracking.',
             style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
@@ -78,12 +78,12 @@ class StatsSummaryCards extends StatelessWidget {
     }
     final cards = [
       UsageStatCard(
-        label: 'Agents spawned',
+        label: 'Harnesses started',
         value: '${summary.agentsSpawned}',
         icon: AppIcons.bot,
       ),
       UsageStatCard(
-        label: 'Time agents worked',
+        label: 'Time harnesses worked',
         value: formatWorkedTime(summary.timeWorked),
         icon: AppIcons.clock,
       ),
@@ -677,7 +677,7 @@ class ProviderUsageRow extends StatelessWidget {
       LedgerStatus.ok =>
         ledger.hasData
             ? '${ledger.sessionCount} '
-                  '${ledger.sessionCount == 1 ? 'session' : 'sessions'}'
+                  '${ledger.sessionCount == 1 ? 'conversation' : 'conversations'}'
             : 'Nothing spent here yet.',
     };
   }

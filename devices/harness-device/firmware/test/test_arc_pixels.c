@@ -1,5 +1,5 @@
-// Golden pixels from the original fixed-point curved renderer. Optimizations
-// must preserve every coverage/color value at all 32 supported text lengths.
+// Golden 24 px pixels from the dense reference48 renderer. Optimizations
+// must preserve every coverage/color value at all supported text lengths.
 #include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -32,6 +32,6 @@ int main(void)
 #endif
     }
 #ifndef HT_UPDATE_ARC_GOLDEN
-    puts("arc pixels: all 64 original upper/lower angle/color hashes preserved");
+    printf("arc pixels: all %u upper/lower 24 px angle/color hashes preserved\n",2*HT_ARC_COLS);
 #endif
 }

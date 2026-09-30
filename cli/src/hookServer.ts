@@ -56,6 +56,8 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
+  /** Context for a verified process-owned agent, only on its real user turn. */
+  onPromptContext?: (agentId: string) => string | null
   onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
@@ -83,6 +85,7 @@ export interface HookServerHandlers {
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
   onTurnStart?: (body: { sessionId: string }) => void
+  onPromptSubmitted?: (agentId: string, prompt: string) => void
   onToolStart?: (body: {
     sessionId: string
     toolUseId: string
@@ -159,7 +162,7 @@ const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
   'engine', 'launcherId', 'sessionId', 'transcriptPath', 'cwd', 'source', 'tmuxPane', 'title', 'model',
   'cliVersion', 'runtimeHints', 'callerPid', 'hookEvent', 'pluginVersion', 'reason', 'status', 'toolUseId',
-  'toolName', 'input',
+  'toolName', 'input', 'prompt',
 ])
 
 function optionalBoundedString(value: unknown, max: number): boolean {
@@ -175,6 +178,7 @@ function optionalBoundedJson(value: unknown, max: number): boolean {
 function validHookBody(value: unknown): value is BoundHookBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const body = value as Record<string, unknown>
+  if (body.prompt !== undefined && (typeof body.prompt !== 'string' || Buffer.byteLength(body.prompt) > 128 * 1024)) return false
   if (Object.keys(body).some((field) => !HOOK_BODY_FIELDS.has(field))) return false
   if (body.engine !== undefined && (typeof body.engine !== 'string' || !ENGINES.includes(body.engine as AgentEngine))) return false
   if (!optionalBoundedString(body.launcherId, 200)
@@ -248,6 +252,7 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
 }
 
 type BoundHookBody = RegisterInput & {
+  prompt?: string
   sessionId?: string
   reason?: string
   status?: string
@@ -470,7 +475,7 @@ export function startHookServer(
       // whose SessionStart the adapter missed still shows up on its first prompt).
       if (req.method === 'POST' && url === '/api/hook/session-start') {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: RegisterInput
+        let body: BoundHookBody
         try {
           const parsed = JSON.parse(await readBody(req)) as unknown
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
@@ -529,6 +534,9 @@ export function startHookServer(
           void awaitHermesKind(body, handlers)
           return
         }
+        if (body.hookEvent === 'UserPromptSubmit') {
+          handlers.onPromptSubmitted?.(processAgent.agentId, body.prompt ?? '')
+        }
         let result = registry.register(body)
         if (!result && body.transcriptPath && !existsSync(body.transcriptPath)) {
           // The engine announced the session BEFORE writing its transcript. Measured on claude: the hook
@@ -547,7 +555,9 @@ export function startHookServer(
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        json(200, { ok: true })
+        const context = body.hookEvent === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex')
+          ? handlers.onPromptContext?.(result.entry.agentId) : null
+        json(200, { ok: true, ...(context ? { additionalContext: context } : {}) })
         return
       }
 

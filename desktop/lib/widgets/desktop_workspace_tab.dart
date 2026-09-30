@@ -100,7 +100,7 @@ class DesktopWorkspaceTab extends StatefulWidget {
     label,
     shortcutHint: shortcutHint,
     hasActivity: hasActivity,
-  ).clamp(112, 240);
+  ).clamp(112, 256);
 
   @override
   State<DesktopWorkspaceTab> createState() => _DesktopWorkspaceTabState();
@@ -117,7 +117,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
     final focusVisible = _focused || widget.highlighted;
     // Workspace palettes can stay dark beside light app surfaces. Match the
     // native tab bar's ink to its own surface, independent of terminal colors.
-    final foreground = grid.AppTheme.palette.value.foreground;
+    final foreground = grid.AppTheme.surfacePalette.foreground;
     final muted = foreground.withValues(alpha: .65);
     final fill = widget.selected
         ? grid.AppPalette.swarmWelcome

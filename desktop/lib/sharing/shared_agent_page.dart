@@ -212,7 +212,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                             children: [
                               Text(
                                 _loading
-                                    ? 'Opening shared agent…'
+                                    ? 'Opening shared harness…'
                                     : 'Shared harness',
                                 style: DesktopChrome.heading(),
                                 textAlign: TextAlign.center,
@@ -222,7 +222,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                                 Semantics(
                                   liveRegion: true,
                                   child: Text(
-                                    _error ?? 'Shared agent',
+                                    _error ?? 'Shared harness',
                                     style: DesktopChrome.text(
                                       size: 13,
                                       color: DesktopChrome.muted,

@@ -1,3 +1,5 @@
+import 'package:harness/widgets/workspace_store_button.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -143,9 +145,12 @@ void main() {
         (element.widget as RichText).text,
         const TextStyle(),
         desktopTab:
-            element.findAncestorWidgetOfExactType<DesktopWorkspaceTab>() !=
-                null &&
-            element.findAncestorWidgetOfExactType<ActivityMark>() == null,
+            (element.findAncestorWidgetOfExactType<DesktopWorkspaceTab>() !=
+                    null &&
+                element.findAncestorWidgetOfExactType<ActivityMark>() ==
+                    null) ||
+            element.findAncestorWidgetOfExactType<WorkspaceStoreButton>() !=
+                null,
         workspaceBar: find
             .descendant(
               of: find.byWidgetPredicate(

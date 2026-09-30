@@ -87,7 +87,7 @@ void main() {
           findsOneWidget,
         );
         expect(route.barrierColor, Colors.transparent);
-        expect(find.text('Blender · Recorded session'), findsOneWidget);
+        expect(find.text('Blender · Recorded run'), findsOneWidget);
         expect(find.text('Open recording').hitTestable(), findsOneWidget);
         expect(
           find.byKey(const ValueKey('store-demo-browser')).hitTestable(),

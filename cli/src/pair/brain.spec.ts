@@ -67,7 +67,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame>; proposals?: ConstructorParameters<typeof PairBrain>[0]['proposals']; lessonKey?: ConstructorParameters<typeof PairBrain>[0]['lessonKey'] } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame>; open?: (uid?: string) => Promise<Frame>; proposals?: ConstructorParameters<typeof PairBrain>[0]['proposals']; lessonKey?: ConstructorParameters<typeof PairBrain>[0]['lessonKey'] } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -96,6 +96,7 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     relayed: (fields) => { local.relayed(fields) },
     ...(opts.relayLimits ? { relayLimits: opts.relayLimits } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
+    ...(opts.open ? { open: opts.open } : {}),
     ...(opts.proposals ? { proposals: opts.proposals } : {}),
     ...(opts.lessonKey ? { lessonKey: opts.lessonKey } : {}),
   })
@@ -317,6 +318,22 @@ describe('the brain', () => {
     await settle(60_000)
     expect(await talk('local:window', 'later')).toMatchObject({ ok: true })
     expect(talked).toHaveLength(7)
+  })
+
+  it('only an attached window can open its companion terminal, without a talk or cost', async () => {
+    const open = vi.fn(async () => ({ ok: true, agentId: 'pair-tim' }))
+    const w = world({ open })
+    const replies: Frame[] = []
+    const send = (f: Frame) => { replies.push(f) }
+    await w.brain.onOpen('tool', { requestId: 'o1', companionUid: 'tim-one' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ ok: false, error: 'UI_ONLY' })
+    expect(open).not.toHaveBeenCalled()
+    w.brain.clientAttached('window')
+    await w.brain.onOpen('window', { requestId: 'o2' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ ok: false, error: 'STALE_COMPANION' })
+    await w.brain.onOpen('window', { requestId: 'o3', companionUid: 'tim-one' }, send)
+    expect(open).toHaveBeenCalledWith('tim-one')
+    expect(replies.pop()).toEqual({ type: 'daemon_open_result', payload: { requestId: 'o3', ok: true, agentId: 'pair-tim' } })
   })
 
   it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {

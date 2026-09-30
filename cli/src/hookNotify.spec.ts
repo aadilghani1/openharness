@@ -127,14 +127,14 @@ function runHook(opts: RunHookOpts): Promise<string> {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
+async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
       requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
-      res.end('{}')
+      res.end(JSON.stringify(response))
     })
   })
   servers.push(server)
@@ -145,6 +145,38 @@ async function collect(): Promise<{ port: number; requests: Array<{ url: string;
 }
 
 describe('hook notify terminal scope', () => {
+  it.each(['claude', 'codex'] as const)('adds daemon-verified companion context to the actual %s user turn', async engine => {
+    const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
+    const { port, requests } = await collect({ ok: true, additionalContext })
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const input = recordings[engine].input
+    const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
+    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
+    expect(requests[0]?.body.prompt).toBe(input.prompt)
+    expect(await runHook({ port, engine, tmuxPane: '%42', input: { ...input, hook_event_name: 'SessionStart' } })).toBe('')
+  })
+  it.each(['claude', 'codex', 'grok'] as const)('forwards the actual %s accepted prompt without changing the model input', async engine => {
+    const { port, requests } = await collect()
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const input = recordings[engine].input
+    const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
+    expect(requests).toContainEqual({ url: '/api/hook/session-start', body: expect.objectContaining({
+      hookEvent: 'UserPromptSubmit', prompt: input.prompt, engine,
+    }) })
+    expect(stdout).toBe('')
+  })
+  it.each(['claude', 'codex', 'grok'] as const)('still announces an oversized %s prompt so earlier scope is cleared', async engine => {
+    const { port, requests } = await collect()
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    for (const prompt of ['x'.repeat(140_000), '\u0000'.repeat(30_000)]) {
+      const stdout = await runHook({ port, engine, tmuxPane: '%42', input: { ...recordings[engine].input, prompt } })
+      expect(stdout).toBe('')
+    }
+    expect(requests).toHaveLength(2)
+    for (const request of requests) expect(request).toMatchObject({ url: '/api/hook/session-start', body: {
+      hookEvent: 'UserPromptSubmit', prompt: '', engine,
+    } })
+  })
   it('refuses a symlinked hook credential instead of authenticating with its target', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-credential-link-'))
     tmpDirs.push(dir)

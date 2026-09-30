@@ -181,7 +181,7 @@ void main() {
             await tester.pump();
             _expectReadableText(
               tester,
-              find.textContaining('Required for every terminal session'),
+              find.textContaining('Required for every harness'),
             );
             _expectReadableText(
               tester,

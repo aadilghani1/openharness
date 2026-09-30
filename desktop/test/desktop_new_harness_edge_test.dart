@@ -94,7 +94,11 @@ class _App extends AppNotifier {
   ) async => {'path': path ?? '/Users/dev', 'entries': []};
 
   @override
-  Future<String?> installDsh(String machineId, String id) async {
+  Future<String?> installDsh(
+    String machineId,
+    String id, {
+    bool trustUnverified = false,
+  }) async {
     installs.add(id);
     final state = machineStates[machineId]!;
     state.dsh.runs.remove(id);

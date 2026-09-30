@@ -63,7 +63,7 @@ export const CONTROL_TOOLS: readonly ControlTool[] = [
   { name: 'start_harness', kind: 'write', description: 'Start a new harness (mode ask, never bypass) in an existing folder, optionally with a first prompt.', input: object({ ...machineArg, engine: { type: 'string', description: 'claude, codex, …' }, cwd: { type: 'string', description: 'An absolute folder on that machine.' }, prompt: { type: 'string' }, name: { type: 'string' } }, ['engine', 'cwd']) },
   { name: 'pause_harness', kind: 'write', description: 'Pause a harness: its process stops, its conversation is kept, resume brings it back.', input: object(agentArgs, ['agentId']) },
   { name: 'resume_harness', kind: 'write', description: 'Resume a paused harness.', input: object(agentArgs, ['agentId']) },
-  { name: 'say', kind: 'say', description: 'Say one short line in the status line, in your own voice. Rate-limited; say facts.', input: object({ line: { type: 'string' } }, ['line']) },
+  { name: 'say', kind: 'say', description: 'Reply to the person in the companion chat. Put the complete answer in reply (up to 8000 characters), and a short summary in line for the status bar. Include your companionUid for a full reply. Never invent memories or work facts.', input: object({ line: { type: 'string' }, reply: { type: 'string', maxLength: 8000 }, companionUid: { type: 'string' } }, ['line']) },
 ]
 
 const TOOL_BY_NAME = new Map(CONTROL_TOOLS.map((tool) => [tool.name, tool]))
@@ -129,7 +129,7 @@ export interface ControlDeps {
     /** This machine's harnesses as its sensor sees them (for a brief while the fleet is not running). */
     harnesses: () => PairHarness[]
   }
-  pairing: { enabled: () => boolean; pairedDaemon: () => string | null }
+  pairing: { enabled: () => boolean; pairedDaemon: () => string | null; pairedUid?: () => string | null }
   autonomy: () => Autonomy
   /** True when `candidate` is the current pair harness launch's token (pair/token.ts). */
   tokenMatches: (candidate: string) => boolean
@@ -295,11 +295,19 @@ export class PairControl {
   private say(args: Result): Result {
     const line = statusText(str(args.line, 400), 140).replace(/^(\[[a-z/ ]*\]\s*)+/i, '').trim()
     if (!line) return fail('EMPTY')
+    const reply = typeof args.reply === 'string' ? args.reply.trim() : ''
+    const companionUid = this.deps.pairing.pairedUid?.() ?? null
+    if (reply) {
+      if (reply.length > 8_000) return fail('TOO_LONG', 'A chat reply can contain up to 8000 characters.')
+      if (!this.deps.tokenMatches(str(args.token, 200))) return fail('TOKEN_REQUIRED')
+      if (companionUid && args.companionUid !== companionUid) return fail('STALE_COMPANION', 'This conversation belongs to a different companion.')
+    }
     if (!this.deps.present()) return fail('NOBODY_HERE', 'Nobody is at this computer to hear it.')
     const now = this.deps.now()
     if (now - this.lastSay < SAY_MIN_GAP_MS) return fail('RATE_LIMITED', `One line every ${SAY_MIN_GAP_MS / 1000} s.`)
     if (!this.sayLimit.take()) return fail('RATE_LIMITED', 'Six lines a minute, thirty an hour.')
-    const said = this.deps.voice.say({ id: `say:${now}:${++this.seq}`, about: { machineId: this.deps.local.machineId(), agentId: '' }, mood: 'say', from: 'pair', line, actions: [], ttlMs: 30_000 })
+    const said = this.deps.voice.say({ id: `say:${now}:${++this.seq}`, about: { machineId: this.deps.local.machineId(), agentId: '' }, mood: 'say', from: 'pair', line,
+      ...(reply ? { reply } : {}), ...(companionUid ? { companionUid } : {}), actions: [], ttlMs: 30_000 })
     if (!said) return fail('RATE_LIMITED', 'The voice is over its limit for this minute.')
     this.lastSay = now
     return { ok: true }

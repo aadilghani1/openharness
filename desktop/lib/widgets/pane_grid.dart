@@ -39,6 +39,11 @@ import 'pane_resize_handle.dart';
 import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder;
 import 'desktop_chrome.dart';
 
+/// The view drawn alone when only one fits (a phone): the real zoom, else the
+/// focused view, else the first before anything has focus.
+int? soloPaneId(AppNotifier app) =>
+    app.zoomedPaneId ?? app.focusedPaneId ?? app.panes.firstOrNull?.id;
+
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
 /// one stable parent as its rectangle, visibility and keyboard focus change.
 class PaneGrid extends StatelessWidget {
@@ -48,6 +53,8 @@ class PaneGrid extends StatelessWidget {
     this.swarmMode = false,
     this.empty,
     this.onOpenModels,
+    this.soloFocused = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
@@ -55,6 +62,14 @@ class PaneGrid extends StatelessWidget {
   final Widget? empty;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+
+  /// Draw only the focused view, full size, as if zoomed — without zooming:
+  /// the tab's saved layout and zoom stay as they are (a phone shows one
+  /// harness at a time; the same desk on a computer keeps its grid).
+  final bool soloFocused;
+
+  /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
+  final WidgetBuilder? companionViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -68,6 +83,8 @@ class PaneGrid extends StatelessWidget {
             dragging: dragging,
             empty: empty,
             onOpenModels: onOpenModels,
+            soloFocused: soloFocused,
+            companionViewer: companionViewer,
           );
         }
         final panes = notifier.panes;
@@ -83,6 +100,7 @@ class PaneGrid extends StatelessWidget {
           visible: visible,
           swarmMode: swarmMode,
           onOpenModels: onOpenModels,
+          companionViewer: companionViewer,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -230,12 +248,16 @@ class _SwarmCanvas extends StatefulWidget {
     required this.dragging,
     this.empty,
     this.onOpenModels,
+    this.soloFocused = false,
+    this.companionViewer,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final bool soloFocused;
+  final WidgetBuilder? companionViewer;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -250,7 +272,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     skipTraversal: true,
   );
   late Object _lastInputDestination;
-  final _resizeFocus = FocusNode(debugLabel: 'Resize focused agent');
+  final _resizeFocus = FocusNode(debugLabel: 'Resize focused harness');
   final _resizeHelp = OverlayPortalController();
   late int _resizeRequest;
   late String _activeId;
@@ -258,11 +280,16 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   Size? _viewportSize;
   bool _focusRevealPending = false;
 
+  /// The view drawn alone: the real zoom, or [soloPaneId] when solo.
+  int? get _shownZoom => widget.soloFocused
+      ? soloPaneId(widget.notifier)
+      : widget.notifier.zoomedPaneId;
+
   Object get _inputDestination => (
     widget.notifier.activeSwarmId,
     widget.notifier.focusedPaneId,
     widget.notifier.paneFocusRequest,
-    widget.notifier.zoomedPaneId,
+    _shownZoom,
     widget.notifier.tabStripFocused,
   );
 
@@ -331,7 +358,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     final app = widget.notifier;
     final visible = {
       for (final pane in app.panes)
-        if (app.zoomedPaneId == null || pane.id == app.zoomedPaneId) pane.id,
+        if (_shownZoom == null || pane.id == _shownZoom) pane.id,
     };
     // Exclude the outgoing views and enable the destination's existing focus
     // tree now. Painting/layout still happens in the normal scheduled frame.
@@ -358,7 +385,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     if (viewport == null || !_scroll.hasClients) return;
     final app = widget.notifier;
     final panes = app.panes
-        .where((p) => app.zoomedPaneId == null || p.id == app.zoomedPaneId)
+        .where((p) => _shownZoom == null || p.id == _shownZoom)
         .toList();
     final index = panes.indexWhere((p) => p.id == app.focusedPaneId);
     if (index < 0) return;
@@ -437,11 +464,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     return (
       notifier: app,
       location: (app.activeSwarmId, app.panes.indexOf(pane)),
-      layoutRequest: (
-        app.paneLayoutRequest,
-        app.panes.length,
-        app.zoomedPaneId,
-      ),
+      layoutRequest: (app.paneLayoutRequest, app.panes.length, _shownZoom),
       machine: machine?.machine,
       local: machine?.isLocalMachine,
       online: machine?.nodeOnline,
@@ -457,6 +480,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       link: session.linkMode,
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
+      emphasized: app.isPaneEmphasized(pane),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
       focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
@@ -484,7 +508,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         _focusRevealPending = false;
         final visible = [
           for (final pane in app.panes)
-            if (app.zoomedPaneId == null || pane.id == app.zoomedPaneId) pane,
+            if (_shownZoom == null || pane.id == _shownZoom) pane,
         ];
         final layout = _SwarmGeometry(
           count: visible.length,
@@ -493,7 +517,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           minimum: _MinTile.of(),
           sizes: app.activeSwarm.paneSizes,
         );
-        if (app.zoomedPaneId == null) {
+        if (_shownZoom == null) {
           app.activeSwarm.arranged = layout.arrangement;
           app.activeSwarm.arrangedKey = layout.key;
           final minimum = _MinTile.of();
@@ -570,10 +594,12 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
                                     onOpenModels: widget.onOpenModels,
+                                    solo: widget.soloFocused,
+                                    companionViewer: widget.companionViewer,
                                   ),
                                 ),
                               ),
-                          if (app.zoomedPaneId == null &&
+                          if (_shownZoom == null &&
                               layout.arrangement?.dividers.isNotEmpty == true)
                             Positioned.fill(child: _resizeLayer(layout)),
                         ],
@@ -1168,6 +1194,8 @@ class _PaneCell extends StatelessWidget {
     this.visible = true,
     this.swarmMode = false,
     this.onOpenModels,
+    this.solo = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
@@ -1177,8 +1205,13 @@ class _PaneCell extends StatelessWidget {
   final bool swarmMode;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final WidgetBuilder? companionViewer;
 
-  bool get _single => notifier.panes.length == 1;
+  /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
+  /// dimming or focus ring, and no zoom, since it already fills the screen.
+  final bool solo;
+
+  bool get _single => solo || notifier.panes.length == 1;
 
   @override
   Widget build(BuildContext context) {
@@ -1196,9 +1229,9 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
-    // Keep the selected pane clear while a menu or the tab strip owns keyboard
-    // focus. This is paint only: inactive terminals stay mounted and clickable.
-    final dimmed = !_single && notifier.focusedPaneId != pane.id;
+    // Keep the selected harness's terminal and viewers clear, including while
+    // a menu owns input. This changes paint, never the keyboard's destination.
+    final dimmed = !_single && !notifier.isPaneEmphasized(pane);
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
@@ -1273,14 +1306,17 @@ class _PaneCell extends StatelessWidget {
                       opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
                       child: child,
                     ),
-                    child: _PaneContent(
-                      notifier: notifier,
-                      pane: pane,
-                      single: _single,
-                      visible: visible,
-                      swarmMode: swarmMode,
-                      onOpenModels: onOpenModels,
-                    ),
+                    child: pane.isCompanion
+                        ? companionViewer?.call(context) ??
+                              const SizedBox.shrink()
+                        : _PaneContent(
+                            notifier: notifier,
+                            pane: pane,
+                            single: _single,
+                            visible: visible,
+                            swarmMode: swarmMode,
+                            onOpenModels: onOpenModels,
+                          ),
                   ),
                 ),
               ),
@@ -1441,7 +1477,7 @@ class _PaneContent extends StatelessWidget {
           icon: AppIcons.terminal,
           detail:
               agent?.terminalUnavailableReason ??
-              'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
+              'This harness is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
       } else if (agent.launchState == 'failed') {
         // A resume the daemon could not CONFIRM is not a start that failed: the
@@ -1595,7 +1631,7 @@ class _PaneContent extends StatelessWidget {
         full: HarnessJoinGuideScreen(
           notifier: notifier,
           machineState: machine,
-          agentName: agentName ?? 'selected agent',
+          agentName: agentName ?? 'selected harness',
         ),
       );
     }
@@ -1604,7 +1640,7 @@ class _PaneContent extends StatelessWidget {
         activity: activityMark,
         title: machine.machine.displayName,
         icon: AppIcons.circleCheck,
-        message: 'This machine is ready. Drag an agent here to open it.',
+        message: 'This machine is ready. Drag a harness here to open it.',
         onClose: close,
       );
     }
@@ -1613,7 +1649,7 @@ class _PaneContent extends StatelessWidget {
         activity: activityMark,
         title: wantedAgentId,
         icon: AppIcons.circleHelp,
-        message: 'This agent is no longer on ${machine.machine.displayName}.',
+        message: 'This harness is no longer on ${machine.machine.displayName}.',
         onClose: close,
       );
     }
@@ -1624,7 +1660,7 @@ class _PaneContent extends StatelessWidget {
         icon: AppIcons.terminal,
         message:
             agent.terminalUnavailableReason ??
-            'This agent has no available terminal.',
+            'This harness has no available terminal.',
         onClose: close,
       );
     }
@@ -1951,7 +1987,10 @@ class _SwapZone extends StatelessWidget {
               child: IgnorePointer(
                 // Off entirely unless a pane is in flight, so the terminal
                 // underneath keeps every click the rest of the time.
-                ignoring: dragging == null || dragging.paneId == paneId,
+                ignoring:
+                    notifier.activeSwarm.isCompanions ||
+                    dragging == null ||
+                    dragging.paneId == paneId,
                 child: DragTarget<PaneDragRef>(
                   onAcceptWithDetails: (details) =>
                       notifier.reorderPane(details.data.paneId, paneId),
@@ -2194,7 +2233,7 @@ class _DropZone extends StatelessWidget {
         child,
         Positioned.fill(
           child: IgnorePointer(
-            ignoring: dragging == null,
+            ignoring: notifier.activeSwarm.isCompanions || dragging == null,
             child: DragTarget<AgentDragRef>(
               onAcceptWithDetails: (details) => notifier.assignAgentToPane(
                 paneId,
@@ -2218,8 +2257,8 @@ class _DropZone extends StatelessWidget {
                           ),
                           child: Text(
                             paneId == null
-                                ? 'Open ${candidate.first?.name ?? 'agent'} here'
-                                : 'Show ${candidate.first?.name ?? 'agent'} in this pane',
+                                ? 'Open ${candidate.first?.name ?? 'harness'} here'
+                                : 'Show ${candidate.first?.name ?? 'harness'} in this pane',
                             style: grid.AppType.mono(
                               fontWeight: FontWeight.w500,
                               color: AppColors.text,
@@ -2313,7 +2352,7 @@ class _EmptyGrid extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Select an agent, or drag one in from the left.',
+                'Select a harness, or drag one in from the left.',
                 style: grid.AppType.body(color: AppColors.mutedStrong),
               ),
               // Selecting and dragging both need an agent to already exist. On a

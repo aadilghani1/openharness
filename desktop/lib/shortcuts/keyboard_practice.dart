@@ -9,8 +9,8 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 import '../core/test_run.dart';
-import '../shared/theme/app_type.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/app_type.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/terminal_prompt.dart';
@@ -44,9 +44,9 @@ class KeyboardLesson {
     'agent.new' => 'Codex · This Mac · payments\nHarness anything (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
     'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
     'pane.close' =>
-      '[agent 1]\nThe second view closes. Its agent keeps running.',
+      '[harness 1]\nThe second view closes. Its harness keeps running.',
     'swarm.close' =>
-      '[previous tab]\nThe view closes. Its agents keep running.',
+      '[previous swarm]\nThe view closes. Its harnesses keep running.',
     'navigation.commands' => '>rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',

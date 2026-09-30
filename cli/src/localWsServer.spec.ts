@@ -77,6 +77,23 @@ describe('local CLI WebSocket', () => {
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
 
+  it('keeps notification identities on the local read and snapshot paths', async () => {
+    const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
+    const ws = new WebSocket(await start(backend, { onAgentSeen: seen, onAppUnread: unread }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const item = { agentId: 'a', machineId: 'remote', question: true, text: 'Publish?', readToken: 'question-1' }
+    ws.send(JSON.stringify({ type: 'app_unread', payload: { items: [item] } }))
+    ws.send(JSON.stringify({ type: 'agent_seen', payload: { agentId: 'a', readToken: item.readToken } }))
+    for (const readToken of ['', 42, 'x'.repeat(64)]) ws.send(JSON.stringify({ type: 'agent_seen', payload: { agentId: 'a', readToken } }))
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledExactlyOnceWith('a', 'question-1'))
+    expect(unread).toHaveBeenCalledExactlyOnceWith([item])
+    expect(backend.frames).toEqual([])
+    ws.close()
+  })
+
   it('serves the same endpoint over the daemon socket, with no Host to name and no Origin allowed', async () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
@@ -656,6 +673,7 @@ describe('local CLI WebSocket', () => {
       relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
       onDaemonAct: (_connId, payload, reply) => { got.push(['act', payload]); reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, ok: true } }) },
       onDaemonTalk: (_connId, payload, reply) => { got.push(['talk', payload]); reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: true } }) },
+      onDaemonOpen: (_connId, payload, reply) => { got.push(['open', payload]); reply({ type: 'daemon_open_result', payload: { requestId: payload.requestId, ok: true } }) },
       onDaemonConfirm: (_connId, payload, reply) => { got.push(['confirm', payload]); reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, ok: true } }) },
       onDaemonShown: (_connId, payload) => { got.push(['shown', payload]) },
       onDaemonPresence: (_connId, payload, meta) => { presence.push({ payload, ui: meta.ui }) },
@@ -674,7 +692,10 @@ describe('local CLI WebSocket', () => {
       result = onceMessage(ws)
       ws.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c1', kind: 'autonomy', nonce: 'n1', accept: true } }))
       expect(await result).toEqual({ type: 'daemon_confirm_result', payload: { requestId: 'c1', ok: true } })
-      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm'])
+      result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'o1', companionUid: 'tim-one' } }))
+      expect(await result).toEqual({ type: 'daemon_open_result', payload: { requestId: 'o1', ok: true } })
+      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm', 'open'])
       expect(presence).toEqual([{ payload: { active: true, awayMs: 0 }, ui: true }])
       ws.close()
 
@@ -688,6 +709,9 @@ describe('local CLI WebSocket', () => {
       result = onceMessage(tcp)
       tcp.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2' } }))
       expect(await result).toMatchObject({ type: 'daemon_confirm_result', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2', ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
+      result = onceMessage(tcp)
+      tcp.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
+      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
       tcp.close()
 
       // A tool (`harness pair`, the MCP server) is not a window, even over the socket.
@@ -695,6 +719,9 @@ describe('local CLI WebSocket', () => {
       result = onceMessage(tool)
       tool.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't3', text: 'hi' } }))
       expect(await result).toMatchObject({ type: 'daemon_talk_result', payload: { requestId: 't3', ok: false, error: 'UI_ONLY' } })
+      result = onceMessage(tool)
+      tool.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
+      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'UI_ONLY' } })
       tool.close()
 
       // A relayed machine's socket: its presence is a fact about this desk; a key on it is not a window's.
@@ -703,9 +730,12 @@ describe('local CLI WebSocket', () => {
       result = onceMessage(relay)
       relay.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r4', id: 'need:x', choice: 'y' } }))
       expect(await result).toMatchObject({ type: 'daemon_act_result', payload: { requestId: 'r4', ok: false, error: 'UI_ONLY' } })
+      result = onceMessage(relay)
+      relay.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
+      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'UI_ONLY' } })
       relay.close()
 
-      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm'])
+      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm', 'open'])
       expect(presence.map((p) => p.ui)).toEqual([true, false])
       // Neither this daemon's dispatcher (whose send() uploads) nor the relayed machine ever saw one.
       expect(backend.frames).toEqual([])

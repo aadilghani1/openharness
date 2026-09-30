@@ -342,7 +342,12 @@ void main() {
         for (final part in parts) {
           final ink = part.foreground.computeLuminance();
           final ground = palette.workspace.computeLuminance();
-          expect((ink + .05) / (ground + .05), greaterThanOrEqualTo(4.5));
+          expect(
+            ink > ground
+                ? (ink + .05) / (ground + .05)
+                : (ground + .05) / (ink + .05),
+            greaterThanOrEqualTo(4.5),
+          );
         }
       }
     }
@@ -1186,7 +1191,7 @@ void main() {
       }
       expect(
         tester.getSize(secondTab).width,
-        lessThanOrEqualTo(160),
+        lessThanOrEqualTo(160 + grid.AppDesktop.tabCloseInset * 2),
         reason: 'short tab labels keep their compact width in a roomy window',
       );
       expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);

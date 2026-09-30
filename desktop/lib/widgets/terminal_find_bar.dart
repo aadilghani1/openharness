@@ -2,8 +2,8 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../shared/theme/app_type.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/app_type.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_search.dart';
 import 'box_chrome.dart';
@@ -282,10 +282,10 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 autofocus: widget.search != null,
                 textAlignVertical: TextAlignVertical.center,
                 // The query is terminal text, so it is set like the terminal.
-                style: terminalTextStyle(height: 1, color: Colors.white),
-                decoration: const InputDecoration(
+                style: terminalTextStyle(height: 1, color: boxText(1)),
+                decoration: InputDecoration(
                   hintText: 'Find in terminal…',
-                  hintStyle: TextStyle(color: Colors.white54),
+                  hintStyle: TextStyle(color: boxText(.54)),
                   isDense: true,
                   isCollapsed: true,
                   constraints: BoxConstraints(),
@@ -335,7 +335,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 padding: EdgeInsets.zero,
                 visualDensity: VisualDensity.compact,
                 iconSize: 17,
-                color: selected ? Colors.white : Colors.white60,
+                color: boxText(selected ? 1 : .60),
                 icon: icon,
               ),
             );
@@ -349,12 +349,12 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                 return Row(
                   children: [
                     if (widget.readOnly) ...[
-                      const Tooltip(
+                      Tooltip(
                         message: 'This terminal is read only',
                         child: Icon(
                           AppIcons.lock,
                           size: 14,
-                          color: Colors.white54,
+                          color: boxText(.54),
                         ),
                       ),
                       const SizedBox(width: 6),
@@ -364,7 +364,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                       child: ExcludeSemantics(
                         child: Text(
                           '/',
-                          style: terminalTextStyle(color: Colors.white70),
+                          style: terminalTextStyle(color: boxText(.70)),
                         ),
                       ),
                     ),
@@ -389,8 +389,11 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                             style: AppType.monoMeta(
                               color:
                                   count == 0 && query.isNotEmpty && !searching
-                                  ? const Color(0xffffb4a9)
-                                  : Colors.white54,
+                                  ? grid.AppTheme.pick(
+                                      grid.AppPalette.dangerFill,
+                                      const Color(0xffffb4a9),
+                                    )
+                                  : boxText(.54),
                               height: 1,
                             ),
                           ),
@@ -412,7 +415,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                         Text(
                           'Aa',
                           style: AppType.monoLabel(
-                            color: sensitive ? Colors.white : Colors.white54,
+                            color: boxText(sensitive ? 1 : .54),
                             fontWeight: sensitive
                                 ? FontWeight.w700
                                 : FontWeight.w400,

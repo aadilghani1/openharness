@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/shared/theme/pull_request_icon.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/terminal/terminal_theme.dart';
@@ -32,7 +33,12 @@ void main() {
         }
         expect(colors.length, 4);
       }
+      final originalPalette = grid.AppTheme.palette.value;
+      addTearDown(() => grid.AppTheme.palette.value = originalPalette);
       for (final brightness in Brightness.values) {
+        grid.AppTheme.palette.value = brightness == Brightness.light
+            ? HarnessPalette.paper
+            : HarnessPalette.graphite;
         final surface = grid.AppTheme.as(
           brightness,
           () => grid.AppPalette.cardBg,

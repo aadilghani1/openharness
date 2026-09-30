@@ -46,7 +46,7 @@ class AlertsCard extends StatelessWidget {
             controlSemanticLabel: 'On-screen alerts',
             detail:
                 'Show a banner when an agent finishes, or stops to ask you '
-                'something. Click it to go to that agent.',
+                'something. Click it to go to that harness.',
             control: Align(
               alignment: Alignment.centerLeft,
               child: Switch(
@@ -113,7 +113,7 @@ String _systemDetail({
 }) {
   final base =
       'Let the system tell you at the same two moments while Harness is not '
-      'in front.${clickOpensAgent ? ' Click one to go to that agent.' : ''}';
+      'in front.${clickOpensAgent ? ' Click one to go to that harness.' : ''}';
   if (!on) return base;
   return switch (permission) {
     NotificationPermission.denied =>

@@ -11,7 +11,8 @@
  *   repeat-steps    The same sequence of three or more command steps, in separate turns, three times in
  *                   one project.
  *
- * Replays, sub-agents, terminals and the pair harness are the caller's to leave out (as for the sensor);
+ * Replays, sub-agents, terminals and archived pair chats are the caller's to leave out;
+ * the collection DSH's real work is included, while its tool-free reviews never register as agents.
  * prompts the daemon itself sent (`daemonSent`) are never a person correcting anything. Every signal
  * carries its provenance — engine, machine, agent, session, turn, the project as a hash — and its
  * evidence trimmed and redacted (guard.ts). The failures and step sequences seen are kept in a small
@@ -89,7 +90,35 @@ const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx', 'bunx', 'c
 
 /** One command split into what it runs, in order: `cd x && npm ci && npm test` is `npm ci`, `npm test`. */
 export function segments(command: string): string[] {
-  return command.split(/\s*(?:&&|\|\||;|\n)\s*/).map((part) => part.trim()).filter(Boolean)
+  const parts: string[] = []
+  let start = 0
+  let quote: string | null = null
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]!
+    if (c === '\\' && quote !== "'") { i++; continue }
+    if (quote) { if (c === quote) quote = null; continue }
+    if (c === "'" || c === '"') { quote = c; continue }
+    // Heredocs, substitutions and compound scripts need a real shell grammar. Omit the
+    // whole call rather than teach lines of Python/JS (or strings) as shell commands.
+    if (c === '`' || c === '(' || c === ')' || (c === '<' && command[i + 1] === '<')) return []
+    if (c === '#' && (i === 0 || /\s/.test(command[i - 1]!))) {
+      const end = command.indexOf('\n', i)
+      const part = command.slice(start, i).trim()
+      if (part) parts.push(part)
+      if (end < 0) return parts
+      i = end; start = end + 1; continue
+    }
+    if (c === ';' || c === '\n' || (c === '&' && command[i + 1] === '&') || (c === '|' && command[i + 1] === '|')) {
+      const part = command.slice(start, i).trim()
+      if (part) parts.push(part)
+      if (c === '&' || c === '|') i++
+      start = i + 1
+    }
+  }
+  if (quote) return []
+  const last = command.slice(start).trim()
+  if (last) parts.push(last)
+  return parts
 }
 
 /**
@@ -195,7 +224,7 @@ interface FailureSeen {
 interface WindowTurn { from: Provenance; commands: string[] }
 
 interface SignalsState {
-  v: 1
+  v: 2
   failures: FailureSeen[]
   windows: Record<string, WindowTurn[]>
   signaled: Record<string, number>
@@ -455,16 +484,18 @@ export class LessonSignals {
   }
 
   private load(): SignalsState {
-    const empty: SignalsState = { v: 1, failures: [], windows: {}, signaled: {} }
+    const empty: SignalsState = { v: 2, failures: [], windows: {}, signaled: {} }
     if (!this.deps.file) return empty
     try {
-      const parsed = JSON.parse(readFileSync(this.deps.file, 'utf8')) as Partial<SignalsState>
-      if (parsed?.v !== 1) return empty
+      const parsed = JSON.parse(readFileSync(this.deps.file, 'utf8')) as Partial<Omit<SignalsState, 'v'>> & { v?: number }
+      if (parsed?.v !== 1 && parsed?.v !== 2) return empty
       return {
-        v: 1,
+        v: 2,
         failures: Array.isArray(parsed.failures) ? parsed.failures : [],
-        windows: parsed.windows && typeof parsed.windows === 'object' ? parsed.windows : {},
-        signaled: parsed.signaled && typeof parsed.signaled === 'object' ? parsed.signaled : {},
+        // v1 split script bodies into commands. Rebuild only that derived index from new work.
+        windows: parsed.v === 2 && parsed.windows && typeof parsed.windows === 'object' ? parsed.windows : {},
+        signaled: parsed.signaled && typeof parsed.signaled === 'object'
+          ? Object.fromEntries(Object.entries(parsed.signaled).filter(([key]) => parsed.v === 2 || !key.startsWith('steps:'))) : {},
       }
     } catch { return empty }
   }

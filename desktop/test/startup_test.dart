@@ -178,6 +178,7 @@ void main() {
           'app_ui_font_size',
           'app_color_palette',
           'harness_start_background',
+          'harness_custom_background',
           'workspace_prompt_v1',
         },
       ]);

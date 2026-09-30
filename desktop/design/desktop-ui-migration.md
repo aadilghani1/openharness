@@ -3,7 +3,8 @@
 Objective: a coherent, welcoming Mac-style application around unchanged terminal
 panes. This tracks the complete requested scope, not only the initial composer.
 The [design system](desktop-design-system.md) is normative; historical screenshots
-and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
+and tests do not override it. The user authorized PR, merge, and desktop release
+on 2026-09-30; the unmerged checkpoints below describe earlier review stages.
 
 ## Surface inventory
 
