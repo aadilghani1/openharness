@@ -54,7 +54,10 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
 
 # As tmux starts: window 0 is a shell on this computer.
 expect "starts in a shell, as tmux does" "Mock terminal (mock)" 5000
-expect "status line, tmux-style (desk=off: the first session is tmux's 0)" "[0] 0:"
+status_tabs() { screen | tail -n 1 | grep -q '^ 0:' && echo yes; }
+wait_eq "status line starts with window tabs, without a session label" yes status_tabs
+expect "status line quotes the local machine's app name" '"mock-local"'
+wait_eq "desk=off: the first session is still tmux's 0" 0 hn display -p '#{session_name}'
 tmux_ send-keys -t t C-b s
 expect "C-b s opens the fzf list" "Search harnesses"
 tmux_ send-keys -t t 'Mock\ Claude'
