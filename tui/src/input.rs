@@ -618,7 +618,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "go"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
+            picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
@@ -2511,14 +2511,15 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             SPLIT.with(|s| s.set(None));
             app.switch_session(sid);
         }
-        // A conversation Harness did not start: resumed as a harness (a new window, or where C-v,
-        // C-x, M-enter say); one open in another terminal or app is not opened twice.
+        // A conversation Harness did not start: resumed as a harness in this window, or where
+        // C-t, C-v, C-x, M-enter say; one open in another terminal or app is not opened twice.
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("external:")).unwrap_or(false) => {
             let found = id.as_deref().and_then(|i| i.strip_prefix("external:")).and_then(|r| r.split_once(':'))
                 .and_then(|(m, s)| app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s).cloned());
             let Some(x) = found else { return keep(app, kind, picker) };
             if x.open { picker.say("It is open in another terminal or app — close it there first"); return keep(app, kind, picker) }
             let placement = match choice {
+                Choice::Enter => Placement::Auto(None),
                 Choice::SplitRight => Placement::Split(Dir::Horizontal), Choice::SplitDown => Placement::Split(Dir::Vertical), Choice::Here => Placement::Replace,
                 _ => if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab },
             };
@@ -2549,11 +2550,12 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 (Choice::SplitDown, _) => Placement::Split(Dir::Vertical),
                 (Choice::Here, _) => Placement::Replace,
                 (_, Some(dir)) => Placement::Split(dir),
-                // Enter, as tmux's chooser: to the harness's window, or a window of its own.
+                // Enter adds a pane in this window; an already-open harness is focused.
+                (Choice::Enter, None) => Placement::Auto(None),
                 _ => Placement::Tab,
             };
-            // fzf --multi: Enter acts on every marked row — a window each (C-v / C-x: the first
-            // where asked, the rest beside it).
+            // fzf --multi: Enter adds every marked harness here; C-t opens a window each.
+            // C-v / C-x put the first where asked and add the rest beside it.
             let mut targets: Vec<(String, String)> = picker.marked.iter().filter_map(|m| split_key(m)).collect();
             if targets.is_empty() { targets.push((machine.clone(), agent.clone())) }
             for (i, (machine, agent)) in targets.iter().enumerate() {

@@ -80,7 +80,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
             let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
             format!("in {name}:{n} — enter goes to it")
         });
-        out.push(dim(place.unwrap_or_else(|| "enter opens it in a window · C-v beside · C-x below · M-enter here".into())).into());
+        out.push(dim(place.unwrap_or_else(|| "enter adds a pane here · C-t new window · C-v beside · C-x below · M-enter here".into())).into());
         return out;
     }
     // What it asks, or why it failed, first: at 80×24 the preview is a few rows.
@@ -148,7 +148,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
         format!("in {name}:{n} — enter goes to it")
     });
-    out.push(dim(place.unwrap_or_else(|| "enter opens it in a window · C-v beside · C-x below · M-enter here".into())).into());
+    out.push(dim(place.unwrap_or_else(|| "enter adds a pane here · C-t new window · C-v beside · C-x below · M-enter here".into())).into());
     out
 }
 
@@ -265,7 +265,7 @@ fn external(app: &App, id: &str) -> Vec<Line<'static>> {
     }
     out.push(Line::raw(""));
     out.push(if x.open { Line::styled("Open in another terminal or app — close it there to open it here", Style::default().fg(Color::Yellow)) }
-        else { dim("enter resumes it in a window · C-v beside · C-x below · M-enter here — without permission prompts, as the desktop resumes it").into() });
+        else { dim("enter resumes it as a pane here · C-t new window · C-v beside · C-x below · M-enter here — without permission prompts, as the desktop resumes it").into() });
     out
 }
 

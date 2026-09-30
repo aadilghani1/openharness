@@ -59,13 +59,24 @@ status_tabs() { screen | tail -n 1 | grep -q '^ 0:' && echo yes; }
 wait_eq "status line starts with window tabs, without a session label" yes status_tabs
 expect "status line quotes the local machine's app name" '"mock-local"'
 wait_eq "desk=off: the first session is still tmux's 0" 0 hn display -p '#{session_name}'
+start_window=$(hn display -p '#{window_id}')
 tmux_ send-keys -t t C-b s
 expect "C-b s opens the fzf list" "Search harnesses"
 tmux_ send-keys -t t 'Mock\ Claude'
 expect "fuzzy filter narrows" "1/"
-# Enter, as tmux's chooser: the harness in a window of its own (not a split of this one).
+# Enter adds the harness beside the existing shell in the current window.
 tmux_ send-keys -t t Enter
-expect "C-b s Enter: a window of its own, name before status" "1:Mock Claude*"
+expect "C-b s Enter streams the selected harness" "Mock Claude (mock)"
+wait_eq "C-b s Enter keeps the current window" "$start_window" hn display -p '#{window_id}'
+wait_eq "C-b s Enter adds a pane" "2" hn display -p '#{window_panes}'
+wait_eq "C-b s Enter does not add a window" "1" hn display -p '#{session_windows}'
+hn kill-pane
+tmux_ send-keys -t t C-b s
+expect "C-b s reopens the fzf list" "Search harnesses"
+tmux_ send-keys -t t 'Mock\ Claude'
+expect "fuzzy filter narrows for a new window" "1/"
+tmux_ send-keys -t t C-t
+expect "C-b s C-t: a window of its own, name before status" "1:Mock Claude*"
 idle_tab() { hn display -p "$(hn show -gwv window-status-current-format)"; }
 wait_eq "idle windows have no status dot" "1:Mock Claude*" idle_tab
 wait_eq "the harness window's one pane" "1" hn display -p '#{window_panes}'
