@@ -1248,7 +1248,7 @@ async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: str
   return true
 }
 
-/** Both updaters manage only the installed bundle, never a checkout or a canary. */
+/** An explicit hn update manages only the installed bundle, never a checkout or a canary. */
 function isInstalledCli(): boolean {
   const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
   try {
@@ -1487,14 +1487,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
   // the published bundle into ~/.harness/cli and restart, hijacking the version you're developing.
   // Match by inode so symlinks/realpath don't fool it; fall back to a path compare.
-  const isInstalledCopy = isInstalledCli()
-  daemonBoot.tuiUpdater = startTuiUpdater({
-    currentVersion: VERSION,
-    isInstalledCopy,
-    disabled: env.ADAPTER_UPDATE_DISABLE,
-    intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
-    slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
-  })
+  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
+  let isInstalledCopy = SCRIPT_PATH === installedCli
+  try { isInstalledCopy = statSync(SCRIPT_PATH).ino === statSync(installedCli).ino } catch { /* keep path compare */ }
   if (isInstalledCopy && !env.ADAPTER_UPDATE_DISABLE) {
     daemonBoot.updater = startSelfUpdater({
       currentVersion: VERSION,
@@ -1517,6 +1512,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   } else if (!env.ADAPTER_UPDATE_DISABLE) {
     console.log(`[update] self-update off · running a dev/repo build (v${VERSION}), not the installed copy`)
   }
+
+  // Keep the CLI's recovery updater armed first. hn is an independent, optional download.
+  daemonBoot.tuiUpdater = startTuiUpdater({
+    currentVersion: VERSION,
+    isInstalledCopy,
+    disabled: env.ADAPTER_UPDATE_DISABLE,
+    intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
+    slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+  })
 
   const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
   // Before any agent is probed: one already running on a saved API's model reports that model.
