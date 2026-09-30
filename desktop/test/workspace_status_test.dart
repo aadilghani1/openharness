@@ -17,6 +17,7 @@ import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
+import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_status.dart';
 import 'package:harness/screens/swarm_screen.dart';
@@ -168,6 +169,93 @@ void main() {
       }
     }
   });
+  for (final brightness in Brightness.values) {
+    for (final count in [4, 9]) {
+      testWidgets('$count pane toolbars stay aligned in ${brightness.name}', (
+        tester,
+      ) async {
+        final oldBrightness = grid.AppTheme.brightness.value;
+        final oldPalette = grid.AppTheme.palette.value;
+        grid.AppTheme.palette.value = brightness == Brightness.dark
+            ? HarnessPalette.graphite
+            : HarnessPalette.paper;
+        addTearDown(() => grid.AppTheme.palette.value = oldPalette);
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
+        final app = createApp();
+        final names = [
+          'Composer polish',
+          'Review changes',
+          'API cleanup',
+          'Improve search',
+          'Keyboard shortcuts',
+          'Docs',
+          'Release notes',
+          'Test coverage',
+          'Model picker',
+        ];
+        app.machineStates['m']!.localOnly = true;
+        app.machineStates['m']!.nodeOnline = true;
+        app.machineStates['m']!.agents = [
+          for (var i = 0; i < count; i++)
+            Agent.fromJson({
+              'id': 'a$i',
+              'name': names[i],
+              'engine': i.isEven ? 'codex' : 'claude',
+              'selectedModel': i.isEven
+                  ? 'runtime-v1:a$i:codex:gpt-6-astra@high'
+                  : 'runtime-v1:a$i:claude:fable@high',
+              'terminal': {'available': true},
+            }),
+        ];
+        for (var i = 0; i < count; i++) {
+          final session = terminal('a$i', [])..agentName = names[i];
+          session.terminal.write('~/code/harness\r\n\r\nReady.\r\n');
+          app.adoptSessionForTest(session);
+        }
+        app.setPreset(count, count == 4 ? PanePreset.quad : PanePreset.cols3);
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(1560, 1000);
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: SwarmScreen(notifier: app),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+        for (final pane in app.panes) {
+          final cell = find.byKey(pane.cellKey);
+          final controls = [
+            find.byKey(ValueKey(('pane-model', 'm', pane.agentId!))),
+            for (final key in [
+              'pane-split-down',
+              'pane-split-right',
+              'pane-zoom',
+            ])
+              find.descendant(of: cell, matching: find.byKey(ValueKey(key))),
+            find.descendant(of: cell, matching: find.byType(PaneCloseButton)),
+          ];
+          for (var i = 1; i < controls.length; i++) {
+            final previous = tester.getRect(controls[i - 1]);
+            final rect = tester.getRect(controls[i]);
+            expect(rect.left, greaterThanOrEqualTo(previous.right));
+            expect(rect.center.dy, closeTo(previous.center.dy, .1));
+            expect(rect.width, 28);
+            expect(rect.height, greaterThanOrEqualTo(28));
+          }
+          final close = tester.getRect(controls.last);
+          expect(close.right, lessThan(tester.getRect(cell).right));
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pump(const Duration(milliseconds: 100));
+        await captureControls(tester, 'pane-toolbar-$count-${brightness.name}');
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      });
+    }
+  }
   for (final native in [false, true]) {
     testWidgets(
       'pane model opens shared picker for its harness (native=$native)',

@@ -54,6 +54,7 @@ abstract final class AppIcons {
   static const code = LucideIcons.code400;
   static const coins = LucideIcons.coins400;
   static const columns2 = LucideIcons.columns2400;
+  static const rows2 = LucideIcons.rows2400;
   static const command = LucideIcons.command400;
   static const copy = LucideIcons.copy400;
   static const cornerDownLeft = LucideIcons.cornerDownLeft400;

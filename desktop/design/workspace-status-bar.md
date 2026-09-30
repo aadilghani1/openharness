@@ -140,8 +140,9 @@ use the shared system-type scale.
 
 ## Pane controls
 
-Each pane header shows its model immediately before an always-visible × at the
-right edge. Tab and pane close marks share a small regular glyph (12-point
+Each pane header ends with model, split down, split right, zoom and × at the
+right edge. The 14-point split/zoom glyphs and 12-point close glyph each have a
+28-point target, with no resting fill or border. Tab and pane close marks share a small regular glyph (12-point
 Lucide, optically matched 10-point SF Symbol) and quiet 45% resting ink, with
 full ink on hover/focus and the existing larger click
 targets. The close control removes that pane view while keeping its harness
@@ -177,14 +178,16 @@ while offline, but do not advertise switching when it is disabled.
 A model update must repaint the label without reopening or retargeting the pane.
 The observed subscription model does not select a Local row in the picker.
 
-Zoom and Stop remain keyboard/menu actions. Cmd-Shift-W closes the focused pane
+Zoom is also available in the header and becomes Restore while enlarged.
+Stop remains a keyboard/menu action. Cmd-Shift-W closes the focused pane
 view, Cmd-W closes the tab, and Cmd-Enter toggles pane zoom. Closing a view
 keeps its harness running; Stop Harness remains a separate command with its
 existing confirmation. Preserve explicit user keymap overrides.
 
-Pane edges have no floating split buttons. Split Right and Split Down remain
-keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
-access. Keep the resize gaps available for resizing.
+Pane edges have no floating split buttons. Split Right and Split Down use the
+header, keyboard commands (Cmd-R and Cmd-D by default), File menu, and command
+search. All open New Harness directly with the source pane's defaults, without
+an existing-harness search step. Keep the resize gaps available for resizing.
 
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button

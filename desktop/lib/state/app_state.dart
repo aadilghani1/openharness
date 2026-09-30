@@ -10859,7 +10859,12 @@ class AppNotifier extends ChangeNotifier {
     if (focus) {
       target.focusedPaneId = pane.id;
       target.zoomedPaneId = null;
-      if (target == activeSwarm) selectedMachineId = machineId;
+      if (target == activeSwarm) {
+        selectedMachineId = machineId;
+        // A manual split can grow the canvas beyond the viewport. Announce
+        // its reveal just as opening an existing pane does, before notifying.
+        if (split != null) _paneFocusRequest++;
+      }
     }
     _dismissedLinkPrompts.remove(machineId);
     if (focus) machine.activeAgentId = agentId;

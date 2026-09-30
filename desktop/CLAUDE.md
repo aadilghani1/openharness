@@ -311,8 +311,9 @@ its headless debug timings do not establish native display or network latency.
   with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each pane places its model control before its
-  always-visible close icon. Usage has no dot separators and colors only low/exhausted
+  and quiet, with larger click targets. Each pane ends with model, split down,
+  split right, zoom, close. Split opens New Harness directly for the clicked pane.
+  Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
   The context follows a viewer's owner and uses the compact project label, never a worktree path

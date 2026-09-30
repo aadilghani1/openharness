@@ -27,6 +27,7 @@ void main() {
       final closed = <int>[];
       final deleted = <int>[];
       final zoomed = <int>[];
+      final splits = <(String, int)>[];
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1100, 700);
       addTearDown(tester.view.reset);
@@ -42,6 +43,8 @@ void main() {
               onClose: () => closed.add(version),
               onDelete: () => deleted.add(version),
               onToggleZoom: () => zoomed.add(version),
+              onSplitDown: () => splits.add(('down', version)),
+              onSplitRight: () => splits.add(('right', version)),
               zoomed: version >= 2,
             ),
           ),
@@ -55,12 +58,15 @@ void main() {
       await mouse.moveTo(tester.getCenter(find.text(session.agentName)));
       await tester.pump();
       expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
-      for (final label in ['Zoom Pane', 'Stop Harness']) {
+      for (final label in ['Stop Harness']) {
         expect(find.byTooltip(label), findsNothing);
       }
       expect(closed, isEmpty);
       expect(deleted, isEmpty);
       expect(zoomed, isEmpty);
+      await tester.tap(find.byTooltip('New Pane Below'));
+      await tester.tap(find.byTooltip('New Pane to the Right'));
+      expect(splits, [('down', 1), ('right', 1)]);
       expect(find.byTooltip('Pane actions'), findsNothing);
       expect(find.byTooltip('Restart Harness'), findsNothing);
       expect(find.byTooltip('Share harness'), findsNothing);
@@ -172,7 +178,9 @@ void main() {
       );
       revision.value = 2;
       await tester.pump();
-      expect(find.byTooltip('Restore Pane'), findsNothing);
+      expect(find.byTooltip('Restore Pane').hitTestable(), findsOneWidget);
+      await tester.tap(find.byTooltip('Restore Pane'));
+      expect(zoomed, [2]);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -272,7 +280,7 @@ void main() {
           reason: 'The model belongs to its pane header.',
         );
         expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
-        for (final label in ['Zoom Pane', 'Stop Harness']) {
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
         final controlsBounds = tester.getRect(controls);
@@ -281,14 +289,14 @@ void main() {
         await mouse.moveTo(tester.getCenter(title));
         await tester.pump();
         expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
-        for (final label in ['Zoom Pane', 'Stop Harness']) {
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label), findsNothing);
         }
         expect(tester.getRect(title), titleBounds);
         expect(tester.getRect(controls), controlsBounds);
         await mouse.moveTo(tester.getCenter(find.byType(TerminalView)));
         await tester.pump();
-        for (final label in ['Zoom Pane', 'Stop Harness']) {
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
         expect(find.byTooltip('Share harness'), findsNothing);
@@ -354,7 +362,7 @@ void main() {
         );
         await tester.pump();
         final title = find.text(session.agentName);
-        expect(tester.getSize(title).width, greaterThan(64));
+        expect(tester.getSize(title).width, greaterThan(40));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
         expect(find.byType(GridModelPicker), findsOneWidget);
@@ -365,7 +373,7 @@ void main() {
         expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
         await mouse.removePointer();
         expect(find.byTooltip('Stop Harness'), findsNothing);
-        expect(find.byTooltip('Zoom Pane'), findsNothing);
+        expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
         expect(tester.getRect(title), titleBefore);
         for (final status in [
           TerminalSessionStatus.opening,

@@ -314,12 +314,18 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the current model is a quiet text control immediately before
-an always-visible close icon at the right edge. Clicking the model focuses that
+**Pane header** — the right-hand controls read model, split down, split right,
+zoom, close. Use quiet 14-point Lucide split/zoom glyphs and the shared 12-point
+close glyph in 28-point targets. Resting ink is 45%; hover and keyboard focus
+brighten the glyph without a fill, border, or movement. Keep the controls on one
+line; model and title text truncate before icon targets shrink. Zoom becomes
+Restore while enlarged. Unavailable controls stay in place with disabled ink.
+Split opens New Harness directly, inheriting the clicked pane's agent, machine,
+and project; the pane is created only after submission. Clicking the model focuses that
 pane and opens the same Models picker as Cmd-:. Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
-and keep the close target clear at narrow widths. Tab-strip close behavior is
+and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
 **Focused workspace footer** — remaining subscription usage at the left,

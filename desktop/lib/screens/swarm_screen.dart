@@ -2755,19 +2755,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
             ? app.projectHistory.selected(id) ??
                   app.projectHistory.recent(id).firstOrNull
             : null);
+    final inherited = agent?.engine;
     if (!newHarnessOpensInBox) {
       await _newAgentForm(
         machineId: id,
         folder: initialFolder,
         swarmId: target,
         split: requestedSplit,
-        engine: engine,
+        engine: engine ?? (isTerminalEngine(inherited) ? null : inherited),
         placement: placement,
         task: task ?? fallbackTask,
       );
       return;
     }
-    final inherited = agent?.engine;
     final embedded =
         source == _NewHarnessSource.workspace &&
         requestedSplit == null &&
@@ -3329,10 +3329,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _splitAgent(PaneResizeAxis axis) async {
-    final split = app.preparePaneSplit(axis);
+  Future<void> _splitAgent(PaneResizeAxis axis, {int? paneId}) async {
+    if (app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator) return;
+    final split = app.preparePaneSplit(axis, paneId: paneId);
     if (split == null) return;
-    _openSearch(adding: true, split: split);
+    // Header actions belong to the clicked pane, even if its neighbor held
+    // the keyboard. The shared creation flow inherits that pane's context.
+    app.focusPane(split.paneId);
+    await _newAgent(
+      swarmId: split.swarmId,
+      split: split,
+      stillCurrent: () => app.isPaneSplitCurrent(split),
+    );
   }
 
   Future<void> _showHistory() async {
@@ -6101,10 +6109,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return app.panes.length > 1 && app.zoomedPaneId == null;
     }
     if (id == 'pane.split_right') {
-      return app.preparePaneSplit(PaneResizeAxis.x) != null;
+      return !app.activeSwarm.isUtility &&
+          !app.activeSwarm.isOrchestrator &&
+          app.preparePaneSplit(PaneResizeAxis.x) != null;
     }
     if (id == 'pane.split_down') {
-      return app.preparePaneSplit(PaneResizeAxis.y) != null;
+      return !app.activeSwarm.isUtility &&
+          !app.activeSwarm.isOrchestrator &&
+          app.preparePaneSplit(PaneResizeAxis.y) != null;
     }
     if (id == 'pane.reset_sizes') {
       return app.activeSwarm.paneSizes.keys.any(
@@ -6592,6 +6604,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                               notifier: app,
                                               swarmMode: true,
                                               onOpenModels: _openPaneModels,
+                                              onSplitPane: (paneId, axis) =>
+                                                  unawaited(
+                                                    _splitAgent(
+                                                      axis,
+                                                      paneId: paneId,
+                                                    ),
+                                                  ),
                                               companionViewer:
                                                   _creatureEnabled &&
                                                       _zoo.loaded
