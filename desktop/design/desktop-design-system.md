@@ -126,6 +126,9 @@ is explicit for code, copyable technical identifiers and shortcut hints; it is
 not the default for navigation or session context. Terminal zoom never resizes
 app controls. Platform text scaling does, and controls grow rather than clip.
 Buttons keep at least 6 points of padding above and below the rendered label.
+The fallback workspace tab strip and Harness Store control follow these same
+rules, including platform text scaling; compact terminal/status bars retain
+their separate sizing contract.
 
 Names before context. Buttons state the action: New Harness, Save, Cancel,
 Open Folder, New Folder, GitHub. Use short sentence-case instructions: Enter
@@ -238,6 +241,13 @@ with relevant keyboard hints. Move Pane uses a tab icon, destination name,
 harness count and optional number accelerator. Selection uses the same blue
 row treatment as search; no competing outlined selection card.
 
+**History** — use the shared dialog header, search field and result rows.
+The scope label is “This window”: these are the window's visited and closed
+tabs and panes. Search receives initial focus. Tab reaches Close, and Enter on
+Close dismisses the dialog without accepting a result. Results scroll and
+reveal the active row without moving the search field. History keeps its
+existing controller and does not add a preview.
+
 **Cmd-P** — a prominent search field, separate compact scope pills, recognizable
 agent marks and clean results. Harnesses is the default scope. Preserve typed
 words when changing scope. Keep result selection stable through live updates.
@@ -342,6 +352,9 @@ neighboring explanatory text alone is not an accessible label. Do not merge
 multiple actions into a single settings row. Short popovers use their measured
 content height, including enlarged text, before applying the window height cap. Standard
 editing, IME, keymap remaps, focus traversal and focus return remain intact.
+Pending selectors must be unavailable to pointer, keyboard and accessibility
+activation together. A queued selection cannot change an operation's target;
+failure or cancellation restores the original control and permits retry.
 Opening a modal isolates the workspace and native footer in the accessibility
 tree. A late reply cannot restore a dismissed form or act on a different pane.
 

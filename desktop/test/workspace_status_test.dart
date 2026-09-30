@@ -1150,10 +1150,27 @@ void main() {
       for (final element in barControls.evaluate()) {
         final control = element.widget as WorkspaceBarControl;
         final rect = tester.getRect(find.byWidget(control));
-        expect(
-          rect.height,
-          control.selectedBackground == null ? 28 : tester.getSize(bar).height,
-        );
+        if (control.label == 'Harness Store') {
+          final label = find.descendant(
+            of: find.byWidget(control),
+            matching: find.text('Harness Store'),
+          );
+          expect(
+            tester.widget<Text>(label).style!.fontFamily,
+            grid.AppType.sansFamily,
+          );
+          expect(
+            rect.height,
+            greaterThanOrEqualTo(tester.getSize(label).height + 12),
+          );
+        } else {
+          expect(
+            rect.height,
+            control.selectedBackground == null
+                ? 28
+                : tester.getSize(bar).height,
+          );
+        }
         if (control.selected == true) {
           final fill = find.descendant(
             of: find.byWidget(control),
@@ -1205,6 +1222,49 @@ void main() {
         }
       }
       await captureControls(tester, 'workspace-bottom-bar');
+      final workspace = tester.widget<SwarmScreen>(find.byType(SwarmScreen));
+      for (final scale in [1.0, 2.0]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: workspace,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+        final store = find.byKey(const ValueKey('swarm-store-button'));
+        expect(
+          MediaQuery.textScalerOf(tester.element(store)).scale(13),
+          13 * scale,
+        );
+        final label = find.descendant(
+          of: store,
+          matching: find.text('Harness Store'),
+        );
+        expect(
+          tester.renderObject<RenderParagraph>(label).didExceedMaxLines,
+          isFalse,
+        );
+        expect(
+          tester.getSize(store).height,
+          greaterThanOrEqualTo(tester.getSize(label).height + 12),
+        );
+        expect(
+          tester.widget<Text>(label).style!.fontFamily,
+          grid.AppType.sansFamily,
+        );
+        expect(tester.takeException(), isNull);
+        await captureControls(
+          tester,
+          'store-navigation-$scale',
+          height: tester.getSize(bar).height,
+        );
+      }
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

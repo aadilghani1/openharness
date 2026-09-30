@@ -64,6 +64,11 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
   final _query = TextEditingController();
   final _focus = FocusNode(debugLabel: 'History search');
   void _choose(SwarmSearchSelection choice) => Navigator.pop(context, choice);
+  void _close() => Navigator.pop(context);
+
+  bool get _composing =>
+      _query.value.composing.isValid && !_query.value.composing.isCollapsed;
+
   @override
   void dispose() {
     _query.dispose();
@@ -73,50 +78,75 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return Dialog(
-      alignment: const Alignment(0, -0.5),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-      child: SizedBox(
-        width: 680,
-        height: 480,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: SwarmSearchKeys(
-            search: widget.search,
-            editing: _query,
-            onChoose: _choose,
-            onClose: () => Navigator.pop(context),
-            onRefocus: _focus.requestFocus,
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Text('History', style: grid.AppType.monoLabel()),
-                    Spacer(),
-                    Text(
-                      'This session',
-                      style: boxMonoStyle(color: Colors.white54),
-                    ),
-                  ],
+    return DesktopChrome(
+      child: Dialog(
+        alignment: const Alignment(0, -0.5),
+        insetPadding: const EdgeInsets.all(20),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: SizedBox(
+          width: 680,
+          height: 480,
+          child: DesktopDialogSurface(
+            child: Actions(
+              // EditableText can resolve Escape before the picker shortcuts.
+              // A composing editor keeps that key; Close remains available.
+              actions: {
+                DismissIntent: CallbackAction<DismissIntent>(
+                  onInvoke: (_) {
+                    if (!_composing) _close();
+                    return null;
+                  },
                 ),
-                const SizedBox(height: 16),
-                SwarmSearchField(
-                  controller: _query,
-                  focusNode: _focus,
-                  autofocus: true,
-                  hintText: 'Search history',
-                  onChanged: widget.search.setQuery,
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: SwarmSearchResults(
-                    search: widget.search,
-                    onChoose: _choose,
-                    onRefocus: _focus.requestFocus,
+              },
+              child: Column(
+                children: [
+                  DesktopDialogHeader(
+                    title: 'History',
+                    detail: 'This window',
+                    onClose: _close,
                   ),
-                ),
-              ],
+                  Expanded(
+                    // Enter belongs to the focused Close button in the header;
+                    // result acceptance only applies within the search area.
+                    child: SwarmSearchKeys(
+                      desktop: true,
+                      search: widget.search,
+                      editing: _query,
+                      onChoose: _choose,
+                      onClose: _close,
+                      onRefocus: _focus.requestFocus,
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: DesktopChrome.panelPadding,
+                            ),
+                            child: SwarmSearchField(
+                              controller: _query,
+                              focusNode: _focus,
+                              autofocus: true,
+                              hintText: 'Search history',
+                              onChanged: widget.search.setQuery,
+                            ),
+                          ),
+                          const SizedBox(height: DesktopChrome.controlGap),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              child: SwarmSearchResults(
+                                search: widget.search,
+                                onChoose: _choose,
+                                onRefocus: _focus.requestFocus,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

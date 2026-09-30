@@ -251,6 +251,46 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('recent harness ages show and say now, including clock skew', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    app.machineStates['m']!.agents = [
+      for (final (id, age) in [
+        ('recent', const Duration(seconds: 30)),
+        ('future', const Duration(minutes: -4)),
+      ])
+        Agent(
+          id: id,
+          name: '$id harness',
+          engine: _running.engine,
+          sessionId: '$id-conversation',
+          terminalAvailable: true,
+          project: _project,
+          lastActivityAt: now.subtract(age),
+        ),
+    ];
+    for (final id in ['recent', 'future']) {
+      app.rememberOpenedHarness('m', id);
+    }
+    await open(tester);
+    for (final agentId in ['recent', 'future']) {
+      final id = agentDestinationId('m', agentId);
+      expect(
+        tester.widget<Text>(find.byKey(ValueKey('session-age:$id'))).data,
+        '· now',
+      );
+      final spoken = tester
+          .widget<Semantics>(find.byKey(ValueKey('session-open:$id')))
+          .properties
+          .value!;
+      expect(spoken, contains('Last used now'));
+      expect(spoken, isNot(contains('0m')));
+      expect(spoken, isNot(contains('now ago')));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'displays remote cached tokens beneath context and leaves missing usage empty',
     (tester) async {

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show SemanticsAction;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/autonomous_device/autonomous_device_cli.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
@@ -14,6 +15,7 @@ class FakeAutonomousDeviceCli extends AutonomousDeviceCli {
   bool unsupported = false;
   int statusCalls = 0;
   Completer<void>? statusWait;
+  Completer<void>? pairWait;
   String? pairFailure;
   bool networkBlocked = false;
   List<Map<String, dynamic>> discovered = [
@@ -51,6 +53,7 @@ class FakeAutonomousDeviceCli extends AutonomousDeviceCli {
     required String deviceId,
   }) async {
     submissions.add({'code': code, 'deviceId': deviceId});
+    if (pairWait != null) await pairWait!.future;
     if (pairFailure != null) {
       throw AutonomousDeviceCliException('CODE_MISMATCH', pairFailure!);
     }
@@ -125,6 +128,7 @@ void main() {
         );
         expect(pickerNode.getSemanticsData().label, 'Autonomous robot');
         expect(pickerNode.getSemanticsData().value, 'Select a device');
+        expect(pickerNode.getSemanticsData().flagsCollection.isButton, isTrue);
         expect(codeNode.id, isNot(pickerNode.id));
         expect(codeNode.getSemanticsData().flagsCollection.isTextField, isTrue);
         expect(
@@ -269,6 +273,118 @@ void main() {
     await select(tester, 'device-2');
     expect(tester.widget<TextField>(codeField).controller!.text, isEmpty);
   });
+
+  for (final (outcome, error) in [
+    (
+      'failure',
+      const AutonomousDeviceCliException('CODE_MISMATCH', 'Mismatch'),
+    ),
+    (
+      'cancellation',
+      const AutonomousDeviceCliException('CANCELLED', 'Pairing was cancelled.'),
+    ),
+  ]) {
+    testWidgets(
+      'pending device selection ignores keys and recovers after $outcome',
+      (tester) async {
+        tester.view.physicalSize = const Size(880, 560);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final semantics = tester.ensureSemantics();
+        try {
+          final pending = Completer<void>();
+          final cli = FakeAutonomousDeviceCli()
+            ..pairWait = pending
+            ..discovered.add({'id': 'device-2', 'name': 'Desk'});
+          await open(tester, cli);
+          final picker = find.byKey(const Key('autonomous-device-selection'));
+          await tester.tap(picker);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Kitchen').last);
+          await tester.pumpAndSettle();
+          final previousSelection = tester
+              .widget<AppSelectField<String?>>(picker)
+              .onChanged;
+          await tester.enterText(codeField, 'ABC234');
+          await tester.tap(find.text('Pair'));
+          await tester.pump();
+          expect(find.text('Pairing…'), findsOneWidget);
+          final pendingPicker = tester
+              .getSemantics(find.bySemanticsLabel('Autonomous robot'))
+              .getSemanticsData();
+          expect(pendingPicker.label, 'Autonomous robot');
+          expect(pendingPicker.value, 'Kitchen');
+          expect(pendingPicker.hasAction(SemanticsAction.tap), isFalse);
+          expect(cli.submissions, [
+            {'code': 'ABC234', 'deviceId': 'device-1'},
+          ]);
+
+          // The pending selector is unavailable to Tab/Enter just as it is to a
+          // pointer, so the displayed device cannot diverge from this operation.
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(find.text('Desk'), findsNothing);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          // A selection queued before the pending rebuild follows the same guard.
+          previousSelection('device-2');
+          await tester.pump();
+          expect(
+            tester.widget<AppSelectField<String?>>(picker).value,
+            'device-1',
+          );
+          expect(cli.submissions, hasLength(1));
+
+          pending.completeError(error);
+          await tester.pumpAndSettle();
+          expect(find.text(error.userMessage), findsOneWidget);
+          expect(tester.widget<TextField>(codeField).enabled, isTrue);
+          final editablePicker = tester
+              .getSemantics(find.bySemanticsLabel('Autonomous robot'))
+              .getSemanticsData();
+          expect(editablePicker.label, 'Autonomous robot');
+          expect(editablePicker.value, 'Kitchen');
+          expect(editablePicker.flagsCollection.isButton, isTrue);
+          expect(editablePicker.hasAction(SemanticsAction.tap), isTrue);
+          for (
+            var i = 0;
+            i < 4 && !Focus.of(tester.element(find.text('Kitchen'))).hasFocus;
+            i++
+          ) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+            await tester.pump();
+          }
+          expect(
+            Focus.of(tester.element(find.text('Kitchen'))).hasFocus,
+            isTrue,
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(find.text('Desk'), findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(
+            tester.widget<AppSelectField<String?>>(picker).value,
+            'device-2',
+          );
+          expect(find.text(error.userMessage), findsNothing);
+          cli.pairWait = null;
+          await submit(tester, 'DEF567');
+          expect(cli.submissions.map((row) => row['deviceId']), [
+            'device-1',
+            'device-2',
+          ]);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox());
+        } finally {
+          semantics.dispose();
+        }
+      },
+    );
+  }
   testWidgets('lost discovery clears selection and never retargets code', (
     tester,
   ) async {

@@ -5927,9 +5927,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     Focus(
                       focusNode: _tabStripFocus,
                       onKeyEvent: _onTabStripKey,
-                      child: _native
-                          ? const SizedBox.shrink()
-                          : MediaQuery.withNoTextScaling(child: _tabStrip()),
+                      child: _native ? const SizedBox.shrink() : _tabStrip(),
                     ),
                     if (_learning.active)
                       WorkspaceQuickStart(

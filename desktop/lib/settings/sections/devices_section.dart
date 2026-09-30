@@ -40,6 +40,8 @@ class _DevicesSectionState extends State<DevicesSection> {
   List<Map<String, dynamic>> _discovered = [];
   Map<String, dynamic> _status = {};
   List<Map<String, dynamic>> _devices = [];
+  bool get _controlsDisabled =>
+      _busy || _loading || (kUnderTest && widget.cli == null);
 
   @override
   void initState() {
@@ -267,7 +269,7 @@ class _DevicesSectionState extends State<DevicesSection> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final disabled = _busy || _loading || (kUnderTest && widget.cli == null);
+    final disabled = _controlsDisabled;
     Widget action(String label, VoidCallback? onPressed) => SizedBox(
       width: SettingRow.controlWidth,
       child: OutlinedButton(onPressed: onPressed, child: Text(label)),
@@ -388,30 +390,36 @@ class _DevicesSectionState extends State<DevicesSection> {
                       Row(
                         children: [
                           Expanded(
-                            child: IgnorePointer(
-                              ignoring: disabled,
-                              child: AppSelectField<String?>(
-                                key: const Key('autonomous-device-selection'),
-                                semanticLabel: 'Autonomous robot',
-                                value: _selectedDevice,
-                                options: [
-                                  const SelectOption<String?>(
-                                    value: null,
-                                    label: 'Select a device',
-                                  ),
-                                  for (final device in _discovered)
-                                    SelectOption<String?>(
-                                      value: device['id'] as String,
-                                      label:
-                                          device['name']?.toString() ??
-                                          'Autonomous robot',
+                            child: ExcludeFocus(
+                              excluding: disabled,
+                              child: IgnorePointer(
+                                ignoring: disabled,
+                                child: AppSelectField<String?>(
+                                  key: const Key('autonomous-device-selection'),
+                                  semanticLabel: 'Autonomous robot',
+                                  value: _selectedDevice,
+                                  options: [
+                                    const SelectOption<String?>(
+                                      value: null,
+                                      label: 'Select a device',
                                     ),
-                                ],
-                                onChanged: (value) => setState(() {
-                                  _selectedDevice = value;
-                                  _code.clear();
-                                  _actionError = null;
-                                }),
+                                    for (final device in _discovered)
+                                      SelectOption<String?>(
+                                        value: device['id'] as String,
+                                        label:
+                                            device['name']?.toString() ??
+                                            'Autonomous robot',
+                                      ),
+                                  ],
+                                  onChanged: (value) {
+                                    if (_controlsDisabled) return;
+                                    setState(() {
+                                      _selectedDevice = value;
+                                      _code.clear();
+                                      _actionError = null;
+                                    });
+                                  },
+                                ),
                               ),
                             ),
                           ),

@@ -13,6 +13,7 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Welcome / New Tab | Shared 680-point composer; six muted Recent harnesses with status-format context and “now”; empty welcome omits history; machine discovery and pending defaults have distinct, actionable startup presentations |
 | Cmd-N and child choosers | Purpose icons, approval explanations, visible focus, and coding-agent-first order implemented; shared controller retained |
 | Cmd-P and resource previews | 1120×680 bounded panel, wider preview, natural-height model groups, explicit loading/error/retry states; six scopes rendered in both appearances |
+| Full History | Shared desktop header/search/results with explicit “This window” scope; initial focus, Close activation, composition, result reveal and terminal focus return tested; light/dark and narrow/enlarged renders inspected |
 | Rename and takeover | Desktop prompt anatomy implemented; safety/IME and focus-return tests pass |
 | Stop, delete, restart, fork | Desktop confirmations implemented; long errors scroll independently of fixed actions; synthetic light/dark/narrow renders inspected |
 | Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
@@ -287,3 +288,34 @@ unmerged.
   Actual VoiceOver and physical AppKit IME remain unverified. Light renders test
   shared components; the production workspace still uses its approved dark
   appearance and this work does not add an appearance switch.
+
+### Completion audit and supporting navigation, 2026-09-30
+
+- A fresh frozen full suite at `4bbe5a255` resolves the earlier compilation
+  timing ambiguity: **4,755 passed, 16 skipped**. Its fresh coverage passes the
+  New Harness **3,953/3,953** and resource picker **1,271/1,271** line gates.
+  Those results precede the following final audit fixes.
+- Full History now uses the shared desktop surface, header, search field and
+  result treatment. “This window” names its existing scope accurately. Close
+  receives its own Enter action; search composition retains Escape. Synthetic
+  native-command tests cover selection, dismissal and terminal focus return.
+- The fallback Harness Store control uses system UI type and measured label
+  padding. The fallback tab strip respects platform text scaling; ordinary
+  navigation can grow while terminal zoom remains independent. Actual-font
+  renders cover normal and 200% text.
+- Pending device pairing prevents keyboard and queued selector changes, keeping
+  the displayed device aligned with the operation. Fake failure/cancellation
+  journeys verify accessible state and editing/retry recovery. Manage harnesses
+  now displays and announces “now” for activity under one minute, including
+  future clock skew, consistent with welcome and search.
+- The combined affected-journey suite passes **167 tests**, with **1 optional
+  render skipped**. History also passes all six final interaction/layout tests
+  with actual fonts, and its four normal/narrow light/dark renders were inspected.
+  Static analysis of `lib`, `test`, and `integration_test` is clean, and the
+  normal macOS debug review build succeeds.
+  Shared tab/pane close marks remain the small, fine, muted recipe documented in
+  the design system, with their larger click targets and interaction emphasis.
+- Native runtime verification is still pending: app control reports “Sky
+  Computer Use native pipe startup failed”. Automatic approval review timed out
+  twice before a native integration test could launch; no native test executed
+  in this checkpoint. Physical VoiceOver and AppKit IME remain unverified.
