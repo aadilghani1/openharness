@@ -366,7 +366,7 @@ private extension SwarmTabButton {
     }
     let inkWidth = (closeInk.map(\.x).max() ?? 0) - (closeInk.map(\.x).min() ?? 0) + 1
     let inkHeight = (closeInk.map(\.y).max() ?? 0) - (closeInk.map(\.y).min() ?? 0) + 1
-    try checkTitlebar(!closeInk.isEmpty && inkWidth <= 9 && inkHeight <= 9,
+    try checkTitlebar(!closeInk.isEmpty && inkWidth <= 7 && inkHeight <= 7,
       "The tab close paints a tiny regular cross inside its unchanged 32pt target")
     closeButton.performClick(nil)
     try checkTitlebar(events == ["close"], "Clicking the close control closes once without selecting the tab")
@@ -472,7 +472,8 @@ private extension SwarmTabButton {
     try checkTitlebar(paragraph?.alignment == .center && abs(group.midX - bounds.midX) < 0.01,
       "The visible title and adjacent indicator form a centered group")
     try checkTitlebar(selectButton.frame == bounds, "Selection and drag retain the whole tab target beneath its accessory")
-    try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX, "The close action stays in the reserved trailing slot")
+    try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX - 8,
+      "The close action stays inset inside the tab's curved body")
   }
 
   func checkCompleteNameFits() throws {
@@ -1027,7 +1028,7 @@ private extension SwarmTabStrip {
        "activity": ["mark": index == 1 ? "⠋" : "", "label": index == 1 ? "Working" : "Idle",
                     "color": Int64(0xff64d2ff)]]
     }
-    setFrameSize(NSSize(width: 1280, height: 40))
+    setFrameSize(NSSize(width: 1440, height: 40))
     for (name, values) in [
       ("dark", ["workspace": Int64(0xff282828), "tabBar": Int64(0xff1c1c1c)]),
       ("light", ["workspace": Int64(0xfff0f2f5), "tabBar": Int64(0xffe4e6e9)]),
@@ -1035,7 +1036,7 @@ private extension SwarmTabStrip {
       update(["enabled": true, "activeId": "dense-1", "tabs": crowdedRows, "palette": values])
       try captureTabPresentation("native-tabs-eight-\(name)-rest")
       try checkTitlebar(tabs.last!.frame.maxX <= scroll.bounds.width,
-        "Eight ordinary tab names fit a 1280pt strip without forced scrolling: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
+        "Eight ordinary tab names with inset close targets fit a 1440pt strip: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
       for tab in tabs {
         try tab.checkCenteredLabel()
         try tab.checkCompleteNameFits()

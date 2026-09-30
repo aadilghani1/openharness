@@ -2197,10 +2197,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private static let upperRadius: CGFloat = 10
   private static let shoulder: CGFloat = 8
   private static let topInset: CGFloat = 6
-  // A compact centered title/status group leaves the 32pt hover target clear.
-  private static let contentInset: CGFloat = 32
-  private static let trailingInset: CGFloat = 0
+  // Mirror AppDesktop.tabCloseInset: keep the 32pt hover target inside the
+  // curved tab body, with equal space reserved around the centered title.
+  private static let trailingInset: CGFloat = 8
   private static let accessorySide: CGFloat = 32
+  private static let contentInset: CGFloat = trailingInset + accessorySide
   private static let gap: CGFloat = 6
   private static let activityWidth: CGFloat = 16
 
@@ -2310,8 +2311,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     closeButton.title = ""
     closeButton.isBordered = false
     closeButton.image = HarnessControlSymbols.image("xmark")
-    // SF's xmark fills more of its em than Lucide's: 10pt matches closeSize 12.
-    closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+    // Match the small visible cross of the pane's 12pt Lucide close mark.
+    closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 8, weight: .regular)
     closeButton.restingOpacity = 0.45
     closeButton.highContrastRestingOpacity = 0.7
     closeButton.imagePosition = .imageOnly

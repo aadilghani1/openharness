@@ -349,3 +349,25 @@ unmerged.
   was rebuilt after native tests. A final app-control attempt still returns
   “Sky Computer Use native pipe startup failed”, so no live visual review is
   claimed for this checkpoint.
+
+### Tab close and recent identities review, 2026-09-30
+
+- Tab close targets now sit 8 points inside the outer bounds, keeping the cross
+  clear of the curved edge in both AppKit and Flutter. The 32-point click target
+  is preserved; the title reserves that space before truncating and remains
+  stationary on hover. Natural tab widths gain 16 points to retain the centered
+  name/status group, so the eight-tab full-name fixture now uses a 1440-point
+  strip. Existing narrow-window scrolling behavior is retained.
+- The native tab uses an 8-point regular SF cross to match the pane's small
+  12-point Lucide mark. Flutter tabs and pane headers already share
+  `AppIcons.closeSize`. Hover emphasis and keyboard commands are unchanged.
+- Recent harnesses retain the original agent colors at 18 points. Removed the
+  grayscale filter and additional opacity; names and context remain quiet.
+  The canonical design system records both revised rules.
+- The existing tab/welcome suites pass **20 tests**, including light/dark,
+  narrow layouts, enlarged type, draft continuity, and close/select ownership.
+  The isolated AppKit titlebar harness passes **1,090 checks** without opening
+  windows. Scoped analysis and formatting are clean. Synthetic native and
+  Flutter renders were inspected in both appearances.
+- The normal macOS debug app builds and was reopened for review. Physical
+  AppKit input and VoiceOver were not exercised in this small visual update.

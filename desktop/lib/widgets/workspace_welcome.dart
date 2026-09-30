@@ -400,36 +400,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             child: Row(
               children: [
                 ExcludeSemantics(
-                  child: Opacity(
-                    opacity: MediaQuery.highContrastOf(context) ? 1 : .65,
-                    child: ColorFiltered(
-                      // Desaturate the real mark, preserving its shading and
-                      // recognizable silhouette without competing with New.
-                      colorFilter: const ColorFilter.matrix([
-                        .2126,
-                        .7152,
-                        .0722,
-                        0,
-                        0,
-                        .2126,
-                        .7152,
-                        .0722,
-                        0,
-                        0,
-                        .2126,
-                        .7152,
-                        .0722,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                      ]),
-                      child: EngineMark(engine: row.engine, size: 18),
-                    ),
-                  ),
+                  child: EngineMark(engine: row.engine, size: 18),
                 ),
                 const SizedBox(width: 12),
                 Expanded(

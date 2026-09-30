@@ -48,7 +48,9 @@ class DesktopWorkspaceTab extends StatefulWidget {
     return width;
   }
 
-  static const _contentInset = 32.0;
+  // Reserve the full close target inside the tab's curved body on both sides,
+  // keeping the name centered and clear of the hover action.
+  static const _contentInset = 32.0 + grid.AppDesktop.tabCloseInset;
   static const _indicatorGap = 6.0;
 
   static TextStyle _hintStyle({Color? color}) =>
@@ -253,7 +255,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                       ),
                     ),
                     Positioned(
-                      right: 0,
+                      right: grid.AppDesktop.tabCloseInset,
                       width: 32,
                       top: 0,
                       bottom: 0,

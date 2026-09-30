@@ -361,7 +361,7 @@ void main() {
         );
         expect(
           find.descendant(of: recent, matching: find.byType(ColorFiltered)),
-          findsNWidgets(6),
+          findsNothing,
         );
         expect(find.text('Older session seven'), findsNothing);
         expect(find.text('now'), findsOneWidget);

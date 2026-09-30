@@ -175,15 +175,15 @@ Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
 illustration. Center the drawing optically inside its role's target; icon-only
 controls retain a 32-point target and a descriptive tooltip/accessibility label.
 Workspace close marks are a quiet exception: 12-point Lucide × at 45% foreground,
-with an optically matched 10-point regular SF Symbol in AppKit, inside the existing
+with an optically matched 8-point regular SF Symbol in AppKit, inside the existing
 click target. Hover or keyboard focus restores full ink;
 Increase Contrast strengthens the resting mark. Tabs reveal the mark on hover,
 while pane headers keep it visible. Neither changes geometry on interaction.
 Use the surrounding text's semantic color. Hover changes emphasis or the shared
 control fill, never the symbol, weight or position. Disabled icons stay legible
 without suggesting an action. Agent, provider, service and product logos retain
-their recognizable artwork; welcome recents desaturate those marks to keep the
-composer primary.
+their recognizable artwork; welcome recents keep the original color at a small
+size so agent identity remains easy to distinguish.
 
 AppKit-owned menus and toolbar controls use regular monochrome SF Symbols with
 one shared sizing recipe, matching the system menus. Terminal text, user-chosen
@@ -202,6 +202,7 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Field / inset row / pane radius | 10 |
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
+| Tab close target inset from outer bounds | 8 |
 | Dialog content inset | 24 |
 | Group / control gap | 16 / 8 |
 | Menu inset | 6 |
@@ -269,7 +270,7 @@ Machine stays inside the repo search row.
 
 **Welcome and New Tab hierarchy** — creation is primary. Show at most six rows
 under “Recent harnesses”, separated from creation controls by 56 points. Use
-small desaturated agent marks and one muted neutral ink for names, context,
+small original-color agent marks and one muted neutral ink for names, context,
 heading and timestamps. Use “now” for visits under one minute old. Context
 reuses `StatusLine`, honoring the selected wording, machine/project/branch
 visibility and status font, but omitting ANSI colors and segment backplates.
@@ -297,7 +298,10 @@ add a duplicate example line or an empty results area beneath an empty field.
 independent of the status bar and terminal font. Center the name and its adjacent
 status as one compact group, without permanent number prefixes. Navigation ink
 follows the tab-bar surface, including beside light app content. The default label
-is New Tab. A small right-hand close icon appears on hover. Holding Command
+is New Tab. A small right-hand close icon appears on hover, with its 32-point
+target inset 8 points from the outer tab bounds. This puts the cross's center
+16 points inside the curved body edge. Reserve that space before truncating
+the title so hover never crowds the name or status. Holding Command
 temporarily replaces the status with the actual remapped shortcut beside the
 name. An idle tab has no empty status slot; its name centers on its own. Hover
 never moves the name, and Command never changes tab width. Long names truncate
