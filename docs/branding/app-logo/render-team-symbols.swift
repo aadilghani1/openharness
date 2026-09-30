@@ -102,7 +102,7 @@ func dockScene(icon: NSImage, at origin: NSPoint) {
   NSGraphicsContext.restoreGraphicsState()
 }
 
-// Match the production status item's 20pt artwork and lower-right count badge.
+// Preserve this original proposal's 20pt artwork and lower-right count badge.
 func statusImage(logo: NSImage, count: Int?) -> NSImage {
   NSImage(size: NSSize(width: 32, height: 22), flipped: false) { bounds in
     let hasBadge = (count ?? 0) > 0

@@ -3,6 +3,16 @@
     {
       "filename" : "HarnessStatusIcon.svg",
       "idiom" : "mac"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "HarnessStatusIconDark.svg",
+      "idiom" : "mac"
     }
   ],
   "info" : {
