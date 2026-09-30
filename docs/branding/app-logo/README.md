@@ -10,7 +10,7 @@ tile is the first element and nothing is drawn outside it.
 
 The macOS menu bar uses the team's updated September 30 portrait symbols from
 `team-symbols-2026-09-30/Symbol Harness_Lightmode.svg` and
-`team-symbols-2026-09-30/Symbol Harness_Darkmode.svg`, drawn at 16pt in a 28 × 22pt
+`team-symbols-2026-09-30/Symbol Harness_Darkmode.svg`, drawn at 18pt in a 28 × 22pt
 footprint. The light variant has an outlined tile and the dark variant has a
 filled tile; both preserve the supplied vector paths and transparent cutouts.
 Their shipping copies live in

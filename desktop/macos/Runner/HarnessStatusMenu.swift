@@ -180,9 +180,9 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
       label = ""
     }
     let image = NSImage(size: NSSize(width: 28, height: 22), flipped: false) { bounds in
-      // The solid tile needs a smaller optical size than an open system symbol.
-      logo?.draw(in: NSRect(x: label.isEmpty ? (bounds.width - 16) / 2 : 2, y: label.isEmpty ? 3 : 5,
-                           width: 16, height: 16))
+      // Balance the portrait's fine cutouts against neighboring system symbols.
+      logo?.draw(in: NSRect(x: label.isEmpty ? (bounds.width - 18) / 2 : 2, y: label.isEmpty ? 2 : 3,
+                           width: 18, height: 18))
       if !label.isEmpty, let context = NSGraphicsContext.current?.cgContext {
         let badge = NSRect(x: bounds.maxX - 15, y: 0.5, width: 12.5, height: 12.5)
         context.saveGState()
