@@ -9,6 +9,7 @@
 #include "draft.h"
 #include "gestures.h"
 #include "character.h"
+#include "focus.h"
 #include "perf_bench.h"
 #include "command_face.h"
 #include "theme.h"
@@ -96,6 +97,7 @@ typedef enum {
     A_QUESTION,
     A_CHOICE,
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
+    A_PANE_PREV, A_PANE_NEXT,
     A_INBOX,
     A_NOTICE,
     A_TABS,
@@ -571,6 +573,14 @@ static int working(void)
         n += s.agents[i].busy;
     return n;
 }
+// The open question's prompt for this agent, as its notice carries it; NULL when it has none open.
+static const char *question_prompt(const char *id)
+{
+    for (int i = 0; i < s.notice_count; i++)
+        if (s.notice[i].question && !strcmp(id, s.notice[i].agent_id))
+            return s.notice[i].summary[0] ? s.notice[i].summary : "Needs your answer";
+    return NULL;
+}
 static bool is_question(const char *id)
 {
     for (int i = 0; i < s.notice_count; i++)
@@ -582,17 +592,18 @@ static uint16_t color(unsigned rgb)
 {
     // Hardware brightness dims text and illustrated pixels equally.
     unsigned b = 100;
-    if (rgb == HT_THEME_CANVAS || rgb == HT_THEME_CARD) {
+    if (rgb == HT_THEME_CANVAS) {
         // RGB565 has an extra green bit. Independently truncating a dim gray
-        // makes it green; the neutral range has exact steps of 8, and both the canvas and the card
-        // fill behind a Focus label are dim neutrals that would tint without this.
+        // makes it green; the neutral range has exact steps of 8.
         unsigned gray = (((rgb & 255) * b + 400) / 800) * 8;
         return ht_rgb(gray * 0x010101u);
     }
     return ht_rgb((((rgb >> 16) * b / 100) << 16) | ((((rgb >> 8) & 255) * b / 100) << 8) |
                   ((rgb & 255) * b / 100));
 }
-#define BG color(HT_THEME_CANVAS)
+// Which ground this skin stands on. One answer for the whole glass, not per screen: the inbox, lists
+// and settings under Focus are on the same black as its home face, as they are in its design.
+#define BG color(character.id == HT_CHARACTER_FOCUS ? HT_THEME_FOCUS_CANVAS : HT_THEME_CANVAS)
 #define FG color(HT_THEME_TEXT)
 #define DIM color(HT_THEME_SECONDARY)
 #define ACCENT color(HT_THEME_ACCENT)
@@ -647,7 +658,7 @@ static bool home_footer(action_kind_t action)
     // bracket control is pressed and released like every other one, while A_PET reads a TAP as a boop
     // and only starts speech on a 650 ms hold — which is the creature's gesture, not a button's.
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-           action == A_CARRY_DROP || action == A_VOICE;
+           action == A_CARRY_DROP || action == A_VOICE || action == A_PANE_PREV || action == A_PANE_NEXT;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -810,6 +821,9 @@ static void render_workspace_preview(ht_scene_t *f)
 }
 static void render_home(ht_scene_t *f)
 {
+    // Where the Focus face's microphone target begins: a little above the mark's ink at 397, so the
+    // top of the mark is not its edge. A_PET ends here on Focus.
+    enum { FOCUS_MIC_TOP = 386 };
     s.caption_arc = (ht_rect_t){0};
     if (!s.connected || s.loading) { render_brand(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
@@ -818,9 +832,21 @@ static void render_home(ht_scene_t *f)
     // a recap. The bell has its own lower target, outside the voice surface.
     const char *recap = a && !a->busy && a->recap_ready && s.connected && !s.loading &&
         !s.nap && !s.voice_retry_until && !carry.active && !carry.error[0] ? a->preview : NULL;
+    /*
+     * An open question takes the recap's place, on this face, where the person already is. It is
+     * shown to be READ: the answer is given in the app, so the face grows no buttons and no other
+     * screen opens for it. A turn's recap would be last turn's news; the question is what the agent
+     * is waiting on now.
+     */
+    const char *asked = a && s.connected && !s.loading && !carry.active && !carry.error[0] ?
+        question_prompt(a->id) : NULL;
+    if (asked) recap = asked;
     // A live turn can outlast its terminal footer (or have no readable footer).
     // Keep its busy state visible while more specific activity is unavailable.
-    const char *activity = a && a->busy && s.connected && !s.loading && !s.nap ?
+    // An agent with a question open is not working, whatever its turn says: it is waiting on this
+    // person. The face says so instead of a "Working" that sends them nowhere.
+    const char *activity = a && s.connected && !s.loading && !s.nap && is_question(a->id) ?
+        "Needs your answer" : a && a->busy && s.connected && !s.loading && !s.nap ?
         (a->tool[0] ? a->tool : "Working") : "";
     home_caption_tick(ms());
     /*
@@ -839,7 +865,7 @@ static void render_home(ht_scene_t *f)
     // Seconds since THIS DIAL heard about the turn, not since it began: turn.started carries no
     // timestamp. The 25 s staleness fuse (ui_prune_stale_busy) is what keeps this from counting a
     // turn nobody is running any more.
-    uint32_t since = a && a->busy && a->busy_ms ? (ms() - a->busy_ms) / 1000 : 0;
+    uint32_t since = a && a->busy && a->busy_ms && !is_question(a->id) ? (ms() - a->busy_ms) / 1000 : 0;
     int tab_index = workspace_index(s.selected_tab);
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         // The lower text seat belongs to notifications and useful status.
@@ -866,7 +892,7 @@ static void render_home(ht_scene_t *f)
     bool focus_face = character.id == HT_CHARACTER_FOCUS;
     ht_character_face(f, &character, &f_, ACCENT, recap);
     if (bell) {
-        if (focus_face) ht_notification_bell_at(f, unread, f_.ink, 14);
+        if (focus_face) ht_notification_bell_at(f, unread, f_.ink, 8);   // ink 15..41, clear of the pill at 61
         else ht_notification_bell(f, unread, f_.ink);
     }
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
@@ -905,14 +931,53 @@ static void render_home(ht_scene_t *f)
     if (focus_face && !carry.active && !carry.error[0] && !visit.available) {
         bool can_say = s.connected && !s.loading && a != NULL;
         int n = s.hit_count++;
-        s.hits[n] = (hit_t){{143, 389, 180, 50}, A_VOICE, 0, can_say};
-        ht_text(f, (HT_WIDTH - ht_mic_footer.width) / 2, 392, ht_mic_footer.width, &ht_mic_footer,
-                !can_say ? DIM : n == s.pressed ? ACCENT : color(HT_THEME_DONE), BG, HT_MIC);
+        /*
+         * THE TARGET RUNS TO THE BOTTOM OF THE GLASS, and that is the whole point of it.
+         *
+         * It was {143, 389, 180, 50} — 50 px tall around a 48 px glyph drawn at y 392, so three
+         * pixels of slack above the mark and NONE below it. A thumb pressing the lower half of a
+         * circle held in the hand rolls downward, and the roll left the rect. That loses the entire
+         * contact rather than just the release: the press path records `pressed_action` from the
+         * FIRST sample, and both the scroll guard above and the release rule below ask
+         * home_footer(pressed_action.kind), so a DOWN one pixel low makes the contact a terminal
+         * scroll and nothing can recover it. Pressing the TOP of the mark worked immediately because
+         * the row above is A_PET, whose tap opens the microphone too.
+         *
+         * Nothing else on the Focus face claims this band — A_PET is cut short to end where it
+         * starts (see the bottom of this function), the bell sits at the top — so the rect takes it
+         * whole, down to the bottom edge. The corners fall outside the round glass, which costs
+         * nothing: a touch out there does not exist.
+         */
+        s.hits[n] = (hit_t){{143, FOCUS_MIC_TOP, 180, HT_HEIGHT - FOCUS_MIC_TOP}, A_VOICE, 0, can_say};
+        // Cell at 390 puts the mark's ink at y 397..431: the design's rows (mockup/newdesign.html,
+        // "Agent — recap") plus 20, because on glass the cluster sat tight under the recap.
+        ht_text(f, (HT_WIDTH - ht_mic_footer.width) / 2, 390, ht_mic_footer.width, &ht_mic_footer,
+                // The design's own green, which is also the recording meter's: the thing that starts
+                // speech and the thing that shows it are one colour. HT_THEME_DONE, which this used to
+                // be, is the terminal's "finished" teal and read on glass as a different button.
+                !can_say ? DIM : n == s.pressed ? ACCENT : color(HT_THEME_VOICE), BG, HT_MIC);
+        /*
+         * THE PANE ARROWS, from the design: either side of the microphone, and only when this tab has
+         * another agent to go to. They do what a sideways swipe does (see the end of habitat_touch),
+         * which is the gesture nobody finds — and they are buttons, pressed and released, for the
+         * same reason the microphone is. Their targets stop where the microphone's starts, x 143 and
+         * 323, so the three never share a pixel.
+         */
+        if (s.count > 1) {
+            int prev = s.hit_count;
+            s.hits[s.hit_count++] = (hit_t){{53, 350, 90, 76}, A_PANE_PREV, 0, s.connected};
+            ht_text(f, 113, 370, ht_chevron.width, &ht_chevron,
+                    prev == s.pressed ? FG : DIM, BG, HT_CHEVRON_LEFT);
+            int next = s.hit_count;
+            s.hits[s.hit_count++] = (hit_t){{323, 350, 90, 76}, A_PANE_NEXT, 0, s.connected};
+            ht_text(f, 342, 370, ht_chevron.width, &ht_chevron,
+                    next == s.pressed ? FG : DIM, BG, HT_CHEVRON_RIGHT);
+        }
     }
     if (!carry.active && !carry.error[0] && !visit.available) {
         // Both phases of the caption open the same pane picker. On Focus the caption is the pill,
         // which sits below where the arc would have been.
-        s.hits[s.hit_count++] = focus_face ? (hit_t){{83, 56, 300, 44}, A_AGENTS, 0, true}
+        s.hits[s.hit_count++] = focus_face ? (hit_t){{83, 61, 300, 40}, A_AGENTS, 0, true}
                                            : (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
@@ -926,7 +991,9 @@ static void render_home(ht_scene_t *f)
                                            : (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
     // The bell and the creature never share a target, even when the bell is
     // hidden or its count changes under a finger. Centre always starts voice.
-    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
+    // On Focus it stops where the microphone's target starts; nothing is drawn between the last recap
+    // row (y 335) and the mic, so the band belongs to the button rather than to a tap-anywhere.
+    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, focus_face ? FOCUS_MIC_TOP - 66 : 316}, A_PET, 0, true};
 }
 static void render_agents(ht_scene_t *f)
 {
@@ -1169,9 +1236,22 @@ static void render_notice(ht_scene_t *f)
     int body = s.hit_count++;
     s.hits[body] = (hit_t){{33, 55, 400, 327}, A_NOTICE, s.offset, s.connected};
     uint16_t mark = color(n->question ? HT_THEME_QUESTION : n->failed ? HT_THEME_FAILED : HT_THEME_DONE);
-    ht_inbox_card(f, n->question ? "?" : n->failed ? HT_FAILED : HT_DONE, n->name,
-                  n->summary[0] ? n->summary : "No preview available.",
-                  s.connected ? FG : DIM, s.connected ? mark : DIM);
+    /*
+     * On Focus the card leads with the agent's engine badge, as its design does. The notice carries
+     * only the agent's id, so the engine comes from the roster: a notice from an agent this dial is
+     * not carrying (another machine's) has none, and gets an empty badge rather than a guessed one.
+     */
+    char badge[4] = "";
+    uint32_t badge_ink = 0;
+    if (character.id == HT_CHARACTER_FOCUS) {
+        int i = find(n->agent_id);
+        if (i >= 0) ht_focus_engine_mark(s.agents[i].engine, badge, &badge_ink);
+    }
+    ht_inbox_card_badged(f, n->question ? "?" : n->failed ? HT_FAILED : HT_DONE, n->name,
+                         n->summary[0] ? n->summary : "No preview available.",
+                         s.connected ? FG : DIM, s.connected ? mark : DIM,
+                         character.id == HT_CHARACTER_FOCUS ? badge : NULL,
+                         !s.connected ? DIM : badge_ink ? color(badge_ink) : FG);
     s.notice_frame = n->read_on_dial ? 0 : n->display_revision;
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_HOME, 0, true};
     ht_text(f, FACE_CX(20), 400, 20, &ht_nav_32,
@@ -1755,6 +1835,16 @@ static void dispatch(action_t a)
         break;
     case A_INBOX:
         notice_open();
+        break;
+    case A_PANE_PREV:
+    case A_PANE_NEXT:
+        // The sideways swipe's step, from a button. Wraps, as the swipe does.
+        if (s.count > 1 && s.connected && !s.loading) {
+            int i = s.active < 0 ? 0 : (s.active + (a.kind == A_PANE_NEXT ? 1 : s.count - 1)) % s.count;
+            action_t pane = {.kind = A_AGENT};
+            COPY(pane.id, s.agents[i].id);
+            dispatch(pane);
+        }
         break;
     case A_NOTICE: {
         if (s.connected && !visit.pending && a.id[0]) {
@@ -2376,6 +2466,13 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (s.view == VOICE) {
                 ESP_LOGI("habitat", "gesture tap: finish voice");
                 dispatch((action_t){.kind = A_VOICE_STOP});
+            } else if (character.id == HT_CHARACTER_FOCUS && s.view != SELECTION) {
+                /*
+                 * On Focus the microphone starts speech and nothing else does. A creature skin has
+                 * no button — the creature IS the affordance, so the middle of the glass has to be
+                 * one. Focus draws its button, and the middle is the recap somebody is reading: a
+                 * tap there opening the mic surprised people, and the mic is right under it.
+                 */
             } else if (s.connected && !s.loading && pressed_action.id[0]) {
                 ESP_LOGI("habitat", "gesture tap: start voice");
                 pressed_action.kind = A_VOICE;
@@ -3495,7 +3592,11 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
         s.q.valid=false; s.q.pending=false; s.q.revision++;
         if (question_view(s.view)) { COPY(s.q.error,"The question changed. Open the alert again."); view(QUESTION); }
     }
-    change(); display_unlock();
+    // The question is shown on the home face, in the recap's place (render_home): no screen opens
+    // for it. The display wakes so a person glancing over sees it.
+    change();
+    display_wake();
+    display_unlock();
 }
 void ui_question_state(const cJSON *p)
 {
