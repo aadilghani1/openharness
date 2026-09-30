@@ -146,7 +146,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
       pageDown: () => _page(1),
       pageUp: () => _page(-1),
       child: DesktopPromptSurface(
-        body: SingleChildScrollView(
+        body: DesktopPromptScrollBody(
           controller: _body,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

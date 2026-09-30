@@ -171,6 +171,11 @@ branch and check retain one silhouette everywhere.
 Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
 illustration. Center the drawing optically inside its role's target; icon-only
 controls retain a 32-point target and a descriptive tooltip/accessibility label.
+Workspace close marks are a quiet exception: 12-point Lucide × at 45% foreground,
+with an optically matched 10-point regular SF Symbol in AppKit, inside the existing
+click target. Hover or keyboard focus restores full ink;
+Increase Contrast strengthens the resting mark. Tabs reveal the mark on hover,
+while pane headers keep it visible. Neither changes geometry on interaction.
 Use the surrounding text's semantic color. Hover changes emphasis or the shared
 control fill, never the symbol, weight or position. Disabled icons stay legible
 without suggesting an action. Agent, provider, service and product logos retain
@@ -221,6 +226,10 @@ then flip or constrain when the window has insufficient room.
 **Task dialogs** — one heading, optional short explanation, fields, and fixed
 trailing actions. Rename, confirmation, linking and sharing use the same type,
 frame, padding and control states. Content scrolls before actions disappear.
+`DesktopPromptScrollBody` shows a quiet, draggable scroll thumb when the body
+overflows, including before the first scroll gesture. Text leaves 12 points of
+clearance for the thumb. Short content has no visible scroll furniture; nested
+editors keep their own input and scrolling behavior.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
@@ -268,11 +277,13 @@ its clone action and an invalid submission reveals inline validation. Do not
 add a duplicate example line or an empty results area beneath an empty field.
 
 **Workspace tabs and pane frames** — tabs use the 13-point system control face,
-independent of the status bar and terminal font. Names align left without permanent
-number prefixes. Navigation ink follows the tab-bar surface, including beside
-light app content. The default label is New Tab. A right-hand close icon appears
-on hover; holding Command shows the actual remapped shortcut in that accessory
-slot. Neither state moves the title or changes the tab width. Long names truncate
+independent of the status bar and terminal font. Center the name and its adjacent
+status as one compact group, without permanent number prefixes. Navigation ink
+follows the tab-bar surface, including beside light app content. The default label
+is New Tab. A small right-hand close icon appears on hover. Holding Command
+temporarily replaces the status with the actual remapped shortcut beside the
+name. An idle tab has no empty status slot; its name centers on its own. Hover
+never moves the name, and Command never changes tab width. Long names truncate
 and retain a full-name tooltip. Selection, dragging, middle-click close and the
 existing keyboard commands keep their meaning.
 
@@ -298,7 +309,11 @@ Titles stay quiet when several panes are visible; do not repeat branches in
 pane headers. Do not repeat model or effort in the footer. Context honors Customize Harness's selected
 status face, fields, colors and shell/Powerline treatment. Recent-harness
 context uses that same renderer's monochrome presentation to stay secondary.
-Use compact labels such as “Claude 0% · Codex 50%”. These percentages are
+Use compact labels such as “Claude 0%  Codex 50%”, separated by whitespace only.
+Provider names stay neutral. Color only the remaining percentage: red at 0%,
+amber above 0% through 20%, neutral above 20% or when unavailable. Use shared
+semantic ink adjusted to remain readable on the selected workspace surface;
+the number always conveys the state independently of color. These percentages are
 remaining, not used. Use the same deduplicated accounts, limiting window and
 freshness rules as Models. Separate subscriptions remain separate; unknown or
 expired values show “—”, never a fabricated zero. Hover explains reset windows

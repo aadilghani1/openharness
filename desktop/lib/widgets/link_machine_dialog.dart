@@ -779,7 +779,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
             onKeyEvent: _key,
             child: DesktopPromptSurface(
               width: 480,
-              body: SingleChildScrollView(
+              body: DesktopPromptScrollBody(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [

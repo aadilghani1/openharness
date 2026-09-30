@@ -31,9 +31,23 @@ class _NoInstall extends EnvironmentProvisioner {
 void main() {
   setUpAll(() async {
     await loadRealFonts();
+    if (Platform.isMacOS) {
+      final bytes = ByteData.sublistView(
+        await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+      );
+      for (final family in ['.AppleSystemUIFont', 'SF Pro Text', 'Roboto']) {
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+    }
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
+          rootBundle.load(
+            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
+          ),
+        ))
+        .load();
   });
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {

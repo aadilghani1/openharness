@@ -27,7 +27,7 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Teams / ancillary dialogs | Swarm conversation, questions, member controls and Quick Start use desktop typography and controls; polling, answers, learning steps and storage unchanged |
 | Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu and compact Find options implemented; keyboard navigation and terminal Find sizing retained |
 | Daemon panels | Companion settings, pairing, proposal controls and consent use desktop controls; artwork, reveal frames, state and approval gates retained |
-| Native tabs / footer / menus | System-font curved tabs with names, hover close and Command-held hints; 10-point pane frames. Model/effort at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
+| Native tabs / footer / menus | System-font curved tabs with names, hover close and Command-held hints; 10-point pane frames. Pane model control before an always-visible close icon. Remaining subscription usage at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
 | Linux / browser presentation | Shared light/dark, narrow and enlarged-text fixtures cover responsive behavior; physical Linux/browser platform validation is not claimed |
 
 Legacy/test-only paths (including the old NewAgentDialog entry when
@@ -214,6 +214,41 @@ The experimental branch remains unmerged for the user's visual review.
   app-control connection (“Sky Computer Use native pipe startup failed”); this
   checkpoint does not claim a live-account app review.
 
-Remaining review: physical VoiceOver and AppKit IME, native Linux/browser use,
-and the persistent scrolling cue in enlarged confirmation bodies. These remain
-explicit gaps, not completed checks. This checkpoint remains unmerged.
+### Quiet workspace controls and supporting-surface review, 2026-09-29
+
+- Subscription readings use whitespace rather than dot separators. Names remain
+  neutral; only percentages use red for zero and amber through 20%. Flutter and
+  AppKit receive the same colored spans. Unavailable readings remain neutral and
+  cannot appear as exhausted accounts. Contrast checks cover every workspace
+  palette in both appearances.
+- Pane close marks use the shared smaller size and 45% resting ink, strengthening
+  for hover, focus and Increase Contrast without reducing their click target.
+- Tab names and status form a centered group. Command replaces the status with
+  the resolved shortcut immediately beside the name. Empty status marks reserve
+  no visible slot. Close glyphs are optically matched across Flutter and AppKit,
+  inside separate 32-point targets. Eight tabs fit the reviewed 1280-point width
+  without truncation or horizontal scrolling.
+- Shared confirmation/form bodies now show a draggable scroll thumb whenever
+  content overflows, before the first scroll gesture. Long selectable recovery
+  messages retain their own bounded scroll area and fixed actions. Error text can
+  still be selected and copied in full without changing keyboard ownership.
+- Settings navigation exposes button/selected/enabled accessibility states.
+  Setup metadata and errors now use readable semantic ink. Export Logs retains
+  visible, scalable, keyboard-accessible actions at enlarged text. Store
+  recordings use the shared modal veil.
+- Integrated supporting-surface checks: **121 passed**. Footer/pane checks:
+  **21 passed**, including updates, unknown values, low/exhausted colors, pane
+  targeting, and narrow widths. **10 actual-font render checks** cover light/dark
+  confirmations and connection forms, including enlarged selectable errors.
+- Tab/workspace checks: **53 passed**. Native checks: **1,331 titlebar/layout**,
+  **169 keyboard bridge**, and **9 viewer**; a final windowless run passed
+  **1,090** checks after updating the colored subscription fixture. Actual-font
+  light/dark tab captures cover rest, hover, Command and enlarged text. Source
+  analysis is clean and the normal macOS debug build succeeds.
+- A fresh review instance was launched from this worktree after rebuilding;
+  process start time was verified newer than the bundle. The unavailable native
+  app-control connection still prevents claiming a live visual automation pass.
+
+Remaining review: physical VoiceOver and AppKit IME, and native Linux/browser
+use. These remain explicit gaps, not completed checks. This checkpoint remains
+unmerged.

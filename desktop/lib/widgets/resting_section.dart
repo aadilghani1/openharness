@@ -205,7 +205,7 @@ class _SwitchAnywayPromptState extends State<_SwitchAnywayPrompt> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return DesktopPromptSurface(
-      body: SingleChildScrollView(
+      body: DesktopPromptScrollBody(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

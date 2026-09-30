@@ -565,7 +565,7 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       child: DesktopPromptSurface(
         width: 440,
         body: LayoutBuilder(
-          builder: (context, constraints) => SingleChildScrollView(
+          builder: (context, constraints) => DesktopPromptScrollBody(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,

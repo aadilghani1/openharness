@@ -11,6 +11,9 @@ abstract final class AppIcons {
   static const double controlSize = 20;
   static const double featureSize = 24;
 
+  /// A quiet close mark in tabs and pane headers, inside the full click target.
+  static const double closeSize = 12;
+
   static const activity = LucideIcons.activity400;
   static const arrowDownToLine = LucideIcons.arrowDownToLine400;
   static const arrowDownWideNarrow = LucideIcons.arrowDownWideNarrow400;

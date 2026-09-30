@@ -14,7 +14,7 @@ class DesktopPromptSurface extends StatelessWidget {
     this.width = grid.AppDesktop.formWidth,
   });
 
-  /// Normally a scroll view, with its controller owned by the calling form.
+  /// Normally [DesktopPromptScrollBody]. Forms may retain their own controller.
   final Widget body;
   final List<Widget> actions;
 
@@ -61,6 +61,51 @@ class DesktopPromptSurface extends StatelessWidget {
   }
 }
 
+/// Long explanations and enlarged fields disclose their scroll position before
+/// the first gesture. One controller owns the body and its draggable thumb;
+/// nested editors retain their own scrolling and keyboard behavior.
+class DesktopPromptScrollBody extends StatefulWidget {
+  const DesktopPromptScrollBody({
+    super.key,
+    required this.child,
+    this.controller,
+  });
+
+  final Widget child;
+  final ScrollController? controller;
+
+  @override
+  State<DesktopPromptScrollBody> createState() =>
+      _DesktopPromptScrollBodyState();
+}
+
+class _DesktopPromptScrollBodyState extends State<DesktopPromptScrollBody> {
+  final _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller ?? _controller;
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: Scrollbar(
+        controller: controller,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          controller: controller,
+          padding: const EdgeInsetsDirectional.only(end: 12),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
 /// Keeps status and recovery details readable without displacing the actions.
 /// Longer messages scroll and remain selectable in full; selection does not
 /// introduce a Tab stop. Callers retain announcement and operation ownership.
@@ -71,9 +116,20 @@ class DesktopPromptMessage extends StatelessWidget {
   final Color? color;
 
   @override
-  Widget build(BuildContext context) => SelectableText(
-    message,
-    maxLines: 3,
-    style: DesktopChrome.text(size: 13, color: color),
-  );
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.text(size: 13, color: color);
+    final measure = TextPainter(
+      text: TextSpan(text: 'M\nM\nM', style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final maxHeight = measure.height;
+    measure.dispose();
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: DesktopPromptScrollBody(
+        child: SelectableText(message, style: style),
+      ),
+    );
+  }
 }

@@ -286,8 +286,13 @@ its headless debug timings do not establish native display or network latency.
   `grid.AppTheme.brightness`, which `_GridTokenScope` in `main.dart` sets from `Theme.of(context)`.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
-- The [workspace status bar](design/workspace-status-bar.md) places compact numbered tabs and global actions at the top,
-  with model/effort at the bottom left and focused machine/repo/branch/PR at the bottom right. Automatic names use the strongest shared harness type,
+- The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
+  with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  Tabs center their name/status group without permanent number prefixes; Command replaces
+  the status with the resolved shortcut beside the name. Tab and pane close marks are small
+  and quiet, with larger click targets. Each pane places its model control before its
+  always-visible close icon. Usage has no dot separators and colors only low/exhausted
+  percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
   The context follows a viewer's owner and uses the compact project label, never a worktree path
   or marker. User-renamed tabs always retain their saved name. Customize Harness → Status
@@ -322,8 +327,10 @@ its headless debug timings do not establish native display or network latency.
 - **Agent-account usage is what the native Models menu reads** (`lib/usage/`,
   `usage/models_menu_controller.dart`, `SwarmSubscriptionView` in `SwarmTitlebar.swift`): what the
   Claude and Codex accounts on this machine — and on the remote machines that answer `usage_read` —
-  have spent. Each account shows its `tightest` window, the limit that stops the work first. Opening
-  the menu reads the cached snapshot and refreshes at most once a minute; nothing polls on startup.
+  have spent. Each account shows its `tightest` window, the limit that stops the work first.
+  The shared controller reads ahead at startup and every five minutes; opening a menu requests
+  a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
+  and freshness rules, displaying the remaining percentage rather than the amount spent.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read

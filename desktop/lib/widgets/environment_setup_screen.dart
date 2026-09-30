@@ -409,7 +409,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.end,
-                        style: grid.AppType.body(color: AppColors.muted),
+                        style: grid.AppType.body(color: AppColors.textSoft),
                       ),
                     ),
             ),
@@ -630,7 +630,9 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       child: Text(
         _copyError ?? 'Next: sign in and start a harness.',
         style: grid.AppType.body(
-          color: _copyError == null ? AppColors.textSoft : AppColors.danger,
+          color: _copyError == null
+              ? AppColors.textSoft
+              : Theme.of(context).colorScheme.error,
         ),
       ),
     );
@@ -726,11 +728,11 @@ class _CheckRow extends StatelessWidget {
     grid.AppTheme.watch(context);
     final color = switch (status) {
       EnvironmentStepStatus.ready => AppColors.success,
-      EnvironmentStepStatus.failed => AppColors.danger,
+      EnvironmentStepStatus.failed => Theme.of(context).colorScheme.error,
       EnvironmentStepStatus.needsTerminal => AppColors.warning,
       EnvironmentStepStatus.running => AppColors.accent,
-      EnvironmentStepStatus.notApplicable => AppColors.muted,
-      _ => AppColors.muted,
+      EnvironmentStepStatus.notApplicable => AppColors.textSoft,
+      _ => AppColors.textSoft,
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -764,7 +766,10 @@ class _CheckRow extends StatelessWidget {
               children: [
                 Text(label, style: grid.AppType.label()),
                 const SizedBox(height: 3),
-                Text(detail, style: grid.AppType.body(color: AppColors.muted)),
+                Text(
+                  detail,
+                  style: grid.AppType.body(color: AppColors.textSoft),
+                ),
               ],
             ),
           ),

@@ -1696,12 +1696,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'text': _subscriptionUsage.text,
         'label': _subscriptionUsage.detail,
         'detail': _subscriptionUsage.detail,
-        'segments': [
-          {
-            'text': _subscriptionUsage.text,
-            'foreground': terminalTheme.foreground.toARGB32(),
-          },
-        ],
+        'segments': _subscriptionUsage
+            .paintSegments(
+              foreground: terminalTheme.foreground,
+              surface: grid.AppPalette.swarmField,
+            )
+            .map((part) => part.toJson())
+            .toList(),
         'interactive': _shortcutsEnabled,
       },
       'footerCovered':
@@ -6396,8 +6397,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         height: workspaceBarControlHeight(context),
                         child: Center(
                           widthFactor: 1,
-                          child: Text(
-                            usage.text,
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                for (final part in usage.paintSegments(
+                                  foreground: theme.foreground,
+                                  surface: grid.AppPalette.swarmField,
+                                ))
+                                  TextSpan(
+                                    text: part.text,
+                                    style: TextStyle(color: part.foreground),
+                                  ),
+                              ],
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: workspaceBarTextStyle(
@@ -6527,16 +6539,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       labels[index],
                       swarm.name,
                       clipped:
-                          DesktopWorkspaceTab.labelWidth(
-                                context,
-                                labels[index],
-                              ) +
-                              32 +
-                              DesktopWorkspaceTab.accessoryWidth(
-                                context,
-                                _keymap.hint('swarm.select_${index + 1}'),
-                              ) +
-                              (activity == null ? 0 : 20) >
+                          DesktopWorkspaceTab.naturalWidth(
+                            context,
+                            labels[index],
+                            shortcutHint: _keymap.hint(
+                              'swarm.select_${index + 1}',
+                            ),
+                            hasActivity: activity != null,
+                          ) >
                           _tabWidths[index],
                     );
                     final tabHint = [
@@ -6580,7 +6590,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           onClose: _shortcutsEnabled
                               ? () => unawaited(app.closeSwarm(swarm.id))
                               : null,
-                          activity: activity == null
+                          activity: activity == null || activity.mark.isEmpty
                               ? null
                               : ListenableBuilder(
                                   listenable: _tabScroll,

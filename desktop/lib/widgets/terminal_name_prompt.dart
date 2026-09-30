@@ -149,7 +149,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
       accept: _accept,
       child: DesktopPromptSurface(
         width: 460,
-        body: SingleChildScrollView(
+        body: DesktopPromptScrollBody(
           controller: _body,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -176,13 +176,19 @@ class _SidebarItemState extends State<SidebarItem> {
       ),
     );
 
+    final accessibleRow = Semantics(
+      button: true,
+      enabled: widget.enabled,
+      selected: widget.selected,
+      child: row,
+    );
     final tooltip = widget.tooltip;
     if (tooltip == null ||
         tooltip.trim().isEmpty ||
         tooltip.trim() == widget.label.trim()) {
-      return row;
+      return accessibleRow;
     }
-    return Tooltip(message: tooltip, child: row);
+    return Tooltip(message: tooltip, child: accessibleRow);
   }
 }
 

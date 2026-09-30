@@ -1,10 +1,36 @@
+import 'package:flutter/painting.dart';
+
+import '../shared/theme/status_line_style.dart';
+import '../theme/app_theme.dart';
+
+enum WorkspaceUsageTone { normal, low, exhausted }
+
 /// One shared reading for the Flutter and native workspace footers. The Models
 /// controller owns freshness, limiting windows and account deduplication.
 class WorkspaceSubscriptionUsage {
-  const WorkspaceSubscriptionUsage(this.text, this.detail);
+  const WorkspaceSubscriptionUsage._(this.segments, this.detail);
 
-  final String text;
+  final List<({String text, WorkspaceUsageTone tone})> segments;
+  String get text => segments.map((part) => part.text).join();
   final String detail;
+
+  /// Names stay neutral. Only a known remaining percentage carries urgency;
+  /// use the model picker's 20% low-water mark and reserve red for exhaustion.
+  List<StatusLinePaintSegment> paintSegments({
+    required Color foreground,
+    required Color surface,
+  }) => [
+    for (final part in segments)
+      StatusLinePaintSegment(
+        part.text,
+        statusLineInkOnSurface(switch (part.tone) {
+          WorkspaceUsageTone.normal => foreground,
+          WorkspaceUsageTone.low => AppColors.warning,
+          WorkspaceUsageTone.exhausted => AppColors.danger,
+        }, surface),
+        null,
+      ),
+  ];
 
   factory WorkspaceSubscriptionUsage.fromRows(List<Map<String, Object?>> rows) {
     final accounts = rows
@@ -14,7 +40,7 @@ class WorkspaceSubscriptionUsage {
     for (final row in accounts) {
       counts.update(row['engine'], (count) => count + 1, ifAbsent: () => 1);
     }
-    final labels = <String>[];
+    final segments = <({String text, WorkspaceUsageTone tone})>[];
     final details = <String>['Remaining subscription usage'];
     final positions = <Object?, int>{};
     for (final row in accounts) {
@@ -38,16 +64,31 @@ class WorkspaceSubscriptionUsage {
       final figure = remaining is num && remaining.isFinite
           ? status.replaceFirst(RegExp(r' remaining$'), '')
           : '—';
-      labels.add('$name $figure');
+      segments.add((
+        text: '${segments.isEmpty ? '' : '  '}$name ',
+        tone: WorkspaceUsageTone.normal,
+      ));
+      segments.add((
+        text: figure,
+        tone: remaining is! num || !remaining.isFinite
+            ? WorkspaceUsageTone.normal
+            : remaining <= 0
+            ? WorkspaceUsageTone.exhausted
+            : remaining <= 20
+            ? WorkspaceUsageTone.low
+            : WorkspaceUsageTone.normal,
+      ));
       details.add(
-        '$name${account.isNotEmpty && counts[engine] == 1 ? ' · $account' : ''}: $status',
+        '$name${account.isNotEmpty && counts[engine] == 1 ? ' ($account)' : ''}: $status',
       );
       final windows = row['details'];
       if (windows is List) details.addAll(windows.whereType<String>());
     }
-    return WorkspaceSubscriptionUsage(
-      labels.isEmpty ? 'Subscriptions' : labels.join(' · '),
-      labels.isEmpty
+    return WorkspaceSubscriptionUsage._(
+      segments.isEmpty
+          ? const [(text: 'Subscriptions', tone: WorkspaceUsageTone.normal)]
+          : List.unmodifiable(segments),
+      segments.isEmpty
           ? 'View subscriptions and remaining usage'
           : details.join('\n'),
     );

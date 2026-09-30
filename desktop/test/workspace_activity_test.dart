@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
 import 'harness_activity_test.dart' show activityQuestion;
@@ -185,7 +186,21 @@ void main() {
         if (native) {
           expect(nativeActivity(second.id)['mark'], isEmpty);
         } else {
-          expect(flutterState(second.id), HarnessActivity.idle);
+          expect(
+            find.byKey(ValueKey('tab-activity:${second.id}')),
+            findsNothing,
+          );
+          expect(
+            tester
+                .widget<DesktopWorkspaceTab>(
+                  find.byWidgetPredicate(
+                    (widget) =>
+                        widget is DesktopWorkspaceTab && widget.id == second.id,
+                  ),
+                )
+                .activityLabel,
+            HarnessActivity.idle.label,
+          );
         }
         // Narrow windows keep the symbol, shorten the name, and retain controls.
         tester.view.physicalSize = const Size(640, 600);

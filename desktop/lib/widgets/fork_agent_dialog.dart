@@ -363,7 +363,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
         },
         child: DesktopPromptSurface(
           width: 520,
-          body: SingleChildScrollView(
+          body: DesktopPromptScrollBody(
             controller: _body,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

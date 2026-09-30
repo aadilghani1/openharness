@@ -9,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 
 import 'keymap_host_test.dart' show key, MemoryKeymap;
 import 'support/stop_connection.dart';
@@ -204,6 +205,25 @@ void main() {
         ),
       );
       expect(body.controller!.offset, 0);
+      // The scroll cue must be present before scrolling, with the same safe
+      // actions stationary below it. A hidden auto-scrollbar cannot be dragged.
+      final actionsBefore = tester.getRect(find.text('Cancel'));
+      final scrollbar = find.ancestor(
+        of: find.textContaining('End this shell'),
+        matching: find.byType(Scrollbar),
+      );
+      final thumb = tester.getRect(scrollbar).topRight + const Offset(-3, 8);
+      final drag = await tester.startGesture(
+        thumb,
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag.moveBy(const Offset(0, 48));
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(body.controller!.offset, greaterThan(0));
+      expect(tester.getRect(find.text('Cancel')), actionsBefore);
+      expect(connection.stops, isEmpty);
+      body.controller!.jumpTo(0);
       await key(tester, LogicalKeyboardKey.pageDown);
       expect(body.controller!.offset, greaterThan(0));
       expect(find.text('Cancel').hitTestable(), findsOneWidget);
@@ -279,7 +299,10 @@ void main() {
         await tester.pumpAndSettle();
 
         final fullMessage = 'Stop failed: $detail';
-        final message = find.text(fullMessage);
+        final message = find.ancestor(
+          of: find.text(fullMessage),
+          matching: find.byType(DesktopPromptMessage),
+        );
         final cancel = find.widgetWithText(TextButton, 'Cancel');
         final stop = find.byKey(const Key('agent-stop-confirm'));
         final cancelRect = tester.getRect(cancel);
@@ -304,9 +327,23 @@ void main() {
         );
 
         final scrollable = tester.state<ScrollableState>(
-          find.descendant(of: message, matching: find.byType(Scrollable)),
+          find.descendant(of: message, matching: find.byType(Scrollable)).first,
         );
         expect(scrollable.position.maxScrollExtent, greaterThan(0));
+        final errorScrollbar = find
+            .descendant(of: message, matching: find.byType(Scrollbar))
+            .first;
+        final thumb =
+            tester.getRect(errorScrollbar).topRight + const Offset(-3, 8);
+        final drag = await tester.startGesture(
+          thumb,
+          kind: PointerDeviceKind.mouse,
+        );
+        await drag.moveBy(const Offset(0, 20));
+        await drag.up();
+        await tester.pumpAndSettle();
+        expect(scrollable.position.pixels, greaterThan(0));
+        scrollable.position.jumpTo(0);
         await tester.sendEventToBinding(
           PointerScrollEvent(
             position: tester.getCenter(message),

@@ -13,6 +13,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
@@ -291,15 +292,23 @@ void main() {
           subscription('claude', 'aaaaaa', 0),
           subscription('codex', 'bbbbbb', 50),
         ]).text,
-        'Claude 0% · Codex 50%',
+        'Claude 0%  Codex 50%',
       );
       final all = WorkspaceSubscriptionUsage.fromRows([
         subscription('claude', 'aaaaaa', 0),
         subscription('claude', 'cccccc', .3, status: '<1% remaining'),
         subscription('codex', 'bbbbbb', null, status: 'Usage unavailable'),
       ]);
-      expect(all.text, 'Claude aaaaaa 0% · Claude cccccc <1% · Codex —');
-      expect(all.detail, contains('Codex · bbbbbb: Usage unavailable'));
+      expect(all.text, 'Claude aaaaaa 0%  Claude cccccc <1%  Codex —');
+      expect(all.detail, contains('Codex (bbbbbb): Usage unavailable'));
+      expect(all.segments.map((part) => part.tone), [
+        WorkspaceUsageTone.normal,
+        WorkspaceUsageTone.exhausted,
+        WorkspaceUsageTone.normal,
+        WorkspaceUsageTone.low,
+        WorkspaceUsageTone.normal,
+        WorkspaceUsageTone.normal,
+      ]);
       expect(all.detail, contains('Weekly limit'));
       expect(
         WorkspaceSubscriptionUsage.fromRows([
@@ -309,6 +318,35 @@ void main() {
       );
     },
   );
+
+  test('only low and exhausted percentages carry readable warning ink', () {
+    final oldBrightness = grid.AppTheme.brightness.value;
+    addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
+    final usage = WorkspaceSubscriptionUsage.fromRows([
+      subscription('claude', '', 0),
+      subscription('codex', '', 20),
+      subscription('other', '', 21),
+    ]);
+    for (final brightness in Brightness.values) {
+      grid.AppTheme.brightness.value = brightness;
+      for (final palette in HarnessPalette.values) {
+        final parts = usage.paintSegments(
+          foreground: palette.foreground,
+          surface: palette.workspace,
+        );
+        expect(parts[1].foreground, isNot(palette.foreground));
+        expect(parts[3].foreground, isNot(palette.foreground));
+        for (final index in [0, 2, 4, 5]) {
+          expect(parts[index].foreground, palette.foreground);
+        }
+        for (final part in parts) {
+          final ink = part.foreground.computeLuminance();
+          final ground = palette.workspace.computeLuminance();
+          expect((ink + .05) / (ground + .05), greaterThanOrEqualTo(4.5));
+        }
+      }
+    }
+  });
 
   for (final native in [false, true]) {
     testWidgets(
@@ -325,7 +363,7 @@ void main() {
         final subscriptions = _FooterSubscriptions()
           ..values = [
             subscription('claude', 'aaaaaa', 0),
-            subscription('codex', 'bbbbbb', 50),
+            subscription('codex', 'bbbbbb', 13),
           ];
         final app = createApp();
         final pane = app.adoptSessionForTest(terminal('a0', []));
@@ -345,9 +383,19 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        const label = 'Claude 0% · Codex 50%';
+        const label = 'Claude 0%  Codex 13%';
         if (native) {
           expect(updates.last['subscriptionUsage']['text'], label);
+          final parts = updates.last['subscriptionUsage']['segments'] as List;
+          expect(parts.map((part) => part['text']), [
+            'Claude ',
+            '0%',
+            '  Codex ',
+            '13%',
+          ]);
+          expect(parts[0]['foreground'], parts[2]['foreground']);
+          expect(parts[1]['foreground'], isNot(parts[0]['foreground']));
+          expect(parts[3]['foreground'], isNot(parts[0]['foreground']));
           expect(
             updates.last['subscriptionUsage']['detail'],
             contains('remaining'),
@@ -423,6 +471,11 @@ void main() {
     final close = find.byType(PaneCloseButton);
     expect(close, findsNWidgets(2));
     expect(close.hitTestable(), findsNWidgets(2));
+    final restingIcon = tester.widget<Icon>(
+      find.descendant(of: close.first, matching: find.byIcon(AppIcons.close)),
+    );
+    expect(restingIcon.size, AppIcons.closeSize);
+    expect(restingIcon.color!.a, .45);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(titles.first));
@@ -438,7 +491,7 @@ void main() {
       matching: find.byIcon(AppIcons.close),
     );
     expect(tester.widget<Icon>(closeIcon).color!.a, 1);
-    expect(tester.widget<Icon>(closeIcon).size, AppIcons.inlineSize);
+    expect(tester.widget<Icon>(closeIcon).size, AppIcons.closeSize);
     expect(
       find.descendant(of: close.first, matching: find.byType(ColoredBox)),
       findsNothing,

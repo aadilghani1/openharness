@@ -73,7 +73,7 @@ class _TakeOverPromptState extends State<_TakeOverPrompt> {
     return TerminalPromptKeys(
       cancel: () => _pick(null),
       child: DesktopPromptSurface(
-        body: SingleChildScrollView(
+        body: DesktopPromptScrollBody(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

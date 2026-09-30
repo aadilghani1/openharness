@@ -110,7 +110,7 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
       focusNode: _promptFocus,
       cancel: _close,
       child: DesktopPromptSurface(
-        body: SingleChildScrollView(
+        body: DesktopPromptScrollBody(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

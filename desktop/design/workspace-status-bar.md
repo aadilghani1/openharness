@@ -134,7 +134,10 @@ use the shared system-type scale.
 ## Pane controls
 
 Each pane header shows its model immediately before an always-visible × at the
-right edge. The close control removes that pane view while keeping its harness
+right edge. Tab and pane close marks share a small regular glyph (12-point
+Lucide, optically matched 10-point SF Symbol) and quiet 45% resting ink, with
+full ink on hover/focus and the existing larger click
+targets. The close control removes that pane view while keeping its harness
 running. Its tooltip names Close Pane and the current shortcut. Long model names
 truncate without moving or covering the close target. Clicking the model focuses
 that pane and opens the same unified Models picker as Cmd-:, preserving the
@@ -146,6 +149,10 @@ or effort. Read the same deduplicated account rows as Models: each percentage
 uses the limiting window and expires under the same rules. Different accounts
 remain distinct. Unknown usage shows “—”; exhausted usage shows “0%”. Hover
 explains remaining percentages and reset windows; click opens Subscriptions.
+Separate accounts with whitespace, without dot separators. Provider names stay
+neutral; only percentages carry warning ink: red at zero, amber through 20%,
+neutral above 20% or when unavailable. Resolve the same readable colors for the
+Flutter and native footers against the chosen workspace background.
 No account or usage reading is invented for this footer.
 
 For the model label, prefer

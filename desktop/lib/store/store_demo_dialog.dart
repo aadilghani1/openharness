@@ -8,6 +8,7 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_dialog.dart';
 import '../terminal/terminal_text.dart';
 
 Future<void> showStoreDemo(
@@ -16,7 +17,7 @@ Future<void> showStoreDemo(
   required StoreExample example,
 }) async {
   if (example.video == null) return;
-  await showDialog<void>(
+  await showAppDialog<void>(
     context: context,
     builder: (_) => StoreDemoDialog(
       name: entry.name,

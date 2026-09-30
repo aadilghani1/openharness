@@ -204,7 +204,7 @@ class _RestartAgentPromptState extends State<_RestartAgentPrompt> {
       child: DesktopPromptSurface(
         key: const ValueKey('agent-restart-prompt'),
         body: ExcludeFocusTraversal(
-          child: SingleChildScrollView(
+          child: DesktopPromptScrollBody(
             controller: _body,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

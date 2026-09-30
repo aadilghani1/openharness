@@ -955,18 +955,22 @@ private func workspaceBarTextWidth(_ text: String, font: NSFont) -> CGFloat {
 /// Plain toolbar icons emphasize the glyph without a button well.
 private class SwarmPlainIconButton: SwarmIconButton {
   var foreground = NSColor.white { didSet { needsDisplay = true } }
+  var restingOpacity: CGFloat = 0.75 { didSet { needsDisplay = true } }
+  var highContrastRestingOpacity: CGFloat? { didSet { needsDisplay = true } }
 
   override func draw(_ dirtyRect: NSRect) {
     let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
     // Draw only the glyph: AppKit can paint a hover bezel even on a borderless
     // NSButton. Emphasis belongs to the bell, never a background around it.
-    if let symbol = image?.withSymbolConfiguration(HarnessControlSymbols.configuration) {
+    if let symbol = image?.withSymbolConfiguration(symbolConfiguration ?? HarnessControlSymbols.configuration) {
       let rect = NSRect(x: (bounds.width - symbol.size.width) / 2,
         y: (bounds.height - symbol.size.height) / 2,
         width: symbol.size.width, height: symbol.size.height)
       NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
       symbol.draw(in: rect)
-      foreground.withAlphaComponent(isEnabled ? (emphasized ? 1 : 0.75) : 0.28).setFill()
+      let quietOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        ? highContrastRestingOpacity ?? restingOpacity : restingOpacity
+      foreground.withAlphaComponent(isEnabled ? (emphasized ? 1 : quietOpacity) : 0.28).setFill()
       rect.fill(using: .sourceIn)
       NSGraphicsContext.current?.cgContext.endTransparencyLayer()
     }
@@ -2193,10 +2197,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private static let upperRadius: CGFloat = 10
   private static let shoulder: CGFloat = 8
   private static let topInset: CGFloat = 6
-  private static let leadingInset: CGFloat = 16
-  private static let trailingInset: CGFloat = 8
+  // A compact centered title/status group leaves the 32pt hover target clear.
+  private static let contentInset: CGFloat = 32
+  private static let trailingInset: CGFloat = 0
   private static let accessorySide: CGFloat = 32
-  private static let gap: CGFloat = 8
+  private static let gap: CGFloat = 6
   private static let activityWidth: CGFloat = 16
 
   var palette = SwarmNativePalette() {
@@ -2207,7 +2212,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var displayLabel = "New Tab" { didSet { if displayLabel != oldValue { invalidateLabel() } } }
   var shortcutHint: String? { didSet { if shortcutHint != oldValue { invalidateLabel(); updateAccessibility() } } }
   var showsShortcutHint = false {
-    didSet { if showsShortcutHint != oldValue { updateAccessoryVisibility(); needsDisplay = true } }
+    didSet { if showsShortcutHint != oldValue { needsLayout = true; needsDisplay = true } }
   }
   var foreground = NSColor(white: 0.85, alpha: 1) {
     didSet {
@@ -2215,12 +2220,17 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       closeButton.foreground = foreground
     }
   }
-  private var activitySpace: CGFloat { activityLabel == nil ? 0 : Self.activityWidth + Self.gap }
-  private var naturalContentWidth: CGFloat { max(label.size().width, emphasizedLabel.size().width) + activitySpace }
-  private var accessoryWidth: CGFloat { max(Self.accessorySide, (shortcutLabel?.size().width ?? 0) + Self.gap) }
-  var minimumWidth: CGFloat { Self.leadingInset + Self.gap + accessoryWidth + Self.trailingInset + activitySpace + 16 }
+  private var indicatorWidth: CGFloat {
+    min(72, max(activityLabel == nil ? 0 : Self.activityWidth, shortcutLabel?.size().width ?? 0))
+  }
+  private var reservedIndicatorSpace: CGFloat { indicatorWidth == 0 ? 0 : indicatorWidth + Self.gap }
+  private var activitySpace: CGFloat {
+    (activityMark?.isEmpty ?? true) && !displaysShortcut ? 0 : reservedIndicatorSpace
+  }
+  private var naturalTitleWidth: CGFloat { max(label.size().width, emphasizedLabel.size().width) }
+  var minimumWidth: CGFloat { Self.contentInset * 2 + reservedIndicatorSpace + 16 }
   var preferredWidth: CGFloat {
-    min(260, max(minimumWidth, ceil(naturalContentWidth + Self.leadingInset + Self.gap + accessoryWidth + Self.trailingInset)))
+    min(260, max(112, ceil(naturalTitleWidth + reservedIndicatorSpace + Self.contentInset * 2)))
   }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
@@ -2236,23 +2246,23 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if let activity { return activity.working ? harnessActivityFrames[activityFrame] : activity.mark }
     return attention ? "?" : nil
   }
-  private var accessoryRect: NSRect {
-    NSRect(x: max(0, bounds.width - Self.trailingInset - accessoryWidth),
-      y: contentCenterY - Self.accessorySide / 2, width: min(accessoryWidth, bounds.width),
-      height: Self.accessorySide)
-  }
-  private var contentRect: NSRect {
-    NSRect(x: Self.leadingInset, y: 0,
-      width: max(0, accessoryRect.minX - Self.gap - Self.leadingInset), height: bounds.height)
-  }
   private var titleRect: NSRect {
-    NSRect(x: contentRect.minX, y: 0, width: max(0, contentRect.width - activitySpace), height: bounds.height)
+    let width = min(naturalTitleWidth, max(0, bounds.width - Self.contentInset * 2 - activitySpace))
+    return NSRect(x: (bounds.width - width - activitySpace) / 2, y: 0,
+      width: width, height: bounds.height)
+  }
+  private var indicatorRect: NSRect {
+    if bounds.width < minimumWidth {
+      let width = min(indicatorWidth, max(0, bounds.width - 16))
+      return NSRect(x: bounds.midX - width / 2, y: 0, width: width, height: bounds.height)
+    }
+    return NSRect(x: titleRect.maxX + Self.gap, y: 0, width: indicatorWidth, height: bounds.height)
   }
   private var activityRect: NSRect {
     if bounds.width < minimumWidth {
       return NSRect(x: bounds.midX - Self.activityWidth / 2, y: 0, width: Self.activityWidth, height: bounds.height)
     }
-    return NSRect(x: contentRect.maxX - Self.activityWidth,
+    return NSRect(x: indicatorRect.midX - Self.activityWidth / 2,
       y: 0, width: Self.activityWidth, height: bounds.height)
   }
   /// The strip holds the keyboard on this tab; Flutter still owns the keys.
@@ -2300,6 +2310,10 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     closeButton.title = ""
     closeButton.isBordered = false
     closeButton.image = HarnessControlSymbols.image("xmark")
+    // SF's xmark fills more of its em than Lucide's: 10pt matches closeSize 12.
+    closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+    closeButton.restingOpacity = 0.45
+    closeButton.highContrastRestingOpacity = 0.7
     closeButton.imagePosition = .imageOnly
     closeButton.foreground = foreground
     closeButton.target = self
@@ -2347,7 +2361,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   private var displaysShortcut: Bool { actionsEnabled && showsShortcutHint && shortcutLabel != nil }
   private func updateAccessoryVisibility() {
-    closeButton.isHidden = !isHovered || displaysShortcut
+    closeButton.isHidden = !isHovered
   }
   private func invalidateLabel() {
     cachedLabel = nil
@@ -2360,7 +2374,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if let cachedLabel { return cachedLabel }
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
-    paragraph.alignment = .left
+    paragraph.alignment = .center
     let label = NSAttributedString(string: displayLabel,
       attributes: [.font: labelFont,
         .foregroundColor: foreground, .paragraphStyle: paragraph])
@@ -2378,7 +2392,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private var shortcutLabel: NSAttributedString? {
     guard let shortcutHint, !shortcutHint.isEmpty else { return nil }
     let paragraph = NSMutableParagraphStyle()
-    paragraph.alignment = .right
+    paragraph.alignment = .center
     paragraph.lineBreakMode = .byTruncatingTail
     return NSAttributedString(string: shortcutHint, attributes: [
       .font: NSFont.systemFont(ofSize: 12, weight: .regular),
@@ -2435,7 +2449,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       text.draw(in: NSRect(x: titleRect.minX, y: contentCenterY - text.size().height / 2,
         width: titleRect.width, height: text.size().height))
     }
-    if let activityMark {
+    if !displaysShortcut, let activityMark {
       let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
       let paused = activityMark == "||"
       let marker = NSAttributedString(string: activityMark,
@@ -2449,8 +2463,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       NSGraphicsContext.restoreGraphicsState()
     }
     if displaysShortcut, let shortcut = shortcutLabel {
-      shortcut.draw(in: NSRect(x: accessoryRect.minX, y: contentCenterY - shortcut.size().height / 2,
-        width: accessoryRect.width, height: shortcut.size().height))
+      shortcut.draw(in: NSRect(x: indicatorRect.minX, y: contentCenterY - shortcut.size().height / 2,
+        width: indicatorRect.width, height: shortcut.size().height))
     }
   }
   // Overflowed tabs might not be drawn. Their names and selection still need

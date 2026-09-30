@@ -104,8 +104,14 @@ class PaneCloseButton extends StatelessWidget {
         child: Center(
           child: Icon(
             AppIcons.close,
-            size: AppIcons.inlineSize,
-            color: theme.foreground.withValues(alpha: emphasized ? 1 : .7),
+            size: AppIcons.closeSize,
+            color: theme.foreground.withValues(
+              alpha: emphasized
+                  ? 1
+                  : MediaQuery.highContrastOf(context)
+                  ? .7
+                  : .45,
+            ),
           ),
         ),
       ),

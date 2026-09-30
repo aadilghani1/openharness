@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -174,7 +175,9 @@ void main() {
       await tester.pumpAndSettle();
       final message = find.text(detail);
       final editor = tester.widget<EditableText>(message);
-      await tester.tap(message);
+      await tester.tap(
+        find.ancestor(of: message, matching: find.byType(DesktopPromptMessage)),
+      );
       await key(tester, LogicalKeyboardKey.keyA, cmd: true);
       expect(editor.focusNode.hasPrimaryFocus, isTrue);
       expect(editor.controller.selection.textInside(detail), detail);

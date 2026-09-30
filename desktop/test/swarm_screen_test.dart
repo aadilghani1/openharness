@@ -102,7 +102,7 @@ void main() {
       final tab = find.byKey(ValueKey(second.id));
       final nameBounds = tester.getRect(label);
       expect(nameBounds.left, greaterThan(tester.getRect(tab).left));
-      expect(nameBounds.center.dx, lessThan(tester.getCenter(tab).dx));
+      expect(nameBounds.center.dx, closeTo(tester.getCenter(tab).dx, .01));
       expect(find.text('2:Second tab'), findsNothing);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: const Offset(1200, 700));
@@ -114,8 +114,15 @@ void main() {
       await tester.pump();
       expect(find.text('⌘1'), findsOneWidget);
       expect(find.text('⌘2'), findsOneWidget);
-      expect(close, findsNothing);
-      expect(tester.getRect(label), nameBounds);
+      expect(close.hitTestable(), findsOneWidget);
+      final commandName = tester.getRect(label);
+      final commandHint = tester.getRect(find.text('⌘2'));
+      expect(commandHint.left - commandName.right, closeTo(6, .1));
+      expect(
+        (commandName.left + commandHint.right) / 2,
+        closeTo(tester.getCenter(tab).dx, .1),
+      );
+      expect(commandName.size, nameBounds.size);
       expect(app.activeSwarm, same(second));
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       await tester.pump();

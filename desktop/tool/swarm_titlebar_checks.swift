@@ -70,9 +70,9 @@ private extension SwarmTabButton {
     let width = preferredWidth
     let displayedWidth = frame.width
     let rect = activityRect
-    try checkTitlebar(label.string == "desktop" && activitySpace >= activityRect.width + 8,
+    try checkTitlebar(label.string == "desktop" && activitySpace >= activityRect.width + 6,
       "Activity measures its gap and cell separately from the tab name")
-    try checkTitlebar(rect.minX >= titleRect.maxX + 8,
+    try checkTitlebar(rect.minX >= titleRect.maxX + 6,
       "The native activity follows the complete tab name")
     var pictures = Set<Data>()
     for frame in 0..<10 {
@@ -89,8 +89,8 @@ private extension SwarmTabButton {
     for (mark, label) in states {
       activity = SwarmTabActivity(payload(mark, label))
       layoutSubtreeIfNeeded()
-      try checkTitlebar(preferredWidth == width && activityRect == rect,
-        "\(label) occupies the same reserved cell")
+      try checkTitlebar(preferredWidth == width && (mark.isEmpty || activityRect == rect),
+        "\(label) preserves tab width and visible marks share their inline cell")
       try checkTitlebar(toolTip == label && selectButton.accessibilityHelp() == label,
         "\(label) has readable hover and accessibility descriptions")
       for narrow in [CGFloat(28), CGFloat(56), width, displayedWidth] {
@@ -288,6 +288,9 @@ private extension SwarmTabButton {
     try checkTitlebar(symbol.renderedPixels() != symbolResting &&
       symbol.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
       "Symbols emphasize their ink on hover without changing weight or adding a background")
+    shortcutHint = "⌘2"
+    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
+    layoutSubtreeIfNeeded()
     let width = preferredWidth
     let resting = renderedPixels()
     mouseEntered(with: hover)
@@ -297,15 +300,14 @@ private extension SwarmTabButton {
     try checkTitlebar(preferredWidth == width && !closeButton.isHidden && drawnFont == labelFont,
       "Hover reveals the right close button without changing tab width or type")
     let titleBeforeHint = titleRect, closeBeforeHint = closeButton.frame
-    shortcutHint = "⌘2"
     showsShortcutHint = true
     layoutSubtreeIfNeeded()
-    try checkTitlebar(displaysShortcut && closeButton.isHidden && renderedPixels() != Data(bytes: hovered.bitmapData!, count: hovered.bytesPerRow * hovered.pixelsHigh),
-      "Holding Command replaces the hover close button with its shortcut hint")
+    try checkTitlebar(displaysShortcut && !closeButton.isHidden && renderedPixels() != Data(bytes: hovered.bitmapData!, count: hovered.bytesPerRow * hovered.pixelsHigh),
+      "Holding Command replaces status with its shortcut while keeping the hover close action")
     try checkTitlebar(titleRect == titleBeforeHint && closeButton.frame == closeBeforeHint && preferredWidth == width,
       "Command hints never move the title, close target or tab boundaries")
     showsShortcutHint = false
-    try checkTitlebar(!closeButton.isHidden, "Releasing Command restores the hovered close action")
+    try checkTitlebar(!closeButton.isHidden, "Releasing Command keeps the hovered close action")
     mouseExited(with: hover)
     selectButton.highlight(true)
     try checkTitlebar(renderedPixels() != resting, "Pressing a tab uses the same visible highlight")
@@ -340,6 +342,7 @@ private extension SwarmTabButton {
     name = "1: Release planning"
     displayLabel = name
     shortcutHint = "⌘2"
+    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
     layoutSubtreeIfNeeded()
     let title = titleRect, close = closeButton.frame, width = preferredWidth
     try checkTitlebar(closeButton.isHidden && !displaysShortcut,
@@ -354,11 +357,36 @@ private extension SwarmTabButton {
       "A hovered tab exposes a separate 32pt close target on the right")
     try checkTitlebar(accessibilityChildren()?.count == 2 && closeButton.accessibilityLabel() == "Close 1: Release planning",
       "The hover close button has the exact custom title as its accessible purpose")
+    let closeBitmap = closeButton.renderedBitmap()
+    let closeInk = (0..<closeBitmap.pixelsWide).flatMap { x in
+      (0..<closeBitmap.pixelsHigh).compactMap { y -> NSPoint? in
+        (closeBitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+          ? NSPoint(x: x, y: y) : nil
+      }
+    }
+    let inkWidth = (closeInk.map(\.x).max() ?? 0) - (closeInk.map(\.x).min() ?? 0) + 1
+    let inkHeight = (closeInk.map(\.y).max() ?? 0) - (closeInk.map(\.y).min() ?? 0) + 1
+    try checkTitlebar(!closeInk.isEmpty && inkWidth <= 9 && inkHeight <= 9,
+      "The tab close paints a tiny regular cross inside its unchanged 32pt target")
     closeButton.performClick(nil)
     try checkTitlebar(events == ["close"], "Clicking the close control closes once without selecting the tab")
     showsShortcutHint = true
-    try checkTitlebar(displaysShortcut && closeButton.isHidden && shortcutLabel?.string == "⌘2",
-      "Command reveals the supplied shortcut instead of the hover close icon")
+    try checkTitlebar(displaysShortcut && !closeButton.isHidden && shortcutLabel?.string == "⌘2",
+      "Command reveals the supplied shortcut beside the name without hiding hover close")
+    try checkTitlebar(indicatorRect.minX == titleRect.maxX + 6 &&
+      indicatorRect.maxX <= closeButton.frame.minX,
+      "The inline Command hint stays outside the close action's entire hit target")
+    let commandBitmap = renderedBitmap()
+    let hasActivityInk = (0..<commandBitmap.pixelsWide).contains { x in
+      (0..<commandBitmap.pixelsHigh).contains { y in
+        guard let pixel = commandBitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          pixel.alphaComponent > 0.2 else { return false }
+        return pixel.blueComponent - pixel.redComponent > 0.15 &&
+          pixel.greenComponent - pixel.redComponent > 0.1
+      }
+    }
+    try checkTitlebar(!hasActivityInk && selectButton.accessibilityHelp() == "Working",
+      "Command hides the visual activity mark while retaining its accessible status")
     try checkTitlebar(titleRect == title && closeButton.frame == close && preferredWidth == width,
       "Modifier changes preserve every tab and title boundary")
     mouseExited(with: hover)
@@ -370,8 +398,8 @@ private extension SwarmTabButton {
     shortcutHint = "⌃⌥⌘R"
     layoutSubtreeIfNeeded()
     showsShortcutHint = true
-    try checkTitlebar(shortcutLabel?.string == "⌃⌥⌘R" && accessoryRect.width >= shortcutLabel!.size().width,
-      "A remapped shortcut remains exact and fits its reserved accessory")
+    try checkTitlebar(shortcutLabel?.string == "⌃⌥⌘R" && indicatorRect.width >= shortcutLabel!.size().width,
+      "A remapped shortcut remains exact and fits its inline status position")
     shortcutHint = nil
     try checkTitlebar(!displaysShortcut, "Unbound and unnumbered tabs invent no shortcut hint")
     actionsEnabled = false
@@ -438,11 +466,18 @@ private extension SwarmTabButton {
     }
   }
 
-  func checkLeftAlignedLabel() throws {
+  func checkCenteredLabel() throws {
     let paragraph = label.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
-    try checkTitlebar(paragraph?.alignment == .left && titleRect.minX == 16, "The tab title keeps a fixed left inset")
+    let group = activitySpace == 0 ? titleRect : titleRect.union(indicatorRect)
+    try checkTitlebar(paragraph?.alignment == .center && abs(group.midX - bounds.midX) < 0.01,
+      "The visible title and adjacent indicator form a centered group")
     try checkTitlebar(selectButton.frame == bounds, "Selection and drag retain the whole tab target beneath its accessory")
-    try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX - 8, "The close action stays in the reserved trailing slot")
+    try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX, "The close action stays in the reserved trailing slot")
+  }
+
+  func checkCompleteNameFits() throws {
+    try checkTitlebar(titleRect.width >= naturalTitleWidth,
+      "The eight-tab fixture keeps each ordinary name readable")
   }
 
   func clickBothActions() {
@@ -943,7 +978,8 @@ private extension SwarmTabStrip {
     setFrameSize(NSSize(width: 900, height: 40))
     let rows: [[String: Any]] = [
       ["id": "new", "name": "New Tab", "label": "New Tab", "shortcutHint": "⌘1"],
-      ["id": "work", "name": "Desktop", "label": "Desktop", "shortcutHint": "⌘2"],
+      ["id": "work", "name": "Desktop", "label": "Desktop", "shortcutHint": "⌘2",
+       "activity": ["mark": "⠋", "label": "Working", "working": true, "color": Int64(0xff64d2ff)]],
       ["id": "custom", "name": "1: Release planning", "label": "1: Release planning", "shortcutHint": "⌃⌥⌘R"],
       ["id": "unbound", "name": "Notes", "label": "Notes", "shortcutHint": NSNull()],
     ]
@@ -985,6 +1021,32 @@ private extension SwarmTabStrip {
     setShortcutHintsVisible(true)
     try checkTitlebar(tabs.allSatisfy { !$0.showsShortcutHint }, "Disabled native navigation never advertises active shortcuts")
     setShortcutHintsVisible(false)
+    let crowdedNames = ["New Tab", "Desktop", "Docs", "Web", "Notes", "API", "Tests", "Release"]
+    let crowdedRows: [[String: Any]] = crowdedNames.enumerated().map { index, name in
+      ["id": "dense-\(index)", "name": name, "label": name, "shortcutHint": "⌘\(index + 1)",
+       "activity": ["mark": index == 1 ? "⠋" : "", "label": index == 1 ? "Working" : "Idle",
+                    "color": Int64(0xff64d2ff)]]
+    }
+    setFrameSize(NSSize(width: 1280, height: 40))
+    for (name, values) in [
+      ("dark", ["workspace": Int64(0xff282828), "tabBar": Int64(0xff1c1c1c)]),
+      ("light", ["workspace": Int64(0xfff0f2f5), "tabBar": Int64(0xffe4e6e9)]),
+    ] {
+      update(["enabled": true, "activeId": "dense-1", "tabs": crowdedRows, "palette": values])
+      try captureTabPresentation("native-tabs-eight-\(name)-rest")
+      try checkTitlebar(tabs.last!.frame.maxX <= scroll.bounds.width,
+        "Eight ordinary tab names fit a 1280pt strip without forced scrolling: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
+      for tab in tabs {
+        try tab.checkCenteredLabel()
+        try tab.checkCompleteNameFits()
+      }
+      setShortcutHintsVisible(true)
+      try captureTabPresentation("native-tabs-eight-\(name)-command")
+      tabs[1].mouseEntered(with: hover)
+      try captureTabPresentation("native-tabs-eight-\(name)-command-hover")
+      tabs[1].mouseExited(with: hover)
+      setShortcutHintsVisible(false)
+    }
   }
 
   func captureTabPresentation(_ name: String) throws {
@@ -1155,9 +1217,12 @@ private extension SwarmTabStrip {
     }
     try checkTitlebar(clickedFields.map { $0.0 } == ["machine", "project", "branch"] &&
       clickedFields.allSatisfy { $0.1 == 7 }, "Each context action preserves field and pane identity")
-    linked["subscriptionUsage"] = ["text": "Claude 0% · Codex 50%", "interactive": true,
+    linked["subscriptionUsage"] = ["text": "Claude 0%  Codex 13%", "interactive": true,
       "detail": "Remaining subscription usage",
-      "segments": [["text": "Claude 0% · Codex 50%", "foreground": Int64(0xffdddddd)]]]
+      "segments": [["text": "Claude ", "foreground": Int64(0xffdddddd)],
+                   ["text": "0%", "foreground": Int64(0xffff6b6b)],
+                   ["text": "  Codex ", "foreground": Int64(0xffdddddd)],
+                   ["text": "13%", "foreground": Int64(0xffffc857)]]]
     var usageClicks = 0
     emit = { method, _ in
       if method == "subscriptions" { usageClicks += 1 }
@@ -1231,7 +1296,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search, bell and Store controls")
-    try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "code",
+    try checkTitlebar(tabs[0].frame.width < 136 && tabs[0].displayLabel == "code",
       "Overflow tabs keep readable names without persistent number prefixes")
     try checkTitlebar(subviews.count == 5 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
@@ -1267,9 +1332,9 @@ private extension SwarmTabStrip {
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     tabs[1].mouseEntered(with: hover)
-    try tabs[1].checkLeftAlignedLabel()
+    try tabs[1].checkCenteredLabel()
     tabs[1].mouseExited(with: hover)
-    try tabs[1].checkLeftAlignedLabel()
+    try tabs[1].checkCenteredLabel()
     scroll.contentView.scroll(to: .zero)
     scroll.reflectScrolledClipView(scroll.contentView)
     let browsingOrigin = scroll.documentVisibleRect.origin
@@ -1330,7 +1395,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(buttons.count == 2, "Hover exposes selection and close to native accessibility")
     for button in buttons {
       try checkTitlebar(window.makeFirstResponder(button), "An enabled tab action accepts keyboard focus")
-      try tab.checkLeftAlignedLabel()
+      try tab.checkCenteredLabel()
       try checkTitlebar(scroll.documentVisibleRect.contains(tab.frame),
         "Keyboard focus reveals the entire overflowed tab")
       try checkTitlebar(activeId == "keyboard-23", "Focusing a tab control does not activate its swarm")
@@ -1343,7 +1408,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(window.firstResponder === window.contentInput,
         "Activating a tab action returns the next key to Flutter content")
       try window.checkContentCommand()
-      try tab.checkLeftAlignedLabel()
+      try tab.checkCenteredLabel()
       try checkTitlebar(messenger.calls.count == before + 1, "Each native tab activation sends one action")
     }
     tab.mouseExited(with: hover)
@@ -1470,7 +1535,7 @@ private extension SwarmTabStrip {
     info.draggingPasteboard.setString("drag-0", forType: swarmPasteboardType)
     info.draggingLocation = document.convert(NSPoint(x: tabs[2].frame.midX + 1, y: 20), to: nil)
     try checkTitlebar(draggingEntered(info) == .move && draggingUpdated(info) == .move,
-      "An owned tab can move within the visible tab area")
+      "An owned tab can move within the visible tab area: \(scroll.frame), \(scroll.documentVisibleRect), \(info.draggingLocation)")
     try checkTitlebar(performDragOperation(info) && moves.last?["index"] as? Int == 2,
       "Moving right accounts for removing the source tab first")
     moves.removeAll()

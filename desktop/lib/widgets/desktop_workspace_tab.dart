@@ -9,8 +9,8 @@ import '../shared/theme/app_theme.dart' as grid;
 import 'box_chrome.dart';
 import 'desktop_chrome.dart';
 
-/// The Flutter counterpart of the AppKit tab: a name, a quiet activity mark,
-/// and one trailing accessory. Hover and shortcut hints never move the name.
+/// The Flutter counterpart of the AppKit tab: a centered name/status group
+/// and a trailing hover close action. Command replaces status with its hint.
 class DesktopWorkspaceTab extends StatefulWidget {
   const DesktopWorkspaceTab({
     super.key,
@@ -48,29 +48,57 @@ class DesktopWorkspaceTab extends StatefulWidget {
     return width;
   }
 
-  static double accessoryWidth(BuildContext context, String? hint) => math
+  static const _contentInset = 32.0;
+  static const _indicatorGap = 6.0;
+
+  static TextStyle _hintStyle({Color? color}) =>
+      DesktopChrome.metadata(color: color).copyWith(
+        fontFamilyFallback: [...grid.AppType.sansFallback, 'Apple Symbols'],
+      );
+
+  static double indicatorWidth(
+    BuildContext context,
+    String? hint, {
+    required bool hasActivity,
+  }) => math
       .max(
-        28.0,
-        hint == null
+        hasActivity ? 16.0 : 0.0,
+        hint == null || hint.isEmpty
             ? 0.0
-            : _measure(context, hint, DesktopChrome.metadata()) + 8,
+            : _measure(context, hint, _hintStyle()),
       )
-      .clamp(28.0, 72.0);
+      .clamp(0.0, 72.0);
 
   static double labelWidth(BuildContext context, String label) =>
       _measure(context, label, DesktopChrome.control());
+
+  static double naturalWidth(
+    BuildContext context,
+    String label, {
+    String? shortcutHint,
+    bool hasActivity = false,
+  }) {
+    final indicator = indicatorWidth(
+      context,
+      shortcutHint,
+      hasActivity: hasActivity,
+    );
+    return labelWidth(context, label) +
+        _contentInset * 2 +
+        (indicator == 0 ? 0 : indicator + _indicatorGap);
+  }
 
   static double widthOf(
     BuildContext context,
     String label, {
     String? shortcutHint,
     bool hasActivity = false,
-  }) =>
-      (labelWidth(context, label) +
-              32 +
-              accessoryWidth(context, shortcutHint) +
-              (hasActivity ? 20 : 0))
-          .clamp(116, 240);
+  }) => naturalWidth(
+    context,
+    label,
+    shortcutHint: shortcutHint,
+    hasActivity: hasActivity,
+  ).clamp(112, 240);
 
   @override
   State<DesktopWorkspaceTab> createState() => _DesktopWorkspaceTabState();
@@ -83,6 +111,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final enabled = widget.onSelect != null;
+    final quietCloseOpacity = MediaQuery.highContrastOf(context) ? .7 : .45;
     final focusVisible = _focused || widget.highlighted;
     // Workspace palettes can stay dark beside light app surfaces. Match the
     // native tab bar's ink to its own surface, independent of terminal colors.
@@ -113,109 +142,185 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
           container: true,
           explicitChildNodes: true,
           selected: widget.selected,
-          child: Row(
-            children: [
-              const SizedBox(width: 16),
-              Expanded(
-                child: Semantics(
-                  button: true,
-                  enabled: enabled,
-                  label: [widget.label, ?widget.activityLabel].join(', '),
-                  onTap: widget.onSelect,
-                  customSemanticsActions: {
-                    if (widget.onClose != null)
-                      const CustomSemanticsAction(label: 'Close tab'):
-                          widget.onClose!,
-                  },
-                  child: FocusableActionDetector(
-                    enabled: enabled,
-                    onShowFocusHighlight: (value) =>
-                        setState(() => _focused = value),
-                    actions: {
-                      ActivateIntent: CallbackAction<ActivateIntent>(
-                        onInvoke: (_) {
-                          widget.onSelect?.call();
-                          return null;
+          child: LayoutBuilder(
+            builder: (context, constraints) => ValueListenableBuilder(
+              valueListenable: widget.showShortcuts,
+              builder: (context, showHints, _) {
+                final showHint =
+                    enabled &&
+                    showHints &&
+                    (widget.shortcutHint?.isNotEmpty ?? false);
+                final indicator = DesktopWorkspaceTab.indicatorWidth(
+                  context,
+                  widget.shortcutHint,
+                  hasActivity: widget.activity != null,
+                );
+                final indicatorSpace = widget.activity != null || showHint
+                    ? indicator + DesktopWorkspaceTab._indicatorGap
+                    : 0.0;
+                final labelWidth = math.min(
+                  DesktopWorkspaceTab.labelWidth(context, widget.label),
+                  math.max(
+                    0.0,
+                    constraints.maxWidth -
+                        DesktopWorkspaceTab._contentInset * 2 -
+                        indicatorSpace,
+                  ),
+                );
+                final groupLeft =
+                    (constraints.maxWidth - labelWidth - indicatorSpace) / 2;
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: Semantics(
+                        button: true,
+                        enabled: enabled,
+                        label: [widget.label, ?widget.activityLabel].join(', '),
+                        onTap: widget.onSelect,
+                        customSemanticsActions: {
+                          if (widget.onClose != null)
+                            const CustomSemanticsAction(label: 'Close tab'):
+                                widget.onClose!,
                         },
-                      ),
-                    },
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: widget.onSelect,
-                      onDoubleTap: widget.onRename,
-                      child: SizedBox.expand(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: ExcludeSemantics(
-                            child: Text(
-                              widget.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: DesktopChrome.control(color: ink),
+                        child: FocusableActionDetector(
+                          enabled: enabled,
+                          onShowFocusHighlight: (value) =>
+                              setState(() => _focused = value),
+                          actions: {
+                            ActivateIntent: CallbackAction<ActivateIntent>(
+                              onInvoke: (_) {
+                                widget.onSelect?.call();
+                                return null;
+                              },
+                            ),
+                          },
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: widget.onSelect,
+                            onDoubleTap: widget.onRename,
+                            child: ExcludeSemantics(
+                              child: Stack(
+                                children: [
+                                  Positioned(
+                                    left: groupLeft,
+                                    width: labelWidth,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Center(
+                                      child: Text(
+                                        widget.label,
+                                        key: ValueKey('tab-label:${widget.id}'),
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: DesktopChrome.control(
+                                          color: ink,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (indicatorSpace > 0)
+                                    Positioned(
+                                      left:
+                                          groupLeft +
+                                          labelWidth +
+                                          DesktopWorkspaceTab._indicatorGap,
+                                      width: indicator,
+                                      top: 0,
+                                      bottom: 0,
+                                      child: Center(
+                                        child: showHint
+                                            ? Text(
+                                                widget.shortcutHint!,
+                                                key: ValueKey(
+                                                  'tab-shortcut:${widget.id}',
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style:
+                                                    DesktopWorkspaceTab._hintStyle(
+                                                      color: ink,
+                                                    ),
+                                              )
+                                            : widget.activity,
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-              ),
-              if (widget.activity != null) ...[
-                const SizedBox(width: 6),
-                widget.activity!,
-              ],
-              const SizedBox(width: 4),
-              SizedBox(
-                width: DesktopWorkspaceTab.accessoryWidth(
-                  context,
-                  widget.shortcutHint,
-                ),
-                child: ValueListenableBuilder(
-                  valueListenable: widget.showShortcuts,
-                  builder: (context, showHints, _) {
-                    if (showHints && widget.shortcutHint != null) {
-                      return Center(
-                        child: Text(
-                          widget.shortcutHint!,
-                          key: ValueKey('tab-shortcut:${widget.id}'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(color: ink),
-                        ),
-                      );
-                    }
-                    return IgnorePointer(
-                      ignoring: !_hovered,
-                      child: ExcludeFocus(
-                        excluding: !_hovered,
-                        child: ExcludeSemantics(
-                          excluding: !_hovered,
-                          child: Opacity(
-                            opacity: _hovered ? 1 : 0,
-                            child: IconButton(
-                              key: ValueKey('tab-close:${widget.id}'),
-                              tooltip: 'Close tab',
-                              onPressed: widget.onClose,
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 28,
-                                height: 28,
+                    Positioned(
+                      right: 0,
+                      width: 32,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: IgnorePointer(
+                          ignoring: !_hovered || !enabled,
+                          child: ExcludeFocus(
+                            excluding: !_hovered || !enabled,
+                            child: ExcludeSemantics(
+                              excluding: !_hovered || !enabled,
+                              child: Opacity(
+                                opacity: _hovered && enabled ? 1 : 0,
+                                child: IconButton(
+                                  key: ValueKey('tab-close:${widget.id}'),
+                                  tooltip: 'Close tab',
+                                  onPressed: widget.onClose,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints.tightFor(
+                                    width: 32,
+                                    height: 32,
+                                  ),
+                                  style:
+                                      IconButton.styleFrom(
+                                        foregroundColor: ink,
+                                        backgroundColor: Colors.transparent,
+                                        overlayColor: Colors.transparent,
+                                        side: BorderSide.none,
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ).copyWith(
+                                        animationDuration: Duration.zero,
+                                        foregroundColor:
+                                            WidgetStateProperty.resolveWith(
+                                              (states) => foreground.withValues(
+                                                alpha:
+                                                    states.any(
+                                                      (state) =>
+                                                          state ==
+                                                              WidgetState
+                                                                  .hovered ||
+                                                          state ==
+                                                              WidgetState
+                                                                  .focused ||
+                                                          state ==
+                                                              WidgetState
+                                                                  .pressed,
+                                                    )
+                                                    ? 1
+                                                    : quietCloseOpacity,
+                                              ),
+                                            ),
+                                      ),
+                                  icon: const Icon(
+                                    AppIcons.close,
+                                    size: AppIcons.closeSize,
+                                  ),
+                                ),
                               ),
-                              style: IconButton.styleFrom(
-                                foregroundColor: ink,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ).copyWith(animationDuration: Duration.zero),
-                              icon: const Icon(AppIcons.close, size: 16),
                             ),
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-            ],
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
