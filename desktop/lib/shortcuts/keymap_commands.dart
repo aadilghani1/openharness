@@ -29,26 +29,9 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
-    if (!kIsWeb &&
-        id == 'navigation.commands' &&
-        defaultTargetPlatform == TargetPlatform.linux) {
-      return const ['ctrl+shift+p'];
-    }
-    if (!kIsWeb &&
-        id == 'harnesses.list' &&
-        defaultTargetPlatform == TargetPlatform.linux) {
-      return const ['ctrl+p'];
-    }
-    if (!kIsWeb &&
-        id == 'models.list' &&
-        defaultTargetPlatform == TargetPlatform.linux) {
-      return const ['ctrl+i', 'cmd+i'];
-    }
-    if (!kIsWeb &&
-        id == 'picker.complete' &&
-        defaultTargetPlatform == TargetPlatform.linux) {
-      // Ctrl-I opens Models on Linux, including from another picker scope.
-      return const ['tab'];
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+      final linux = linuxAltCommandKeys[id];
+      if (linux != null) return linux;
     }
     return action == null
         ? extraKeys.map(platformWorkspaceBinding).toList(growable: false)
@@ -132,7 +115,7 @@ final harnessCommands = <HarnessCommand>[
   // key of their own in keybindings.jsonc.
   const HarnessCommand(
     'swarm.reopen',
-    'Reopen closed swarm or pane',
+    'Reopen closed tab or pane',
     ShortcutGroup.navigate,
     action: ShortcutAction.reopenClosedSwarm,
     nativeAction: 'reopen',
@@ -140,7 +123,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.next',
-    'Next Swarm',
+    'Next Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.nextSwarm,
     nativeAction: 'next',
@@ -149,7 +132,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.previous',
-    'Previous Swarm',
+    'Previous Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.previousSwarm,
     nativeAction: 'previous',
@@ -197,7 +180,7 @@ final harnessCommands = <HarnessCommand>[
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
       'swarm.select_$i',
-      'Select swarm $i',
+      'Select tab $i',
       ShortcutGroup.navigate,
       keywords: const ['tab'],
       extraKeys: ['cmd+$i'],
@@ -262,7 +245,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'pane.move_to_tab',
-    'Move the pane to another swarm',
+    'Move the pane to another tab',
     ShortcutGroup.panes,
     action: ShortcutAction.movePaneToTab,
     nativeAction: 'movePaneToTab',
@@ -501,7 +484,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'team.open',
-    'Swarm conversation: view this swarm’s collaboration',
+    'Tab conversation: view this tab’s collaboration',
     ShortcutGroup.actions,
     action: ShortcutAction.team,
     keywords: [
@@ -511,6 +494,7 @@ final harnessCommands = <HarnessCommand>[
       'question',
       'reply',
       'inbox',
+      'tab',
       'swarm',
       'channel',
     ],
@@ -855,10 +839,10 @@ ResolvedKeymap get harnessDefaultKeymap =>
     );
 
 List<String> describeKeyStrokeKeys(KeyStroke stroke) => [
-  if (stroke.control) kIsWeb ? 'Ctrl' : '⌃',
-  if (stroke.alt) kIsWeb ? 'Alt' : '⌥',
-  if (stroke.shift) kIsWeb ? 'Shift' : '⇧',
-  if (stroke.command) kIsWeb ? 'Cmd' : '⌘',
+  if (stroke.control) controlKeyLabel,
+  if (stroke.alt) altKeyLabel,
+  if (stroke.shift) shiftKeyLabel,
+  if (stroke.command) commandKeyLabel,
   const {
         'left': '←',
         'right': '→',
@@ -887,6 +871,6 @@ List<String> describeKeyStrokeKeys(KeyStroke stroke) => [
       stroke.key.toUpperCase(),
 ];
 String describeKeyStroke(KeyStroke stroke) =>
-    describeKeyStrokeKeys(stroke).join(kIsWeb ? '+' : '');
+    describeKeyStrokeKeys(stroke).join(chordKeySeparator);
 String describeKeyBinding(KeyBinding binding) =>
     binding.keys.map(describeKeyStroke).join(' ');

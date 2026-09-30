@@ -197,7 +197,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                         ),
                         prefixIcon: Icon(
                           AppIcons.search,
-                          size: 15,
+                          size: 16,
                           color: AppPalette.textFaint,
                         ),
                         prefixIconConstraints: const BoxConstraints(
@@ -623,7 +623,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           : () => unawaited(controller.toggle(model)),
                       icon: Icon(
                         icon,
-                        size: 17,
+                        size: 16,
                         semanticLabel: '$action ${model.name}',
                       ),
                       style: IconButton.styleFrom(
@@ -793,7 +793,7 @@ class LocalModelInvitation extends StatelessWidget {
                       tooltip: 'Dismiss',
                       onPressed: () =>
                           unawaited(controller.dismissIntroduction()),
-                      icon: const Icon(AppIcons.close, size: 17),
+                      icon: const Icon(AppIcons.close, size: 16),
                     ),
                   ],
                 ),

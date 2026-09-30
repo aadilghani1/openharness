@@ -150,7 +150,7 @@ class DaemonHistoryReview {
       return '$reviewed of $total conversation turns reviewed. The rest will continue when the hourly review allowance resets.';
     }
     if (state == 'waiting' && error == 'usage-limit') {
-      return 'Your chosen model has reached its usage limit. Your conversations are queued and we’ll check again later. You can also choose another model in the agent pane, then retry this review.';
+      return 'Your chosen agent has reached its usage limit. Your conversations stay queued. Choose another agent above or retry later.';
     }
     if (state == 'failed') {
       return 'The review could not finish. Your progress and any proposed lessons are kept. Retry to continue.';
@@ -221,6 +221,9 @@ class DaemonLearning {
     }
     if (state == 'unsupported') {
       return 'Background learning cannot use this agent connection yet. Your conversation and approved lessons are kept.';
+    }
+    if (state == 'unopened') {
+      return 'Choose Codex or Claude Code above to power your companion and its memories.';
     }
     if (state != 'ready') {
       return 'Finish setting up the agent on the right. Learning follows the model you choose there.';

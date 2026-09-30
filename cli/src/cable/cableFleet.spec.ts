@@ -218,6 +218,29 @@ describe('USB dial fleet', () => {
 })
 
 describe('macOS USB inventory', () => {
+  it('reads multiple USB-rooted subtrees without leaking IDs into their siblings', () => {
+    const dump = `+-o Tim <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 4097
+  "USB Serial Number" = "AA:01"
+  +-o CDC
+    +-o serial
+      "IOCalloutDevice" = "/dev/tim"
++-o unrelated <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 12
+  +-o serial
+    "IOCalloutDevice" = "/dev/unrelated"
++-o Tux <class IOUSBHostDevice>
+  "USB Serial Number" = "BB:02"
+  "idProduct" = 4097
+  "idVendor" = 12346
+  +-o serial
+    "IOCalloutDevice" = "/dev/tux"`
+    expect(parseDarwinDialPorts(dump)).toEqual([device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')])
+    expect(parseDarwinDialPorts('')).toEqual([])
+  })
+
   it('associates each tty with its own matching USB parent and serial in either property order', () => {
     const dump = `+-o root
   +-o Tim

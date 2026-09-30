@@ -15,18 +15,21 @@ mod ids;
 mod history;
 mod mirror;
 mod server;
+mod settings;
 mod ipc;
 mod keys;
 mod preview;
 mod config;
 mod copy;
 mod daemon;
+mod devices;
 mod dial;
 mod draw;
 mod event;
 mod fleet;
 mod format;
 mod fzf;
+mod terminal_themes;
 mod input;
 mod layout;
 mod local;
@@ -45,6 +48,11 @@ mod term_input;
 mod tmuxconf;
 mod ui;
 mod viewer;
+// ── status bar ──
+mod bar;
+mod bar_more;
+// ── models: the Models view (step 6) ──
+mod models;
 
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -161,6 +169,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.cfg_finished = true;
     app.config_files = read;
     if config.prefix_set { app.keymap.prefix = config.prefix }
+    if config.prefix2.is_some() { app.keymap.prefix2 = config.prefix2 }
+    app.apply_look(config.look.as_ref());
     // The server's options, keys, buffers and environment: this client's if it is the first.
     server::join(&mut app);
     // When each harness was last looked at (seen.json): what finished while no one looked is
@@ -243,6 +253,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
         if config.prefix_set { km.prefix = config.prefix }
+        if config.prefix2.is_some() { km.prefix2 = config.prefix2 }
         let mut text = String::new();
         for p in &settings.paths { text += &format!("read {}\n", p.display()) }
         text += &format!("prefix {}\n\n", keys::name(&km.prefix));
@@ -291,16 +302,21 @@ async fn run(config: config::Config) -> io::Result<()> {
             f.rest = f.rest[starts[k]..].to_vec();
         }
     }
+    // `hn <command>` where the command is an in-TUI one (theme, palette, layout…): tmux's CLI
+    // would answer "unknown command", because these are not tmux commands. The client starts and
+    // runs it itself, once the launcher is up — as `;`'s chain is (`start_then`). A word the
+    // server answers too (take, new, send…) stays the server's.
+    let gui = !f.rest.is_empty() && f.rest.iter().all(|w| crate::input::is_command(w) && !crate::commands::is_command_name(w));
     // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
-    if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
+    if !gui { if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) } }
     // -L name, starting a client: its socket's name.
     if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
     // hn new -s work / hn attach -t work: the session this client starts in.
     // `hn new … \; split-window …`: the command that starts this client, then the chain after it
     // (run in the client once its session is there, as tmux runs the rest of the command line).
-    let cut = f.rest.iter().position(|w| w == ";").unwrap_or(f.rest.len());
-    let then: Vec<String> = f.rest.get(cut + 1..).map(|r| r.to_vec()).unwrap_or_default();
-    let start = cli::start_session(&f.rest[..cut]);
+    let cut = if gui { 0 } else { f.rest.iter().position(|w| w == ";").unwrap_or(f.rest.len()) };
+    let then: Vec<String> = if gui { f.rest.clone() } else { f.rest.get(cut + 1..).map(|r| r.to_vec()).unwrap_or_default() };
+    let start = if gui { None } else { cli::start_session(&f.rest[..cut]) };
 
     // attach with nothing to attach to (no client, no session kept; the desk's is always there):
     // tmux's words, before it would look for a terminal — `hn attach || hn new` makes one.
@@ -411,6 +427,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.cfg_finished = true;
     app.config_files = read.clone();
     if config.prefix_set { app.keymap.prefix = config.prefix }
+    if config.prefix2.is_some() { app.keymap.prefix2 = config.prefix2 }
+    app.apply_look(config.look.as_ref());
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
@@ -526,7 +544,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         let all = app.mouse && app.wants_motion();
         if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
-        if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
+        if refill && matches!(app.modal, Some(modal::Modal::Picker { .. } | modal::Modal::NewHarness(_))) { input::refill(&mut app) }
         if std::mem::take(&mut app.redraw_all) { term.clear()?; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
             // (The backend makes each frame's changes one synchronized update, and writes nothing

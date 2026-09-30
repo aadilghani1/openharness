@@ -61,7 +61,9 @@ function depthOf(line: string): number {
 async function findDarwin(): Promise<DialPort[]> {
   let dump: string
   try {
-    const { stdout } = await runFile('ioreg', ['-p', 'IOService', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })
+    // Keep each USB device's children (the tty lives below its vendor/product IDs), but do not
+    // serialize the whole IOService plane every two seconds just to detect a hot-plugged dial.
+    const { stdout } = await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })
     dump = stdout
   } catch {
     throw new Error('Could not enumerate USB dials')

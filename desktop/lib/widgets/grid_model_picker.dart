@@ -597,7 +597,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
         if (widget.enabled) 'Switch model · Subscription or local models',
         ?sentence,
       ].join('\n'),
-      waitDuration: const Duration(milliseconds: 700),
+      waitDuration: const Duration(milliseconds: 500),
       child: MouseRegion(
         // Stated rather than inherited. The pane header sits over a terminal, and the cursor a
         // person sees while hovering this was whatever the surface underneath asked for — so a

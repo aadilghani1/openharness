@@ -193,15 +193,21 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 // ticked row would sit a few pixels off an unticked one.
                 SizedBox(
                   width: widget.metrics.iconSize,
-                  child:
-                      widget.leading ??
-                      (glyph == null
-                          ? null
-                          : Icon(
-                              glyph,
-                              size: widget.metrics.iconSize,
-                              color: tint,
-                            )),
+                  child: widget.leading != null
+                      ? IconTheme.merge(
+                          data: IconThemeData(
+                            color: tint,
+                            size: widget.metrics.iconSize,
+                          ),
+                          child: widget.leading!,
+                        )
+                      : (glyph == null
+                            ? null
+                            : Icon(
+                                glyph,
+                                size: widget.metrics.iconSize,
+                                color: tint,
+                              )),
                 ),
                 const SizedBox(width: 9),
                 Flexible(

@@ -276,9 +276,10 @@ class SwarmSearchController extends ChangeNotifier {
     // Its entry's status is only the API's name, which the row it sits under already shows.
     if (entry.apiModel != null) return modelRowAction(row);
     final local = entry.local;
-    if (local == null) {
-      return entry.own ? modelRowAction(row) ?? entry.status : entry.status;
-    }
+    // A subscription says how much of it is left — the one figure worth a glance; Enter on it is
+    // the preview's to say. Other rows with no weights here say what Enter does.
+    if (entry.subscription != null) return entry.status;
+    if (local == null) return modelRowAction(row) ?? entry.status;
     final owner = entry.controller ?? catalog.manager;
     final operation = owner.operationFor(local);
     if (operation?.active == true ||
@@ -295,6 +296,18 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   static const inUseWord = '● In use';
+
+  /// A model row's title on the desktop list: the two action rows named for what they do, without
+  /// the terminal list's brackets; every other row as it is.
+  String modelRowTitle(SwarmDestination row) {
+    if (isGridSetupRow(row)) return 'Set up local & shared models';
+    if (isModelDownloadsRow(row)) {
+      return modelDownloadsVisible
+          ? 'Show fewer'
+          : 'More models (${_downloadCount - shownDownloads})';
+    }
+    return row.title;
+  }
 
   /// Whether the harness this picker chooses for is on [row]'s model now: the grid model the
   /// daemon read off its process, or a saved API's model at that API's address.
@@ -2149,7 +2162,7 @@ class SwarmSearchController extends ChangeNotifier {
       : row.closedId != null
       ? 'Reopen'
       : row.isSwarm && !row.isStore && row.members.length != 1
-      ? 'Go to Swarm'
+      ? 'Go to Tab'
       : 'Open Harness';
 
   @override

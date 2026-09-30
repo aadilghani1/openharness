@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_pane_icon.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -77,10 +78,25 @@ final agentDrag = ValueNotifier<AgentDragRef?>(null);
 /// a pane drag offers the other tiles to trade places with.
 final paneDragging = ValueNotifier<PaneDragRef?>(null);
 
-class PaneCloseButton extends StatelessWidget {
-  const PaneCloseButton({super.key, required this.onPressed});
+/// Small, quiet glyphs with a stable mouse and keyboard target. Pane controls
+/// share the close button's emphasis without adding a row of button chrome.
+class PaneHeaderButton extends StatelessWidget {
+  const PaneHeaderButton({
+    super.key,
+    required this.label,
+    this.command,
+    required this.icon,
+    this.iconSize = 14,
+    this.onPressed,
+  });
 
-  final VoidCallback onPressed;
+  static const width = 28.0;
+
+  final String label;
+  final String? command;
+  final AppPaneSymbol icon;
+  final double iconSize;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -89,24 +105,27 @@ class PaneCloseButton extends StatelessWidget {
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
-    final hint = KeymapTheme.of(context)?.hint('pane.close');
+    final hint = command == null
+        ? null
+        : KeymapTheme.of(context)?.hint(command!);
     return WorkspaceBarControl(
-      label: 'Close Pane',
-      tooltip: [
-        'Close Pane',
-        if (hint != null && hint.isNotEmpty) hint,
-      ].join(' · '),
+      label: label,
+      tooltip: [label, if (hint != null && hint.isNotEmpty) hint].join(' · '),
       foreground: theme.foreground,
       onPressed: onPressed,
       builder: (context, emphasized) => SizedBox(
-        width: workspaceBarCellSizeOf(context).width * 3,
+        width: width,
         height: workspaceBarControlHeight(context),
         child: Center(
-          child: Icon(
-            AppIcons.close,
-            size: AppIcons.closeSize,
+          child: AppPaneIcon(
+            icon,
+            size: iconSize,
             color: theme.foreground.withValues(
-              alpha: emphasized
+              alpha: onPressed == null
+                  ? MediaQuery.highContrastOf(context)
+                        ? .45
+                        : .22
+                  : emphasized
                   ? 1
                   : MediaQuery.highContrastOf(context)
                   ? .7
@@ -117,4 +136,19 @@ class PaneCloseButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class PaneCloseButton extends StatelessWidget {
+  const PaneCloseButton({super.key, required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => PaneHeaderButton(
+    label: 'Close Pane',
+    command: 'pane.close',
+    icon: AppPaneSymbol.close,
+    iconSize: AppIcons.closeSize,
+    onPressed: onPressed,
+  );
 }

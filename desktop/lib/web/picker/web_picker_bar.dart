@@ -1,50 +1,61 @@
 import 'package:flutter/material.dart';
 
-import '../../shared/theme/app_theme.dart' as grid;
+import '../../shared/theme/app_icons.dart';
+import '../../shared/widgets/app_icon_button.dart';
 import '../../state/workspace_chrome.dart';
-import '../../terminal/terminal_text.dart';
-import '../../terminal/terminal_theme.dart';
-import '../../terminal/terminal_theme_store.dart';
+import '../../widgets/desktop_chrome.dart';
 import 'web_picker_scopes.dart';
 
 /// The row over the picker's input: Back out of a scope, the scopes the
-/// prefix keys reach, and close — each a click instead of a key.
+/// prefix keys reach, and close — each a click instead of a key. Scopes are
+/// the design system's compact scope pills (design/desktop-design-system.md).
 class WebPickerBar extends StatelessWidget {
   const WebPickerBar({super.key, required this.picker});
 
   final WorkspacePicker picker;
 
+  /// Lines the first pill up with the search field's text, past its icon.
+  static const _fieldTextInset = 57.0;
+
   @override
   Widget build(BuildContext context) {
     final search = picker.search;
-    final cell = terminalCellSizeOf(context);
     return ListenableBuilder(
       listenable: search,
       builder: (context, _) => Padding(
         key: const ValueKey('web-picker-bar'),
-        // Align the host scopes with the shared search editor text.
-        padding: EdgeInsets.fromLTRB(57, cell.height * .5, cell.width, 0),
+        padding: const EdgeInsets.fromLTRB(
+          _fieldTextInset,
+          DesktopChrome.controlGap + 4,
+          DesktopChrome.controlGap,
+          0,
+        ),
         child: Row(
           children: [
             if (search.canGoBack) ...[
-              _BarText(
+              DesktopPill(
                 key: const ValueKey('web-picker-back'),
-                label: '‹ Back',
+                label: 'Back',
+                leading: const Icon(AppIcons.chevronLeft, size: 14),
+                quiet: true,
+                compact: true,
                 onPressed: () {
                   if (search.back()) picker.focus();
                 },
               ),
-              SizedBox(width: cell.width * 2),
+              const SizedBox(width: DesktopChrome.controlGap),
             ],
             Expanded(
               child: Wrap(
-                spacing: cell.width * 2,
+                spacing: 6,
+                runSpacing: 6,
                 children: [
                   for (final scope in webPickerScopes(search))
-                    _BarText(
+                    DesktopPill(
                       key: ValueKey('web-picker-scope:${scope.prefix}'),
                       label: scope.label,
-                      active:
+                      compact: true,
+                      selected:
                           !search.isHelpMode &&
                           search.scopePrefix == scope.prefix,
                       onPressed: () {
@@ -55,55 +66,15 @@ class WebPickerBar extends StatelessWidget {
                 ],
               ),
             ),
-            _BarText(
+            AppIconButton(
               key: const ValueKey('web-picker-close'),
-              label: '×',
+              icon: AppIcons.close,
+              tooltip: 'Close',
+              size: 16,
               onPressed: picker.close,
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// A line of picker text that is also a button: dim until hovered, full ink
-/// and underlined when it names where the picker is.
-class _BarText extends StatelessWidget {
-  const _BarText({
-    super.key,
-    required this.label,
-    required this.onPressed,
-    this.active = false,
-  });
-
-  final String label;
-  final VoidCallback onPressed;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = terminalThemeFor(
-      grid.AppTheme.palette.value,
-      terminalThemeStore.value,
-    );
-    return TextButton(
-      onPressed: onPressed,
-      style: TextButton.styleFrom(
-        foregroundColor: theme.foreground.withValues(alpha: active ? 1 : .54),
-        textStyle: terminalContentStyle().copyWith(
-          decoration: active ? TextDecoration.underline : null,
-        ),
-        padding: EdgeInsets.zero,
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        shape: const RoundedRectangleBorder(),
-      ),
-      child: SizedBox(
-        height: terminalCellSizeOf(context).height * 1.5,
-        // Centered on the row's height only: a plain Center would take the
-        // whole width and stack every scope on a line of its own.
-        child: Center(widthFactor: 1, child: Text(label)),
       ),
     );
   }

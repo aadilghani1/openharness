@@ -19,7 +19,12 @@ pub struct Opt { pub name: &'static str, pub scope: Scope, pub pane: bool, pub k
 /// The table's entry for `name` (or `name[3]`).
 pub fn find(name: &str) -> Option<&'static Opt> {
     let base = name.split('[').next().unwrap_or(name);
-    table::TABLE.iter().chain(table::HOOKS.iter()).find(|o| o.name == base)
+    static INDEX: OnceLock<HashMap<&'static str, &'static Opt>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = HashMap::new();
+        for option in table::TABLE.iter().chain(table::HOOKS.iter()) { index.entry(option.name).or_insert(option); }
+        index
+    }).get(base).copied()
 }
 
 /// tmux's options_match: a name as written, or the one option it is the start of (`stat` is
@@ -88,6 +93,8 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
     static D: OnceLock<BTreeMap<String, String>> = OnceLock::new();
     D.get_or_init(|| {
         let mut m = tmux_defaults().clone();
+        // (Each pane's title at its top by default — off and bottom are yours to choose, in
+        // Appearance → Pane titles.)
         m.insert("pane-border-status".into(), "top".into());
         // Each pane's title row: the harness's name, then its state symbol, [watching — who
         // has it] when another window has the pane to type in, and its project and branch
@@ -237,11 +244,62 @@ impl Store {
     /// panes' title rows), where you have not set them yourself.
     pub fn tmux_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("tmux") }
 
+    /// How panes are drawn: `surface` (the "blur" look — the active pane's surface pops, the rest
+    /// are dimmed, no border line) or `line` (the classic highlighted border). Set directly by
+    /// `@hn-focus` (from the config's `[look].focus`) or, for the legacy `panes` preset, by
+    /// `@hn-look panes`.
+    pub fn focus_style(&self) -> &'static str {
+        match self.get("@hn-focus", "", None).as_deref() {
+            Some("surface") => "surface",
+            _ => "line",
+        }
+    }
+
     /// The normal hn presentation; classic keeps the earlier line borders.
-    pub fn pane_look(&self) -> bool { !matches!(self.get("@hn-look", "", None).as_deref(), Some("tmux" | "classic")) }
+    pub fn pane_look(&self) -> bool {
+        self.focus_style() == "surface" || self.get("@hn-look", "", None).as_deref() == Some("panes")
+    }
+
+    /// `@hn-layout`: the default split direction for a new harness/pane — `auto` (tmux-style, by
+    /// the shape of the pane being split), `vertical` or `horizontal`.
+    pub fn look_orientation(&self) -> &'static str {
+        match self.get("@hn-layout", "", None).as_deref() {
+            Some("vertical") => "vertical",
+            Some("horizontal") => "horizontal",
+            _ => "auto",
+        }
+    }
 
     /// Reduce motion independently of the status/pane appearance.
     pub fn animations(&self) -> bool { !matches!(self.get("@hn-animations", "", None).as_deref(), Some("off" | "0" | "no")) }
+
+    // ── status bar ──
+
+    /// `@hn-status-bar` (tui.toml `status_bar`): `bottom` or `top` (tmux's status line, where
+    /// status-position puts it), or `left`/`right` — the bar down that side.
+    pub fn status_bar(&self) -> &'static str {
+        match self.get("@hn-status-bar", "", None).as_deref() { Some("left") => "left", Some("right") => "right", Some("top") => "top", _ => "bottom" }
+    }
+
+    /// `@hn-border` box (the default): every pane its own frame, a cell apart. `line` is tmux's
+    /// shared lines; the blurred surfaces and `@hn-look tmux` draw as they always have.
+    pub fn box_panes(&self) -> bool {
+        !self.tmux_look() && !self.pane_look() && self.border_style() == "box"
+    }
+
+    /// `@hn-dim on` (tui.toml `dim`): the panes you are not in, a little quieter — with borders or
+    /// blurred surfaces alike. Off unless chosen.
+    pub fn dim_others(&self) -> bool { self.get("@hn-dim", "", None).as_deref() == Some("on") }
+
+    /// `@hn-border` as chosen — or, not chosen, `box` except under `@hn-look classic` (a look
+    /// from before boxes, whose panes keep their lines until you choose).
+    pub fn border_style(&self) -> &'static str {
+        match self.get("@hn-border", "", None).as_deref() {
+            Some("line") => "line",
+            Some(_) => "box",
+            None => if self.get("@hn-look", "", None).as_deref() == Some("classic") { "line" } else { "box" },
+        }
+    }
 
     /// The default for a name: hn's, or tmux's under `@hn-look tmux`.
     fn default_of(&self, name: &str, inherit_window_style: bool) -> Option<String> {
@@ -252,22 +310,28 @@ impl Store {
             if name == "window-active-style" && inherit_window_style { Some("default".into()) }
             else { pane_default(name) }
         }
+        else if name == "pane-border-status" && self.pane_look() {
+            // The opt-in "panes" look keeps each pane's title row; only the classic (default)
+            // look drops it, so panes are divided by a plain line.
+            Some("top".into())
+        }
         else { defaults().get(name).cloned() }
     }
 
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
-        let layers: Vec<Option<&BTreeMap<String, String>>> = if name.starts_with('@') {
-            vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
+        let definition = find(name);
+        let layers = if name.starts_with('@') {
+            [pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
         } else {
-            match find(name).map(|o| o.scope) {
-                Some(Scope::Server) => vec![Some(&self.server)],
-                Some(Scope::Session) => vec![Some(&self.session), Some(&self.global_session)],
-                Some(Scope::Window | Scope::Pane) => vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window)],
+            match definition.map(|o| o.scope) {
+                Some(Scope::Server) => [Some(&self.server), None, None, None, None, None],
+                Some(Scope::Session) => [Some(&self.session), Some(&self.global_session), None, None, None, None],
+                Some(Scope::Window | Scope::Pane) => [pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), None, None, None],
                 None => return None,
             }
         };
         // An array's item: from the nearest layer holding the array (none there is none).
-        if find(name).map(|o| o.array).unwrap_or(false) {
+        if definition.map(|o| o.array).unwrap_or(false) {
             let (base, index) = split_index(name);
             index?;
             return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => self.default_of(name, false) };
@@ -610,6 +674,8 @@ mod tests {
         let mut s = Store::default();
         let g = SetFlags { global: true, ..Default::default() };
         let gw = SetFlags { global: true, window: true, ..Default::default() };
+        assert!(!s.pane_look()); // the classic line-border look is the default
+        s.set("@hn-look", Some("panes"), &g, "", 0).unwrap();
         assert!(s.pane_look());
         assert!(s.get("window-style", "", None).unwrap().starts_with("fg=#"));
         s.set("window-style", Some("bg=blue"), &gw, "", 0).unwrap();
@@ -629,6 +695,7 @@ mod tests {
                   SetFlags { window: true, ..Default::default() },
                   SetFlags { pane: true, ..Default::default() }] {
             let mut s = Store::default();
+            s.set("@hn-look", Some("panes"), &SetFlags { global: true, ..Default::default() }, "w", 1).unwrap();
             assert_ne!(s.get("window-style", "w", Some(1)), s.get("window-active-style", "w", Some(1)));
             s.set("window-style", Some("fg=red,bg=blue"), &f, "w", 1).unwrap();
             assert_eq!(s.get("window-active-style", "w", Some(1)).as_deref(), Some("default"));

@@ -164,11 +164,20 @@ of the native footer. Popovers have no independent full-window veil.
 
 ## Icons
 
+The [icon design system](icon-design-system.md) defines the complete vocabulary,
+size roles, state treatment, deliberate exceptions and audit workflow.
+
 `AppIcons` owns one monochrome outline vocabulary: the regular (400) Lucide
 family with rounded ends and joins. Use its named constants, never raw Material
 icons, alternate stroke weights or text characters for app actions. A close
 button always uses `AppIcons.close`; plus, search, back, disclosure, folder,
 branch and check retain one silhouette everywhere.
+
+Small pane split/zoom controls use the shared `AppPaneIcon` optical variants:
+the same 24-unit grid, two-unit outline and round caps, with four-unit corners
+so their rounding remains visible at 14 points. This includes Restore. The
+close mark remains the unchanged Lucide ×; keep this adjustment in the shared
+icon implementation, not in individual pane widgets.
 
 Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
 illustration. Center the drawing optically inside its role's target; icon-only
@@ -202,6 +211,7 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
 | Tab close target inset from outer bounds | 8 |
+| Pane close target trailing inset | 4 |
 | Dialog content inset | 24 |
 | Group / control gap | 16 / 8 |
 | Menu inset | 6 |
@@ -265,7 +275,9 @@ are different states; keep existing results visible while refreshing.
 the “Harness anything” prompt; model, approvals and profile below; Worktree and
 branch together.
 The dialog is frameless over its veil. New Tab uses the same width on the page.
-Machine stays inside the repo search row.
+Agent and project capsules use an opaque neutral surface beneath their state
+tints, so workspace text never shows through them. Machine stays inside the
+repo search row.
 
 **Welcome and New Tab hierarchy** — creation is primary. Show at most six rows
 under “Recent harnesses”, separated from creation controls by 56 points. Use
@@ -314,12 +326,19 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the current model is a quiet text control immediately before
-an always-visible close icon at the right edge. Clicking the model focuses that
+**Pane header** — the right-hand controls read model, split down, split right,
+zoom, close. Use the rounded 14-point `AppPaneIcon` split/zoom variants and the
+shared 12-point close glyph in 28-point targets. The close target sits 4 points
+inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
+brighten the glyph without a fill, border, or movement. Keep the controls on one
+line; model and title text truncate before icon targets shrink. Zoom becomes
+Restore while enlarged. Unavailable controls stay in place with disabled ink.
+Split opens New Harness directly, inheriting the clicked pane's agent, machine,
+and project; the pane is created only after submission. Clicking the model focuses that
 pane and opens the same Models picker as Cmd-:. Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
-and keep the close target clear at narrow widths. Tab-strip close behavior is
+and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
 **Focused workspace footer** — remaining subscription usage at the left,
@@ -330,8 +349,8 @@ pane headers. Do not repeat model or effort in the footer. Context honors Custom
 status face, fields, colors and shell/Powerline treatment. Recent-harness
 context uses that same renderer's monochrome presentation to stay secondary.
 Use compact labels such as “Claude 0%  Codex 50%”, separated by whitespace only.
-Provider names stay neutral. Color only the remaining percentage: red at 0%,
-amber above 0% through 20%, neutral above 20% or when unavailable. Use shared
+Provider names stay neutral. Color only the remaining percentage: quiet amber
+from 0% through 20%, neutral above 20% or when unavailable. Use shared
 semantic ink adjusted to remain readable on the selected workspace surface;
 the number always conveys the state independently of color. These percentages are
 remaining, not used. Use the same deduplicated accounts, limiting window and

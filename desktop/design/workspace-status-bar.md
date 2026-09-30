@@ -1,5 +1,8 @@
 # Workspace status bar
 
+Use the [product terminology](../../docs/terminology.md): a tab groups harnesses;
+a harness is one running agent session.
+
 A navigation row above the panes and a 37.5 pt status row below them. Tabs use
 system type; status fields use the selected workspace monospace face.
 Follow the [desktop design system](desktop-design-system.md) and
@@ -47,7 +50,7 @@ shortcut replaces the status beside the name without changing the tab width.
 Hover never moves the title. Cmd-W, remapped shortcuts, native menu access,
 and middle-click closing remain available.
 Preserve reorder, rename, keyboard focus, and terminal sessions. Cmd-T opens a
-swarm. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
+tab. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
 on harnesses. Cmd-Shift-P opens commands (`>`). The projects list has
 no New Project/Open Folder row. Projects with an open pane in any tab come first;
 each group is alphabetical. Pane focus and navigation history do not change that
@@ -93,7 +96,7 @@ explain each symbol.
 | `\|\|` | Paused | Muted foreground |
 | `⊘` | Offline | Muted foreground |
 
-A swarm shows its most urgent member in the order above, counting a harness and
+A tab shows its most urgent member in the order above, counting a harness and
 its viewers once. For an individual harness, offline/paused/launch state takes
 precedence; a current question takes precedence over working. A new turn masks
 old results. Seeing a completion clears its unread check, but viewing a failed
@@ -137,8 +140,9 @@ use the shared system-type scale.
 
 ## Pane controls
 
-Each pane header shows its model immediately before an always-visible × at the
-right edge. Tab and pane close marks share a small regular glyph (12-point
+Each pane header ends with model, split down, split right, zoom and × at the
+right edge. The 14-point split/zoom glyphs and 12-point close glyph each have a
+28-point target, with no resting fill or border. Tab and pane close marks share a small regular glyph (12-point
 Lucide, optically matched 10-point SF Symbol) and quiet 45% resting ink, with
 full ink on hover/focus and the existing larger click
 targets. The close control removes that pane view while keeping its harness
@@ -154,7 +158,7 @@ uses the limiting window and expires under the same rules. Different accounts
 remain distinct. Unknown usage shows “—”; exhausted usage shows “0%”. Hover
 explains remaining percentages and reset windows; click opens Subscriptions.
 Separate accounts with whitespace, without dot separators. Provider names stay
-neutral; only percentages carry warning ink: red at zero, amber through 20%,
+neutral; only percentages carry quiet amber ink from zero through 20%,
 neutral above 20% or when unavailable. Resolve the same readable colors for the
 Flutter and native footers against the chosen workspace background.
 No account or usage reading is invented for this footer.
@@ -174,14 +178,16 @@ while offline, but do not advertise switching when it is disabled.
 A model update must repaint the label without reopening or retargeting the pane.
 The observed subscription model does not select a Local row in the picker.
 
-Zoom and Stop remain keyboard/menu actions. Cmd-Shift-W closes the focused pane
-view, Cmd-W closes the swarm, and Cmd-Enter toggles pane zoom. Closing a view
+Zoom is also available in the header and becomes Restore while enlarged.
+Stop remains a keyboard/menu action. Cmd-Shift-W closes the focused pane
+view, Cmd-W closes the tab, and Cmd-Enter toggles pane zoom. Closing a view
 keeps its harness running; Stop Harness remains a separate command with its
 existing confirmation. Preserve explicit user keymap overrides.
 
-Pane edges have no floating split buttons. Split Right and Split Down remain
-keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
-access. Keep the resize gaps available for resizing.
+Pane edges have no floating split buttons. Split Right and Split Down use the
+header, keyboard commands (Cmd-R and Cmd-D by default), File menu, and command
+search. All open New Harness directly with the source pane's defaults, without
+an existing-harness search step. Keep the resize gaps available for resizing.
 
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button
@@ -206,7 +212,41 @@ follow a dependent viewer's owner.
 
 ## Notifications
 
-A small bell sits in the top row between the search icon and the Harness Store button. Reserve four bar cells on both native macOS and Flutter; counts
+On macOS, the Harness menu bar uses the team's portrait symbol,
+stored as vector paths and rendered as a monochrome template. A small circular
+count badge sits at the bottom-right corner when notifications are unread.
+At zero, only the portrait icon is shown, with no number or badge circle. The badge
+sits slightly outside the mark so both remain legible. The combined template
+adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
+above 99 with the exact count in its tooltip and accessibility
+value. Its native menu lists only harnesses with unread
+notifications, grouped by their open tab's displayed name in tab order. Each
+section lists its newest notifications first. Sessions outside open tabs appear
+under “Other sessions” at the end. A session in multiple tabs appears once,
+preferring the active tab, then the first tab containing it. Machine profiles
+do not hide notification groups. Project and machine context stays in row
+tooltips. Read sessions disappear; an empty inbox says “No unread
+notifications.” Blue dots mark unread rows. Long titles truncate with
+their full text and context in tooltips; unavailable rows are disabled. Rows
+stay in place while the menu is open. New Harness and Open Harness open the
+same creation and existing-session pickers as the workspace commands. Clear All
+Notifications, Show Harness, Settings, and Quit follow. Show Harness only brings
+the app window forward and stays available when workspace actions are disabled.
+The window's titlebar
+has search and Store without a duplicate bell.
+
+![Native notification menu entries rendered offscreen with synthetic sessions](images/notification-tab-groups.png)
+
+Clear All acknowledges only the notifications in the displayed snapshot. Newer
+results and replacement questions stay unread. Opening a conversation restores
+its existing pane in the displayed tab before bringing the window forward. If
+that view moved or closed, navigation resolves the session's current location.
+Reading a question clears its notification, while the question itself remains
+pending until answered.
+The menu uses AppKit's standard keyboard navigation and accessibility.
+
+On Linux and the web, a small bell sits in the top row between the search icon
+and the Harness Store button. Reserve four bar cells in Flutter; counts
 never move the other controls. Put the count at the bell's upper-right corner,
 hide it at zero, show `99+` above 99, and keep the exact count in accessibility text.
 The bell has no background or button well, including on hover and keyboard
@@ -417,7 +457,9 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
 Pane headers keep task identity, model selection and an always-visible close action. The top bar
-contains tabs, New Tab, a plain search icon, the bell, and the Harness Store button.
+contains tabs, New Tab, a plain search icon, and the Harness Store button. Linux
+and browser bars also retain the notification bell. Leave an 8-point control gap
+before Store; macOS notifications live in the system menu bar.
 Search opens the existing unified picker; Store opens the existing Store tab.
 The Store restores its earlier rounded pill, colorful polymath mark, and quiet
 tinted fill. Its label is `Harness Store`, without brackets. Keep the full name

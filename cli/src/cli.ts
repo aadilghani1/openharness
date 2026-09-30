@@ -94,6 +94,7 @@ import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClie
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
+import { CompanionStartupProfile } from './pair/startupProfile.js'
 import { ConversationReview } from './pair/learn/conversationReview.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
 import { PlateService } from './pair/plateService.js'
@@ -193,6 +194,7 @@ import {
 import { Watcher, type HistoryEvent, type LineEvent } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
+import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
 import { AutonomousDeviceService } from './lib/autonomous-device/service.js'
@@ -235,7 +237,7 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
-import { updateTui } from './tui/install.js'
+import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
@@ -1218,7 +1220,7 @@ async function updateCommand(force: boolean): Promise<void> {
   // hn has its own release cadence. An already-current CLI must still refresh an installed hn;
   // a failed optional download must not stop the CLI from updating.
   if (isInstalledCli()) {
-    try { await updateTui((line) => console.log(line)) }
+    try { await updateManagedTui(SCRIPT_PATH, force, (line) => console.log(line)) }
     catch (error) { console.warn(`  hn update failed; continuing with the CLI update: ${error instanceof Error ? error.message : error}`) }
   }
   let entry: UpdateEntry | null = null
@@ -1330,9 +1332,8 @@ async function logout(): Promise<void> {
  * already wears the right id (a `harness login` on a computer that was signed in all along).
  */
 async function restartDaemonForIdentity(): Promise<void> {
-  // OUR daemon, by its pid file, before anything is asked over the port: the port is fixed and shared,
-  // and a login run against an isolated data dir (a test, a second HOME) must not reach across to a
-  // daemon that is not its own and restart it.
+  // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
+  // different OS user's daemon just because it happens to hold the default TCP port.
   const pid = readPid()
   if (!pid || !isAlive(pid)) return
   const daemon = await runningDaemonStatus()
@@ -1516,7 +1517,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error(`[tmux] unavailable: ${tmuxPath.reason} · install tmux and verify \`tmux -V\`,`
         + ' then restart — agents cannot be created or restored until then')
     } else if (tmuxPath.state === 'adopted') {
-      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.from} from the user's login shell`)
+      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.path} · ${tmuxPath.from}`)
     }
   }
   // The desktop's pane colours, for tmux's `window-style` (lib/hostTheme.ts): the last ones the app
@@ -3457,6 +3458,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
   const agentReconciler = new TerminalAgentReconciler({
+    // The hook server starts before restore. Its early SessionStart hints must not run a full
+    // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
+    deferUntilStart: true,
     current: () => registry.list(),
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
@@ -3870,7 +3874,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(env.PORT, {
+  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onPromptContext: (agentId) => companionPromptContext(agentId),
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
@@ -4262,7 +4266,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onZooRead: () => zooProxy.read(),
     onZooOps: (body) => zooProxy.ops(body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
-  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT) })
+  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), allowPortFallback: true })
+  try { saveDaemonPort(env.ADAPTER_DATA_DIR, env.PORT, hookPort) } catch (error) {
+    await localSocket?.close()
+    hookServer.close()
+    throw error
+  }
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
   // written by whoever spawned us — so a parent that died mid-handover left a daemon nothing could
   // manage — and then, for a while, by us at the top of this function, before the bind — so a child
@@ -4454,9 +4463,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
-    engine: async () => {
-      const found = await probeEngines(['claude', 'codex']).catch(() => [])
-      return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
+    engine: async (preferred) => {
+      if (!preferred) return null // A new collection chooses its engine in the viewer.
+      const found = await probeEngines([preferred]).catch(() => [])
+      return found.some(e => e.engine === preferred && e.installed) ? preferred : null
     },
     // The launcher when this daemon is the installed release it runs; otherwise exactly this process.
     mcpCommand: () => {
@@ -4500,6 +4510,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   isCollectionAgent = (agentId) => agentId === pairHarness.agentId()
   companionPromptContext = (agentId) => daemons.on() ? pairHarness.context(agentId) : null
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
+  const companionStartupProfile = new CompanionStartupProfile({
+    current: () => {
+      if (!daemons.on() || !pairSensor.pairedDaemon()) return null
+      const session = registry.advertised().find(s => s.agentId === pairHarness.agentId())
+      return session?.dsh === PAIR_HARNESS_DSH ? session : null
+    },
+    capture: (id) => captureTerminal(id, 60),
+  })
   const companionIntelligence = new CompanionIntelligence({
     enabled: () => daemons.on() && !!pairSensor.pairedDaemon(),
     current: () => {
@@ -4510,6 +4528,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
       return { agentId, sessionId: session.sessionId, engine: session.engine,
         profile: runtimeProfiles.selectedModel(session), stopped: !live,
+        startup: live ? companionStartupProfile.selected(session) : null,
         codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
     },
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
@@ -4523,7 +4542,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const lessonDistiller = new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() })
   const conversationReview = new ConversationReview({
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'learn'),
-    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.agentId() : null,
+    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.learningScope() : null,
     pairedDaemon: () => pairSensor.pairedDaemon(), intelligence: () => companionIntelligence.status(),
     turns: (from, to) => sessionSearch?.recentConversations(from, to) ?? null,
     cwd: (id) => registry.resolve(id)?.cwd ?? stoppedAgents.get(id)?.cwd ?? null,
@@ -4536,7 +4555,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     history: conversationReview,
     intelligence: () => companionIntelligence.status(),
     queueFile: () => {
-      const id = pairHarness.agentId()
+      const id = pairHarness.learningScope()
       return id ? join(env.ADAPTER_DATA_DIR, 'pair', 'learn', `queue-${id}.json`) : null
     },
     pairedDaemon: () => pairSensor.pairedDaemon(),
@@ -4588,7 +4607,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     fleet: pairFleet,
     // Template first, then this collection's selected model when it is ready.
     triage: new PairTriage({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, budgetMs: 30_000 }),
-    companionHarness: () => ({ agentId: pairHarness.agentId(), ...companionIntelligence.status() }),
+    companionHarness: () => ({ ...companionIntelligence.status(), agentId: pairHarness.agentId(), engine: pairHarness.engine() }),
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
@@ -4614,7 +4633,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     talk: (text, uid) => pairTalk(text, uid),
-    open: (uid) => pairHarness.open(uid),
+    open: async (uid, engine) => {
+      const previousEngine = pairHarness.engine()
+      const result = await pairHarness.open(uid, engine)
+      if (result.ok) {
+        if (engine && engine !== previousEngine) {
+          companionIntelligence.cancel()
+          conversationReview.engineChanged()
+        }
+        pairBrain?.stateChanged()
+        return { ...result, engine: pairHarness.engine() }
+      }
+      return result
+    },
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -5423,6 +5454,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const PANE_POLLED_ENGINES = new Set(['devin', 'cursor', 'grok', 'agy', 'opencode', 'kilo'])
   const PANE_POLL_MS = 15_000
   setInterval(() => {
+    void companionStartupProfile.refresh().then(() => companionProfileChanged()).catch(() => undefined)
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
       void captureTerminal(session.agentId, 60)
@@ -6971,11 +7003,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  */
 async function runningDaemonStatus(): Promise<{ version: string; sessions: number; machineId: string | null; connected: boolean } | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/status`, {
-      signal: AbortSignal.timeout(1_500),
-    })
-    if (!res.ok) return null
-    const body: unknown = await res.json()
+    const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
+      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
+    if (!body) return null
     const status = body as { version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown } | null
     const version = typeof status?.version === 'string' && status.version ? status.version : VERSION
     const sessions = Array.isArray(status?.sessions) ? status.sessions.length : 0
@@ -7181,9 +7211,11 @@ function clearAdapterState(): void {
     ]) {
       rmSync(join(dir, name), { recursive: true, force: true })
     }
-    // One daemon socket per control port (lib/localSocket.ts) — whichever ports have run here.
+    // Private sockets and actual TCP port records — whichever configured ports have run here.
     try {
-      for (const name of readdirSync(dir)) if (isLocalSocketName(name)) rmSync(join(dir, name), { force: true })
+      for (const name of readdirSync(dir)) {
+        if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
+      }
     } catch { /* no such directory */ }
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
@@ -7995,7 +8027,8 @@ const enterSafeMode = (err: unknown): void => {
   // itself was what failed, or we never got that far — take the port for the status alone, so the app
   // still reads not-ready rather than down. A port we cannot take at all leaves only a ticking clock.
   if (!daemonBoot.hookServer) {
-    const hosts = loopbackHosts(env.PORT)
+    const port = daemonPort()
+    const hosts = loopbackHosts(port)
     const status = createServer((req, res) => {
       if (!isLoopbackRequest(req, hosts)) { res.writeHead(403).end(); return }
       const body = safeModeStatusBody({
@@ -8006,11 +8039,11 @@ const enterSafeMode = (err: unknown): void => {
       res.end(JSON.stringify(body))
     })
     status.on('error', (e) => {
-      console.error(`[safe-mode] could not serve status on ${env.PORT}: ${e instanceof Error ? e.message : e}`)
+      console.error(`[safe-mode] could not serve status on ${port}: ${e instanceof Error ? e.message : e}`)
       // A ref'd timer, unlike the updater's: something has to hold the event loop open.
       setInterval(() => console.log(`[safe-mode] still waiting for a fixed build · v${VERSION}`), 10 * 60_000)
     })
-    status.listen(env.PORT, '127.0.0.1')
+    status.listen(port, '127.0.0.1')
   }
 
   // Bounded on purpose. A cause that has since cleared — tmux not yet on PATH after a reboot, a lock
@@ -8064,7 +8097,7 @@ switch (cmd) {
     runForeground(readAuthSession()).catch(enterSafeMode)
     break
   case 'autonomous-device':
-    runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)
+    runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair': {
     // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface
@@ -8157,7 +8190,7 @@ switch (cmd) {
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
-    tuiCommand(rest, { port: daemonPort(), signedIn: () => readAuthSession() !== null }).then((code) => { process.exitCode = code }).catch(onError)
+    tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({

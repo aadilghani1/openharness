@@ -12,6 +12,7 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'core/crash_log.dart';
 import 'core/desktop_window.dart';
+import 'core/linux_app_image.dart';
 import 'screens/login_screen.dart';
 import 'state/app_state.dart';
 import 'stats/stats_lifecycle.dart';
@@ -90,6 +91,9 @@ Future<void> startHarness({
       ),
     ),
   );
+  // After the first frame is on its way: a launcher entry is not worth
+  // holding the window up for.
+  unawaited(registerAppImageLauncher());
 }
 
 class HarnessApp extends StatelessWidget {

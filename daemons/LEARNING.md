@@ -67,6 +67,19 @@ on the machine is working — or after an hour regardless. One signal becomes at
 
 **Before the DSH is ready:** observations wait. Opening Companions and completing its real agent setup
 supplies the learning engine, model, and effort; changing the agent's model changes learning too.
+The companion home's **Powered by** menu explicitly selects Codex or Claude Code.
+That choice is remembered per collection, without a Claude-first default for new
+collections or automatic provider fallback. Engine conversations remain separate;
+the persisted observation queue, history-review window, and deduplication state use
+one stable collection key, retained when changing engines. An explicit switch can
+retry a provider quota wait with the newly selected engine once it is ready. It
+does not bypass the hourly cap or revive cancelled/completed reviews.
+The ready CLI banner can supply that profile before the first message binds a conversation. This
+startup observation is scoped to the live agent and process, refreshed every 15 seconds, and expires
+after 45 seconds without a successful read. It is never saved as an empty conversation or reused by
+another process; a dummy first message is not required.
+An agent without a conversation is not automatically paused by the idle timer, since there is no
+conversation to resume. Explicit stop and experimental-off still stop it.
 Experimental-off and watching consent remain the gates. The legacy `pair.jsonc.model` field is no
 longer a separate intelligence switch. An observed profile is retained for that conversation's idle
 pause, never borrowed from another agent or account. Custom provider connections without a supported

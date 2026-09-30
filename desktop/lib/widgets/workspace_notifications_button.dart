@@ -42,7 +42,7 @@ class WorkspaceNotificationsButton extends StatelessWidget {
           ),
           child: Icon(
             AppIcons.bell,
-            size: 17,
+            size: 16,
             color: foreground.withValues(
               alpha: onPressed == null
                   ? .28

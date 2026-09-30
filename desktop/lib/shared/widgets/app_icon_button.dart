@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 
 /// A compact icon button with the same rounded hover and focus well as the
@@ -10,7 +11,7 @@ class AppIconButton extends StatefulWidget {
     required this.icon,
     required this.onPressed,
     this.tooltip,
-    this.size = 15,
+    this.size = AppIcons.inlineSize,
     this.color,
     this.hoverColor,
     this.hoverFill,
@@ -35,8 +36,8 @@ class AppIconButton extends StatefulWidget {
   /// it is about to be pressable again.
   final bool spinning;
 
-  /// Glyph size. 15 is the inline default — a ✕ that clears a field, a dismiss
-  /// on a row. A dialog's own close is 18, the size the app draws it at.
+  /// Glyph size, independent of the 32-point target. Inline actions use 16;
+  /// workspace close marks use AppIcons.closeSize inside their existing target.
   final double size;
 
   /// Resting ink. Defaults to [AppPalette.textSecondary].
@@ -88,8 +89,7 @@ class AppIconButton extends StatefulWidget {
   /// A normal desktop target, independent of terminal cell size.
   static const double _box = 32;
 
-  /// 7 — the app's radius for a small inline button (`ghost_button.dart`,
-  /// `chat_header.dart`), and never rounder than the 8 of a control it sits in.
+  /// The same rounded control geometry as the rest of the desktop chrome.
   static const double _radius = AppDesktop.fieldRadius;
 
   @override

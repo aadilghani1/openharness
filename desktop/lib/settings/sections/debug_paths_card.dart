@@ -72,7 +72,7 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
         children: [
           Row(
             children: [
-              Icon(AppIcons.terminal, size: 15, color: AppPalette.textFaint),
+              Icon(AppIcons.terminal, size: 16, color: AppPalette.textFaint),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

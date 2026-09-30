@@ -137,6 +137,19 @@ export class ConversationReview {
     return { ok: true, review: this.status() }
   }
 
+  /** An explicit engine change keeps the pending review, but its old provider's quota wait no
+   * longer applies. Never starts a new review or revives a cancelled/completed one. */
+  engineChanged(): void {
+    this.load()
+    const job = this.saved.job
+    if (!job || !['queued', 'reviewing', 'waiting'].includes(job.state)) return
+    this.generation++; this.abort?.abort()
+    // The local hourly budget applies across engines; changing providers cannot bypass it.
+    if (job.error !== 'cap') { job.retryAt = 0; job.error = undefined }
+    job.state = 'queued'
+    this.save()
+  }
+
   /** Experimental-off cancels the old scope before that scope is cleared. */
   stop(): void {
     this.generation++; this.abort?.abort()

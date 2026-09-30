@@ -213,6 +213,10 @@ pub struct Picker {
     pub track_current: Option<String>,
     /// search(…): what is searched for in place of the query, until the query changes.
     pub search: Option<String>,
+    /// The look/theme picker: the section the cursor is inside (None: the section list is shown).
+    pub theme_in: Option<String>,
+    /// Opened from the command list (C-b Space): Esc goes back to it rather than closing.
+    pub from_commands: bool,
 }
 
 impl Picker {
@@ -290,6 +294,8 @@ impl Picker {
             excluded: Default::default(),
             track_current: None,
             search: None,
+            theme_in: None,
+            from_commands: false,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_reposition: Default::default(),

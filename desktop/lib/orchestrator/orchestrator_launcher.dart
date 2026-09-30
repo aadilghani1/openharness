@@ -4,13 +4,13 @@ import '../shared/widgets/labeled_field.dart';
 
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../shortcuts/app_shortcuts.dart' show altWorkspacePrefix;
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart';
 import 'orchestrator_controller.dart';
@@ -160,10 +160,10 @@ class _OrchestratorLauncherState extends State<OrchestratorLauncher> {
           padding: const EdgeInsets.all(24),
           child: CallbackShortcuts(
             bindings: {
-              const SingleActivator(
+              SingleActivator(
                 LogicalKeyboardKey.enter,
-                meta: !kIsWeb,
-                alt: kIsWeb,
+                meta: !altWorkspacePrefix,
+                alt: altWorkspacePrefix,
               ): _start,
             },
             child: Column(

@@ -192,7 +192,8 @@ void main() {
           brightness: switchPane ? Brightness.light : Brightness.dark,
         );
         await tester.enterText(_apiInput('key'), 'fixture-only-secret');
-        for (final id in ['visibility', 'options', 'cancel', 'save']) {
+        // One row under the fields, the job first: Save, Cancel, then the quieter ones.
+        for (final id in ['save', 'cancel', 'visibility', 'options']) {
           await key(tester, LogicalKeyboardKey.tab);
           expect(_buttonFocused(tester, _api(id)), isTrue);
         }
@@ -207,7 +208,7 @@ void main() {
         await tester.pump();
         await key(tester, LogicalKeyboardKey.tab, shift: true);
         expect(
-          switchPane ? query.hasFocus : _buttonFocused(tester, _api('save')),
+          switchPane ? query.hasFocus : _buttonFocused(tester, _api('options')),
           isTrue,
         );
         form.currentState!.focus();

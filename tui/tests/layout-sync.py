@@ -31,6 +31,7 @@ def scenario(mode, port, read_only=False):
     prefix = f'hn-layout-{os.getpid()}-{port}'
     env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ') if k in os.environ}
     env.update(HOME=str(base), HN_TMPDIR=str(base), HN_SOCKET_NAME=prefix, PORT=str(port),
+               ADAPTER_DATA_DIR=str(base / 'data'),
                TERM='xterm-256color', SHELL='/bin/sh', HARNESS_TUI_DESK='read' if read_only else 'sync',
                HN_DESKTOP='off', HARNESS_TUI_NOTIFY='off', MOCK_DEMO='1', MOCK_LAYOUT='1', MOCK_DESK=mode)
     peer_env = dict(env, HOME=str(base / 'peer'), HN_SOCKET_NAME=prefix + '-peer')

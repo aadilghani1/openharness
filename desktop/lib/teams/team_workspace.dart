@@ -547,7 +547,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
         controller: _rosterScroll,
         children: [
           Text(
-            model.isChannel ? 'Agents in this swarm' : 'Teammates',
+            model.isChannel ? 'Agents in this tab' : 'Teammates',
             style: DesktopChrome.control(medium: true),
           ),
           _gap(.5),
@@ -947,14 +947,11 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Agents consult relevant peers in this swarm and continue their work.',
+          'Agents consult relevant peers in this tab and continue their work.',
           style: style,
         ),
         _gap(),
-        Text(
-          'This tab is your swarm. Add another agent pane to include it.',
-          style: faint,
-        ),
+        Text('Add another agent pane to include it in this tab.', style: faint),
         for (final instruction in teamRows(
           model.team?['consultations'],
         ).reversed.take(5)) ...[
@@ -1025,7 +1022,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
     children: [
       if (model.selectedId != null && !_creating) ...[
         Text(
-          '${model.isChannel ? 'Swarm conversation · ' : ''}${model.members.where((m) => m['enabled'] != false).length} agents · ${model.isChannel ? 'This tab only · ' : ''}${model.team?['state'] ?? 'Connecting'}',
+          '${model.isChannel ? 'Tab conversation · ' : ''}${model.members.where((m) => m['enabled'] != false).length} agents · ${model.isChannel ? 'This tab only · ' : ''}${model.team?['state'] ?? 'Connecting'}',
           style: faint,
         ),
         _gap(.5),
@@ -1105,7 +1102,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
               _loadingRows()
             else
               _action(
-                model.isChannel ? 'Retry reading swarm' : 'Retry reading team',
+                model.isChannel ? 'Retry reading tab' : 'Retry reading team',
                 () => unawaited(model.refresh()),
               ),
           ],
@@ -1127,7 +1124,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                 children: [
                   _summary(),
                   Text(
-                    model.isChannel ? 'Agents in this swarm' : 'Teammates',
+                    model.isChannel ? 'Agents in this tab' : 'Teammates',
                     style: DesktopChrome.control(medium: true),
                   ),
                   _gap(.5),
@@ -1210,9 +1207,9 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
     final title = _creating
         ? 'Connect a team'
         : model.team?['name'] as String? ??
-              (model.isChannel ? 'Swarm conversation' : 'Team');
+              (model.isChannel ? 'Tab conversation' : 'Team');
     final hint =
-        '${terminalPromptHint(context, 'picker.complete', 'Tab')} move · ${terminalPromptHint(context, 'picker.cancel', 'Esc')} close · conversations stay with the ${model.isChannel ? 'swarm' : 'team'}';
+        '${terminalPromptHint(context, 'picker.complete', 'Tab')} move · ${terminalPromptHint(context, 'picker.cancel', 'Esc')} close · conversations stay with the ${model.isChannel ? 'tab' : 'team'}';
     return TerminalPromptKeys(
       cancel: widget.onClose,
       refresh: () => unawaited(model.refresh()),

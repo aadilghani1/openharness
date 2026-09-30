@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_pane_icon.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -46,6 +47,7 @@ import 'engine_identity.dart';
 import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
+import 'pane_share_badge.dart';
 import 'pane_model_status.dart';
 
 /// The pane header's own horizontal inset.
@@ -115,6 +117,9 @@ class TerminalPanel extends StatefulWidget {
 
   /// Opens the workspace's shared model picker for this exact pane.
   final VoidCallback? onOpenModels;
+
+  /// Creates a new harness beside this exact pane.
+  final VoidCallback? onSplitDown, onSplitRight;
 
   final VoidCallback? onDelete;
 
@@ -189,6 +194,8 @@ class TerminalPanel extends StatefulWidget {
     this.onToggleComposer,
     this.onClose,
     this.onOpenModels,
+    this.onSplitDown,
+    this.onSplitRight,
     this.onDelete,
     this.onToggleZoom,
     this.zoomed = false,
@@ -2108,7 +2115,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
-    // Behind harnesses: each part paints its own fill at this opacity (the
+    // Over a Background: each part paints its own fill at this opacity (the
     // header, the screen) or solid (the composer), over nothing — a fill
     // underneath them all would stack with theirs.
     final paneOpacity = PaneOpacity.of(context);
@@ -2465,6 +2472,8 @@ class _TerminalPanelState extends State<TerminalPanel>
       compact: widget.compactHeader,
       close: widget.onClose != null,
       openModels: widget.onOpenModels != null,
+      splitDown: widget.onSplitDown != null,
+      splitRight: widget.onSplitRight != null,
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
@@ -2490,6 +2499,12 @@ class _TerminalPanelState extends State<TerminalPanel>
         onOpenModels: widget.onOpenModels == null
             ? null
             : () => widget.onOpenModels?.call(),
+        onSplitDown: widget.onSplitDown == null
+            ? null
+            : () => widget.onSplitDown?.call(),
+        onSplitRight: widget.onSplitRight == null
+            ? null
+            : () => widget.onSplitRight?.call(),
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
@@ -2567,6 +2582,7 @@ class _TerminalHeader extends StatelessWidget {
   final bool readOnly;
   final VoidCallback? onClose;
   final VoidCallback? onOpenModels;
+  final VoidCallback? onSplitDown, onSplitRight;
 
   /// Ends the agent (with a confirmation), as the rail's row menu does. Null
   /// where the pane cannot name a live agent to end.
@@ -2604,6 +2620,8 @@ class _TerminalHeader extends StatelessWidget {
     this.readOnly = false,
     this.onClose,
     this.onOpenModels,
+    this.onSplitDown,
+    this.onSplitRight,
     this.onDelete,
     required this.onReconnect,
     this.compact = false,
@@ -2705,21 +2723,46 @@ class _TerminalHeader extends StatelessWidget {
     final showModelPicker = modelPickerSupports(session.engineId);
     // The picker: a model id up to 220px and its padding.
     final pickerWidth = showModelPicker ? 250.0 : 0.0;
-    final closeWidth = onClose == null
-        ? 0.0
-        : workspaceBarCellSizeOf(context).width * 3;
-    final actionsWidth = pickerWidth + closeWidth;
+    final showSplit = compact || onSplitDown != null || onSplitRight != null;
+    final showZoom = compact || onToggleZoom != null;
+    final controlsWidth =
+        ((showSplit ? 2 : 0) + (showZoom ? 1 : 0) + (onClose != null ? 1 : 0)) *
+        PaneHeaderButton.width;
+    final actionsWidth = pickerWidth + controlsWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
     final header = SizedBox(
       height: compact ? 38 : 46,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
+        padding: const EdgeInsets.only(
+          left: _stripPadding,
+          right: grid.AppDesktop.paneCloseInset,
+        ),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final scale = grid.appTextScaleOf(context);
             final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+            // At the smallest widths, connection state takes the leading
+            // mark's place so the pane name survives beside the fixed tools.
+            final leadingStatus =
+                compact && constraints.maxWidth < 280 && status != null;
+            Widget statusButton() => Tooltip(
+              message: '${status!.label}: ${status.detail}',
+              child: IconButton(
+                tooltip: status.actionLabel ?? status.label,
+                onPressed: statusAction,
+                icon: Icon(status.icon, size: 14),
+                style: IconButton.styleFrom(
+                  foregroundColor: color,
+                  disabledForegroundColor: color,
+                  fixedSize: const Size(28, 28),
+                  minimumSize: const Size(28, 28),
+                  padding: EdgeInsets.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            );
             // Workspace panes show PR state once in the main status bar.
             // Standalone terminals retain their own PR badge.
             final showPr =
@@ -2756,7 +2799,7 @@ class _TerminalHeader extends StatelessWidget {
 
             final desiredRightWidth = narrow
                 ? math.max(
-                    (showModelPicker ? 96.0 : 0.0) + badgeWidth,
+                    controlsWidth + (showModelPicker ? 96.0 : 0.0) + badgeWidth,
                     constraints.maxWidth * .36,
                   )
                 : math.max(
@@ -2768,27 +2811,36 @@ class _TerminalHeader extends StatelessWidget {
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
               compact
-                  ? math.min(actionsWidth, constraints.maxWidth * .38)
+                  ? controlsWidth +
+                        math.min(
+                          pickerWidth,
+                          math.max(
+                            56.0,
+                            (constraints.maxWidth - controlsWidth) * .38,
+                          ),
+                        )
                   : desiredRightWidth,
               math.max(0.0, constraints.maxWidth - 99),
             );
             return Row(
               children: [
-                if (agent != null)
+                if (leadingStatus)
+                  statusButton()
+                else if (agent != null)
                   EngineMark.forAgent(agent, size: 17)
                 else
                   EngineMark(engine: session.engineId, size: 17),
                 // Icon and name, the same as every other pane (owner,
                 // 2026-09-15): a harness agent is its harness here, and the
                 // engine it runs on is the dialog's and the tooltip's to say.
-                const SizedBox(width: 10),
+                SizedBox(width: leadingStatus ? 6 : 10),
                 Expanded(
                   child: Row(
                     children: [
                       Flexible(
                         child: Tooltip(
                           message: identityDetail,
-                          waitDuration: const Duration(milliseconds: 700),
+                          waitDuration: const Duration(milliseconds: 500),
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onDoubleTap: () => unawaited(
@@ -2815,26 +2867,13 @@ class _TerminalHeader extends StatelessWidget {
                         machineId: session.machineId,
                         agentId: session.agentId,
                       ),
-                      if (status != null || starting != null || !compact)
+                      if ((status != null && !leadingStatus) ||
+                          starting != null ||
+                          !compact)
                         const SizedBox(width: 8),
-                      if (status != null && narrow)
-                        Tooltip(
-                          message: '${status.label}: ${status.detail}',
-                          child: IconButton(
-                            tooltip: status.actionLabel ?? status.label,
-                            onPressed: statusAction,
-                            icon: Icon(status.icon, size: 14),
-                            style: IconButton.styleFrom(
-                              foregroundColor: color,
-                              disabledForegroundColor: color,
-                              fixedSize: const Size(28, 28),
-                              minimumSize: const Size(28, 28),
-                              padding: EdgeInsets.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ),
-                        )
-                      else if (status != null)
+                      if (status != null && narrow && !leadingStatus)
+                        statusButton()
+                      else if (status != null && !leadingStatus)
                         ConstrainedBox(
                           constraints: BoxConstraints(
                             maxWidth: math.max(
@@ -2889,9 +2928,9 @@ class _TerminalHeader extends StatelessWidget {
                             ),
                           ),
                         )
-                      else if (starting != null && narrow)
+                      else if (status == null && starting != null && narrow)
                         PaneStartingChip(phase: starting, narrow: true)
-                      else if (starting != null)
+                      else if (status == null && starting != null)
                         // Never wider than the room this row is sure to have: the name's
                         // share (at most 45%) or what the actions and the PR badge leave —
                         // less [_headerFurniture]. Its words shorten rather than push the
@@ -2914,12 +2953,15 @@ class _TerminalHeader extends StatelessWidget {
                       else if (!compact)
                         Padding(
                           padding: const EdgeInsets.all(4),
-                          child: Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: color,
+                          child: Tooltip(
+                            message: 'Terminal connected',
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: color,
+                              ),
                             ),
                           ),
                         ),
@@ -2927,6 +2969,16 @@ class _TerminalHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                // Keep sharing status outside the model/action width budget.
+                // It follows the title and precedes the model and pane controls.
+                if (agent != null && PaneShareStatus.visibleOf(context))
+                  PaneShareBadge(
+                    notifier: notifier,
+                    machineId: session.machineId,
+                    agentId: agent.id,
+                    name: agent.displayName,
+                    compact: narrow,
+                  ),
                 // Which of the three paths carries this pane's bytes. Absent for a local machine's own
                 // terminal, which has no such distinction and so gets no badge.
                 //
@@ -2941,7 +2993,7 @@ class _TerminalHeader extends StatelessWidget {
                   ),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: math.max(0, rightWidth - closeWidth),
+                    maxWidth: math.max(0, rightWidth - controlsWidth),
                   ),
                   child: PaneHeaderActions(
                     trailing: showPr
@@ -3034,6 +3086,30 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
+                if (showSplit) ...[
+                  PaneHeaderButton(
+                    key: const ValueKey('pane-split-down'),
+                    label: 'New Pane Below',
+                    command: 'pane.split_down',
+                    icon: AppPaneSymbol.splitDown,
+                    onPressed: onSplitDown,
+                  ),
+                  PaneHeaderButton(
+                    key: const ValueKey('pane-split-right'),
+                    label: 'New Pane to the Right',
+                    command: 'pane.split_right',
+                    icon: AppPaneSymbol.splitRight,
+                    onPressed: onSplitRight,
+                  ),
+                ],
+                if (showZoom)
+                  PaneHeaderButton(
+                    key: const ValueKey('pane-zoom'),
+                    label: zoomed ? 'Restore Pane' : 'Zoom Pane',
+                    command: 'pane.zoom',
+                    icon: zoomed ? AppPaneSymbol.restore : AppPaneSymbol.zoom,
+                    onPressed: onToggleZoom,
+                  ),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );

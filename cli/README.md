@@ -63,20 +63,20 @@ it uses temporary identities and loopback sockets, never live machine state.
 
 ## Install & run (`harness`)
 
-Install the CLI, then sign in once with the same SSO account used by Harness:
+Install the CLI and run `hn` to work locally. Sign in when you want to connect other machines:
 
 ```bash
 curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 ```
 
 (The installer is a first-party hosted script. It brings its own Node, downloads the published
-bundle and writes the `~/.local/bin/harness` command, and `hn`: Harness in a terminal, which signs in
-and starts the daemon the first time you run it.)
+bundle and writes the `~/.local/bin/harness` command, and `hn`: Harness in a terminal, which starts
+your local daemon the first time you run it. Local use requires no login.)
 
 ```bash
 harness login         # opens browser SSO and saves this computer's session
 harness login --force # stop the daemon and sign in as a different SSO account
-harness start         # starts the adapter from the saved SSO session
+harness start         # starts the local adapter; uses a saved SSO session if present
 harness start -f      # foreground mode for a supervisor; logs to stdout
 harness status     # is it running? shows pid + the chat link
 harness stop       # stop the background adapter

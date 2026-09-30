@@ -138,9 +138,17 @@ keep running and the next launch uses the update. Failures retry without blockin
 An hn release still uses `release-tui.yml`; publishing a CLI does not rebuild or republish hn.
 The CLI updater discovers whichever hn release is latest, so an hn-only release reaches
 existing installations too. `ADAPTER_UPDATE_DISABLE=true` covers both automatic updaters.
-Checkout/local CLI builds, `HARNESS_TUI_BIN` overrides, symlinked hn binaries and hn development
-version labels are left alone. A missing hn is installed on first use or by the installer.
-`harness tui --install` remains the explicit reinstall command.
+Checkout/local CLI builds, `HARNESS_TUI_BIN` overrides, symlinked managed binaries and hn development
+version labels are left alone. A missing managed binary is repaired on the next update check when
+the managed `hn` launcher is present; otherwise first use or the installer downloads it.
+
+Older manual/development `hn` commands can bypass this managed binary. `harness update` diagnoses
+these installations, including a different `hn` earlier on PATH. `harness tui --install` or
+`harness update --force` verifies the latest download, backs up a recognized old Harness launcher
+under `~/.local/bin/.hn-backup-*/hn`, and replaces it with a launcher that follows `harness tui`.
+An unrelated command is preserved; use `harness tui` or correct PATH in that case. Explicit
+`HARNESS_TUI_BIN` overrides remain in effect until unset. The installer never writes through
+an existing `hn` symlink.
 
 ## Rolling out safely
 

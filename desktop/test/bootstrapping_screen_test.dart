@@ -29,6 +29,23 @@ Widget _host({
 }
 
 void main() {
+  testWidgets('the heading and the status sit in the middle of the window', (
+    tester,
+  ) async {
+    // The block is up to 470 wide and its lines are shorter; start-aligned, they
+    // read as sitting left of centre.
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_host(message: 'Starting local service…'));
+    await tester.pump(const Duration(milliseconds: 100));
+    final middle = tester.getSize(find.byType(BootstrappingScreen)).width / 2;
+    for (final text in ['Opening your workspace', 'Starting local service…']) {
+      final centre = tester.getCenter(find.text(text)).dx;
+      expect((centre - middle).abs(), lessThan(24), reason: text);
+    }
+  });
+
   testWidgets('opens with a task heading and a truthful fallback status', (
     tester,
   ) async {

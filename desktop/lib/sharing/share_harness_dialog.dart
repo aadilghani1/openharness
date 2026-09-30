@@ -77,6 +77,9 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   @override
   void initState() {
     super.initState();
+    // The dialog veil autofocuses its own Escape scope first, and only one
+    // autofocus wins per scope — so the form asks for the keys itself.
+    _focusPane();
     unawaited(_load());
     _presence = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!_busy) unawaited(_load(quiet: true));

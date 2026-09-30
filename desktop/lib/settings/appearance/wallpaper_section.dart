@@ -35,7 +35,7 @@ class WallpaperSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Shown on new tabs, and behind your harnesses if you like.',
+            'Shown behind the panes of running harness tabs.',
             style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 16),
@@ -85,10 +85,10 @@ class WallpaperSection extends StatelessWidget {
             const SizedBox(height: 20),
             _CustomControls(prefs: prefs, custom: value.custom),
           ],
-          // Blank has nothing to show through; the choice is kept for later.
-          if (value.background != HarnessBackground.plain) ...[
+          // Blank has nothing to show through.
+          if (value.showsBackground) ...[
             const SizedBox(height: 20),
-            _BehindHarnessesControls(prefs: prefs, value: value),
+            _PaneOpacityControl(prefs: prefs, value: value),
           ],
         ],
       ),
@@ -297,7 +297,7 @@ class _CustomCardState extends State<_CustomCard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        Icons.add_photo_alternate_outlined,
+                        AppIcons.imagePlus,
                         color: grid.AppPalette.textSecondary,
                       ),
                       const SizedBox(height: 6),
@@ -412,9 +412,9 @@ class _CustomControls extends StatelessWidget {
   }
 }
 
-/// Behind harnesses, and how solid the panes stay while it shows through them.
-class _BehindHarnessesControls extends StatelessWidget {
-  const _BehindHarnessesControls({required this.prefs, required this.value});
+/// How solid the panes stay while the background shows through them.
+class _PaneOpacityControl extends StatelessWidget {
+  const _PaneOpacityControl({required this.prefs, required this.value});
   final AppearancePrefsStore prefs;
   final AppearancePrefs value;
 
@@ -425,46 +425,29 @@ class _BehindHarnessesControls extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile(
-          key: const ValueKey('background-behind-harnesses'),
-          contentPadding: EdgeInsets.zero,
-          value: value.behindHarnesses,
-          onChanged: (on) => prefs.setBehindHarnesses(on: on),
-          title: Text('Behind harnesses', style: label),
-          subtitle: Text(
-            'Show it through the panes of running tabs.',
-            style: grid.AppType.label(color: grid.AppPalette.textSecondary),
-          ),
+        Text('Pane opacity', style: label),
+        Row(
+          children: [
+            Expanded(
+              child: Slider(
+                key: const ValueKey('background-pane-opacity'),
+                value: value.paneOpacity,
+                min: AppearancePrefs.paneOpacityMin,
+                divisions: 20,
+                label: percent,
+                onChanged: prefs.setPaneOpacity,
+              ),
+            ),
+            SizedBox(
+              width: 44,
+              child: Text(
+                percent,
+                textAlign: TextAlign.end,
+                style: grid.AppType.label(color: grid.AppPalette.textSecondary),
+              ),
+            ),
+          ],
         ),
-        if (value.behindHarnesses) ...[
-          const SizedBox(height: 8),
-          Text('Pane opacity', style: label),
-          Row(
-            children: [
-              Expanded(
-                child: Slider(
-                  key: const ValueKey('background-pane-opacity'),
-                  value: value.paneOpacity,
-                  min: AppearancePrefs.paneOpacityMin,
-                  divisions: 20,
-                  label: percent,
-                  onChanged: (opacity) =>
-                      prefs.setBehindHarnesses(opacity: opacity),
-                ),
-              ),
-              SizedBox(
-                width: 44,
-                child: Text(
-                  percent,
-                  textAlign: TextAlign.end,
-                  style: grid.AppType.label(
-                    color: grid.AppPalette.textSecondary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
       ],
     );
   }

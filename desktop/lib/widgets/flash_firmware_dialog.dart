@@ -447,7 +447,7 @@ class _FlashDialogState extends State<_FlashDialog> {
               children: [
                 Icon(
                   AppIcons.squareTerminal,
-                  size: 13,
+                  size: 14,
                   color: grid.AppPalette.textFaint,
                 ),
                 const SizedBox(width: 8),

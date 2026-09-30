@@ -819,6 +819,7 @@ class DaemonBrain extends ChangeNotifier {
   DateTime? _talkRetryAt;
   Timer? _talkRetryTimer;
   String? _pairAgentId;
+  String? _pairEngine;
   String? _conversationScope, _companionUid;
   int _conversationGeneration = 0;
   bool _historyLoading = false;
@@ -866,6 +867,7 @@ class DaemonBrain extends ChangeNotifier {
 
   /// The pair harness's agent id on this computer, once a talk reached it.
   String? get pairAgentId => _pairAgentId;
+  String? get pairEngine => _pairEngine;
 
   /// The talk so far, oldest first: what you said and what it answered.
   List<DaemonTalkEntry> get talk => List.unmodifiable(_talk);
@@ -885,7 +887,10 @@ class DaemonBrain extends ChangeNotifier {
     _talkPhase = DaemonTalkPhase.idle;
     _talkNeedsSetup = false;
     _talkError = null;
-    if (!sameCollection || uid == null) _pairAgentId = null;
+    if (!sameCollection || uid == null) {
+      _pairAgentId = null;
+      _pairEngine = null;
+    }
     _talk.clear();
     _heardReplies.clear();
     notifyListeners();
@@ -1038,7 +1043,10 @@ class DaemonBrain extends ChangeNotifier {
       case 'daemon_state':
         _state = DaemonBrainState.fromJson(payload);
         final harness = payload['companionHarness'];
-        if (harness is Map) _pairAgentId = _opt(harness['agentId']);
+        if (harness is Map) {
+          _pairAgentId = _opt(harness['agentId']);
+          _pairEngine = _opt(harness['engine']);
+        }
         notifyListeners();
       case 'daemon_say':
         final say = DaemonSay.fromJson(payload);
@@ -1264,16 +1272,20 @@ class DaemonBrain extends ChangeNotifier {
 
   /// Opening a DSH starts/resumes its terminal without sending any words or
   /// Enter key. Trust, login and permissions remain in the engine's own UI.
-  Future<Map<String, dynamic>> openConversation() async {
+  Future<Map<String, dynamic>> openConversation({String? engine}) async {
     final generation = _conversationGeneration;
     final uid = _companionUid;
     if (uid == null) return {'ok': false, 'error': 'PAIR_OFF'};
-    final result = await _requestFrame('daemon_open', {'companionUid': uid});
+    final result = await _requestFrame('daemon_open', {
+      'companionUid': uid,
+      'engine': ?engine,
+    });
     if (_disposed || generation != _conversationGeneration) {
       return {'ok': false, 'error': 'STALE_COMPANION'};
     }
     if (result['ok'] == true) {
       _pairAgentId = _opt(result['agentId']);
+      _pairEngine = _opt(result['engine']) ?? _pairEngine;
       notifyListeners();
     }
     return result;
@@ -1456,6 +1468,7 @@ class DaemonBrain extends ChangeNotifier {
     _talkRetryTimer = null;
     _talkRetryAt = null;
     _pairAgentId = null;
+    _pairEngine = null;
     _talk.clear();
     if (!_disposed) notifyListeners();
   }

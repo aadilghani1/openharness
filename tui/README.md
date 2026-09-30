@@ -15,6 +15,13 @@ the CLI is already current. `ADAPTER_UPDATE_DISABLE=true` disables automatic upd
 local CLI builds and `HARNESS_TUI_BIN` overrides stay untouched. The first hn launch downloads
 it if missing; `harness tui --install` explicitly reinstalls the latest published build.
 
+If `hn --version` stays old after an update, run `harness update` to check the launcher too.
+Old manual or development installs can bypass automatic updates. `harness tui --install` or
+`harness update --force` backs up a recognized old Harness launcher and switches it to managed
+updates after verifying the download. Unrelated commands and explicit `HARNESS_TUI_BIN` overrides
+are preserved; the update output explains any PATH conflict. A missing binary behind a managed
+launcher is restored automatically.
+
 hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your harnesses on
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).
@@ -32,9 +39,11 @@ with the desktop and phone. With no daemon available, hn opens local shells inst
 PTY supervisor keeps them running through detach, reconnect and a client crash. These local
 sessions stay on this computer and remain intact when Harness reconnects.
 
-On a fresh server `hn` signs in (over SSH the login prints a URL and takes the pasted
-callback), starts the daemon, then opens. If sign-in or daemon startup fails, it still opens
-a local shell. Like `tmux new -A`, it restores your swarms if the desk has any,
+On a fresh computer `hn` starts your local daemon and opens without requiring an account.
+Sign in with `harness login` when you want your other machines and shared desk. If daemon startup
+fails, hn still opens a local shell. Each OS user connects through their own private Unix socket;
+hn never attaches to another user's daemon merely because it occupies the default TCP port.
+Like `tmux new -A`, it restores your swarms if the desk has any,
 else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
 
@@ -48,8 +57,8 @@ this computer unless you name it); the others are this computer's, kept between 
 
 **More than one terminal** works as with one tmux server. Each `hn` is a client. `hn attach -t
 main` from a second terminal (or over SSH) shows `main` in both, as tmux does: a split, a new
-window or a window chosen in either shows in both, and either can type into its panes (the first
-key takes the pane's keyboard). `attach -r` only watches; `attach -d` takes the session and
+window or a window chosen in either shows in both, and either can type into its panes (typing
+into a watcher takes control across that TUI's tabs). `attach -r` only watches; `attach -d` takes the session and
 detaches the others. Commands from a shell reach every session, whichever terminal has it. `hn
 ls`, `list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in
 any order: the last one showing a session keeps it. What tmux's server
@@ -64,8 +73,9 @@ flags are accepted (hn already works that way) and `-c` runs a command in your s
 
 ## Keys
 
-tmux's. The prefix is `C-b`; `C-b s` then Enter goes to any harness (its window, or a window of its own), `C-v` or `C-x` puts it beside or below; every default tmux binding does what it does in tmux, with a window
-being a swarm and a pane showing a harness. If you have a `~/.tmux.conf`, it is read: your prefix and
+tmux's. The prefix is `C-b`; `C-b s` then Enter adds a harness to the current window, `C-t` opens
+it in a new window, and `C-v` or `C-x` puts it beside or below. An already-open harness is focused.
+A window is a swarm and a pane shows a harness. If you have a `~/.tmux.conf`, it is read: your prefix and
 binds (copy-mode-vi's and vim-tmux-navigator's too), `source-file`, `if-shell`, `base-index`,
 `renumber-windows`, `mouse`, `mode-keys`, `status-left`/`status-right` and the window formats
 (`#[…]` styles, `#{?…}`, `%H:%M`), `pane-border-format`, `synchronize-panes` and your colours come
@@ -79,10 +89,10 @@ Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pa
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
 with one-cell gaps and inset terminal content. Panes have no drawn borders: background
-contrast identifies focus. The focused pane keeps the terminal's native background across the
-whole surface. Inactive dark panes use `rgb(64, 64, 64)` with softer text, separated by dark gaps.
-A lone or zoomed pane keeps the same focused surface and surrounding canvas. Light terminals
-keep a light counterpart.
+contrast identifies focus. The margins and gaps keep the terminal's native background. The focused
+pane uses a subtly contrasting fill (`#181818` on a black terminal), while inactive dark panes use
+`rgb(64, 64, 64)` with softer text. A lone or zoomed pane keeps the same focused surface. Light
+terminals keep a light counterpart.
 Explicit pane-border styles still customize the title; border line choices apply in classic and
 tmux appearances.
 Explicit program colors and user styles stay intact. The muted green status bar has a continuous
@@ -105,9 +115,16 @@ fleet counts, the quoted local machine name and clock sit on the right. The git 
 header, aligned to the right with its PR and written `⎇ branch` without redundant punctuation.
 Status-bar groups are separated by two spaces, with one space at each outer edge to align
 with the pane surfaces. Window tabs start at the left, without a machine/session label.
-The right side shows the machine running hn by its name in the app, such as `"office"`,
-falling back to its hostname, independent of the focused pane or session name.
+Local and remote machines use their names from the app everywhere, such as `"office"`.
+Local shell panes keep that same name across daemon disconnects and reconnects. Unnamed account
+machines use `machine-<id8>`, as on desktop and phone; before this computer is known, it is
+`This computer`. The status bar names the machine running hn, independent of the focused pane
+or session name.
 Custom status formats and the prefix cue remain supported.
+Take Control (`C-b : take-control`, or `take`) reclaims all available local and remote panes
+across the TUI's tabs, including hidden ones, without changing focus. Typing into a watched pane
+does the same; the input goes only to that pane. Reconnects keep watching until a person asks
+for control again, and read-only clients keep their read-only behavior.
 One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).
@@ -140,11 +157,12 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
 `C-b N` opens the compact desktop-style New Harness form with Agent, Project, collapsed
-Options and New Harness. The initial destination is the local machine, with successful agent
+Options and New Harness. The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; Up/Down moves between fields and previews their chooser. Enter,
 Right or typing enters the chooser. Tab switches between the form and chooser; Enter accepts
-an item and returns to New Harness. A second Enter starts it. Lowercase `C-b n` remains next window.
+an item and returns to New Harness. A second Enter starts it in the current window, splitting
+beside the focused pane when needed. Lowercase `C-b n` remains next window.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
 compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
@@ -161,8 +179,10 @@ never reaches a working pane. No reverse-video selection is used.
 
 
 In the harness and command lists, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
-`S-↑/↓` scrolls it, `M-/` wraps long rows (`--wrap`), `C-a C-e C-w C-u` edit the query, `enter`
-opens, `C-t` in a new window, `C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works
+`S-↑/↓` scrolls it, `M-/` wraps long rows (`--wrap`), `C-a C-e C-w C-u` edit the query. In the harness
+list, `enter` adds a pane in the current window, `C-t` opens in a new window, `C-v` beside, `C-x`
+below; an already-open harness is focused. In the command list, `enter` runs the command. `esc`
+leaves. fzf's search syntax works
 (`'exact ^prefix suffix$ !not a | b`), and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`,
 `16`, `bw`). One key differs on purpose: fzf 0.67 binds `ctrl-/` to toggle-wrap as well as `alt-/`,
 but hn keeps `C-/` for the preview, as fzf's own README binds `ctrl-/` in its preview examples and
@@ -207,13 +227,14 @@ pane counts as done and unread (`✓`) until you go to that pane.
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
   the first line of its final message), or why it failed (`The agent did not start within 60
   seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`), its
-  project when there are several, and how long it has been that way. Enter goes to it: its window,
-  or a window of its own (`C-v` / `C-x` beside or below, `M-Enter` in place of this pane). Typing
+  project when there are several, and how long it has been that way. Enter adds it as a pane in
+  the current window, or focuses it if already open (`C-t` in a new window, `C-v` / `C-x` beside or
+  below, `M-Enter` in place of this pane). Typing
   filters as fzf does, by name, project, branch, machine, pull request (`'4812`) or state
   (`'waiting`, `'failed`, `'done`, `'working`, `'idle`). From the list, without opening it: `M-m`
   marks it read (`M-M` every row shown), `M-s` sends it a message, `M-r` restarts it, `M-1…9` /
-  `M-a` answer it; marked rows open a window each. The list stays ranked while it is open. The preview adds its
-  final message whole, what it was last asked, its plan (its to-do list,
+  `M-a` answer it; Enter adds marked rows as panes, while `C-t` opens a window each. The list stays
+  ranked while it is open. The preview adds its final message whole, what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).
 - **A session per project**: in `C-b s` then `#` (the projects, each with its counts), `C-t` makes
@@ -260,7 +281,7 @@ has multiple accounts, extra remote accounts say `Claude@studio 20%` to distingu
 and Codex; Grok and other providers are not listed until a quota source is available. Existing
 `usage`, `usage_high` and `usage_high_mark` formats retain their used-quota meaning for custom
 configurations. Other formats:
-`#{local_machine}` (this computer's name in the app, falling back to its hostname),
+`#{local_machine}` (this computer's name in the app),
 `#{pane_machine}` (the focused pane's machine), `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
@@ -347,7 +368,9 @@ are sitting at, over SSH too.
 ## Two windows, one harness
 
 A terminal has one keyboard. Opening a harness another window is driving shows it read-only
-("watching"); the first key you type takes it over, and the other window starts watching.
+("watching"); taking control here reclaims this TUI's panes across all tabs, and the other
+window starts watching. The first key typed into a watcher also takes control, preserving that
+key for its intended pane.
 
 ## The dial
 
@@ -402,7 +425,8 @@ notify = true              # OS notifications through the terminal
 | `HARNESS_TUI_DESK=off` | keep tabs to this window |
 | `HARNESS_TUI_PREDICT` | `off` / `always` (see Speed) |
 | `HARNESS_TUI_BIN` | the binary `harness tui` runs |
-| `PORT` | the daemon's port (default 18473) |
+| `PORT` | the configured daemon port naming this user's private socket (default 18473) |
+| `ADAPTER_DATA_DIR` | daemon state directory (default `~/.harness/cli/data`); hn and the CLI must use the same one |
 | `HN_DESKTOP=on` / `off` | whether the desktop app is running, instead of looking (see The dial) |
 
 ## Building
@@ -423,7 +447,7 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 
 | File | |
 |---|---|
-| `daemon.rs` | the loopback WebSocket per machine, requests, pushed frames |
+| `daemon.rs` | the private Unix-socket WebSocket per machine, requests, pushed frames |
 | `proto.rs` | `HTRL` terminal frames (mirrors `cli/src/lib/terminalBinary.ts`) |
 | `pane.rs` | one tile: `alacritty_terminal` grid, key/mouse encoding, selection, find, local echo |
 | `app.rs` | all state: machines, streams, tabs, desk sync |

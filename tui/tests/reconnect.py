@@ -153,6 +153,40 @@ try:
         echo(codex, 'RECOVERED_SOCKET')
         print('PASS: dropped socket recovery', flush=True)
 
+        # One deliberate claim reclaims every tab, including the hidden remote pane.
+        def watched(agent):
+            return hn('display-message', '-p', '-t', pane_for(agent), '#{pane_watched}') == '1'
+
+        def displace_all():
+            start = len(api()['opens'])
+            for agent in panes:
+                fault('watch', agent=agent)
+                fault('close', agent=agent, takenBy='another app')
+            wait(lambda: all(watched(a) for a in panes), 'every pane is watching')
+            assert all(o['takeover'] is False for o in api()['opens'][start:]), 'ownership notifications reclaimed control'
+
+        displace_all()
+        focus = hn('display-message', '-p', '#{window_id}:#{pane_id}')
+        layouts = hn('list-windows', '-F', '#{window_id}:#{window_layout}')
+        before = api()
+        hn('take-control')
+        wait(lambda: len(api()['opens']) == len(before['opens']) + len(panes) and all(not watched(a) for a in panes), 'one command reclaims all local and remote tabs')
+        claims = api()['opens'][len(before['opens']):]
+        assert len(claims) == len(panes) and all(o['takeover'] is True for o in claims), claims
+        assert {o['agent'] for o in claims} == set(panes)
+        assert hn('display-message', '-p', '#{window_id}:#{pane_id}') == focus
+        assert hn('list-windows', '-F', '#{window_id}:#{window_layout}') == layouts
+        assert api()['inputs'] == before['inputs'], 'take-control typed into a terminal'
+        hn('take')
+        assert len(api()['opens']) == len(before['opens']) + len(panes), 'repeat claim reopened controlled panes'
+        displace_all()
+        before = api()
+        hn('send-keys', '-t', pane_for(claude), '-l', 'CLAIMED_ALL_TABS')
+        wait(lambda: all(not watched(a) for a in panes), 'typing in a watcher reclaims every tab')
+        wait(lambda: 'CLAIMED_ALL_TABS' in hn('capture-pane', '-p', '-t', pane_for(claude)), 'claim preserves typed input')
+        assert {i['agent'] for i in api()['inputs'][len(before['inputs']):]} == {claude}, 'typed input leaked to another pane'
+        print('PASS: app-wide control, hidden local/remote tabs, stable focus, idempotence and isolated input', flush=True)
+
         # Genuine terminal/process closure remains a card; it must not restart the program.
         before_count = len(api()['opens'])
         fault('close', machine=LOCAL, agent=claude, reason='process exited')

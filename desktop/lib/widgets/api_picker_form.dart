@@ -204,25 +204,23 @@ class ApiPickerFormState extends State<ApiPickerForm> {
 
   List<FocusNode> get _nodes => [
     for (final id in _visibleFields) _inputs[id]!,
-    for (final action in [
-      for (final action in _actions)
-        if (!_fixedAction(action.id)) action,
-      ..._fixedActions,
-    ])
+    for (final action in _shownActions)
       if (action.run != null && _buttons[action.id] != null)
         _buttons[action.id]!,
   ];
 
-  bool _fixedAction(String id) =>
-      _desktop &&
-      _editing != null &&
-      const {'save', 'delete', 'cancel'}.contains(id);
-
-  List<({String id, String label, VoidCallback? run})> get _fixedActions => [
-    for (final id in ['cancel', 'save', 'delete'])
-      for (final action in _actions)
-        if (_fixedAction(action.id) && action.id == id) action,
-  ];
+  /// The actions in the order they are shown, and walked: on the desktop, the one that does the job
+  /// (Save, Delete) first, then Cancel, then the quieter ones — all in one row right under the fields.
+  /// A footer of its own below a divider put Save out of sight of the fields it saves.
+  List<({String id, String label, VoidCallback? run})> get _shownActions {
+    final actions = _actions;
+    if (!_desktop || _editing == null) return actions;
+    const first = ['save', 'delete', 'cancel'];
+    return [
+      for (final id in first) ...actions.where((action) => action.id == id),
+      ...actions.where((action) => !first.contains(action.id)),
+    ];
+  }
 
   FocusNode get _focusTarget =>
       (widget.removing ? _buttons['cancel'] : _nodes.firstOrNull) ?? _scope;
@@ -460,6 +458,18 @@ class ApiPickerFormState extends State<ApiPickerForm> {
     );
   }
 
+  /// What a field takes, shown in it while it is empty.
+  String? _example(String id) => switch (id) {
+    'name' => 'e.g. DeepSeek',
+    'url' => 'https://api.example.com/v1',
+    'key' =>
+      _existing ? 'Leave blank to keep the saved key' : 'Paste the API key',
+    'environment' => 'e.g. DEEPSEEK_API_KEY',
+    'header' => 'Authorization',
+    'prefix' => 'Bearer',
+    _ => null,
+  };
+
   Widget _actionButton(({String id, String label, VoidCallback? run}) action) {
     final node = _buttons.putIfAbsent(
       action.id,
@@ -518,7 +528,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
             Icon(AppIcons.cloud, size: 16, color: DesktopChrome.muted),
             const SizedBox(width: 10),
             Expanded(child: Text(action.label)),
-            Icon(AppIcons.chevronRight, size: 17, color: DesktopChrome.muted),
+            Icon(AppIcons.chevronRight, size: 16, color: DesktopChrome.muted),
           ],
         ),
       );
@@ -533,6 +543,8 @@ class ApiPickerFormState extends State<ApiPickerForm> {
           ? _advanced
                 ? 'Hide options'
                 : 'More options'
+          : action.id == 'back'
+          ? 'Change provider'
           : action.label,
       selected: action.id == 'options' ? _advanced : null,
       compact: true,
@@ -598,9 +610,21 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                       Text(
                         widget.removing
                             ? 'Delete ${_editing?.name ?? 'API'}?'
+                            : desktop && _editing != null && !_existing
+                            ? 'Add ${_editing!.name}'
                             : _editing?.name ?? 'Add API connection',
                         style: desktop ? DesktopChrome.heading() : style,
                       ),
+                      if (desktop &&
+                          _editing?.provider == 'custom' &&
+                          !_existing &&
+                          !widget.removing) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Any OpenAI-compatible API. Harnesses can run on its models.',
+                          style: muted,
+                        ),
+                      ],
                       if (controller.app.viewer != null)
                         Text('Saved on ${controller.hostLabel}', style: muted),
                       SizedBox(height: cell.height),
@@ -685,6 +709,15 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                           filled: true,
                                           fillColor: DesktopChrome.field,
                                           isDense: true,
+                                          hintText: _example(id),
+                                          hintStyle: DesktopChrome.text(
+                                            size: 13,
+                                            color: DesktopChrome.muted,
+                                          ),
+                                          helperText: id == 'key'
+                                              ? 'Stored only on ${controller.hostLabel}.'
+                                              : null,
+                                          helperStyle: muted,
                                           contentPadding:
                                               const EdgeInsets.symmetric(
                                                 horizontal: 10,
@@ -720,7 +753,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                             ],
                           ),
                         ),
-                      if (_editing != null && !widget.removing) ...[
+                      if (!desktop && _editing != null && !widget.removing) ...[
                         Text(
                           'Stored on ${controller.hostLabel}.',
                           style: muted,
@@ -756,9 +789,8 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                 spacing: desktop ? 8 : cell.width * 2,
                                 runSpacing: desktop ? 8 : cell.height,
                                 children: [
-                                  for (final action in _actions)
-                                    if (!_fixedAction(action.id))
-                                      _actionButton(action),
+                                  for (final action in _shownActions)
+                                    _actionButton(action),
                                 ],
                               ),
                         buttons: true,
@@ -767,24 +799,6 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                   ),
                 ),
               ),
-              if (_fixedActions.isNotEmpty) ...[
-                Divider(height: 1, color: DesktopChrome.rim),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: _keys(
-                    Wrap(
-                      alignment: WrapAlignment.end,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final action in _fixedActions)
-                          _actionButton(action),
-                      ],
-                    ),
-                    buttons: true,
-                  ),
-                ),
-              ],
               Padding(
                 padding: EdgeInsets.symmetric(
                   horizontal: cell.width * 2,

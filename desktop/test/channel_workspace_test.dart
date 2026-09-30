@@ -278,7 +278,7 @@ void main() {
         error: 'The owner is unavailable. ' * 20,
       );
       expect(find.text('No teams yet. Start with two sessions.'), findsNothing);
-      final retry = find.widgetWithText(TextButton, 'Retry reading swarm');
+      final retry = find.widgetWithText(TextButton, 'Retry reading tab');
       await tester.ensureVisible(retry);
       await tester.pumpAndSettle();
       expect(retry.hitTestable(), findsOneWidget);

@@ -42,11 +42,12 @@ class _EdgeApp extends ModelManagerTestApp {
   Future<Map<String, dynamic>> localModels(
     String machineId, {
     bool refresh = false,
+    bool setup = false,
   }) {
     if (failingModelHosts.contains(machineId)) {
       throw StateError('Fixture model host unavailable');
     }
-    return super.localModels(machineId, refresh: refresh);
+    return super.localModels(machineId, refresh: refresh, setup: setup);
   }
 
   @override

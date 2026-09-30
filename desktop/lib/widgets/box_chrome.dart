@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -17,7 +18,7 @@ BorderSide terminalPaneBorder({bool focused = false}) => BorderSide(
 const double kWorkspaceInset = 9.5;
 
 /// How solid the workspace's panes paint their own fill: below 1 while the
-/// background shows through them (Behind harnesses). Only fills turn
+/// background shows through them (any Background but Blank). Only fills turn
 /// translucent — text, colored cells, banners and the composer stay solid.
 class PaneOpacity extends InheritedWidget {
   const PaneOpacity({super.key, required this.opacity, required super.child});
@@ -164,15 +165,27 @@ double boxRowHeight(TextScaler scale) =>
 Color get kBoxFaint => boxText(.54);
 TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
 
+/// Linux spells its chords out (`spellsModifierKeys`); the box prints them in
+/// its own lower-case, dash-joined form, as it does a Mac's glyphs.
+String _unspelled(String hint) =>
+    kIsWeb || defaultTargetPlatform != TargetPlatform.linux
+    ? hint
+    : hint
+          .replaceAll('Ctrl+', 'ctrl-')
+          .replaceAll('Alt+', 'alt-')
+          .replaceAll('Shift+', 'shift-')
+          .replaceAll('Super+', 'super-');
+
 /// Keep the user's actual binding, printed like a terminal's local key guide.
-String boxKeyLabel(String hint) => hint
-    .replaceAll('⌃', 'ctrl-')
-    .replaceAll('⌥', 'alt-')
-    .replaceAll('⇧', 'shift-')
-    .replaceAll('⌘', 'cmd-')
-    .replaceAll('↵', 'enter')
-    .replaceAll('⇥', 'tab')
-    .replaceAll('Esc', 'esc');
+String boxKeyLabel(String hint) =>
+    _unspelled(hint)
+        .replaceAll('⌃', 'ctrl-')
+        .replaceAll('⌥', 'alt-')
+        .replaceAll('⇧', 'shift-')
+        .replaceAll('⌘', 'cmd-')
+        .replaceAll('↵', 'enter')
+        .replaceAll('⇥', 'tab')
+        .replaceAll('Esc', 'esc');
 
 /// The highlighted row: a bar at its left edge, fzf's `▌`, with a fill you can
 /// see. A 5% wash on its own was about 1.15:1 — the keyboard's whole position

@@ -78,7 +78,7 @@ class _DebugLogTileState extends State<DebugLogTile> {
                         child: _hovered
                             ? Icon(
                                 AppIcons.chevronRight,
-                                size: 15,
+                                size: 16,
                                 color: AppPalette.textSecondary,
                               )
                             : null,
@@ -135,24 +135,24 @@ class DebugStatusIcon extends StatelessWidget {
       ),
       LogStatus.ok => Icon(
         AppIcons.circleCheck,
-        size: 15,
+        size: 16,
         color: AppPalette.online,
       ),
       LogStatus.failed => Icon(
         AppIcons.circleAlert,
-        size: 15,
+        size: 16,
         color: debugDangerInk(context),
       ),
       LogStatus.warned => Icon(
         AppIcons.triangleAlert,
-        size: 15,
+        size: 16,
         color: AppPalette.warn,
       ),
       // An ordinary line the app chose to write. A dot, not a tick: it did not
       // succeed at anything, it happened.
       LogStatus.event => Icon(
         AppIcons.dot,
-        size: 15,
+        size: 16,
         color: AppPalette.textFaint,
       ),
     };

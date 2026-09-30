@@ -578,7 +578,7 @@ void main() {
     expect(tab.selected!.id, selected);
     expect(tab.capacity, AppNotifier.maxPanes);
     expect(tab.canCreate, isTrue);
-    expect(tab.actionLabel(tab.selected), 'Open in new swarm');
+    expect(tab.actionLabel(tab.selected), 'Open in new tab');
   });
 
   test(

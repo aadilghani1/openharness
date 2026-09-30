@@ -41,7 +41,7 @@ flutter test                                      # whole unit/widget suite (tes
 flutter test test/terminal_session_test.dart      # one file
 flutter test test/ws_conn_test.dart --plain-name "reconnects"   # one test by name substring
 flutter run -d macos                              # or: flutter run -d linux
-flutter build macos --debug
+bash scripts/build-macos-debug.sh                  # pins the host's release renderer
 flutter build macos --release
 flutter build linux --release                     # Ubuntu build host only — no cross-compiling
 ```
@@ -58,7 +58,15 @@ creation and machine-link responses. They refuse to run without `FLUTTER_TEST=1`
 production-only pollers and persistence. The workspace fixture exercises the native macOS titlebar; its injected
 Flutter keys do not establish physical AppKit keyboard/IME behavior. A fixture build replaces
 `Harness.app`, so rebuild the normal review artifact afterward with
-`flutter build macos --debug --no-pub --target lib/main.dart`.
+`bash scripts/build-macos-debug.sh --no-pub --target lib/main.dart`.
+
+**Local macOS renderer:** Intel review builds need Skia, just like the Intel release.
+Plain `flutter build macos --debug` leaves Impeller enabled and can produce invisible
+bitmap artwork on Intel. The script above pins the built bundle's renderer and re-signs
+it so Finder launches work too; Apple Silicon keeps Impeller. For `flutter run` and
+native integration tests on Intel, add `--no-enable-impeller`. Check companion artwork
+on the real renderer with `integration_test/companion_art_native_test.dart`; headless
+image tests alone do not catch this failure.
 
 Local stack / E2E scripts (the CLI comes from this repo's `../cli`; the backend from a sibling
 `autonomous-code` checkout next to `autonomous-harness` — override with `AUTONOMOUS_CODE_ROOT` /
@@ -303,8 +311,9 @@ its headless debug timings do not establish native display or network latency.
   with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each pane places its model control before its
-  always-visible close icon. Usage has no dot separators and colors only low/exhausted
+  and quiet, with larger click targets. Each pane ends with model, split down,
+  split right, zoom, close. Split opens New Harness directly for the clicked pane.
+  Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
   The context follows a viewer's owner and uses the compact project label, never a worktree path
@@ -540,7 +549,12 @@ its headless debug timings do not establish native display or network latency.
   appear immediately; clicking a row or pressing Enter opens keyboard practice without dispatching
   that action. Labels and keycaps use system UI typography and accessibility text scaling,
   independent of terminal font and zoom. The practice scratch preview retains terminal typography.
-  ⇧⌘P opens commands with the query `>`; ⌘P opens the unified picker. On Linux these use Ctrl+Shift+P and Ctrl+P.
+  ⇧⌘P opens commands with the query `>`; ⌘P opens the unified picker. On Linux these use
+  Ctrl+Shift+P and Alt+Shift+P. Linux, like the web, takes Alt where the Mac takes ⌘
+  (`altWorkspacePrefix`) — Hyprland and GNOME keep most Super chords for themselves — and
+  `_linuxAltShortcuts`/`linuxAltCommandKeys` move the few that would land on a key a terminal
+  program answers (Alt+Enter, Alt+T, Alt+F/B/D). The runner rewrites Super to Meta
+  (`super_as_meta_cb`), so a Super chord a user binds still reads as `cmd`.
   Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the

@@ -53,6 +53,7 @@ class PaneGrid extends StatelessWidget {
     this.swarmMode = false,
     this.empty,
     this.onOpenModels,
+    this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
   });
@@ -62,6 +63,7 @@ class PaneGrid extends StatelessWidget {
   final Widget? empty;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
 
   /// Draw only the focused view, full size, as if zoomed — without zooming:
   /// the tab's saved layout and zoom stay as they are (a phone shows one
@@ -83,6 +85,7 @@ class PaneGrid extends StatelessWidget {
             dragging: dragging,
             empty: empty,
             onOpenModels: onOpenModels,
+            onSplitPane: onSplitPane,
             soloFocused: soloFocused,
             companionViewer: companionViewer,
           );
@@ -100,6 +103,7 @@ class PaneGrid extends StatelessWidget {
           visible: visible,
           swarmMode: swarmMode,
           onOpenModels: onOpenModels,
+          onSplitPane: onSplitPane,
           companionViewer: companionViewer,
         );
         final cells = <Widget>[
@@ -248,6 +252,7 @@ class _SwarmCanvas extends StatefulWidget {
     required this.dragging,
     this.empty,
     this.onOpenModels,
+    this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
   });
@@ -256,6 +261,7 @@ class _SwarmCanvas extends StatefulWidget {
   final Widget? empty;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final bool soloFocused;
   final WidgetBuilder? companionViewer;
   @override
@@ -268,7 +274,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   final _offsets = <String, Offset>{};
   final _inputLayers = <int, GlobalKey<_PaneLayerState>>{};
   final _idleFocus = FocusNode(
-    debugLabel: 'Swarm navigation',
+    debugLabel: 'Tab navigation',
     skipTraversal: true,
   );
   late Object _lastInputDestination;
@@ -594,6 +600,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
                                     onOpenModels: widget.onOpenModels,
+                                    onSplitPane: widget.onSplitPane,
                                     solo: widget.soloFocused,
                                     companionViewer: widget.companionViewer,
                                   ),
@@ -1194,6 +1201,7 @@ class _PaneCell extends StatelessWidget {
     this.visible = true,
     this.swarmMode = false,
     this.onOpenModels,
+    this.onSplitPane,
     this.solo = false,
     this.companionViewer,
   });
@@ -1205,6 +1213,7 @@ class _PaneCell extends StatelessWidget {
   final bool swarmMode;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final WidgetBuilder? companionViewer;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
@@ -1249,7 +1258,7 @@ class _PaneCell extends StatelessWidget {
           // What changes to make the gaps visible is the field BEHIND the grid
           // (see _GridField), which is the part the gaps actually show.
           //
-          // Behind harnesses: a terminal paints its own translucent fills, so
+          // Over a Background: a terminal paints its own translucent fills, so
           // the frame adds none (two would stack); a status pane has only this.
           color: PaneOpacity.of(context) < 1 && pane.session != null
               ? null
@@ -1321,6 +1330,7 @@ class _PaneCell extends StatelessWidget {
                             visible: visible,
                             swarmMode: swarmMode,
                             onOpenModels: onOpenModels,
+                            onSplitPane: onSplitPane,
                           ),
                   ),
                 ),
@@ -1341,6 +1351,7 @@ class _PaneContent extends StatelessWidget {
     required this.visible,
     required this.swarmMode,
     this.onOpenModels,
+    this.onSplitPane,
   });
 
   final AppNotifier notifier;
@@ -1350,6 +1361,7 @@ class _PaneContent extends StatelessWidget {
   final bool swarmMode;
   final void Function(int paneId, String machineId, String agentId)?
   onOpenModels;
+  final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
 
   @override
   Widget build(BuildContext context) {
@@ -1358,6 +1370,15 @@ class _PaneContent extends StatelessWidget {
     void close() {
       notifier.closePane(pane.id);
     }
+
+    VoidCallback? split(PaneResizeAxis axis) =>
+        swarmMode &&
+            onSplitPane != null &&
+            !notifier.activeSwarm.isUtility &&
+            !notifier.activeSwarm.isOrchestrator &&
+            notifier.preparePaneSplit(axis, paneId: pane.id) != null
+        ? () => onSplitPane!(pane.id, axis)
+        : null;
 
     if (pane.sharedHarness case final grant?) {
       return SharedHarnessPanel(
@@ -1544,6 +1565,8 @@ class _PaneContent extends StatelessWidget {
               ? null
               : () =>
                     onOpenModels!(pane.id, session.machineId, session.agentId),
+          onSplitDown: split(PaneResizeAxis.y),
+          onSplitRight: split(PaneResizeAxis.x),
           // The same confirmation the rail's row menu opens. Only for an
           // agent the machine still lists — a pane whose agent is already
           // gone has nothing to end.
@@ -2185,7 +2208,7 @@ class _PaneStatus extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           )
-                        : Icon(icon, size: 26, color: AppColors.mutedStrong),
+                        : Icon(icon, size: 24, color: AppColors.mutedStrong),
                   ),
                   const SizedBox(height: 10),
                   Flexible(

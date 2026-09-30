@@ -11,7 +11,7 @@ mod parse;
 enum InternalEvent { Event(Event), CursorPosition(u16, u16), KeyboardEnhancementFlags(KeyboardEnhancementFlags), PrimaryDeviceAttributes }
 
 #[derive(Debug, PartialEq)]
-enum Item { Input(Event), Terminal(Option<String>), Foreground(Option<String>), Background(Option<String>) }
+enum Item { Input(Event), Terminal(Option<String>), Foreground(Option<String>), Background(Option<String>), Palette(u8, Option<String>) }
 
 #[derive(Default)]
 struct Decoder { pending: Vec<u8> }
@@ -44,6 +44,19 @@ impl Decoder {
             if p.starts_with(b"\x1b]11;") && p.len() < 4096 {
                 let end = if p.ends_with(b"\x1b\\") { Some(p.len() - 2) } else if p.ends_with(b"\x07") { Some(p.len() - 1) } else { None };
                 if let Some(end) = end { out.push(Item::Background(parse_osc11(&String::from_utf8_lossy(&p[5..end])))); self.pending.clear(); }
+                continue;
+            }
+            // OSC 4 palette answer from `ask_terminal`, `\x1b]4;N;rgb:…\x07`: one of the terminal's
+            // own sixteen colours, from which hn's accent is picked when no theme is chosen. The
+            // same hold-till-terminator rule as OSC 10/11.
+            if b"\x1b]4;".starts_with(p) { continue }
+            if p.starts_with(b"\x1b]4;") && p.len() < 4096 {
+                let end = if p.ends_with(b"\x1b\\") { Some(p.len() - 2) } else if p.ends_with(b"\x07") { Some(p.len() - 1) } else { None };
+                if let Some(end) = end {
+                    let body = String::from_utf8_lossy(&p[4..end]).into_owned();
+                    if let Some((n, colour)) = body.split_once(';').and_then(|(n, c)| Some((n.parse::<u8>().ok()?, c))) { out.push(Item::Palette(n, parse_osc11(colour))) }
+                    self.pending.clear();
+                }
                 continue;
             }
             // If the apparent XDA prefix turned out to be Alt-P, replay through the exact
@@ -147,6 +160,10 @@ pub fn read(keys: tokio::sync::mpsc::UnboundedSender<crate::event::Event>) {
                 Item::Background(bg) => {
                     crate::term_out::set_terminal_colours(bg, None);
                     crate::event::Event::Apply(Box::new(|app| { app.push_theme(); app.redraw_all = true; }))
+                }
+                Item::Palette(n, colour) => {
+                    crate::term_out::set_palette_colour(n, colour);
+                    crate::event::Event::Apply(Box::new(|app| app.redraw_all = true))
                 }
             };
             if keys.send(event).is_err() { return }

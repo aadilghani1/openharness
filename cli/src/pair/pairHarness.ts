@@ -1,6 +1,6 @@
 /**
  * The pair harness (daemons/BRAIN.md, tier 2): the paired daemon as a conversation you can have. A
- * built-in harness, `autonomous/pair`, that runs a coding engine (Claude Code, else Codex) with the
+ * built-in harness, `autonomous/pair`, that runs the person's chosen coding engine with the
  * `harnessd` MCP server — the control interface (pair/control.ts) — and instructions that give it the
  * paired daemon's voice (roster lore, first words, lines) and the floor.
  *
@@ -188,8 +188,8 @@ export interface PairHarnessDeps {
   pairedUid?: () => string | null
   /** All individuals in this collection. Membership isolates signed-in and guest histories. */
   collectionUids?: () => readonly string[]
-  /** An installed engine to run it on, Claude first; null when neither is here. */
-  engine: () => Promise<PairEngine | null>
+  /** Verify the person's chosen engine is installed. Never substitute another engine. */
+  engine: (preferred?: PairEngine) => Promise<PairEngine | null>
   /** How this machine runs `harness` (the launcher, else this process's node and cli.js). */
   mcpCommand: () => string[]
   token: PairToken
@@ -214,7 +214,7 @@ export interface PairHarnessDeps {
   idleMs?: number
 }
 
-interface Saved { agentId: string; revision: string; uid?: string; members?: string[] }
+interface Saved { agentId: string; revision: string; uid?: string; members?: string[]; engine?: PairEngine; learningScope?: string }
 
 export class PairHarness {
   private lastActivity = 0
@@ -232,18 +232,18 @@ export class PairHarness {
   }
 
   /** Open the real terminal, including first-run setup, without sending a model turn. */
-  open(expectedUid?: string): Promise<Record<string, unknown>> {
-    return this.enqueue(null, expectedUid)
+  open(expectedUid?: string, engine?: PairEngine): Promise<Record<string, unknown>> {
+    return this.enqueue(null, expectedUid, engine)
   }
 
-  private enqueue(text: string | null, expectedUid?: string): Promise<Record<string, unknown>> {
-    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.(), generation: this.generation }
+  private enqueue(text: string | null, expectedUid?: string, engine?: PairEngine): Promise<Record<string, unknown>> {
+    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.(), generation: this.generation, engine }
     const next = this.talking.then(() => this.talkNow(text, requested), () => this.talkNow(text, requested))
     this.talking = next.catch(() => ({}))
     return next
   }
 
-  private async talkNow(text: string | null, requested: { daemonId: string | null; uid: string | null | undefined; generation: number }): Promise<Record<string, unknown>> {
+  private async talkNow(text: string | null, requested: { daemonId: string | null; uid: string | null | undefined; generation: number; engine?: PairEngine }): Promise<Record<string, unknown>> {
     const words = text?.trim() ?? ''
     const daemonId = this.deps.pairedDaemon()
     if (!daemonId) return { ok: false, error: 'PAIR_OFF', detail: 'Nothing is paired: hatch or pair a daemon first.' }
@@ -251,9 +251,14 @@ export class PairHarness {
       (requested.uid == null || this.deps.pairedUid?.() === requested.uid)
     const stale = { ok: false, error: 'STALE_COMPANION', detail: 'Your companion changed before the message was sent. Send it again to the companion shown.' }
     if (!current()) return stale
-    const saved = this.saved()
+    const previous = this.saved()
+    const previousEngine = this.engine()
+    const switching = !!requested.engine && requested.engine !== previousEngine
+    const saved = switching ? this.saved(requested.engine) : previous
     const conversation = this.deps.find().find((row) => row.agentId === saved?.agentId) ?? null
-    if (this.activeAgentId && this.activeAgentId !== saved?.agentId && this.deps.find().some(row => row.agentId === this.activeAgentId && row.status === 'live')) {
+    if (switching && previous && this.deps.working(previous.agentId)) return { ok: false, error: 'BUSY',
+      detail: 'Finish or stop the current turn before switching agents.' }
+    if (this.activeAgentId && this.activeAgentId !== previous?.agentId && this.deps.find().some(row => row.agentId === this.activeAgentId && row.status === 'live')) {
       await this.deps.stop(this.activeAgentId)
       if (!current()) return stale
     }
@@ -261,8 +266,11 @@ export class PairHarness {
     // character, or updating its artwork must never replace the person's conversation.
     if (saved && !conversation) return { ok: false, error: 'CONVERSATION_UNAVAILABLE',
       detail: 'The collection’s saved conversation is unavailable. Its history has been kept.' }
-    const engine = conversation?.engine ?? await this.deps.engine()
-    if (!engine) return { ok: false, error: 'NO_ENGINE', detail: 'The pair runs on Claude Code or Codex; neither is installed here.' }
+    const preferred = requested.engine ?? saved?.engine
+    const engine = switching ? await this.deps.engine(preferred) : conversation?.engine ?? saved?.engine ?? await this.deps.engine(preferred)
+    if (!engine || (preferred && engine !== preferred)) return preferred
+      ? { ok: false, error: 'NO_ENGINE', detail: `${preferred === 'codex' ? 'Codex' : 'Claude Code'} is not installed on this computer.` }
+      : { ok: false, error: 'ENGINE_REQUIRED', detail: 'Choose the agent that powers your companion.' }
     if (!current()) return stale
     const identity = this.deps.pairedUid?.()
     const uid = identity && /^[A-Za-z0-9_-]{1,64}$/.test(identity) ? identity : undefined
@@ -270,9 +278,21 @@ export class PairHarness {
     if (!this.deps.install(files)) return { ok: false, error: 'INSTALL_FAILED', detail: 'The pair harness could not be installed. Try again.' }
     const revision = packageRevision(files)
     if (!current()) return stale
+    // Each engine keeps its own transcript. The review queue and deduplication history belong
+    // to the collection, so switching engines must not change their storage key.
+    const learningScope = previous?.learningScope ?? previous?.agentId
+    if (switching && previous) {
+      this.save({ ...previous, ...(previousEngine ? { engine: previousEngine } : {}) })
+      if (this.deps.find().some(row => row.agentId === previous.agentId && row.status === 'live')) {
+        await this.deps.stop(previous.agentId)
+        if (!current()) return stale
+      }
+    }
+    const save = (agentId: string): void => this.save({ agentId, revision, engine,
+      learningScope: learningScope ?? agentId, ...(uid ? { uid } : {}) })
     this.touch()
     if (conversation?.status === 'live') {
-      this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
+      save(conversation.agentId)
       // Never paste words (or an automatic Enter) into an engine's trust/setup
       // screen. The first prompt was passed at launch and waits for that screen.
       if (text === null) { this.watchIdle(); return { ok: true, agentId: conversation.agentId } }
@@ -285,7 +305,7 @@ export class PairHarness {
       const resumed = await this.deps.resume(conversation.agentId)
       if (resumed.ok) {
         if (!current()) { await this.deps.stop(conversation.agentId).catch(() => {}); return stale }
-        this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
+        save(conversation.agentId)
         if (text !== null) this.deps.send(conversation.agentId, words)
         this.watchIdle()
         return { ok: true, agentId: conversation.agentId, resumed: true }
@@ -299,7 +319,7 @@ export class PairHarness {
     const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: 'companions' })
     if (!created.ok) return created
     if (!current()) { await this.deps.stop(created.agentId).catch(() => {}); return stale }
-    this.save({ agentId: created.agentId, revision, ...(uid ? { uid } : {}) })
+    save(created.agentId)
     this.watchIdle()
     const setupRequired = this.deps.find().some(row => row.agentId === created.agentId && row.hasConversation === false)
     return { ok: true, agentId: created.agentId, started: true, ...(setupRequired ? { setupRequired } : {}) }
@@ -312,6 +332,16 @@ export class PairHarness {
     // as this collection is observed, including when restoring a running terminal.
     if (saved && !saved.members) this.save(saved)
     return saved?.agentId ?? null
+  }
+
+  engine(): PairEngine | null {
+    const saved = this.saved()
+    return this.deps.find().find(row => row.agentId === saved?.agentId)?.engine ?? saved?.engine ?? null
+  }
+
+  learningScope(): string | null {
+    const saved = this.saved()
+    return saved?.learningScope ?? saved?.agentId ?? null
   }
 
   /** Fresh context for the verified collection agent's next real user turn. Never a synthetic turn. */
@@ -342,6 +372,9 @@ export class PairHarness {
     const agentId = this.activeAgentId ?? this.saved()?.agentId
     const row = agentId ? this.deps.find().find((r) => r.agentId === agentId) : null
     if (!agentId || row?.status !== 'live') { this.unwatch(); return false }
+    // An empty/setup terminal has no conversation to resume. Pausing it discards its selected model
+    // and strands a pending memory review; leave it open until a real conversation can be preserved.
+    if (row.hasConversation === false) return false
     if (this.deps.working(agentId) || this.deps.now() - this.lastActivity < (this.deps.idleMs ?? PAIR_IDLE_MS)) return false
     try {
       await this.deps.stop(agentId)
@@ -378,24 +411,25 @@ export class PairHarness {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
   }
 
-  private saved(): Saved | null {
+  private saved(engine?: PairEngine): Saved | null {
     try {
       const value = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as Record<string, unknown>
       const members = this.members()
       const collections = Array.isArray(value.collections) ? value.collections : []
+      const matches = (row: Saved): boolean => !engine || (row.engine ?? this.deps.find().find(item => item.agentId === row.agentId)?.engine) === engine
       for (const item of collections.toReversed()) {
         const row = this.readSaved(item)
-        if (row?.members?.some(uid => members.includes(uid))) return row
+        if (row?.members?.some(uid => members.includes(uid)) && matches(row)) return row
       }
       // Adopt the selected individual's existing chat on the first open. Keep every other
       // legacy pointer (and all engine transcripts) as an archive, never combine transcripts.
       const legacy = this.conversations()
       const selected = this.deps.pairedUid?.()
-      if (selected && members.includes(selected) && legacy[selected]) return legacy[selected]
+      if (selected && members.includes(selected) && legacy[selected] && matches(legacy[selected])) return legacy[selected]
       const current = this.readSaved(value)
-      if (current?.uid && members.includes(current.uid)) return current
-      if (!this.deps.collectionUids && !selected && !current?.members) return current
-      return Object.values(legacy).reverse().find(row => row.uid && members.includes(row.uid)) ?? null
+      if (current?.uid && members.includes(current.uid) && matches(current)) return current
+      if (!this.deps.collectionUids && !selected && !current?.members && current && matches(current)) return current
+      return Object.values(legacy).reverse().find(row => row.uid && members.includes(row.uid) && matches(row)) ?? null
     } catch {
       return null
     }
@@ -407,6 +441,8 @@ export class PairHarness {
     return typeof row.agentId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.agentId) && typeof row.revision === 'string'
       ? { agentId: row.agentId, revision: row.revision, ...(typeof row.uid === 'string' ? { uid: row.uid } : {}),
         ...(Array.isArray(row.members) ? { members: row.members.filter(uid => typeof uid === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(uid)) } : {}),
+        ...(['claude', 'codex'].includes(row.engine ?? '') ? { engine: row.engine } : {}),
+        ...(typeof row.learningScope === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.learningScope) ? { learningScope: row.learningScope } : {}),
       } : null
   }
 

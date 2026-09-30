@@ -20,6 +20,7 @@ import '../state/device_form.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 import 'desktop_chrome.dart';
+import 'new_harness_attachments.dart';
 import 'engine_identity.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
@@ -1823,7 +1824,43 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     visualDensity: VisualDensity.compact,
   );
 
-  Widget _desktopTaskEditor() => ListenableBuilder(
+  /// The task box, taking dropped files when the host attaches them.
+  Widget _desktopTaskEditor() => switch (box.attachments) {
+    final attachments? when box.takesTask => NewHarnessDropZone(
+      attachments: attachments,
+      enabled: !box.locked,
+      child: _desktopTaskBox(),
+    ),
+    _ => _desktopTaskBox(),
+  };
+
+  /// 📎 and the attached files, then New Harness — or New Harness alone.
+  Widget _desktopTaskActions() {
+    final attachments = box.takesTask ? box.attachments : null;
+    if (attachments == null) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: _desktopStartButton(),
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        NewHarnessAttachButton(attachments: attachments, enabled: !box.locked),
+        const SizedBox(width: 6),
+        Expanded(
+          child: NewHarnessAttachmentChips(
+            attachments: attachments,
+            enabled: !box.locked,
+          ),
+        ),
+        const SizedBox(width: 12),
+        _desktopStartButton(),
+      ],
+    );
+  }
+
+  Widget _desktopTaskBox() => ListenableBuilder(
     listenable: _taskFocus,
     builder: (context, _) => Material(
       key: const ValueKey('new-harness-composer'),
@@ -1877,10 +1914,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
             const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: _desktopStartButton(),
-            ),
+            _desktopTaskActions(),
           ],
         ),
       ),
@@ -2014,6 +2048,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     textSize: capsule ? 13 : 12,
     truncateFromStart: row == _Row.branch,
     foregroundColor: capsule ? null : DesktopChrome.muted,
+    surfaceColor: capsule ? DesktopChrome.surface : null,
     tooltip: _desktopChoiceTooltip(row),
     onPressed: box.locked || _blocked(row) != null
         ? null

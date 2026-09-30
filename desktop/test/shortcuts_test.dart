@@ -241,7 +241,7 @@ void main() {
       expect(chordsFor(ShortcutAction.movePaneRight), ['⇧⌘→']);
     });
 
-    test('brackets walk agents, and Shift walks swarms', () {
+    test('brackets walk agents, and Shift walks tabs', () {
       // They used to carry three verbs told apart only by modifiers: ⌘[ ] walked
       // panes, ⇧⌘[ ] walked agents, ⌥⌘[ ] moved panes. Panes use arrows, so
       // the brackets keep the one job a bracket is good at.
@@ -298,7 +298,7 @@ void main() {
         ['⌘', '→'],
       ]);
 
-      final next = rows.firstWhere((row) => row.label == 'Next Swarm');
+      final next = rows.firstWhere((row) => row.label == 'Next Tab');
       expect(next.chords, [
         ['⇧', '⌘', ']'],
         ['⌃', '⇥'],
@@ -319,7 +319,7 @@ void main() {
 
     test('the digits are one row, at the end of their own group', () {
       final rows = shortcutRows();
-      final digits = rows.indexWhere((row) => row.label == 'Select swarms 1–9');
+      final digits = rows.indexWhere((row) => row.label == 'Select tabs 1–9');
       expect(digits, isNot(-1));
       expect(rows[digits].chords, [
         ['⌘', '1 – 9'],

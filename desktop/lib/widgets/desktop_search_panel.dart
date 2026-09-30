@@ -2,6 +2,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../shared/theme/app_pane_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
@@ -92,7 +93,7 @@ class DesktopSearchPanel extends StatelessWidget {
                     children: [
                       Icon(
                         AppIcons.search,
-                        size: 21,
+                        size: 20,
                         color: DesktopChrome.muted,
                       ),
                       const SizedBox(width: 12),
@@ -147,7 +148,10 @@ class DesktopSearchPanel extends StatelessWidget {
                                   onRefocus();
                                 }
                               : null,
-                          icon: const Icon(AppIcons.columns2, size: 18),
+                          icon: const AppPaneIcon(
+                            AppPaneSymbol.splitRight,
+                            size: 18,
+                          ),
                         ),
                       ),
                       if (hostBar == null)

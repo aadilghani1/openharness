@@ -39,6 +39,51 @@ function world(rows = [row()], response: string | null = candidate()) {
 }
 
 describe('explicit conversation review', () => {
+  it('changing engines resumes the existing quota-blocked review with its original window', async () => {
+    const w = world()
+    w.review.mockResolvedValueOnce({ text: null, failure: 'usage-limit' })
+    w.history.start(24); await w.settled()
+    expect(w.history.status()).toMatchObject({ state: 'waiting', error: 'usage-limit', total: 1, reviewed: 0 })
+    w.history.engineChanged()
+    w.set({ ready: false })
+    await w.history.tick()
+    expect(w.history.status()).toMatchObject({ state: 'waiting', error: 'no-model', total: 1, remaining: 1 })
+    expect(w.review).toHaveBeenCalledTimes(1)
+    w.set({ ready: true })
+    await w.history.tick()
+    expect(w.history.status()).toMatchObject({ state: 'complete', from: NOW - 24 * HOUR, to: NOW, reviewed: 1 })
+    expect(w.turns).toHaveBeenCalledTimes(1)
+    expect(w.store.approved()).toHaveLength(0)
+    expect(w.store.pending()).toHaveLength(1)
+  })
+
+  it('changing engines cannot bypass the hourly budget or revive a cancelled review', async () => {
+    const w = world()
+    w.review.mockResolvedValueOnce({ text: null, failure: 'cap' })
+    w.history.start(24); await w.settled()
+    w.history.engineChanged(); await w.history.tick()
+    expect(w.review).toHaveBeenCalledTimes(1)
+    expect(w.history.status()).toMatchObject({ error: 'cap', retryAt: NOW + HOUR })
+    w.history.cancel()
+    w.history.engineChanged(); await w.history.tick()
+    expect(w.history.status()).toMatchObject({ state: 'cancelled' })
+    expect(w.review).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards an in-flight old-engine result and keeps the batch for the chosen engine', async () => {
+    const w = world()
+    let finish!: (value: { text: string }) => void
+    w.review.mockImplementationOnce(async () => new Promise(resolve => { finish = resolve }))
+    w.history.start(24)
+    w.history.engineChanged()
+    expect(w.review.mock.calls[0][1]?.aborted).toBe(true)
+    finish({ text: candidate() }); await new Promise(resolve => setTimeout(resolve, 0))
+    expect(w.store.pending()).toHaveLength(0)
+    expect(w.history.status()).toMatchObject({ state: 'queued', remaining: 1 })
+    await w.history.tick()
+    expect(w.store.pending()).toHaveLength(1)
+  })
+
   it('uses only dated turns from the requested 24 hours and creates pending, sourced lessons', async () => {
     const w = world([row(), row(2, { at: NOW - 25 * HOUR }), row(3, { at: NOW + 1 }), row(4, { at: null })])
     expect(w.history.start(24)).toMatchObject({ ok: true })

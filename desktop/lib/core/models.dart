@@ -1,7 +1,7 @@
 /// Data models mirroring the backend/web types.
 library;
 
-import 'package:flutter/foundation.dart' show immutable;
+import 'package:flutter/foundation.dart' show immutable, listEquals;
 
 import 'runtime_model_name.dart';
 import 'agent_git_context.dart';
@@ -771,6 +771,17 @@ class AgentPhase {
   final AgentPhaseState state;
   final String? artifact;
 
+  @override
+  bool operator ==(Object other) =>
+      other is AgentPhase &&
+      id == other.id &&
+      name == other.name &&
+      state == other.state &&
+      artifact == other.artifact;
+
+  @override
+  int get hashCode => Object.hash(id, name, state, artifact);
+
   static AgentPhase? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final name = AgentVerdict._safeText(raw['name'], 40);
@@ -876,11 +887,19 @@ class AgentVerdict {
       other.errors == errors &&
       other.warnings == warnings &&
       other.artifact == artifact &&
+      listEquals(other.phases, phases) &&
       other.updatedAt == updatedAt;
 
   @override
-  int get hashCode =>
-      Object.hash(ready, summary, errors, warnings, artifact, updatedAt);
+  int get hashCode => Object.hash(
+    ready,
+    summary,
+    errors,
+    warnings,
+    artifact,
+    Object.hashAll(phases),
+    updatedAt,
+  );
 }
 
 /// What the daemon answered when asked where a typed task belongs (⌘B).

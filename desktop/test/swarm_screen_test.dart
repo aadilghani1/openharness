@@ -757,7 +757,7 @@ void main() {
   );
 
   testWidgets(
-    'attention shortcut opens current questions in Harnesses and their originating swarm',
+    'attention shortcut opens current questions in Harnesses and their originating tab',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!

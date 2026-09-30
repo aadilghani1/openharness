@@ -102,7 +102,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
         'What would you like to make?',
         'Choose an agent such as Codex or Claude Code, or a specialized harness '
             'with tools for your craft. Starting either creates a harness '
-            'with its own conversation. Group harnesses in a swarm.',
+            'with its own conversation. Group harnesses in a tab.',
       ),
       HarnessHelpTopic.machine => (
         'Where would you like to work?',

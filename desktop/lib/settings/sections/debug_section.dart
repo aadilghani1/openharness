@@ -125,7 +125,7 @@ class _DebugSectionState extends State<DebugSection> {
                           ).copyWith(
                             prefixIcon: Icon(
                               AppIcons.search,
-                              size: 15,
+                              size: 16,
                               color: AppPalette.textFaint,
                             ),
                             prefixIconConstraints: const BoxConstraints(

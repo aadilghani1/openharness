@@ -1,3 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -16,6 +18,7 @@ import '../state/dial_status.dart';
 import '../theme/app_theme.dart';
 import '../widgets/daemon_illustration.dart';
 import 'companion_dial.dart';
+import 'companion_engine_picker.dart';
 import 'companion_story.dart';
 import 'memory_review_text.dart';
 
@@ -31,6 +34,8 @@ class CompanionHome extends StatefulWidget {
     required this.onHatch,
     required this.onOpenControls,
     this.onOpenConversation,
+    this.onSelectEngine,
+    this.openingTerminal = false,
     this.terminalStatus,
     this.dial,
     this.onDeviceSettings,
@@ -40,6 +45,8 @@ class CompanionHome extends StatefulWidget {
   final ValueChanged<ZooEgg> onHatch;
   final ValueChanged<String> onOpenControls;
   final VoidCallback? onOpenConversation;
+  final ValueChanged<String>? onSelectEngine;
+  final bool openingTerminal;
   final String? terminalStatus;
   final DialState? dial;
   final void Function(String, Map<String, Object?>)? onDeviceSettings;
@@ -59,6 +66,7 @@ class _CompanionHomeState extends State<CompanionHome> {
   final _memoryViewport = GlobalKey();
   late final _lessons = DaemonLessons(widget.brain)..addListener(_changed);
   Timer? _memoryRefresh;
+  String? _lastPairEngine;
   ZooController get zoo => widget.face.zoo;
   ZooDaemon? get individual =>
       _previewSpecies != null ? null : zoo.zoo.byUid(_viewingUid) ?? zoo.paired;
@@ -74,10 +82,17 @@ class _CompanionHomeState extends State<CompanionHome> {
     zoo.addListener(_changed);
     widget.face.addListener(_changed);
     widget.brain.addListener(_changed);
+    _lastPairEngine = widget.brain.pairEngine;
   }
 
   void _changed() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final engineChanged = _lastPairEngine != widget.brain.pairEngine;
+    _lastPairEngine = widget.brain.pairEngine;
+    setState(() {});
+    if (engineChanged && _section == 'Memories' && !_lessons.busy) {
+      unawaited(_lessons.refresh());
+    }
   }
 
   TextStyle ink([double size = 14, Color? color]) => TextStyle(
@@ -177,28 +192,41 @@ class _CompanionHomeState extends State<CompanionHome> {
       color: AppColors.background,
       child: LayoutBuilder(
         builder: (context, constraints) {
+          final enginePicker = CompanionEnginePicker(
+            engine: widget.brain.pairEngine,
+            onSelected: widget.onSelectEngine,
+            busy: widget.openingTerminal,
+          );
           final viewer = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(28, 20, 18, 14),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        'Companions',
-                        style: ink(17).copyWith(fontWeight: FontWeight.w600),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Companions',
+                            style: ink(17)
+                                .copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        if (constraints.maxWidth >= 500) enginePicker,
+                        IconButton(
+                          tooltip: 'Companion settings',
+                          key: const ValueKey('companion-settings'),
+                          onPressed: () => widget.onOpenControls('settings'),
+                          icon: Icon(
+                            AppIcons.slidersHorizontal,
+                            size: 20,
+                            color: AppColors.textSoft,
+                          ),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: 'Companion settings',
-                      key: const ValueKey('companion-settings'),
-                      onPressed: () => widget.onOpenControls('settings'),
-                      icon: Icon(
-                        Icons.tune_rounded,
-                        size: 19,
-                        color: AppColors.textSoft,
-                      ),
-                    ),
+                    if (constraints.maxWidth < 500) enginePicker,
                   ],
                 ),
               ),
@@ -313,9 +341,7 @@ class _CompanionHomeState extends State<CompanionHome> {
               _button(
                 isPaired ? 'By your side' : 'Make my companion',
                 isPaired ? null : () => zoo.pair(daemon.uid),
-                icon: isPaired
-                    ? Icons.favorite_outline_rounded
-                    : Icons.favorite_border_rounded,
+                icon: AppIcons.heart,
                 primary: true,
                 key: const ValueKey('companion-pair'),
               ),
@@ -327,13 +353,13 @@ class _CompanionHomeState extends State<CompanionHome> {
                   _renameError = null;
                   _renaming = true;
                 }),
-                icon: Icons.edit_outlined,
+                icon: AppIcons.pencil,
               ),
             if (daemon == null)
               _button(
                 'Collection preview',
                 null,
-                icon: Icons.auto_awesome_outlined,
+                icon: AppIcons.sparkles,
                 primary: true,
               ),
           ],
@@ -464,7 +490,7 @@ class _CompanionHomeState extends State<CompanionHome> {
         _button(
           'Meet the collection',
           () => _selectSection('Collection'),
-          icon: Icons.arrow_forward_rounded,
+          icon: AppIcons.arrowRight,
         ),
       ],
     );
@@ -692,7 +718,7 @@ class _CompanionHomeState extends State<CompanionHome> {
       _button(
         _exploring ? 'Hide the gallery' : 'Meet all ten companions',
         () => setState(() => _exploring = !_exploring),
-        icon: Icons.auto_awesome_outlined,
+        icon: AppIcons.sparkles,
       ),
       if (_exploring) ...[
         const SizedBox(height: 10),
@@ -796,7 +822,7 @@ class _CompanionHomeState extends State<CompanionHome> {
         const SizedBox(height: 28),
         if (widget.brain.active) ...[
           _memoryCard(
-            Icons.history_rounded,
+            AppIcons.history,
             history?.title ?? 'A little time to look back',
             history?.detail ?? 'Your recent conversations can hold the beginnings of a useful memory. Review the last 24 hours on this computer with your companion’s chosen model.',
           ),
@@ -816,12 +842,13 @@ class _CompanionHomeState extends State<CompanionHome> {
                     ? 'Retry review'
                     : 'Look back over 24 hours',
                 _lessons.busy ||
+                        _lessons.learning?.state == 'unopened' ||
                         (history?.active == true && history?.canRetry != true)
                     ? null
                     : () => unawaited(_lessons.reviewRecent()),
                 key: const ValueKey('memory-review-recent'),
                 primary: true,
-                icon: Icons.history_rounded,
+                icon: AppIcons.history,
               ),
               if (history?.active == true)
                 _button(
@@ -858,13 +885,13 @@ class _CompanionHomeState extends State<CompanionHome> {
           )
         else if (learned.isEmpty && _lessons.learning == null)
           _memoryCard(
-            Icons.auto_stories_outlined,
+            AppIcons.bookOpen,
             'Room for a first memory',
             'When a useful lesson is proposed and you approve it, it will appear here. No memories are invented.',
           ),
         if (widget.brain.active && _lessons.learning != null) ...[
           _memoryCard(
-            Icons.auto_stories_outlined,
+            AppIcons.bookOpen,
             _lessons.learning!.title,
             _lessons.learning!.detail,
           ),
@@ -965,7 +992,7 @@ class _CompanionHomeState extends State<CompanionHome> {
         ],
         if (d != null) ...[
           _memoryCard(
-            Icons.wb_sunny_outlined,
+            AppIcons.sun,
             'The day you met',
             date == null
                 ? '${companionName(d)} joined your collection.'
@@ -973,7 +1000,7 @@ class _CompanionHomeState extends State<CompanionHome> {
           ),
           const SizedBox(height: 12),
           _memoryCard(
-            Icons.favorite_border_rounded,
+            AppIcons.heart,
             'A bond that keeps growing',
             '${d.xp} XP together · ${companionAge(d.version)}',
           ),
@@ -985,7 +1012,7 @@ class _CompanionHomeState extends State<CompanionHome> {
           _button(
             'Refresh memories',
             _lessons.busy ? null : () => unawaited(_lessons.refresh()),
-            icon: Icons.refresh_rounded,
+            icon: AppIcons.refreshCw,
           ),
       ],
     );
@@ -1098,7 +1125,7 @@ class _CompanionHomeState extends State<CompanionHome> {
                       : _lessons.approveReviewed,
                   key: ValueKey('memory-approve-${lesson.id}'),
                   primary: true,
-                  icon: Icons.check_rounded,
+                  icon: AppIcons.check,
                 )
               else
                 _button(
@@ -1135,7 +1162,7 @@ class _CompanionHomeState extends State<CompanionHome> {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 23, color: accentInk),
+        Icon(icon, size: 24, color: accentInk),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
@@ -1178,7 +1205,7 @@ class _CompanionHomeState extends State<CompanionHome> {
           'Meet your companion',
           () => widget.onHatch(egg),
           primary: true,
-          icon: Icons.auto_awesome_outlined,
+          icon: AppIcons.sparkles,
         )
       else
         _button(

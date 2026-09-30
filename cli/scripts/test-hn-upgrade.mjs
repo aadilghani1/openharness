@@ -167,6 +167,67 @@ try {
   await run(harness, ['tui', '--install'], managedOptions)
   assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
   console.log('PASS no automatic downgrade; explicit first install still works')
+
+  // A legacy development link bypassed the managed binary entirely. A normal update diagnoses it;
+  // explicit repair switches commands only after a verified download and keeps a usable backup.
+  const checkout = join(root, 'checkout', 'tui')
+  const legacy = join(checkout, 'target', 'hn-test', 'hn')
+  mkdirSync(dirname(legacy), { recursive: true })
+  writeFileSync(join(checkout, 'Cargo.toml'), '[package]\nname = "harness-tui"\n')
+  writeFileSync(legacy, oldHn, { mode: 0o755 })
+  for (const repair of [['tui', '--install'], ['update', '--force']]) {
+    rmSync(hn)
+    rmSync(managed)
+    symlinkSync(legacy, hn)
+    const bypass = await run(harness, ['update'], managedOptions)
+    assert(bypass.stdout.includes('does not receive automatic updates'), bypass.stdout)
+    assert(bypass.stdout.includes('harness tui --install'), bypass.stdout)
+    assert.equal(readlinkSync(hn), legacy)
+    assert(!existsSync(managed))
+    assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.1 /)
+    const override = await run(harness, ['update', '--force'], options)
+    assert(override.stdout.includes('HARNESS_TUI_BIN='), override.stdout)
+    assert.equal(readlinkSync(hn), legacy, 'an explicit development override prevents forced migration')
+    hnBadChecksum = true
+    await run(harness, repair, managedOptions).catch(error => assert.equal(error.code, 1))
+    assert.equal(readlinkSync(hn), legacy, 'failed downloads must not change the launcher')
+    hnBadChecksum = false
+    const repaired = await run(harness, repair, managedOptions)
+    assert(repaired.stdout.includes('hn now follows automatic updates'), repaired.stdout)
+    assert.equal(readFileSync(hn, 'utf8'), `#!/bin/sh\nexec ${quote(harness)} tui "$@"\n`)
+    assert.equal(sha(readFileSync(legacy)), sha(oldHn))
+    assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+  }
+  const backups = readdirSync(bin).filter(name => name.startsWith('.hn-backup-'))
+  assert.equal(backups.length, 2)
+  for (const backup of backups) assert.equal(readlinkSync(join(bin, backup, 'hn')), legacy)
+  console.log('PASS legacy development installs migrate through --install or update --force, with backups and verified downloads')
+
+  if (native) {
+    rmSync(hn)
+    copyFileSync(native, hn)
+    const original = sha(readFileSync(hn))
+    const repaired = await run(harness, ['tui', '--install'], managedOptions)
+    assert(repaired.stdout.includes('hn now follows automatic updates'), repaired.stdout)
+    const backup = readdirSync(bin).find(name => name.startsWith('.hn-backup-') && !backups.includes(name))
+    assert(backup)
+    assert.equal(sha(readFileSync(join(bin, backup, 'hn'))), original)
+    assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+    console.log('PASS a copied production-native hn migrates with an intact native backup')
+  }
+
+  rmSync(managed)
+  await run(harness, ['update'], managedOptions)
+  assert.match((await run(hn, ['--version'], managedOptions)).stdout, /^hn 0\.1\.2 /)
+  console.log('PASS updates restore a missing binary behind an existing managed launcher')
+
+  const shadowDir = join(root, 'earlier-bin')
+  mkdirSync(shadowDir)
+  writeFileSync(join(shadowDir, 'hn'), oldHn, { mode: 0o755 })
+  const shadow = await run(harness, ['update'], { ...managedOptions, env: { ...managedEnv, PATH: `${shadowDir}:${managedEnv.PATH}` } })
+  assert(shadow.stdout.includes(`Your PATH resolves hn to ${join(shadowDir, 'hn')}`), shadow.stdout)
+  assert.equal(sha(readFileSync(join(shadowDir, 'hn'))), sha(oldHn))
+  console.log('PASS PATH shadowing is reported without changing unrelated commands')
   assert(requests.every(url => ['/metadata.json', '/cli.js', '/notify.mjs', '/hn-metadata.json', '/harness-tui'].includes(url)), JSON.stringify(requests))
 } finally {
   server.closeAllConnections()

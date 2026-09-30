@@ -24,7 +24,9 @@ import '../core/test_run.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/resting_model_words.dart';
 import 'app_state.dart';
+import 'attached_task_delivery.dart';
 import 'harness_placement.dart';
+import 'harness_attachments.dart';
 import 'pane_arrangement.dart';
 
 /// Whether New Harness opens as a line in the box, or as the full form.
@@ -406,6 +408,7 @@ class NewHarnessController extends ChangeNotifier {
     String? home,
     ModelsMenuController? modelUsage,
     Random? random,
+    this.attachments,
   }) : _random = random ?? Random(),
        placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
@@ -1072,6 +1075,10 @@ class NewHarnessController extends ChangeNotifier {
 
   NewHarnessField field = NewHarnessField.agent;
   final bool offersStore;
+
+  /// Files for the harness's prompt, when the host lets New Harness attach
+  /// them (the browser). Null leaves the box as desktop has it.
+  final HarnessAttachments? attachments;
   String query = '';
 
   /// The harness's first message, sent exactly as written as it starts. Empty
@@ -3398,6 +3405,16 @@ class NewHarnessController extends ChangeNotifier {
         permissionMode != null && permissionModeApproves(permissionMode);
     final folder = _project.folder;
     final firstMessage = task.trim();
+    // Files ride into the live terminal after creation, and the task follows
+    // them there (see deliverAttachedTask), so neither is a launch argument.
+    final files = takesTask
+        ? attachments?.files ?? const <HarnessAttachment>[]
+        : const <HarnessAttachment>[];
+    if (files.isNotEmpty && !canAttachFiles(app, _machineId)) {
+      return _fail(
+        'Update Harness CLI on $machineLabel to attach files, or remove them.',
+      );
+    }
     final failure = await app.createAgent(
       _machineId,
       engine: base,
@@ -3412,13 +3429,21 @@ class NewHarnessController extends ChangeNotifier {
       model: _model,
       dsh: harness,
       // Sent exactly as written; an agent that cannot take one is never sent it.
-      prompt: takesTask && firstMessage.isNotEmpty ? firstMessage : null,
+      prompt: takesTask && files.isEmpty && firstMessage.isNotEmpty
+          ? firstMessage
+          : null,
       // A new project named by the person, or after its task, names the agent
       // too — until the engine titles the session. A clock-named one leaves
       // it to the machine ("Solder harness 9-18 13:02").
       name: projectFolderRequest?.agentName,
       attempt: attempt,
     );
+    // Before the disposed check: on an empty tab the new pane replaces this
+    // box as soon as it opens, disposing it while createAgent returns — and
+    // the files still have to follow the harness there.
+    if (failure == null && files.isNotEmpty) {
+      _deliverFiles(attempt.agentId, files, firstMessage);
+    }
     if (_disposed) return NewHarnessOutcome.failed;
     if (failure != null) {
       // A folder already made for this attempt is the project now: a retry
@@ -3439,6 +3464,34 @@ class NewHarnessController extends ChangeNotifier {
     return NewHarnessOutcome.created;
   }
 
+  /// Hands a created harness its files and then its task, detached from this
+  /// box, which may already be gone ([deliverAttachedTask]).
+  void _deliverFiles(
+    String? agentId,
+    List<HarnessAttachment> files,
+    String task,
+  ) {
+    final report = attachments?.onDeliveryProblem;
+    if (!_disposed) attachments?.clear();
+    if (agentId == null) {
+      report?.call(
+        'The harness started without its files. Attach them in its pane.',
+      );
+      return;
+    }
+    unawaited(
+      deliverAttachedTask(
+        app,
+        machineId: _machineId,
+        agentId: agentId,
+        files: files,
+        task: task,
+      ).then((problem) {
+        if (problem != null) report?.call(problem);
+      }),
+    );
+  }
+
   NewHarnessOutcome _fail(String message) {
     busy = false;
     status = null;
@@ -3450,6 +3503,8 @@ class NewHarnessController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    // Its files were copied out for delivery; only the list goes.
+    attachments?.dispose();
     _appTick?.cancel();
     _listDebounce?.cancel();
     app.removeListener(_onApp);

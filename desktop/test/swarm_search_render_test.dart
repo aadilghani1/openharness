@@ -91,7 +91,7 @@ void main() {
           ...machine.agents.where((agent) => agent.id != original.id),
         ];
         machine.nodeOnline = false;
-        app.renameSwarm(source.id, 'Renamed swarm');
+        app.renameSwarm(source.id, 'Renamed tab');
         await tester.pump();
         await open();
         await tester.enterText(field, 'after-branch');
@@ -114,7 +114,7 @@ void main() {
           });
           expect(
             rows.singleWhere((row) => row.swarmId == source.id).swarmName,
-            'Renamed swarm',
+            'Renamed tab',
           );
         }
         await tester.enterText(field, 'before-branch');

@@ -997,7 +997,7 @@ void main() {
         await configured.mount(tester, app, keymap);
         final mac = defaultTargetPlatform == TargetPlatform.macOS;
         final pane = app.focusedPaneId;
-        await key(tester, LogicalKeyboardKey.keyI, cmd: mac, ctrl: !mac);
+        await key(tester, LogicalKeyboardKey.keyI, cmd: mac, alt: !mac);
         expect(search(tester).isModelMode, isTrue);
         expect(tester.widget<TextField>(field).controller!.text, ':');
         expect(
@@ -1016,7 +1016,7 @@ void main() {
         expect(find.text('mac.lan'), findsOneWidget);
         if (mac) await capture(tester, 'own-machine-model');
         await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: mac, ctrl: !mac);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: mac, alt: !mac);
         expect(field, findsOneWidget);
         expect(search(tester).scopePrefix, '#');
         final editor = tester.widget<TextField>(field).controller!;
@@ -1028,7 +1028,13 @@ void main() {
         expect(search(tester).hint, 'Search harnesses');
         expect(search(tester).rows.any((row) => row.isCreate), isFalse);
         await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
+        await key(
+          tester,
+          LogicalKeyboardKey.keyP,
+          cmd: mac,
+          alt: !mac,
+          shift: !mac,
+        );
         expect(search(tester).scopePrefix, '');
         expect(tester.widget<TextField>(field).controller!.text, isEmpty);
         expect(tester.widget<TextField>(field).cursorWidth, 2);
@@ -1046,9 +1052,15 @@ void main() {
         expect(hints, findsOneWidget);
         expect(search(tester).isModelMode, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
+        await key(
+          tester,
+          LogicalKeyboardKey.keyP,
+          cmd: mac,
+          alt: !mac,
+          shift: !mac,
+        );
         final origin = search(tester);
-        await key(tester, LogicalKeyboardKey.keyI, cmd: mac, ctrl: !mac);
+        await key(tester, LogicalKeyboardKey.keyI, cmd: mac, alt: !mac);
         expect(search(tester), same(origin));
         expect(search(tester).isModelMode, isTrue);
         expect(tester.widget<TextField>(field).controller!.text, ':');

@@ -130,6 +130,7 @@ void main() {
   }
 
   for (final legacy in [
+    'New Swarm',
     'New swarm',
     'New Tab',
     'New tab',
@@ -165,40 +166,36 @@ void main() {
     );
   }
 
-  test(
-    'explicit names matching an old placeholder survive a restore',
-    () async {
+  for (final customName in ['New Tab', 'New Swarm']) {
+    test('explicit name $customName survives a restore', () async {
       final store = MemoryStore();
       final original = createApp(store: store);
-      original.renameSwarm(original.activeSwarmId, 'New Tab');
+      original.renameSwarm(original.activeSwarmId, customName);
       await original.flushPaneLayout();
       original.dispose();
       final restored = createApp(store: store);
       addTearDown(restored.dispose);
       await restored.restorePaneLayoutForTest();
-      expect(restored.activeSwarm.name, 'New Tab');
+      expect(restored.activeSwarm.name, customName);
       expect(restored.activeSwarm.nameIsCustom, isTrue);
-    },
-  );
+    });
+  }
+
+  test('first agent names a tab and survives closing and reopening', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    expect(app.activeSwarm.name, 'Agent 0');
+    await app.addAgentToSwarm('m', 'a1');
+    expect(app.activeSwarm.name, 'Agent 0');
+    expect(app.activeSwarm.toJson()['name'], 'Agent 0');
+    await app.closeSwarm(app.activeSwarmId);
+    app.reopenClosedSwarm();
+    expect(app.activeSwarm.name, 'Agent 0');
+  });
 
   test(
-    'first agent names a swarm and survives closing and reopening',
-    () async {
-      final app = createApp();
-      addTearDown(app.dispose);
-      await app.addAgentToSwarm('m', 'a0');
-      expect(app.activeSwarm.name, 'Agent 0');
-      await app.addAgentToSwarm('m', 'a1');
-      expect(app.activeSwarm.name, 'Agent 0');
-      expect(app.activeSwarm.toJson()['name'], 'Agent 0');
-      await app.closeSwarm(app.activeSwarmId);
-      app.reopenClosedSwarm();
-      expect(app.activeSwarm.name, 'Agent 0');
-    },
-  );
-
-  test(
-    'first agent preserves custom names and names the requested swarm',
+    'first agent preserves custom names and names the requested tab',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -275,7 +272,7 @@ void main() {
     },
   );
 
-  test('replacement and pinning cannot change another swarm', () async {
+  test('replacement and pinning cannot change another tab', () async {
     final app = createApp();
     await app.addAgentToSwarm('m', 'a0');
     await app.addAgentToSwarm('m', 'a1');
@@ -324,14 +321,14 @@ void main() {
         for (var i = 0; i < 70; i++) (machineId: 'm', agentId: 'a$i'),
       ]);
       expect(app.panes.length, AppNotifier.maxPanes);
-      expect(app.lastError, contains('Open another swarm'));
+      expect(app.lastError, contains('Open another tab'));
       expect(app.panes.first.agentId, 'a0');
       app.dispose();
     },
   );
 
   test(
-    'all swarm intent, focus, zoom and shared identity restore offline',
+    'all tab intent, focus, zoom and shared identity restore offline',
     () async {
       final storage = MemoryStore();
       final app = createApp(store: storage);

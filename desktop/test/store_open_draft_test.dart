@@ -63,7 +63,7 @@ void main() {
         findsOneWidget,
         reason: 'New Harness is open',
       );
-      expect(app.swarms.length, tabsBefore + 1, reason: 'in a new swarm');
+      expect(app.swarms.length, tabsBefore + 1, reason: 'in a new tab');
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();

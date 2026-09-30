@@ -24,9 +24,9 @@ HarnessBackground get _artwork => HarnessBackground.gallery.firstWhere(
 
 void main() {
   group('prefs', () {
-    test('off by default, at 50%', () {
+    test('Blank by default, at 50%', () {
       const prefs = AppearancePrefs();
-      expect(prefs.behindHarnesses, isFalse);
+      expect(prefs.showsBackground, isFalse);
       expect(prefs.paneOpacity, 0.5);
       expect(prefs.effectivePaneOpacity, 1);
     });
@@ -34,60 +34,66 @@ void main() {
     test('round-trips through storage', () async {
       final storage = _Storage();
       final store = AppearancePrefsStore(storage: storage);
-      await store.setBehindHarnesses(on: true, opacity: 0.6);
+      await store.setPaneOpacity(0.6);
 
       final reloaded = AppearancePrefsStore(storage: storage);
       await reloaded.load();
-      expect(reloaded.value.behindHarnesses, isTrue);
       expect(reloaded.value.paneOpacity, 0.6);
     });
 
-    test('opacity is clamped, and garbage lands on the defaults', () async {
+    test('an older build\'s off switch is ignored', () async {
+      final storage = _Storage()
+        ..values[_key] = '{"on": false, "opacity": 0.3}';
+      final store = AppearancePrefsStore(storage: storage);
+      await store.load();
+      await store.setBackground(_artwork);
+      expect(store.value.showsBackground, isTrue);
+      expect(store.value.effectivePaneOpacity, 0.3);
+    });
+
+    test('opacity is clamped, and garbage lands on the default', () async {
       final storage = _Storage();
       final store = AppearancePrefsStore(storage: storage);
-      await store.setBehindHarnesses(opacity: -1);
+      await store.setPaneOpacity(-1);
       expect(store.value.paneOpacity, AppearancePrefs.paneOpacityMin);
-      await store.setBehindHarnesses(opacity: 7);
+      await store.setPaneOpacity(7);
       expect(store.value.paneOpacity, 1);
 
-      storage.values[_key] = '{"on": "yes", "opacity": "NaN"}';
+      storage.values[_key] = '{"opacity": "NaN"}';
       await store.load();
-      expect(store.value.behindHarnesses, isFalse);
       expect(store.value.paneOpacity, AppearancePrefs.paneOpacityDefault);
 
       storage.values[_key] = 'not json';
       await store.load();
-      expect(store.value.behindHarnesses, isFalse);
+      expect(store.value.paneOpacity, AppearancePrefs.paneOpacityDefault);
     });
 
-    test('Blank shows nothing behind harnesses, but keeps the choice', () async {
+    test('any Background but Blank shows through the panes', () async {
       final store = AppearancePrefsStore(storage: _Storage());
-      await store.setBehindHarnesses(on: true, opacity: 0.7);
-      expect(store.value.showsBehindHarnesses, isFalse);
+      await store.setPaneOpacity(0.7);
+      expect(store.value.showsBackground, isFalse);
       expect(store.value.effectivePaneOpacity, 1);
 
       await store.setBackground(_artwork);
-      expect(store.value.showsBehindHarnesses, isTrue);
+      expect(store.value.showsBackground, isTrue);
       expect(store.value.effectivePaneOpacity, 0.7);
 
       await store.setBackground(HarnessBackground.plain);
-      expect(store.value.behindHarnesses, isTrue);
+      expect(store.value.showsBackground, isFalse);
       expect(store.value.effectivePaneOpacity, 1);
     });
 
     test('reset forgets it', () async {
       final storage = _Storage();
       final store = AppearancePrefsStore(storage: storage);
-      await store.setBehindHarnesses(on: true);
+      await store.setPaneOpacity(0.2);
       await store.reset();
-      expect(store.value.behindHarnesses, isFalse);
+      expect(store.value.paneOpacity, AppearancePrefs.paneOpacityDefault);
       expect(storage.values.containsKey(_key), isFalse);
     });
   });
 
-  testWidgets('the switch shows for artwork and reveals pane opacity', (
-    tester,
-  ) async {
+  testWidgets('pane opacity shows for artwork only', (tester) async {
     final store = AppearancePrefsStore(storage: _Storage());
     await tester.pumpWidget(
       MaterialApp(
@@ -96,19 +102,11 @@ void main() {
         ),
       ),
     );
-    final toggle = find.byKey(const ValueKey('background-behind-harnesses'));
     final slider = find.byKey(const ValueKey('background-pane-opacity'));
-    expect(toggle, findsNothing, reason: 'Blank has nothing to show');
+    expect(slider, findsNothing, reason: 'Blank has nothing to show');
 
     await store.setBackground(_artwork);
     await tester.pumpAndSettle();
-    expect(toggle, findsOneWidget);
-    expect(slider, findsNothing);
-
-    await tester.ensureVisible(toggle);
-    await tester.tap(toggle);
-    await tester.pumpAndSettle();
-    expect(store.value.behindHarnesses, isTrue);
     expect(slider, findsOneWidget);
     expect(find.text('50%'), findsOneWidget);
   });

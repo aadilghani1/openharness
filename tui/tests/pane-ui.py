@@ -31,7 +31,9 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
+# Box panes are the default; this suite covers the blurred surfaces (`@hn-look panes`).
 CONF.write_text('set -g automatic-rename off\n'
+                'set -g @hn-look panes\n'
                 'set -g status-right \'  #{usage_remaining_mark}  #{s/ /  /:fleet}  "#{=/21/…:local_machine}"  20:41 \'\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
@@ -118,12 +120,13 @@ def background(hex_value):
     tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
 
 
+# A surface is the program's cells and one cell around them, its title in the top one: the
+# space between two panes is the one cell tmux keeps between them.
 def pane_edge_background(pane, colour):
     x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split())
-    points = ((x - 1, y - 2), (x + w, y - 2), (x - 1, y + h),
-              (x + w, y + h), (x - 1, y - 1), (x + w, y + h // 2),
-              (x - 2, y - 3), (x + w + 1, y - 3), (x - 2, y + h + 1),
-              (x + w + 1, y + h + 1), (x + w // 2, y - 3), (x - 2, y + h // 2))
+    points = ((x - 1, y - 1), (x + w, y - 1), (x - 1, y + h),
+              (x + w, y + h), (x + w // 2, y - 1), (x + w, y + h // 2),
+              (x - 1, y + h // 2), (x + w // 2, y + h))
     return all(background_at(col, row) == colour for col, row in points)
 
 
@@ -136,7 +139,7 @@ def pane_outline(pane, kind=None):
     x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split())
     screen = tmux('capture-pane', '-p', '-t', 'test').splitlines()
     styles = {'thin': '┌┐└┘', 'heavy': '┏┓┗┛', 'double': '╔╗╚╝'}
-    points = ((x - 2, y - 3), (x + w + 1, y - 3), (x - 2, y + h + 1), (x + w + 1, y + h + 1))
+    points = ((x - 1, y - 1), (x + w, y - 1), (x - 1, y + h), (x + w, y + h))
     return any(all(0 <= row < len(screen) and 0 <= col < len(screen[row]) and screen[row][col] == glyph
                    for (col, row), glyph in zip(points, glyphs))
                for glyphs in ([styles[kind]] if kind else styles.values()))
@@ -144,7 +147,7 @@ def pane_outline(pane, kind=None):
 
 def pane_title_color(pane, foreground=True):
     x, y = map(int, value('#{pane_left} #{pane_top}', pane).split())
-    return color_at(x - 1, y - 2, foreground=foreground)
+    return color_at(x, y - 1, foreground=foreground)
 
 
 def snapshot(name):
@@ -176,7 +179,7 @@ try:
     started = True
     wait(lambda: 'Fix flaky login test' in tmux('capture-pane', '-p', '-t', 'test'), 'demo panes')
     background('#000000')
-    wait(lambda: 'bg=#000000' in hn('show', '-gwv', 'window-active-style'), 'black terminal background')
+    wait(lambda: 'bg=#181818' in hn('show', '-gwv', 'window-active-style'), 'focused pane lifted above the black terminal background')
     hn('select-layout', 'even-horizontal')
     panes = hn('list-panes', '-F', '#{pane_id}').splitlines()
     assert len(panes) == 3
@@ -190,12 +193,12 @@ try:
     active_bg = hn('show', '-gwv', 'window-active-style').split('bg=')[1]
     inactive_bg = hn('show', '-gwv', 'window-style').split('bg=')[1]
     assert active_bg != inactive_bg
-    assert active_bg == '#000000' and inactive_bg == '#404040'
+    assert active_bg == '#181818' and inactive_bg == '#404040'
     wait(lambda: not any(pane_outline(p) for p in (first, second, third)), 'pane backgrounds without outlines')
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
-    assert background_at(149, 0) == '#202020', 'dark backdrop surrounds the pane cards'
+    assert background_at(149, 0) == inactive_bg, 'panes reach the window edges: no outer margin'
     wait(lambda: pane_edge_background(first, active_bg), 'focused background fills through the pane edges')
-    assert background_at(49, 20) == background_at(99, 20) == '#202020', 'dark gaps separate pane backgrounds'
+    assert background_at(49, 20) == background_at(99, 20) == 'default', 'pane gaps use the native terminal background'
     assert pane_edge_background(second, inactive_bg)
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
@@ -293,7 +296,7 @@ try:
     hn('select-pane', '-t', second, '-T', long_title)
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', second).split())
     def waiting_heading():
-        return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].strip()
+        return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].strip()
     wait(lambda: waiting_heading().endswith('(2) ?'), 'long pane names retain their suffix and waiting indicator')
     assert '…' in waiting_heading()
     assert value('#{pane_title}', second) == long_title, 'raw pane title must remain unchanged'
@@ -319,11 +322,11 @@ try:
         assert '⎇ ' + value('#{pane_branch}') in branch_context, branch_context
         assert 'git:(' not in branch_context
         wait(lambda: not pane_outline(target) and background_at(1, 1) == active_bg
-             and background_at(0, 0) == background_at(149, 40) == '#202020',
-             'zoomed pane keeps its focused surface inside the canvas')
+             and background_at(0, 0) == background_at(149, 40) == active_bg,
+             'a zoomed pane fills the window, to its edges')
         wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
         x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', target).split())
-        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 2][x:x + w].rstrip().endswith(branch_context), 'machine, project, branch and PR align to the right edge')
+        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip().endswith(branch_context), 'machine, project, branch and PR align to the right edge')
         snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
         keys('C-b', 'z')
         wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
@@ -339,7 +342,7 @@ try:
     hn('set', '-g', '@hn-look', 'panes')
     assert value('#{window_layout}') == original
     x, y, w, h = map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', first).split())
-    assert x > 0 and y > 1 and w > 0 and h > 0
+    assert x > 0 and y > 0 and w > 0 and h > 0
     hn('send-keys', '-t', first, '-l', '\x1b[?1000h\x1b[?1006h')
     wait(lambda: value('#{mouse_sgr_flag}', first) == '1', 'program mouse mode')
     before = len(api()['inputs'])
@@ -351,8 +354,8 @@ try:
     # Titles and padding focus the pane without sending a click to its program.
     before = len(api()['inputs'])
     second_x, second_y = map(int, value('#{pane_left} #{pane_top}', second).split())
-    mouse(0, second_x, second_y - 2)
-    mouse(0, second_x, second_y - 2, release=True)
+    mouse(0, second_x, second_y - 1)
+    mouse(0, second_x, second_y - 1, release=True)
     wait(lambda: value('#{pane_id}') == second, 'click the pane header')
     wait(lambda: pane_background(second) == active_bg and pane_background(first) == inactive_bg, 'mouse focus moves pane contrast')
     wait(lambda: not pane_outline(second) and not pane_outline(first), 'mouse focus leaves no outlines')
@@ -431,9 +434,10 @@ try:
     layout_before_theme = value('#{window_layout}')
     before = len(api()['inputs'])
     background('#f7f7f7')
-    wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#f7f7f7', 'light surface defaults')
-    wait(lambda: pane_background(first) == '#f7f7f7' and pane_background(second) == '#e5e5e5', 'light focus contrast')
-    wait(lambda: pane_edge_background(first, '#f7f7f7') and pane_title_color(first, foreground=False) == '#f7f7f7', 'light surface fills the focused pane through its padding')
+    wait(lambda: hn('show', '-gwv', 'window-active-style') == 'fg=#1a1a1a,bg=#eeeeee', 'light surface defaults')
+    wait(lambda: pane_background(first) == '#eeeeee' and pane_background(second) == '#e5e5e5', 'light focus contrast')
+    wait(lambda: pane_edge_background(first, '#eeeeee') and pane_title_color(first, foreground=False) == '#eeeeee', 'light surface fills the focused pane through its padding')
+    assert background_at(149, 0) in ('#eeeeee', '#e5e5e5'), 'light theme: the panes reach the window edges too'
     light_status = hn('show', '-gv', 'status-style')
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
@@ -447,7 +451,7 @@ try:
     assert len(api()['inputs']) == before, 'terminal query replies reached an application'
     hn('set', '-gwu', 'window-style')
     assert hn('show', '-gwv', 'window-active-style').startswith('fg=#f5f5f5,')
-    wait(lambda: pane_background(first) == '#101010' and pane_background(second) == '#404040', 'dark focus contrast')
+    wait(lambda: pane_background(first) == '#262626' and pane_background(second) == '#404040', 'dark focus contrast')
     print('PASS pane UI: live light/dark themes, reported defaults and custom style preservation', flush=True)
 
     hn('send-keys', '-t', first, '-l', '\x1b[H\x1b[31;44mHN_COLOR\x1b[0m')
@@ -464,9 +468,9 @@ try:
 
     single = hn('new-window', '-n', 'single', '-P', '-F', '#{pane_id}', '/bin/sh')
     wait(lambda: value('#{pane_id}') == single and value('#{window_panes}') == '1', 'single-pane window')
-    wait(lambda: not pane_outline(single) and background_at(1, 1) == '#101010'
-         and background_at(0, 0) == background_at(149, 40) == '#202020',
-         'single pane keeps its focused surface inside the canvas')
+    wait(lambda: not pane_outline(single) and background_at(1, 1) == '#262626'
+         and background_at(0, 0) == background_at(149, 40) == '#262626',
+         'a single pane fills the window, to its edges')
     snapshot('panes-single')
     hn('kill-window')
     wait(lambda: value('#{window_id}') == current, 'return from single-pane window')

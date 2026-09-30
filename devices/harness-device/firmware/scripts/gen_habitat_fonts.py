@@ -46,13 +46,9 @@ fonts = [('ht_mono_16',mono,16,10,22,17),('ht_mono_20',mono,20,12,28,22),
          ('ht_open_28',mono,28,17,38,31),
          ('ht_open_24',mono,24,15,32,26),('ht_right_24',mono,24,15,32,26),
          ('ht_bell_24',mono,24,15,32,26),
-         ('ht_mic_footer',mono,40,40,48,40),
          ('ht_spark',mono,40,40,48,40),
          ('ht_engine',mono,28,24,38,31),
          ('ht_wave',mono,40,6,124,40),
-         ('ht_pill',mono,20,12,38,30),
-         ('ht_chevron',mono,20,12,24,20),
-         ('ht_down_20',mono,20,24,28,22),('ht_down_28',mono,28,34,38,31),
          ('ht_viet_16',viet,16,10,22,17),('ht_viet_20',viet,20,12,28,22),
          ('ht_viet_24',viet,24,15,32,26),('ht_viet_28',viet,28,17,38,31)]
 with dest.open('w') as out:
@@ -63,7 +59,7 @@ with dest.open('w') as out:
         data=[]
         bounds=[]
         # Latin-1 keeps common names readable; unknown Unicode renders ?, never changes wire text.
-        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe040,0xe044) if name=='ht_pill' else (0xe050,0xe051) if name=='ht_chevron' else (0xe060,0xe060) if name.startswith('ht_down_') else (0xe002,0xe002) if name=='ht_spark' else (0xe001,0xe001) if name=='ht_mic_footer' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name.startswith('ht_viet_') else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
+        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe002,0xe002) if name=='ht_spark' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name.startswith('ht_viet_') else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
         for cp in range(first,last+1):
             # The tail of the Vietnamese atlas is the eight scattered letters, in VIET_TAIL order.
             glyph = VIET_TAIL[cp-0x1efa] if name.startswith('ht_viet_') and cp >= 0x1efa else chr(cp)
@@ -143,59 +139,6 @@ with dest.open('w') as out:
                     stroke([(3,17),(14,28)])
                     stroke([(14,17),(3,28)])
                 im=hi.resize((width,height),Image.Resampling.LANCZOS)
-            if name=='ht_pill':
-                # THE TAB PILL'S OUTLINE, in five pieces: left cap (two cells), body, right cap (two
-                # cells). Habitat can only fill rectangles, so a rounded box is a run of these glyphs
-                # under the tab name's own run.
-                #
-                # Three colours from a glyph that has two: the pill is drawn in an ink three times its
-                # fill, so coverage level 1 IS the fill and level 2 is the rim — a third lighter, as
-                # the design's #333842 rim is against its #141519 fill. Outside stays level 0, the
-                # canvas. So each pixel here is a LEVEL, not a coverage: 0, 85 or 170, and the only
-                # blending is at the outer edge, where black to rim passes through fill — which is
-                # what antialiasing that edge would have painted anyway.
-                #
-                # Stadium of height 38, radius 19, rim 1 px; the name's run covers the body cells
-                # and uses exactly level 1 as its background, so no seam shows. See focus.c.
-                S = 4
-                piece = cp - first                 # 0,1 left cap  2 body  3,4 right cap
-                big = Image.new('L', (width*S*5, height*S))
-                d = ImageDraw.Draw(big)
-                d.rounded_rectangle((0, 0, width*S*5 - 1, height*S - 1), radius=height*S//2, fill=170)
-                d.rounded_rectangle((S, S, width*S*5 - 1 - S, height*S - 1 - S),
-                                    radius=height*S//2 - S, fill=85)
-                x = piece * width * S
-                im = big.crop((x, 0, x + width*S, height*S)).resize((width, height), Image.Resampling.BOX)
-            elif name.startswith('ht_down_'):
-                # "CHOOSE ONE": the ⌄ after the Focus tab pill's name and after the agent's name, each
-                # opening its own list — tabs and panes. One sign for both, so it is learnt once.
-                # Drawn, at 4x and reduced; sized to sit on the cap line of the text it follows.
-                S = 4
-                big = Image.new('L', (width*S, height*S))
-                d = ImageDraw.Draw(big)
-                if name == 'ht_down_20':
-                    pts, stroke = [(9, 11.5), (15, 17.5), (21, 11.5)], 2.0
-                else:
-                    pts, stroke = [(10, 17), (17, 24), (24, 17)], 2.2
-                d.line([(x*S, y*S) for x, y in pts], fill=255, width=round(stroke*S), joint='curve')
-                im = big.resize((width, height), Image.Resampling.BOX)
-            elif name=='ht_chevron':
-                # The Focus pane arrows, the design's own at 1:1 like the microphone: 11 x 20 of
-                # #8a8a99 on black, from "Agent — recap". See assets/README.md.
-                im = Image.new('L', (width, height))
-                im.paste(Image.open(root/('assets/chevron_left.png' if cp == first
-                                          else 'assets/chevron_right.png')), (0, 2))
-            elif name=='ht_mic_footer':
-                # THE DESIGN'S OWN PIXELS, at 1:1 — not scaled, not redrawn.
-                #
-                # assets/mic.png is the mark from mockup/newdesign.html, which is rendered at the
-                # device's 466 x 466, so it is already the size the glass draws. Every earlier
-                # microphone here was scaled or traced and read as a different icon; this one only
-                # loses what four levels of coverage cannot hold. Offset (7, 7): seven puts its left
-                # edge on the design's x = 220 given the cell is drawn at 213, and seven vertically
-                # centres its 34 rows in the 48.
-                im = Image.new('L', (width, height))
-                im.paste(Image.open(root/'assets/mic.png'), (7, 7))
             values=[min(3,(v+42)//85) for v in im.get_flattened_data()]
             if name in ('ht_mono_20','ht_open_20','ht_right_20','ht_bell_20',
                         'ht_mono_24','ht_open_24','ht_right_24','ht_bell_24'):

@@ -343,6 +343,10 @@ abstract final class AppPalette {
   static Color get warn =>
       AppTheme.pick(const Color(0xFF9A4708), const Color(0xFFFFB020));
 
+  /// A quiet allowance limit in workspace chrome, distinct from an app error.
+  static Color get usageLow =>
+      AppTheme.pick(const Color(0xFF87632A), const Color(0xFFC4A46C));
+
   // grey dot — a state mark, so ≥3:1 in light (3.14 on Paper's search ground).
   static Color get offline =>
       AppTheme.pick(const Color(0xFF7F7E78), const Color(0xFF6E6E6E));
@@ -1415,6 +1419,7 @@ abstract final class AppDesktop {
   static const double tabShoulder = 8;
   static const double tabTopInset = 6;
   static const double tabCloseInset = 8;
+  static const double paneCloseInset = 4;
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;

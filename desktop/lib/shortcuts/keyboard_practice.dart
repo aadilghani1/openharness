@@ -40,13 +40,13 @@ class KeyboardLesson {
   String get result => switch (command) {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
     'agent.open' ||
-    'agent.add' => '[agent 1] │ [agent 2]\nBoth agents share this tab.',
+    'agent.add' => '[harness 1] │ [harness 2]\nBoth harnesses share this tab.',
     'agent.new' => 'Codex · This Mac · payments\nHarness anything (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
-    'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
+    'pane.zoom' => '[harness 2 — full workspace]\nPress the same key to restore the other panes.',
     'pane.close' =>
       '[harness 1]\nThe second view closes. Its harness keeps running.',
     'swarm.close' =>
-      '[previous swarm]\nThe view closes. Its harnesses keep running.',
+      '[previous tab]\nThe view closes. Its harnesses keep running.',
     'navigation.commands' => '>rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',

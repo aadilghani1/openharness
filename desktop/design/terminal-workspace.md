@@ -5,6 +5,9 @@ the panes. It replaces this document's former fixed-cell and text-only rules
 for welcome pages, forms, dialogs, pickers, menus, and buttons. Historical
 screenshots show prior iterations and are not a presentation specification.
 
+Use the [product terminology](../../docs/terminology.md): a tab groups harnesses;
+a harness is one running agent session.
+
 ## Preserve the terminal
 
 Terminal output, direct keyboard input, the in-pane composer, and in-pane find
@@ -22,10 +25,17 @@ Tabs remain compact and content-sized, adding one at a time until the row fills.
 Preserve Command-number navigation and established working/question/done/failure
 marks. Idle does not need a mark. Motion represents actual work and respects
 Reduce Motion. Keep the top global actions compact and the Store button familiar.
+Leave an 8-point control gap before Store. On macOS, notifications live in the
+system menu bar; the window keeps Search and Store. Linux and browser bars
+retain their notification bell. Show a count badge only when something is unread.
+Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
 The footer shows remaining subscription usage on the left. Its right-hand context follows the focused pane: machine, project, branch, and PR
-at the right. Each pane header shows its model immediately before an always-visible
-close icon. Clicking the model opens the shared Models picker for that harness;
+at the right. Each pane header ends with model, split down, split right, zoom,
+and close, in that order. The icons stay visible with quiet ink and no button
+chrome. Splitting opens New Harness directly with that pane's agent, machine,
+and project, then creates into the chosen split on submission. Clicking the
+model opens the shared Models picker for that harness;
 the footer does not repeat model or effort. Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.

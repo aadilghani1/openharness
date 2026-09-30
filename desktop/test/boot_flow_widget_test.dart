@@ -1020,7 +1020,7 @@ void main() {
   });
 
   testWidgets(
-    'offline selected agent retains its Swarm view with an offline message',
+    'offline selected agent retains its Tab view with an offline message',
     (tester) async {
       final app = makeNotifier(AppStatus.authenticated);
       const machine = Machine(

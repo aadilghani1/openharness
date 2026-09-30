@@ -4,122 +4,40 @@
 #include <string.h>
 
 /*
- * THE FOCUS FACE — the dial's pre-habitat screens, in cells.
+ * THE FOCUS FACE — the LVGL firmware's agent screen, drawn from that firmware's own numbers.
  *
- * Reference: mockup/device-screens/png/agent-working.png and agent-recap.png, which are exact 466
- * renders of the firmware that shipped before this one. Those are proportional Geist at eight sizes;
- * this is ht_mono_28 at 17 px a cell, which holds about 27 characters a line where the old face held
- * roughly 35. So the arrangement is kept and the measurements are redone, never copied.
+ * Reference: the 0.0.86 build (the last LVGL release) and assets/lvgl/SPEC.md, which records every
+ * value below and where it came from. The fonts and icons are that build's, converted glyph for
+ * glyph by scripts/gen_lvgl_assets.py, and the text is laid out by ht_lv_label, which is LVGL's own
+ * wrap, centring and LONG_DOT. So each y here is what LVGL's flex layout put there:
  *
- * ── the rule that decides every width on this file ──────────────────────────────────────────────
- *
- * A run's usable width is set by its LOWEST edge, not its top: the chord at distance d from the
- * centre is 2*sqrt(233^2 - d^2), and a 38 px row starting at y has its box ending at y+38. Getting
- * this backwards is what cut the brackets off the first square face's footer. Every width in ROWS
- * below is the chord at that row's bottom, minus a margin.
+ *   the tile   466 tall, padded 18; a 384 px column at x 41
+ *   header     [28 px mark] 10 [name, geist_med_38, 51 px lines] from y 119 with a card
+ *   tab pill   51 above the header: 41 tall, 12 px pad and a 1 px rim, montserrat_24
+ *   recap      a card 21 below the name, 384 x 119, radius 28; two lines of geist_med_28, 38 + 3
+ *   no card    [name .. body] centred on the glass: working at 176, "No activity yet" at 172
  *
  * ── the rule that decides the SHAPE of this file ────────────────────────────────────────────────
  *
- * ht_damage() diffs run index against run index and falls back to repainting the whole 466x466 the
- * moment the count or the order changes (terminal.c). So this face emits the SAME RUNS IN THE SAME
- * ORDER on every frame, with empty text where a row has nothing to say — the same stabiliser
- * ht_wrap() already applies by padding to a fixed line count. Do not make a row conditional.
+ * ht_damage() diffs run index against run index and repaints the whole 466x466 the moment the count
+ * or the order changes (terminal.c). So the home face emits the SAME ELEVEN RUNS IN THE SAME ORDER on
+ * every frame — pill box, pill name, mark, name ×2, card, card line ×2, status, "no activity" ×2 —
+ * each empty where it has nothing to say. Do not make one conditional.
  */
-
-enum { FOCUS_ROWS = 7 };   // pill, name, status, and four of recap
-
-/*
- * WHERE THE BODY STARTS, and it is measured off the raster rather than derived from the cells.
- *
- * Equal CELL gaps are not equal gaps to look at. The pill is a filled block so its bottom edge is
- * exactly its cell's, 60 + 28 = 88; the name's ink opens 11 px inside its cell and its descenders
- * run almost to the bottom of it. So cell gaps of 30 and 30 render as ink gaps of 41 and 44, and the
- * lower one looks the looser of the two.
- *
- * 183 is 118 + 38 + 27, and it puts both at 41. The asymmetry is not arbitrary: a pane name carries
- * a descender about half the time (p, y, g) while the first line of a summary carries an ascender
- * nearly always (h, d, t, k, l), so the gap below the name is the one that needs the three pixels
- * back. Verified by banding the rendered face — see focus_face() in test/test_character.c.
- */
-enum { FOCUS_BODY_Y = 124 + 38 + 22 };
-
-/*
- * y, and the width the chord allows there, against a 230 px working radius rather than the 233 px
- * face — the inset every other screen keeps off the bezel.
- *
- * THE NARROW EDGE IS THE ONE FARTHER FROM THE MIDDLE, which for a row above y=233 is its TOP, not
- * its bottom. An earlier note here said "the lowest edge" and meant it generally; that is only true
- * below the centre. The pill and the name sit entirely above it, and while the name had room to
- * spare nothing showed — then the engine badge made it spend its whole width and its top corners
- * went past the bezel.
- *
- *   pill   mono_20, y  60..88  -> far edge  60, d=173 -> chord 303
- *   name   mono_28, y 118..156 -> far edge 118, d=115 -> chord 398
- *   body   mono_28, rows from 183 -> far edges 183/221/297/335 -> chords 449/457/441/412
- *
- * THE STATUS ROW AND THE FIRST RECAP ROW SHARE A y, AND CANNOT BOTH BE FULL. render_home() builds
- * the recap from `!a->busy` and the activity from `a->busy`; its other two status strings ("Try
- * again", "Text expired") each require the recap to be absent as well. So one of the two is always
- * empty, and the face enforces that below rather than trusting it. An empty run draws nothing, and
- * the alternative — sliding the group to fill whichever half is missing — is what used to leave a
- * 96 px hole under the name whenever a turn had said something short.
- *
- * THE FOUR RECAP ROWS HOLD WHAT THE OCTOPUS'S DO: the same {408,408,391,340} and the same
- * HT_CHARACTER_RECAP_CHARS budget ht_character_layout() gives its roomy reading. They sit 22 px
- * higher than its HT_CHARACTER_READING_TEXT_Y, because that row has to clear a portrait and this one
- * has a line of text over it; the widths are re-measured for the y they actually use.
- */
-static const struct { int y, width; const ht_font_t *font; } ROWS[FOCUS_ROWS] = {
-    // The pill: 38 tall from 61, 20 cells of name — see pill(). Well below the bell above it on this
-    // face (ink 15..41, ui_habitat.c); at 50 the two touched on glass.
-    {  61, 240, &ht_mono_20 },
-    { 124, 384, &ht_mono_28 },
-    { FOCUS_BODY_Y,       442, &ht_mono_28 },
-    { FOCUS_BODY_Y,       408, &ht_mono_28 },
-    { FOCUS_BODY_Y +  38, 408, &ht_mono_28 },
-    { FOCUS_BODY_Y +  76, 391, &ht_mono_28 },
-    { FOCUS_BODY_Y + 114, 340, &ht_mono_28 },
-};
-
-/*
- * One row, centred on what it actually contains.
- *
- * `rest` is advanced, so consecutive calls walk one string across several rows. A row with nothing
- * left still emits its run — see the shape rule above.
- */
-static void row(ht_scene_t *s, int index, uint16_t ink, uint16_t fill, const char **rest)
-{
-    const ht_font_t *font = ROWS[index].font;
-    // A filled row spends two of its cells on the padding that makes the block clear the text, so it
-    // has two fewer to write in. Forgetting this is how a full-width pill overran its own chord.
-    int cells = ROWS[index].width / font->width - (fill != s->background ? 2 : 0);
-    char line[HT_TEXT_BYTES] = "";
-    if (rest && *rest && **rest) {
-        const char *begin = *rest, *end = ht_take_display_line(rest, cells, font);
-        size_t n = (size_t)(end - begin);
-        if (n >= sizeof line) n = sizeof line - 1;
-        memcpy(line, begin, n);
-        line[n] = 0;
-    }
-    int glyphs = 0;
-    for (const char *p = line; *p; glyphs++) ht_utf8_next(&p);
-    // A filled row is padded by one cell each side so the block clears the text it sits behind.
-    bool filled = fill != s->background && glyphs;
-    char padded[HT_TEXT_BYTES];
-    snprintf(padded, sizeof padded, filled ? " %s " : "%s", line);
-    int width = (glyphs + (filled ? 2 : 0)) * font->width;
-    /*
-     * ALWAYS ONE RUN, even with nothing to say.
-     *
-     * ht_text() refuses a run of width <= 0 and returns false, which leaves the next writer pointing
-     * at the PREVIOUS run. An empty status row used to blank the engine mark, and three empty recap
-     * rows used to blank the status — both from that. A one-cell run draws nothing and holds the
-     * index, which is also what keeps ht_damage() on its cheap per-cell path.
-     */
-    if (width <= 0) width = font->width;
-    ht_text(s, (HT_WIDTH - width) / 2, ROWS[index].y, width, font,
-            ink, filled ? fill : s->background, padded);
-}
+// PILL_MAX is the name: 314, so the whole pill is at most 342 — the widest a 41 px round box this
+// high can be and keep its ink inside r 230. The LVGL label's 340 would put the pill's ends on the
+// bezel of this glass.
+enum { COL_X = 41, COL_W = 384, NAME_LINE = 51, NAME_GAP = 21, MARK = 28, MARK_GAP = 10,
+       PILL_H = 41, PILL_PAD = 12, PILL_ABOVE = 51, PILL_MAX = 314,
+       ANCHOR = 119, CARD_H = 119, CARD_R = 28, CARD_PAD_H = 18, CARD_PAD_V = 19, RECAP_SPACE = 3,
+       RECAP_GLYPHS = 40, EMPTY_W = 276, ARC_Y = 322, ARC_GAP = 20 };
+#define FOCUS_FG      0xeaeaf0u
+#define FOCUS_EMPTY   0x585863u
+#define FOCUS_VOICE   0x00ff2fu
+#define FOCUS_CARD    0x23252fu
+#define FOCUS_CARD_RIM 0x3d3f47u   // #a6a6a6 at 20% over the card
+#define FOCUS_PILL    0x141519u    // #1c1e24 at 70% over black
+#define FOCUS_PILL_RIM 0x3a3f4bu
 
 /*
  * THE ENGINE'S OWN MARK.
@@ -154,6 +72,16 @@ static const uint32_t ENGINE_INK[] = {
 };
 _Static_assert(sizeof ENGINE_INK / sizeof ENGINE_INK[0] == sizeof ENGINES / sizeof ENGINES[0],
                "one ink per engine");
+
+int ht_focus_engine_index(const char *engine)
+{
+    if (!engine || !*engine) return -1;
+    for (unsigned i = 0; i < sizeof ENGINES / sizeof ENGINES[0]; i++)
+        if (!strcmp(engine, ENGINES[i])) return (int)i;
+    return -1;
+}
+_Static_assert(sizeof ht_icon_engine20 / sizeof ht_icon_engine20[0] == sizeof ENGINES / sizeof ENGINES[0],
+               "one icon per engine");
 
 bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink)
 {
@@ -262,9 +190,6 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
                 listening ? s->background : i == lit ? voice : f->foreground, s->background,
                 listening ? "" : HT_SPARK);
 
-    // And the rows the home face owns, emitted empty for the same reason.
-    for (int i = 0; i < FOCUS_ROWS; i++)
-        ht_text(s, 0, ROWS[i].y, ROWS[i].font->width, ROWS[i].font, f->dim, s->background, "");
 }
 
 /*
@@ -285,184 +210,213 @@ static const char *meter(unsigned level)
     return bars[level > 4 ? 4 : level];
 }
 
-/*
- * A NAME THAT FITS ITS ROW, or as much of it as fits and "...".
- *
- * `cells` is the row's budget in glyphs. A name within it is copied whole; a longer one keeps its
- * first `cells - 3` glyphs, drops the spaces it would end on, and says so with "..." — so it is never
- * cut mid-letter by the raster, and never wraps onto a row that is not there. Returns the glyphs used.
- */
-static int fit(const char *text, int cells, char *out, size_t cap)
+// Placeholders that keep the run count constant: an invisible box and an empty text run.
+static void no_box(ht_scene_t *s) { ht_box(s, 0, 0, 1, 1, 0, s->background, s->background); }
+static void no_text(ht_scene_t *s, const ht_font_t *font)
 {
-    const char *p = text ? text : "";
-    int glyphs = 0;
-    for (const char *q = p; *q; glyphs++) ht_utf8_next(&q);
-    if (glyphs <= cells) {
-        snprintf(out, cap, "%s", p);
-        return glyphs;
+    ht_text(s, 0, 0, 1, font, s->background, s->background, "");
+}
+/*
+ * A laid-out label's lines as runs, `runs` of them always: line n at (x + its centring, y + n *
+ * pitch). The line's bytes are the label's own, trailing space and all, because LVGL centred on them.
+ */
+static void label_runs(ht_scene_t *s, const ht_lv_label_t *l, int runs, int x, int y, int pitch,
+                       const ht_font_t *font, uint16_t ink, uint16_t bg)
+{
+    for (int n = 0; n < runs; n++) {
+        if (n >= l->lines || !l->line[n].len) { no_text(s, font); continue; }
+        const ht_lv_line_t *ln = &l->line[n];
+        char text[HT_TEXT_BYTES];
+        size_t len = ln->len < sizeof text ? ln->len : sizeof text - 1;
+        memcpy(text, l->text + ln->at, len);
+        while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) len--;
+        text[len] = 0;
+        ht_text(s, x + ln->x, y + n * pitch, ln->w > 0 ? ln->w : 1, font, ink, bg, text);
     }
-    int keep = cells > 3 ? cells - 3 : 0;
-    const char *end = p;
-    for (int i = 0; i < keep && *end; i++) ht_utf8_next(&end);
-    while (end > p && end[-1] == ' ') end--;
-    size_t n = (size_t)(end - p);
-    if (n + 4 > cap) n = cap > 4 ? cap - 4 : 0;
-    memcpy(out, p, n);
-    memcpy(out + n, "...", 4);
-    int used = 0;
-    for (const char *q = out; *q; used++) ht_utf8_next(&q);
-    return used;
 }
 
 /*
- * THE TAB PILL, as the design draws it: a rounded box with a thin lighter rim.
- *
- * Habitat fills rectangles and nothing else, so the outline is a run of ht_pill glyphs — two cells of
- * left cap, one body cell per letter, two of right cap — whose coverage levels 1 and 2 are the fill
- * and the rim (see HT_THEME_PILL). The name is a second run laid over the body cells with exactly
- * level 1 as its background, from ht_blend(), so the two meet without a seam. The caps are the
- * padding: the name starts where the left cap's curve ends.
- *
- * TWO RUNS, ALWAYS — with no tab both are one empty cell — so the face's run count never moves.
- * The name's cell sits 4 px into the pill, which centres its cap height (rows 8..22 of ht_mono_20)
- * on the pill's middle rather than centring the cell and leaving the letters high.
+ * THE TAB PILL: the tab's name in a fully rounded box, 51 px above the header, as the old tile drew
+ * it. Two runs always: box, name. A tap on it opens the tab list (ui_habitat.c).
  */
-static void pill(ht_scene_t *s, const ht_character_face_t *f, const char *tab)
+static void pill(ht_scene_t *s, int header_y, const char *tab)
 {
-    const ht_font_t *font = ROWS[0].font;
-    // The ⌄ takes two of the name's cells: it is the pill's own width, not an extra on top of it.
-    bool more = f->more_tabs;
-    int down = more ? ht_down_20.width / ht_pill.width : 0;
-    int cells = ROWS[0].width / font->width - down;
-    // 20 glyphs, or 18 beside the ⌄; longer names end in "...".
-    char line[HT_TEXT_BYTES];
-    int glyphs = fit(tab, cells, line, sizeof line);
-    if (!glyphs) {
-        ht_text(s, 0, ROWS[0].y, ht_pill.width, &ht_pill, s->background, s->background, "");
-        ht_text(s, 0, ROWS[0].y, font->width, font, f->foreground, s->background, "");
-        ht_text(s, 0, ROWS[0].y, ht_down_20.width, &ht_down_20, f->dim, s->background, "");
-        return;
-    }
-    char outline[HT_TEXT_BYTES];
-    int used = snprintf(outline, sizeof outline, "%s", HT_PILL_LEFT);
-    for (int i = 0; i < glyphs + down && used + 4 < (int)sizeof outline - 7; i++)
-        used += snprintf(outline + used, sizeof outline - (size_t)used, "%s", HT_PILL_BODY);
-    snprintf(outline + used, sizeof outline - (size_t)used, "%s", HT_PILL_RIGHT);
-    int width = (glyphs + down + 4) * ht_pill.width, x = (HT_WIDTH - width) / 2;
-    uint16_t ink = ht_rgb(HT_THEME_PILL), fill = ht_blend(ink, s->background, 1);
-    int text_x = x + 2 * ht_pill.width;
-    ht_text(s, x, ROWS[0].y, width, &ht_pill, ink, s->background, outline);
-    ht_text(s, text_x, ROWS[0].y + 4, glyphs * font->width, font, f->foreground, fill, line);
-    // Always emitted — empty, on the pill's own fill, when there is no other tab to choose.
-    ht_text(s, text_x + glyphs * font->width, ROWS[0].y + 4, ht_down_20.width, &ht_down_20,
-            f->dim, fill, more ? HT_DOWN : "");
+    const ht_font_t *font = &ht_lv_montserrat_24.base;
+    if (!*tab) { no_box(s); no_text(s, font); return; }
+    // A label one line tall and at most PILL_MAX wide, LONG_DOT: a longer name ends in "...".
+    ht_lv_label_t l;
+    ht_lv_label(&l, font, tab, PILL_MAX, 1, false);
+    int w = l.w < PILL_MAX ? l.w : PILL_MAX;
+    ht_lv_label(&l, font, tab, w, 1, true);
+    uint16_t fill = ht_rgb(FOCUS_PILL);
+    int box_w = w + 2 * PILL_PAD + 2, x = COL_X + (COL_W - box_w) / 2, y = header_y - PILL_ABOVE;
+    ht_box(s, x, y, box_w, PILL_H, PILL_H / 2, fill, ht_rgb(FOCUS_PILL_RIM));
+    label_runs(s, &l, 1, x + 1 + PILL_PAD, y + 1 + (PILL_H - 2 - font->height) / 2, 0, font,
+               ht_rgb(FOCUS_FG), fill);
 }
+
+/*
+ * THE HEADER: the engine's mark, 10 px, and the agent's name, centred together in the 384 px column
+ * (shell_name_fit). ONE line when something sits under the name, up to TWO when nothing does; the
+ * label is as wide as its text, or its widest line, and a name that needs more ends in "...". The
+ * mark sits on the first line. Three runs always: mark, line 1, line 2. A tap opens the pane list.
+ */
+static int name_lines(const ht_character_face_t *f, int allowed, ht_lv_label_t *l, int *label_w)
+{
+    const ht_font_t *font = &ht_lv_geist_med_38.base;
+    bool marked = ht_focus_engine_index(f->engine) >= 0;
+    int cap = COL_W - (marked ? MARK + MARK_GAP : 0);
+    const char *who = f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6";
+    ht_lv_label(l, font, who, 0x7fff, 1, false);
+    int one = l->w;
+    int lines = ht_lv_label(l, font, who, cap, HT_LV_LINES, false);
+    if (lines > allowed) lines = allowed;
+    *label_w = lines > 1 ? l->w : one < cap ? one : cap;
+    ht_lv_label(l, font, who, *label_w, lines, true);
+    return lines;
+}
+static void header(ht_scene_t *s, const ht_character_face_t *f, int y, const ht_lv_label_t *l,
+                   int label_w)
+{
+    int engine = ht_focus_engine_index(f->engine);
+    int lead = engine >= 0 ? MARK + MARK_GAP : 0, x = COL_X + (COL_W - (lead + label_w)) / 2;
+    // The 28 px box is centred on the first line; the scaled mark is drawn from its corner.
+    if (engine >= 0) ht_icon(s, x, y + (NAME_LINE - MARK) / 2, &ht_icon_engine28[engine]);
+    else no_text(s, &ht_lv_geist_med_38.base);
+    label_runs(s, l, 2, x + lead, y, NAME_LINE, &ht_lv_geist_med_38.base, ht_rgb(FOCUS_FG),
+               s->background);
+}
+
+// "34s", then "1m 05s" — the old firmware's fmt_elapsed.
+static void elapsed_text(char *out, size_t cap, unsigned sec)
+{
+    if (sec < 60) snprintf(out, cap, "%us", sec);
+    else snprintf(out, cap, "%um %02us", sec / 60, sec % 60);
+}
+
+/*
+ * THE WORKING LINE. The verb is the engine's own when the cable carried one; "Working" — the
+ * placeholder render_home() uses when it did not — becomes the old firmware's rotating gerund,
+ * one every six seconds, so a long turn does not read as stuck on a word.
+ */
+static const char *const GERUNDS[] = {
+    "Working", "Brewing", "Cooking", "Churning", "Frosting", "Simmering", "Tinkering",
+    "Conjuring", "Composing", "Percolating", "Wrangling", "Hatching", "Concocting", "Puttering",
+};
+static void status_text(char *out, size_t cap, const ht_character_face_t *f)
+{
+    const char *verb = f->activity;
+    if (!strcmp(verb, "Working"))
+        verb = GERUNDS[(f->elapsed / 6) % (sizeof GERUNDS / sizeof GERUNDS[0])];
+    if (!f->elapsed) { snprintf(out, cap, "%s\xe2\x80\xa6", verb); return; }
+    char when[16];
+    elapsed_text(when, sizeof when, f->elapsed);
+    snprintf(out, cap, "%s\xe2\x80\xa6 %s", verb, when);
+}
+
+/*
+ * The recap as the card holds it (render_recap_block): cut to forty codepoints, then a glyph at a
+ * time until it fits two lines with its "…" — measured, since forty short words can still need three.
+ */
+static void recap_cut(char *out, size_t cap, const char *recap, const ht_font_t *font, int width)
+{
+    size_t n = 0, glyphs = 0;
+    while (recap[n] && glyphs < RECAP_GLYPHS) {
+        size_t k = n + 1;
+        while (recap[k] && ((uint8_t)recap[k] & 0xc0) == 0x80) k++;
+        if (k + 4 > cap) break;
+        n = k;
+        glyphs++;
+    }
+    bool clipped = recap[n] != 0;
+    memcpy(out, recap, n);
+    out[n] = 0;
+    ht_lv_label_t l;
+    for (;;) {
+        char probe[HT_TEXT_BYTES + 4];
+        snprintf(probe, sizeof probe, "%s%s", out, clipped ? "\xe2\x80\xa6" : "");
+        if (ht_lv_label(&l, font, probe, width, 2, false) <= 2 || !out[0]) break;
+        size_t k = strlen(out);
+        do k--; while (k > 0 && ((uint8_t)out[k] & 0xc0) == 0x80);
+        while (k > 0 && out[k - 1] == ' ') k--;
+        out[k] = 0;
+        clipped = true;
+    }
+    if (clipped) strcat(out, "\xe2\x80\xa6");
+}
+
+ht_rect_t ht_focus_pill_target, ht_focus_name_target;
 
 void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
                    const char *recap)
 {
     (void)ink;
     if (f->voice) { voice_face(s, f, frame); return; }
-    // The pane this agent belongs to. It stands where the old face drew the repository name, which
-    // does not exist anywhere in the cable vocabulary — see ht_character_face_t.
-    pill(s, f, f->tab && *f->tab ? f->tab : "");
+    bool has_recap = recap && *recap;
+    bool working = !has_recap && f->activity && *f->activity;
+    bool retry = !has_recap && !working && f->status && *f->status;
 
-    /*
-     * The name, and the engine's badge beside it.
-     *
-     * The badge is its own run because a run carries one colour, and the badge's is not the name's:
-     * this is what lets each engine keep its own ink (ENGINE_INK). ht_run_t.colors would colour
-     * cells individually, but that array has to outlive both scene buffers and a face rebuilt every
-     * frame has nowhere to keep one — and a one-cell badge would get one colour out of it anyway.
-     * The cell is wider than a letter's, so the pair is measured and centred together rather than
-     * the badge being squeezed into the name's first character.
-     */
-    char mark[4];
-    uint32_t mark_ink = 0;
-    bool badged = ht_focus_engine_mark(f->engine, mark, &mark_ink);
-    const char *who = f->recipient ? f->recipient : "";
-    // The badge spends part of the row's chord, so the name gets what is left of it — not the whole
-    // width it would have had alone. Getting this wrong puts the pair's ends outside the bezel.
-    // The ⌄ after the name — "choose another pane" — spends its cell the same way.
-    bool more = f->more_panes && *who;
-    int down = more ? ht_down_28.width : 0;
-    int room = ROWS[1].width - (badged ? ht_engine.width + 8 : 0) - down;
-    // 22 glyphs alone, 20 beside the badge, 18 beside the badge and the ⌄; longer ends in "...".
-    char name[HT_TEXT_BYTES];
-    int cells = fit(who, room / ht_mono_28.width, name, sizeof name);
-    int name_w = cells * ht_mono_28.width;
-    int total = name_w + (badged ? ht_engine.width + 8 : 0) + down;
-    if (total > ROWS[1].width) total = ROWS[1].width;
-    int x = (HT_WIDTH - total) / 2;
-    int name_x = x + (badged ? ht_engine.width + 8 : 0);
-    // Always emitted, badge or not, so the run count and order never move — see the note at the top.
-    ht_text(s, badged ? x : 0, ROWS[1].y, badged ? ht_engine.width : 1, &ht_engine,
-            mark_ink ? ht_rgb(mark_ink) : f->foreground, s->background, badged ? mark : "");
-    ht_text(s, name_x, ROWS[1].y, name_w ? name_w : 1, &ht_mono_28,
-            f->foreground, s->background, name);
-    ht_text(s, more ? name_x + name_w : 0, ROWS[1].y, ht_down_28.width, &ht_down_28,
-            f->dim, s->background, more ? HT_DOWN : "");
+    // The live line: listening meter, the working verb and its seconds, or a status of its own.
+    const ht_font_t *sf = &ht_lv_geist_med_32.base, *ef = &ht_lv_geist_reg_38.base;
+    char status[HT_TEXT_BYTES] = "";
+    if (!has_recap && f->mood == HT_CHARACTER_LISTENING) snprintf(status, sizeof status, "%s", meter(f->pose.level));
+    else if (working) status_text(status, sizeof status, f);
+    else if (retry) snprintf(status, sizeof status, "%s", f->status);
+    bool empty = !has_recap && !status[0];
 
-    /*
-     * The live line.
-     *
-     * While listening this is the meter; while working it is the activity the daemon scraped off the
-     * engine's spinner plus the seconds this dial has been counting. Neither is a tool call and the
-     * seconds are the dial's own — see ht_character_face_t.elapsed.
-     */
-    char status[HT_TEXT_BYTES];
-    uint16_t status_ink = f->ink;
-    if (f->mood == HT_CHARACTER_LISTENING) {
-        snprintf(status, sizeof status, "%s", meter(f->pose.level));
-        status_ink = ht_rgb(HT_THEME_DONE);
-    } else if (f->activity && *f->activity) {
-        if (f->elapsed) snprintf(status, sizeof status, "%s... %us", f->activity, f->elapsed);
-        else snprintf(status, sizeof status, "%s", f->activity);
-        status_ink = ht_rgb(HT_THEME_DONE);
-    } else if (f->status && *f->status) {
-        snprintf(status, sizeof status, "%s", f->status);
-    } else {
-        status[0] = 0;
+    // The body under the name, laid out first: the cardless states are centred on its height.
+    ht_lv_label_t body;
+    int body_h = 0;
+    if (status[0]) {
+        ht_lv_label(&body, sf, status, COL_W, 1, true);
+        body_h = sf->height;
+    } else if (empty) {
+        int n = ht_lv_label(&body, ef, "No activity yet", EMPTY_W, 2, false);
+        body_h = (n < 2 ? n : 2) * ef->height;
     }
-    // Whatever the turn left behind, in the octopus's own four rows and under its own character
-    // budget, so the same summary reads the same on either skin.
-    char prose[HT_CHARACTER_RECAP_CHARS * 4 + 8];
-    ht_display_text(prose, sizeof prose, recap && *recap ? recap : "", &ht_mono_28);
-    int budget = 0;
-    for (const char *p = prose; *p; budget++) ht_utf8_next(&p);
-
-    /*
-     * The two cannot share the glass — see the ROWS comment. Stated here as code rather than left as
-     * an assumption about render_home(), so a future caller that breaks it loses the status line
-     * instead of printing it through the summary.
-     */
-    if (prose[0]) status[0] = 0;
-    const char *live = status;
-    row(s, 2, status_ink, s->background, &live);
-
-    const char *body = prose;
-    for (int i = 3; i < FOCUS_ROWS; i++) row(s, i, f->foreground, s->background, &body);
-
-    // More than the rows or the budget hold. The octopus marks this too (recap_lines); without it a
-    // summary that was cut simply reads as a sentence that stops.
-    if (*body || budget > HT_CHARACTER_RECAP_CHARS) {
-        for (int i = s->count - 1; i >= 3; i--) {
-            char *line = s->runs[i].text;
-            size_t n = strlen(line);
-            if (!n || (n == 1 && line[0] == ' ')) continue;
-            while (n && line[n - 1] == ' ') n--;
-            size_t cells = (size_t)(s->runs[i].w / s->runs[i].font->width);
-            if (n + 3 > cells) n = cells > 3 ? cells - 3 : 0;
-            // Finish at the last whole word the row supplies, the way lines() does — a cut through
-            // the middle of one reads as a typo rather than as more text waiting.
-            size_t word = n;
-            while (word && line[word - 1] != ' ') word--;
-            if (word > 1) n = word;
-            while (n && line[n - 1] == ' ') n--;
-            strcpy(line + n, "...");
-            break;
-        }
+    ht_lv_label_t name;
+    int name_w, lines = name_lines(f, empty ? 2 : 1, &name, &name_w);
+    // tile_block_pad: 466/2 - (name + 21 + body)/2, kept between the pill's band and the action arc.
+    int y = ANCHOR;
+    if (!has_recap) {
+        int block = lines * NAME_LINE + NAME_GAP + body_h;
+        y = HT_HEIGHT / 2 - block / 2;
+        if (y > ARC_Y - ARC_GAP - block) y = ARC_Y - ARC_GAP - block;
+        if (y < PILL_H + 10 + 24) y = PILL_H + 10 + 24;
     }
+    int body_y = y + lines * NAME_LINE + NAME_GAP;
+
+    pill(s, y, f->tab && *f->tab ? f->tab : "");
+    header(s, f, y, &name, name_w);
+    ht_focus_pill_target = f->tab && *f->tab ? (ht_rect_t){COL_X, (int16_t)(y - PILL_ABOVE), COL_W, PILL_H}
+                                             : (ht_rect_t){0};
+    ht_focus_name_target = (ht_rect_t){COL_X, (int16_t)y, COL_W, (int16_t)(lines * NAME_LINE)};
+
+    // The recap card: its text centred in it both ways, one line or two.
+    const ht_font_t *rf = &ht_lv_geist_med_28.base;
+    if (has_recap) {
+        uint16_t card = ht_rgb(FOCUS_CARD);
+        int inner = COL_W - 2 * CARD_PAD_H - 2;
+        ht_box(s, COL_X, body_y, COL_W, CARD_H, CARD_R, card, ht_rgb(FOCUS_CARD_RIM));
+        char cut[HT_TEXT_BYTES];
+        recap_cut(cut, sizeof cut, recap, rf, inner);
+        ht_lv_label_t l;
+        int n = ht_lv_label(&l, rf, cut, inner, 2, false);
+        if (n > 2) n = 2;
+        int pitch = rf->height + RECAP_SPACE, h = n * pitch - RECAP_SPACE;
+        int top = body_y + 1 + CARD_PAD_V + (CARD_H - 2 - 2 * CARD_PAD_V - h) / 2;
+        label_runs(s, &l, 2, COL_X + 1 + CARD_PAD_H, top, pitch, rf, ht_rgb(FOCUS_FG), card);
+    } else { no_box(s); no_text(s, rf); no_text(s, rf); }
+
+    if (status[0])
+        label_runs(s, &body, 1, COL_X, body_y, 0, sf, ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE),
+                   s->background);
+    else no_text(s, sf);
+
+    // Nothing yet: said in the resting grey, where the recap would be.
+    if (empty) label_runs(s, &body, 2, COL_X + (COL_W - EMPTY_W) / 2, body_y, ef->height, ef,
+                          ht_rgb(FOCUS_EMPTY), s->background);
+    else { no_text(s, ef); no_text(s, ef); }
 }
 
 void ht_focus_portrait(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,

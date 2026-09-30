@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -36,7 +36,7 @@ class SettingsCompactSection extends StatelessWidget {
           child: Center(
             child: SidebarItem(
               key: const Key('settings-compact-back'),
-              icon: LucideIcons.arrowLeft300,
+              icon: AppIcons.arrowLeft,
               label: 'Settings',
               onTap: onBack,
             ),

@@ -161,7 +161,7 @@ class _SessionCard extends StatelessWidget {
                               children: [
                                 const Icon(
                                   AppIcons.play,
-                                  size: 15,
+                                  size: 16,
                                   color: Colors.white,
                                 ),
                                 const SizedBox(width: 8),
@@ -262,7 +262,7 @@ class _SessionCard extends StatelessWidget {
                       foregroundColor: grid.AppPalette.accentOnSurface,
                     ),
                     iconAlignment: IconAlignment.end,
-                    icon: const Icon(AppIcons.arrowRight, size: 15),
+                    icon: const Icon(AppIcons.arrowRight, size: 16),
                     label: const Text('Explore harness'),
                   ),
                 ],

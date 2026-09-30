@@ -7,8 +7,8 @@ Harness runs and supervises coding agents across desktop, mobile, CLI and device
 ### Appearance
 
 **Background**:
-The image or fill shown on an empty welcome or new-tab page and, when **Behind harnesses** is on, behind the panes of a running harness tab.
-_Avoid_: Wallpaper, start background
+The image or fill shown behind the panes of a running harness tab, seen through them. Blank shows nothing.
+_Avoid_: Wallpaper, start background, behind harnesses
 
 **Built-in background**:
 A background that ships with Harness, including the default Blank.
@@ -19,17 +19,13 @@ The single background the user supplies from their own image; Harness keeps its 
 _Avoid_: Custom wallpaper, user image, uploaded background
 
 **Dim**:
-How much a custom background is darkened so the welcome text stays readable.
+How much a custom background is darkened so the panes in front of it stay readable.
 _Avoid_: Overlay, opacity, brightness
 
 **Fit**:
-How a custom background is sized to the page: fill, fit, center or tile.
+How a custom background is sized to the tab: fill, fit, center or tile.
 _Avoid_: Scale mode, crop
 
-**Behind harnesses**:
-The choice to also show a non-Blank background behind a running harness tab's panes, seen through them. Off by default.
-_Avoid_: Running-tab background, transparent terminals
-
 **Pane opacity**:
-How solid a harness tab's panes are while **Behind harnesses** is on; lower lets more of the background through.
+How solid a harness tab's panes are over a non-Blank **Background**; lower lets more of it through.
 _Avoid_: Transparency, terminal opacity, Dim (which darkens the background itself)

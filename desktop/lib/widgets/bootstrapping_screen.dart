@@ -67,8 +67,10 @@ class _BootstrappingScreenState extends State<BootstrappingScreen> {
               constraints: const BoxConstraints(
                 maxWidth: BootstrappingScreen._contentWidth,
               ),
+              // Centred line by line: the block is up to 470 wide, and its lines are
+              // mostly shorter, so a start-aligned column read as sitting left of centre.
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Semantics(
@@ -90,6 +92,7 @@ class _BootstrappingScreenState extends State<BootstrappingScreen> {
                     value: status,
                     child: ExcludeSemantics(
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           SizedBox.square(
@@ -106,7 +109,7 @@ class _BootstrappingScreenState extends State<BootstrappingScreen> {
                                   ),
                           ),
                           const SizedBox(width: 12),
-                          Expanded(
+                          Flexible(
                             child: Text(
                               status,
                               key: ValueKey(status),
@@ -127,7 +130,11 @@ class _BootstrappingScreenState extends State<BootstrappingScreen> {
                     ),
                     for (final line in earlier) ...[
                       const SizedBox(height: DesktopChrome.controlGap),
-                      Text(line, style: DesktopChrome.metadata()),
+                      Text(
+                        line,
+                        textAlign: TextAlign.center,
+                        style: DesktopChrome.metadata(),
+                      ),
                     ],
                   ],
                 ],

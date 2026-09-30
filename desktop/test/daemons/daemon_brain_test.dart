@@ -79,15 +79,57 @@ void main() {
         'agentId': 'collection-agent',
         'state': 'ready',
         'model': 'opus',
+        'engine': 'claude',
       },
     });
     expect(brain.pairAgentId, 'collection-agent');
+    expect(brain.pairEngine, 'claude');
     brain.bindConversation('account:test', 'gnu-one');
     expect(brain.pairAgentId, 'collection-agent');
     brain.bindConversation(null, null);
     expect(brain.pairAgentId, isNull);
+    expect(brain.pairEngine, isNull);
   });
 
+  test('an explicit engine choice commits only after success and cannot cross accounts', () async {
+    brain.bindConversation('account:test', 'tim-one');
+    brain.receive('daemon_state', {
+      'pair': 'tim',
+      'companionHarness': {'agentId': 'old-agent', 'engine': 'claude'},
+    });
+    final failed = brain.openConversation(engine: 'codex');
+    expect(sent.last.$2['engine'], 'codex');
+    expect(brain.pairEngine, 'claude');
+    brain.receive('daemon_open_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': false,
+      'error': 'BUSY',
+    });
+    await failed;
+    expect(brain.pairEngine, 'claude');
+    final opening = brain.openConversation(engine: 'codex');
+    brain.receive('daemon_open_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': true,
+      'agentId': 'codex-agent',
+      'engine': 'codex',
+    });
+    await opening;
+    expect(brain.pairEngine, 'codex');
+    expect(brain.pairAgentId, 'codex-agent');
+    final stale = brain.openConversation(engine: 'claude');
+    final request = sent.last.$2['requestId'];
+    brain.bindConversation('account:other', 'other-tim');
+    brain.receive('daemon_open_result', {
+      'requestId': request,
+      'ok': true,
+      'agentId': 'old-agent',
+      'engine': 'claude',
+    });
+    expect((await stale)['error'], 'STALE_COMPANION');
+    expect(brain.pairEngine, isNull);
+    expect(brain.pairAgentId, isNull);
+  });
 
   test('recent conversation survives a window restart, scoped to account and individual', () async {
     brain.bindConversation('account:one', 'tim-one');

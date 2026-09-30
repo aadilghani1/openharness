@@ -446,7 +446,7 @@ void main() {
     },
   );
 
-  testWidgets('native Swarm commands cannot mutate the view behind Settings', (
+  testWidgets('native Tab commands cannot mutate the view behind Settings', (
     tester,
   ) async {
     const channel = MethodChannel('harness/swarm_tabs');

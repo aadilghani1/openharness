@@ -333,8 +333,15 @@ describe('the brain', () => {
     await w.brain.onOpen('window', { requestId: 'o2' }, send)
     expect(replies.pop()?.payload).toMatchObject({ ok: false, error: 'STALE_COMPANION' })
     await w.brain.onOpen('window', { requestId: 'o3', companionUid: 'tim-one' }, send)
-    expect(open).toHaveBeenCalledWith('tim-one')
+    expect(open).toHaveBeenCalledWith('tim-one', undefined)
     expect(replies.pop()).toEqual({ type: 'daemon_open_result', payload: { requestId: 'o3', ok: true, agentId: 'pair-tim' } })
+    await w.brain.onOpen('window', { requestId: 'o4', companionUid: 'tim-one', engine: 'codex' }, send)
+    expect(open).toHaveBeenLastCalledWith('tim-one', 'codex')
+    await w.brain.onOpen('window', { requestId: 'o5', companionUid: 'tim-one', engine: 'unknown' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ error: 'BAD_ENGINE' })
+    await w.brain.onOpen('tool', { requestId: 'o6', companionUid: 'tim-one', engine: 'codex' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ error: 'UI_ONLY' })
+    expect(open).toHaveBeenCalledTimes(2)
   })
 
   it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {

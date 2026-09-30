@@ -15,8 +15,7 @@ use crossterm::event::{
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Widget},
+    style::{Modifier, Style},
 };
 use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
@@ -275,8 +274,7 @@ fn short_path(path: &str, home: &str) -> String {
     }
 }
 fn defaults_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".harness/tui/new-harness.json")
+    crate::app::state_dir().join("new-harness.json")
 }
 fn defaults() -> Value {
     if cfg!(test) {
@@ -326,6 +324,7 @@ fn remember(form: &Form) {
 }
 
 pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
+    let machine = machine.map(|id| app.fleet.launch_machine_id(&id).to_string());
     if machine
         .as_ref()
         .is_some_and(|id| !app.fleet.machines.iter().any(|m| m.id == *id && m.usable()))
@@ -339,6 +338,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
         || (machine.is_none() && cwd.is_none() && app.new_harness_draft.is_some())
     {
         let mut form = app.new_harness_draft.take().unwrap();
+        resolve_launch_machine(app, &mut form);
         refresh_form(app, &mut form);
         app.modal = Some(Modal::NewHarness(form));
         return;
@@ -346,6 +346,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
     let saved = defaults();
     let machine = machine
         .filter(|id| app.fleet.machines.iter().any(|m| m.id == *id && m.usable()))
+        .or_else(|| app.fleet.registered_local_machine().filter(|m| m.usable()).map(|m| m.id.clone()))
         .or_else(|| {
             app.fleet
                 .machines
@@ -502,9 +503,21 @@ pub fn refresh(app: &mut App) {
     let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
         return;
     };
+    resolve_launch_machine(app, &mut form);
     refresh_form(app, &mut form);
     sync_git(app, &mut form, false);
     app.modal = Some(Modal::NewHarness(form));
+}
+fn resolve_launch_machine(app: &mut App, form: &mut Form) {
+    // A pending receipt belongs to its original transport, even if the daemon has returned.
+    if form.starting || form.attempt.is_some() { return }
+    let machine = app.fleet.launch_machine_id(&form.draft.machine).to_string();
+    if machine != form.draft.machine {
+        let project = form.draft.project.clone();
+        set_machine(app, form, &machine);
+        set_project(form, project);
+        sync_git(app, form, false);
+    }
 }
 fn agent_rows(app: &App, machine: &str) -> Vec<Row> {
     modal::new_what_rows(app.dsh.get(machine).map(Vec::as_slice).unwrap_or(&[]))
@@ -549,26 +562,28 @@ fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
     });
     let mut seen = std::collections::HashSet::new();
     for a in agents {
-        if !seen.insert((a.machine_id.clone(), a.cwd.clone())) {
+        let machine = app.fleet.launch_machine_id(&a.machine_id);
+        if !seen.insert((machine.to_string(), a.cwd.clone())) {
             continue;
         }
         let short = short_path(
             &a.cwd,
             app.homes
-                .get(&a.machine_id)
+                .get(machine)
+                .or_else(|| app.homes.get(&a.machine_id))
                 .map(String::as_str)
                 .unwrap_or(""),
         );
         let mut row = Row::new(
-            format!("at:{}\t{}", a.machine_id, a.cwd),
-            format!("{}:{short}", app.fleet.machine_name(&a.machine_id)),
+            format!("at:{machine}\t{}", a.cwd),
+            format!("{}:{short}", app.fleet.machine_name(machine)),
         )
         .group("Recent projects");
         row.disabled = !app
             .fleet
             .machines
             .iter()
-            .any(|m| m.id == a.machine_id && m.usable());
+            .any(|m| m.id == machine && m.usable());
         if row.disabled {
             row.label.push_str(" · offline");
         }
@@ -1371,6 +1386,7 @@ pub fn start(app: &mut App) {
         crate::input::check_creation(app, id, attempt);
         return;
     }
+    resolve_launch_machine(app, &mut form);
     let fail = if form.git_loading {
         Some("Checking the project…".into())
     } else if form.git["error"].is_string() {
@@ -1563,6 +1579,81 @@ mod tests {
         app
     }
 
+    /// Opening a chooser beside the form (an agent, here) leaves the form where it was, on a wide
+    /// window and a narrow one.
+    #[tokio::test]
+    async fn the_form_stays_put_when_a_chooser_opens() {
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        for body in [Rect::new(0, 0, 150, 41), Rect::new(0, 0, 90, 30)] {
+            form.child = None;
+            draw(&mut Buffer::empty(body), body, &mut form);
+            let alone = form.area;
+            child(&mut app, &mut form, Choice::Agent, "codex");
+            draw(&mut Buffer::empty(body), body, &mut form);
+            assert_eq!(form.area, alone, "the form moved at {}x{}", body.width, body.height);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_shell_entry_does_not_override_the_registered_launch_machine() {
+        let mut app = app();
+        let shell = crate::local::MACHINE;
+        app.fleet.machines.insert(0, crate::fleet::Machine {
+            id: shell.into(), name: "m0".into(), local: true,
+            status: "running".into(), reach: crate::fleet::Reach::Ready,
+        });
+        for explicit in [None, Some(shell.into())] {
+            open(&mut app, explicit, None);
+            let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+            assert_eq!(form.draft.machine, "local");
+            assert_eq!(form.project_label(), "studio:New Folder");
+            for rows in [modal::machine_rows(&app), modal::new_machine_rows(&app, shell)] {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].id, "local");
+                assert_eq!(rows[0].label, "studio");
+            }
+        }
+        // Recent local-shell folders use that same machine and collapse duplicate paths.
+        for machine in [shell, "local"] {
+            let agent = crate::fleet::agent_from(machine, &json!({"id":"agent", "engine":"terminal", "project":{"cwd":"/home/dev/repo"}}), None);
+            app.fleet.agents.insert(agent.key(), agent);
+        }
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        let rows = project_rows(&app, &form.draft);
+        let recent: Vec<_> = rows.iter().filter(|r| r.id.starts_with("at:")).collect();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, "at:local\t/home/dev/repo");
+        assert_eq!(recent[0].label, "studio:~/repo");
+    }
+
+    #[tokio::test]
+    async fn daemon_return_redirects_an_idle_local_draft_but_keeps_a_pending_receipt() {
+        for pending in [false, true] {
+            let mut app = app();
+            let shell = crate::local::MACHINE;
+            app.fleet.machines.insert(0, crate::fleet::Machine {
+                id: shell.into(), name: "m0".into(), local: true,
+                status: "running".into(), reach: crate::fleet::Reach::Ready,
+            });
+            app.homes.insert(shell.into(), "/home/dev".into());
+            app.fleet.machine_mut("local").unwrap().reach = crate::fleet::Reach::Offline;
+            open(&mut app, Some(shell.into()), Some("/home/dev/repo".into()));
+            let Some(Modal::NewHarness(form)) = &mut app.modal else { panic!() };
+            if pending {
+                form.attempt = Some(Creation { id: "original".into(), machine: shell.into(), session: app.session_id });
+            }
+            app.fleet.machine_mut("local").unwrap().reach = crate::fleet::Reach::Ready;
+            app.fleet.machine_mut("local").unwrap().name = "office".into();
+            refresh(&mut app);
+            let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+            assert_eq!(form.draft.machine, if pending { shell } else { "local" });
+            assert_eq!(form.project_label(), "office:~/repo");
+            if pending { assert_eq!(form.attempt.as_ref().unwrap().machine, shell); }
+        }
+    }
+
     #[tokio::test]
     async fn draft_survives_picker_escape_and_late_refresh() {
         let mut app = app();
@@ -1598,7 +1689,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_form_is_centered_and_stays_anchored_at_every_terminal_size() {
+    async fn the_form_is_the_panel_centered_and_anchored_at_every_terminal_size() {
         let mut app = app();
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
@@ -1628,7 +1719,8 @@ mod tests {
                                 assert_eq!(hit.intersection(area), *hit);
                             }
                             if form.area.width > 0 {
-                                assert!(form.area.width <= 52);
+                                // The menus' panel: one size and place whatever is open.
+                                assert_eq!(form.area, crate::settings::area(area));
                                 let left = form.area.x - area.x;
                                 let right = area.right() - form.area.right();
                                 assert!(left.abs_diff(right) <= 1, "not centered in {area:?}");
@@ -1645,15 +1737,9 @@ mod tests {
                                 );
                                 assert_eq!(form.area.intersection(area), form.area);
                             }
+                            // A chooser opens in the form's place, as a section of Appearance does.
                             if form.child_area.width > 0 {
-                                assert_eq!(form.child_area.intersection(area), form.child_area);
-                                assert_eq!(form.child_area.y, form.area.y);
-                                if form.child_area.x == form.area.x {
-                                    assert!(active && width < 150);
-                                    assert_eq!(form.child_area.width, form.area.width);
-                                } else {
-                                    assert_eq!(form.child_area.x, form.area.right() + 2);
-                                }
+                                assert_eq!(form.child_area, form.area);
                             }
                         }
                     }

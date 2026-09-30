@@ -67,6 +67,7 @@ import 'dial_status.dart';
 import 'grid_pictures.dart';
 import 'model_start_watch.dart';
 import 'harness_placement.dart';
+import 'harness_share_status.dart';
 import 'desk_sync.dart';
 import 'machine_profile.dart';
 import 'pane_layout_store.dart';
@@ -737,6 +738,11 @@ class AppNotifier extends ChangeNotifier {
     ),
   );
 
+  /// Which of the owner's harnesses are shared, and how — for marking panes.
+  late final shareStatus = HarnessShareStatus(
+    (machineId, agentId) => manageHarnessShares(machineId, agentId, 'list'),
+  );
+
   /// The end of the session a Cmd-P row previews, from its machine's index
   /// (`session_tail`, cli/src/lib/sessionSearch/). Apart from
   /// [sessionPreviews], whose excerpts come from the live agent.
@@ -1077,7 +1083,7 @@ class AppNotifier extends ChangeNotifier {
           final gateway = channelGateway(localMachineState?.machine.machineId);
           if (gateway == null) {
             throw const TeamRequestError(
-              'Connect one of your machines to configure swarm collaboration.',
+              'Connect one of your machines to configure tab collaboration.',
             );
           }
           return teamRequest(gateway, payload);
@@ -1114,7 +1120,7 @@ class AppNotifier extends ChangeNotifier {
                 channelGateway(gatewayMachineId);
             if (machineId == null) {
               throw const TeamRequestError(
-                'Connect one of your machines to use swarm collaboration.',
+                'Connect one of your machines to use tab collaboration.',
               );
             }
             return teamRequest(machineId, payload);
@@ -4159,6 +4165,7 @@ class AppNotifier extends ChangeNotifier {
     machineStates.clear();
     sessionPreviews.clear();
     sessionTails.clear();
+    shareStatus.clear();
     gridPictures.clear();
     _stopWakeFollowers();
     expandedMachines.clear();
@@ -4806,10 +4813,15 @@ class AppNotifier extends ChangeNotifier {
     if (machineStates[machineId]?.machine.isShared == true) {
       return Future.error(StateError('Only the owner can change sharing.'));
     }
-    return _conn(machineId).request(
-      'harness_share_$action',
-      payload: {'agentId': agentId, ...payload},
-    );
+    return _conn(machineId)
+        .request(
+          'harness_share_$action',
+          payload: {'agentId': agentId, ...payload},
+        )
+        .then((response) {
+          shareStatus.record(machineId, agentId, response);
+          return response;
+        });
   }
 
   /// The browser controls only a linked, owned machine's managed viewer. Requests fail while
@@ -5442,6 +5454,7 @@ class AppNotifier extends ChangeNotifier {
       final prev = byId[agent.id];
       if (prev == null ||
           prev.name != agent.name ||
+          prev.title != agent.title ||
           prev.sessionId != agent.sessionId ||
           prev.engine != agent.engine ||
           prev.engineDisplayName != agent.engineDisplayName ||
@@ -5449,6 +5462,11 @@ class AppNotifier extends ChangeNotifier {
           prev.codexHome != agent.codexHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
+          prev.gridModel != agent.gridModel ||
+          prev.gridWebSearch != agent.gridWebSearch ||
+          prev.gridBaseUrl != agent.gridBaseUrl ||
+          prev.gridState != agent.gridState ||
+          _gridNoteValue(prev.gridNote) != _gridNoteValue(agent.gridNote) ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.gitContext != agent.gitContext ||
@@ -5468,12 +5486,28 @@ class AppNotifier extends ChangeNotifier {
           prev.viewerUrl != agent.viewerUrl ||
           prev.viewerError != agent.viewerError ||
           prev.viewerName != agent.viewerName ||
-          prev.verdict != agent.verdict) {
+          prev.verdict != agent.verdict ||
+          prev.forkedFrom?.agentId != agent.forkedFrom?.agentId ||
+          prev.forkedFrom?.name != agent.forkedFrom?.name ||
+          prev.forkable != agent.forkable ||
+          prev.resumeMode != agent.resumeMode ||
+          prev.permissionMode != agent.permissionMode ||
+          prev.bypassPermission != agent.bypassPermission ||
+          prev.namedAgent != agent.namedAgent) {
         return false;
       }
     }
     return true;
   }
+
+  static (Type?, String?, String?) _gridNoteValue(GridNote? note) => (
+    note?.runtimeType,
+    note?.model,
+    switch (note) {
+      GridNoteOffline(:final machine) => machine,
+      _ => null,
+    },
+  );
 
   /// Public retry hook used by the offline join guide's "Retry now" action.
   Future<void> retryOfflineMachine(String machineId) =>
@@ -7247,10 +7281,22 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  void _upsertAgent(MachineState machine, Agent agent) {
+  bool _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
     agent = retainNewerGitContext(agent, previous);
+    // Discovery repeatedly sends the same snapshot. Preserve the existing
+    // object (pane presentation keys include it), and do not refetch previews
+    // or invalidate the workspace for a snapshot with no new information.
+    if (previous != null &&
+        agentsEqual([previous], [agent]) &&
+        machine.agentLoadStatus == AgentLoadStatus.loaded &&
+        machine.agentsLoadError == null &&
+        !machine.pendingProcessingSessions.contains(agent.sessionId)) {
+      // The layout can change independently of the agent snapshot: a newly
+      // opened terminal still needs its viewer, and an orphaned viewer must go.
+      return _syncViewerPane(machine, previous);
+    }
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -7302,16 +7348,19 @@ class AppNotifier extends ChangeNotifier {
         _lastErrorRetryable = false;
       }
     }
+    return true;
   }
 
-  void _renameAgent(MachineState machine, String agentId, String name) {
+  bool _renameAgent(MachineState machine, String agentId, String name) {
     final index = machine.agents.indexWhere((agent) => agent.id == agentId);
-    if (index == -1 || name.trim().isEmpty) return;
+    if (index == -1 || name.trim().isEmpty) return false;
     final cleanName = name.trim();
+    if (machine.agents[index].name == cleanName) return false;
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
     _recordAgentName(machine, machine.agents[index]);
     _syncAgentName(machine, machine.agents[index]);
+    return true;
   }
 
   // Creation can be in flight while a Stop reply removes the old final pane.
@@ -7418,7 +7467,7 @@ class AppNotifier extends ChangeNotifier {
   /// changes, and takes the tile down when the viewer or the terminal goes.
   /// It never steals focus: the person is typing in the terminal the viewer
   /// belongs to. Nothing is persisted — see [PaneKind.web].
-  void _syncViewerPane(MachineState machine, Agent agent) {
+  bool _syncViewerPane(MachineState machine, Agent agent) {
     final machineId = machine.machine.machineId;
     final url = agent.viewerUrl;
     final viewerState = url ?? agent.viewerError;
@@ -7454,6 +7503,8 @@ class AppNotifier extends ChangeNotifier {
         // The same page again is nothing new; a different one navigates in
         // place rather than reopening a tile.
         for (final pane in viewers) {
+          changed =
+              changed || pane.url != url || pane.viewerError != agent.viewerError;
           pane.url = url;
           pane.viewerError = agent.viewerError;
         }
@@ -7489,6 +7540,7 @@ class AppNotifier extends ChangeNotifier {
       changed = true;
     }
     if (changed) _persistLayout();
+    return changed;
   }
 
   /// Whether the active tab shows this agent's viewer beside its terminal.
@@ -8520,12 +8572,12 @@ class AppNotifier extends ChangeNotifier {
       return 'The layout changed. Close this dialog and split the pane again.';
     }
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This swarm was closed';
+    if (target == null) return 'This tab was closed';
     if (placement != null && (target.isUtility || target.isOrchestrator)) {
-      return 'Open a new swarm to add a harness.';
+      return 'Open a new tab to add a harness.';
     }
     if (target.panes.length >= maxPanes) {
-      return 'This swarm is full. Open a new swarm to start a harness.';
+      return 'This tab is full. Open a new tab to start a harness.';
     }
     return null;
   }
@@ -8890,7 +8942,7 @@ class AppNotifier extends ChangeNotifier {
     if (_creationPlacementError(targetId, split, placement: placement) !=
         null) {
       _lastError =
-          'The harness started, but its original swarm or layout changed. '
+          'The harness started, but its original tab or layout changed. '
           'Use New Pane to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -10058,10 +10110,10 @@ class AppNotifier extends ChangeNotifier {
     String? notice;
     if (target == null || !swarms.contains(target)) {
       notice =
-          'Fork created. Its original swarm closed; use New Pane to open it.';
+          'Fork created. Its original tab closed; use New Pane to open it.';
     } else if (target.panes.length >= maxPanes && !keepFocus) {
       notice =
-          'Fork created. Its original swarm is full; use New Tab to open it.';
+          'Fork created. Its original tab is full; use New Tab to open it.';
     } else {
       if (target.panes.length >= maxPanes) {
         newSwarm(name: fork.name);
@@ -10789,7 +10841,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
+          'This tab holds $maxPanes harnesses. Open another tab to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
@@ -10847,7 +10899,12 @@ class AppNotifier extends ChangeNotifier {
     if (focus) {
       target.focusedPaneId = pane.id;
       target.zoomedPaneId = null;
-      if (target == activeSwarm) selectedMachineId = machineId;
+      if (target == activeSwarm) {
+        selectedMachineId = machineId;
+        // A manual split can grow the canvas beyond the viewport. Announce
+        // its reveal just as opening an existing pane does, before notifying.
+        if (split != null) _paneFocusRequest++;
+      }
     }
     _dismissedLinkPrompts.remove(machineId);
     if (focus) machine.activeAgentId = agentId;
@@ -11382,7 +11439,7 @@ class AppNotifier extends ChangeNotifier {
               .firstOrNull;
     if (twin == null && target.panes.length >= maxPanes) {
       _lastError =
-          'That swarm holds $maxPanes harnesses. Close one there to move this in.';
+          'That tab holds $maxPanes harnesses. Close one there to move this in.';
       _lastErrorRetryable = false;
       notifyListeners();
       return false;
@@ -13186,8 +13243,8 @@ class AppNotifier extends ChangeNotifier {
         if (raw is Map) {
           try {
             final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
+            var changed = _upsertAgent(machine, agent);
             if (agent.terminalAvailable) {
-              _upsertAgent(machine, agent);
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
@@ -13200,13 +13257,13 @@ class AppNotifier extends ChangeNotifier {
               // agent are still alive. Keep the pane/layout intent and let a
               // later available sync reattach it. A confirmed `agent_deleted`
               // event remains the sole path that removes a person's panes.
-              _upsertAgent(machine, agent);
               for (final pane in panesFor(machine.machine.machineId)) {
-                if (pane.agentId != agent.id) continue;
+                if (pane.agentId != agent.id || pane.session == null) continue;
                 await _detachSession(pane, sendClose: false);
+                changed = true;
               }
-              notifyListeners();
             }
+            if (!changed) return;
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));
           }
@@ -13234,7 +13291,7 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         final name = payload['name'];
         if (agentId != null && name is String) {
-          _renameAgent(machine, agentId, name);
+          if (!_renameAgent(machine, agentId, name)) return;
         } else {
           unawaited(_loadMachineData(machine, force: true));
         }
@@ -13434,6 +13491,10 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      default:
+        // RPC replies and frames owned by other controllers carry no app
+        // state changes. They must not trigger a full workspace rebuild.
+        return;
     }
     notifyListeners();
   }

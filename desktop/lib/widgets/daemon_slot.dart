@@ -13,6 +13,7 @@ import '../daemons/render.dart' show cardWidth;
 import '../daemons/roster.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/workspace_bar_style.dart';
+import '../shortcuts/app_shortcuts.dart' show linuxKeyLabels;
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
@@ -552,7 +553,7 @@ class DaemonKeys extends StatelessWidget {
               key: ValueKey('$idPrefix-$key'),
               label: action.label,
               tooltip: chord
-                  ? '${action.label} ⌘⌥${key.toUpperCase()}'
+                  ? '${action.label} ${linuxKeyLabels ? 'Alt+Super+' : '⌘⌥'}${key.toUpperCase()}'
                   : action.label,
               onPressed: () => onAnswer!(key),
               builder: (context, emphasized) => SizedBox(
@@ -804,6 +805,8 @@ class _DaemonDetailNoticeState extends State<DaemonDetailNotice> {
                 WorkspaceBarControl(
                   key: const ValueKey('daemon-detail-toggle'),
                   label: _open ? 'Hide the detail' : 'Show the detail',
+                  tooltip:
+                      '${_open ? 'Hide' : 'Show'} details · ${widget.title}',
                   onPressed: () => setState(() => _open = !_open),
                   builder: (context, emphasized) => SizedBox(
                     height: workspaceBarControlHeight(context),

@@ -90,7 +90,7 @@ export interface PairBrainDeps {
   /** `daemon_talk`: the person's words to the pair harness (pair/pairHarness.ts), which starts or wakes. */
   talk?: (text: string, companionUid?: string) => Promise<Record<string, unknown>>
   /** Open the pair's terminal without typing into it or starting a model turn. */
-  open?: (companionUid?: string) => Promise<Record<string, unknown>>
+  open?: (companionUid?: string, engine?: 'claude' | 'codex') => Promise<Record<string, unknown>>
   /** The collection's persistent agent and its observed model. Local windows only. */
   companionHarness?: () => Record<string, unknown>
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
@@ -533,7 +533,9 @@ export class PairBrain {
     if (!this.deps.open) { reply({ ok: false, error: 'UNSUPPORTED' }); return }
     const uid = str(payload.companionUid, 64)
     if (!uid) { reply({ ok: false, error: 'STALE_COMPANION' }); return }
-    const result = await this.deps.open(uid).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+    const engine = payload.engine
+    if (engine !== undefined && engine !== 'claude' && engine !== 'codex') { reply({ ok: false, error: 'BAD_ENGINE' }); return }
+    const result = await this.deps.open(uid, engine).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
     reply(result)
   }
 

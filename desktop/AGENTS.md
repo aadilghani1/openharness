@@ -7,6 +7,11 @@ For all UI outside terminal panes, follow the
 Mac-friendly direction supersedes earlier BIOS, fixed-cell, bracket-button,
 and all-monospace presentation rules.
 
+Every app icon follows the [icon system](design/icon-design-system.md).
+Use the shared catalogue and pane variants; run `python3 scripts/audit-icons.py`
+from `desktop/` after changing icons. Review the full rendered catalogue when
+changing shared icon geometry, weight or size.
+
 Keep terminal content and terminal interaction intact. Pane boundaries are
 covered by [terminal-workspace.md](design/terminal-workspace.md); shared dialog
 behavior and data ownership by [terminal-dialogs.md](design/terminal-dialogs.md)

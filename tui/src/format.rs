@@ -4,6 +4,9 @@
 //! environment, as tmux finds a name; strftime first for the formats tmux expands with the time
 //! (the status line, display-message); then, when drawn, `#[…]` styles.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::{Modifier, Style};
@@ -29,14 +32,14 @@ pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
 pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
-    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None };
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None, values: Rc::default() };
     expand1(&mut es, fmt)
 }
 
 /// display-message -v prints the expansion decisions as tmux's FORMAT_VERBOSE does.
 pub fn verbose(app: &App, fmt: &str, window: usize, pane: Option<u64>) -> (String, Vec<String>) {
     let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let mut es = Es { app, window, pane, time: true, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: Some(trace.clone()) };
+    let mut es = Es { app, window, pane, time: true, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: Some(trace.clone()), values: Rc::default() };
     let out = expand1(&mut es, fmt);
     let lines = trace.borrow().clone();
     (out, lines)
@@ -64,23 +67,28 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 /// A format for a session not in front (another client's, or a list's row): its session_*
 /// values its own, as a #{S:} loop expands them.
 pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None, format_type: Some(crate::tree::FORMAT_SESSION), trace: None };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None, format_type: Some(crate::tree::FORMAT_SESSION), trace: None, values: Rc::default() };
     expand1(&mut es, fmt)
 }
 
 /// A format for window [k] (of session_windows) of a session not in front (another client's).
 pub fn expand_session_window(app: &App, fmt: &str, session: u32, k: usize) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k), format_type: Some(crate::tree::FORMAT_WINDOW), trace: None };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k), format_type: Some(crate::tree::FORMAT_WINDOW), trace: None, values: Rc::default() };
     expand1(&mut es, fmt)
 }
 
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None, values: Rc::default() };
     expand1(&mut es, fmt)
 }
 
 /// tmux's FORMAT_LOOP_LIMIT: formats that expand into themselves stop here.
 const LOOP_LIMIT: u32 = 100;
+
+// One expansion borrows an immutable App. Reuse its raw values within that
+// expansion only; the next render observes all model, option and job changes.
+type LookupContext = (usize, Option<u64>, Option<u32>, Option<usize>, Option<u8>, bool);
+type Values = HashMap<LookupContext, HashMap<String, Option<Val>>>;
 
 struct Es<'a> {
     app: &'a App,
@@ -98,14 +106,15 @@ struct Es<'a> {
     window_of: Option<usize>,
     format_type: Option<u8>,
     trace: Option<std::rc::Rc<std::cell::RefCell<Vec<String>>>>,
+    values: Rc<RefCell<Values>>,
 }
 
 impl<'a> Es<'a> {
     fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
-        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of, format_type: self.format_type, trace: self.trace.clone() }
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of, format_type: self.format_type, trace: self.trace.clone(), values: self.values.clone() }
     }
-    fn log(&self, text: impl AsRef<str>) {
-        if let Some(trace) = &self.trace { trace.borrow_mut().push(format!("#{}{}", " ".repeat(self.depth.min(10) as usize), text.as_ref())) }
+    fn log(&self, text: std::fmt::Arguments<'_>) {
+        if let Some(trace) = &self.trace { trace.borrow_mut().push(format!("#{}{}", " ".repeat(self.depth.min(10) as usize), text)) }
     }
 }
 
@@ -245,9 +254,9 @@ fn alias(c: u8) -> Option<&'static str> {
 fn expand1(es: &mut Es, fmt: &str) -> String {
     if fmt.is_empty() || es.depth >= LOOP_LIMIT { return String::new() }
     es.depth += 1;
-    es.log(format!("expanding format: {fmt}"));
+    es.log(format_args!("expanding format: {fmt}"));
     let timed;
-    let fmt = if es.time && fmt.contains('%') { timed = strftime(es.app, fmt, es.now); if timed != fmt { es.log(format!("after time expanded: {timed}")) } timed.as_str() } else { fmt };
+    let fmt = if es.time && fmt.contains('%') { timed = strftime(es.app, fmt, es.now); if timed != fmt { es.log(format_args!("after time expanded: {timed}")) } timed.as_str() } else { fmt };
     let b = fmt.as_bytes();
     let mut out = String::new();
     let mut i = 0;
@@ -280,7 +289,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             b'{' => {
                 let Some(k) = skip(&b[hash..], b"}") else { break };
                 let end = hash + k;
-                es.log(format!("found #{{}}: {}", &fmt[i..end]));
+                es.log(format_args!("found #{{}}: {}", &fmt[i..end]));
                 match replace(es, &fmt[i..end]) { Some(v) => out.push_str(&v), None => break }
                 i = end + 1;
             }
@@ -301,7 +310,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             _ => {
                 let name = if style_end.map(|e| i > e).unwrap_or(true) { alias(ch) } else { None };
                 match name {
-                    Some(name) => { es.log(format!("found #{}: {name}", ch as char)); match replace(es, name) { Some(v) => out.push_str(&v), None => break } },
+                    Some(name) => { es.log(format_args!("found #{}: {name}", ch as char)); match replace(es, name) { Some(v) => out.push_str(&v), None => break } },
                     None => {
                         out.push('#');
                         // Not an ASCII letter: the character goes out whole, from its first byte.
@@ -311,7 +320,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             }
         }
     }
-    es.log(format!("result is: {out}"));
+    es.log(format_args!("result is: {out}"));
     es.depth -= 1;
     out
 }
@@ -536,7 +545,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         expand1(es, copy)
     } else {
         let found = find(es, copy, &f, time_format.as_deref());
-        match &found { Some(value) => es.log(format!("format '{copy}' found: {value}")), None => es.log(format!("format '{copy}' not found")) }
+        match &found { Some(value) => es.log(format_args!("format '{copy}' found: {value}")), None => es.log(format_args!("format '{copy}' not found")) }
         found.unwrap_or_default()
     };
     if f.expand { value = expand1(es, &value) }
@@ -556,7 +565,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
     if width > 0 { value = pad(&value, width as usize, false) } else if width < 0 { value = pad(&value, width.unsigned_abs() as usize, true) }
     if f.length { value = value.len().to_string() }
     if f.width { value = format_width(&value).to_string() }
-    es.log(format!("replaced '{key}' with '{value}'"));
+    es.log(format_args!("replaced '{key}' with '{value}'"));
     Some(value)
 }
 
@@ -569,8 +578,10 @@ fn choose(es: &mut Es, s: &str, expand: bool) -> Option<(String, String)> {
 
 fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 
-/// A name's value: an option, a variable, else the environment (format_find), with b: d: q: t:.
-fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
+/// A name's raw value: an option, a variable, else the environment (format_find).
+fn value(es: &Es, key: &str, timestring: bool) -> Option<Val> {
+    let context = (es.window, es.pane, es.session, es.window_of, es.format_type, timestring);
+    if let Some(found) = es.values.borrow().get(&context).and_then(|values| values.get(key)) { return found.clone() }
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
     let kind = match key { "session_format" => Some(crate::tree::FORMAT_SESSION), "window_format" => Some(crate::tree::FORMAT_WINDOW), "pane_format" => Some(crate::tree::FORMAT_PANE), _ => None };
@@ -585,18 +596,23 @@ fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<
         _ => app.stash_value(id, key),
     }));
     if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }
-    let mut t: i64 = 0;
-    if found.is_none() {
-        match table(app, key, es.window, es.pane) {
-            Some(Val::Time(v)) => t = v,
-            Some(Val::Str(v)) => found = Some(v),
-            None => {
-                // format_find: the session's environment, then the global one.
-                if !f.timestring { found = app.session_env.get(key).or_else(|| app.global_env.get(key)).and_then(|e| e.value.clone()) }
-                found.as_ref()?;
-            }
-        }
-    }
+    let found = found.map(Val::Str).or_else(|| table(app, key, es.window, es.pane)).or_else(|| {
+        // format_find: the session's environment, then the global one. Time
+        // modifiers do not resolve environment variables in tmux's format_find.
+        if timestring { None } else { app.session_env.get(key).or_else(|| app.global_env.get(key)).and_then(|e| e.value.clone()).map(Val::Str) }
+    });
+    es.values.borrow_mut().entry(context).or_default().insert(key.to_string(), found.clone());
+    found
+}
+
+/// Apply modifiers after lookup: one raw value may be quoted, shortened or timed
+/// differently at each occurrence of the same name.
+fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
+    let app = es.app;
+    let (found, mut t) = match value(es, key, f.timestring)? {
+        Val::Str(v) => (Some(v), 0),
+        Val::Time(v) => (None, v),
+    };
     if f.timestring {
         if t == 0 { t = found.as_deref().and_then(|v| v.trim().parse().ok()).unwrap_or(0) }
         if t == 0 { return None }
@@ -978,6 +994,7 @@ fn pretty_time(app: &App, t: i64, now: i64) -> String {
     strftime(app, "%h%y", t)
 }
 
+#[derive(Clone)]
 enum Val { Str(String), Time(i64) }
 
 /// A pane's tile in its window's layout, in the client's cells (title row included).
@@ -1007,7 +1024,7 @@ pub fn agent_mark(state: crate::fleet::State, tick: u64) -> String {
 /// One remaining figure per subscription, across every machine with a reading. The local
 /// reading wins when machines share an account; unnamed accounts cannot safely be merged.
 /// Machine labels distinguish additional subscriptions without repeating them for shared ones.
-fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet::Usage)>, local: &str, machine_name: impl Fn(&str) -> String, marked: bool) -> String {
+fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet::Usage)>, local: &str, machine_name: impl Fn(&str) -> String, marked: bool, icons: bool) -> String {
     let mut readings: Vec<_> = readings.filter(|(_, u)| !u.windows.is_empty()).collect();
     readings.sort_by(|(am, a), (bm, b)| (&a.provider, *am != local, machine_name(am), am).cmp(&(&b.provider, *bm != local, machine_name(bm), bm)));
     let mut seen = std::collections::HashSet::new();
@@ -1017,7 +1034,7 @@ fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet
         let remaining = 100.0 - used;
         // A little allowance remains: don't round it to a misleading exhausted 0%.
         let number = if remaining > 0.0 && remaining < 1.0 { "<1%".into() } else { format!("{remaining:.0}%") };
-        let mut label = quota_provider(&u.provider);
+        let mut label = if icons { quota_icon(&u.provider) } else { quota_provider(&u.provider) };
         if *machine != local && readings.iter().filter(|(_, other)| other.provider == u.provider).count() > 1 {
             label.push('@'); label.push_str(&clip_middle(&machine_name(machine), 12));
         }
@@ -1025,6 +1042,15 @@ fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet
             Some(format!("{label} #[fg={}]{number}#[fg=default]", quota_color(used)))
         } else { Some(format!("{label} {number}")) }
     }).collect::<Vec<_>>().join("  ")
+}
+
+/// A subscription's provider as its engine's icon, in the engine's colour (`✳` Claude, `◎`
+/// Codex/OpenAI…); a provider with no engine of its own, its name.
+fn quota_icon(provider: &str) -> String {
+    let engine = match provider.to_ascii_lowercase().as_str() { "anthropic" | "claude" => "claude", "openai" | "chatgpt" | "codex" => "codex", _ => return quota_provider(provider) };
+    let (mark, colour) = crate::theme::engine_mark(engine);
+    if crate::theme::no_color() { return mark.to_string() }
+    format!("#[fg={}]{mark}#[fg=default]", crate::tmuxconf::colour_name(crate::theme::paint(colour)))
 }
 
 fn quota_provider(provider: &str) -> String {
@@ -1054,7 +1080,7 @@ fn quota_warning<'a>(readings: impl Iterator<Item = &'a crate::fleet::Usage>, ma
 }
 
 pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
-    let Some(p) = app.panes.get(&pane) else { return crate::app::hostname() };
+    let Some(p) = app.panes.get(&pane) else { return app.fleet.local_machine_name() };
     let tab_id = app.tabs.get(window).map(|t| t.id.clone()).unwrap_or_default();
     if !p.osc_title.is_empty() && app.options.get("allow-set-title", &tab_id, Some(pane)).as_deref() == Some("on") { return p.osc_title.clone() }
     if !p.title.is_empty() { return p.title.clone() }
@@ -1065,8 +1091,8 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
         return if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) };
     }
     // A harness not heard of yet (another terminal's new one, before the list comes): what runs
-    // in it, else tmux's own title (the host) — never its id.
-    agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) })
+    // in it, else the machine's app name.
+    agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| app.fleet.machine_name(&p.machine_id))
 }
 
 /// Keep a distinguishing suffix, such as "(3)", visible when a title is long.
@@ -1097,7 +1123,7 @@ fn pane_heading_columns(app: &App, window: usize, pane: u64) -> usize {
     if app.options.pane_look() {
         let Some(tab) = app.tabs.get(window) else { return 0 };
         let Some(tile) = tab_rect(app, window, pane) else { return 0 };
-        crate::pane_frame::frame(tile, app.window_area(tab), app.pane_status(tab)).title
+        crate::pane_frame::frame(tile, app.window_area(tab), app.box_inner(tab), app.pane_status(tab)).title
             .map(|r| r.width.saturating_sub(2) as usize).unwrap_or(0)
     } else {
         content_rect(app, window, pane).map(|r| r.width.saturating_sub(4) as usize).unwrap_or(0)
@@ -1108,8 +1134,20 @@ fn pane_heading(app: &App, window: usize, pane: u64) -> String {
     let watcher = app.panes.get(&pane).and_then(|p| match &p.phase {
         crate::pane::Phase::Watching(who) => Some(who.as_str()), _ => None,
     });
-    compact_pane_heading(&pane_title(app, window, pane), app.pane_state(pane), watcher,
-        pane_heading_columns(app, window, pane).saturating_sub(1), app.tick)
+    let columns = pane_heading_columns(app, window, pane).saturating_sub(1);
+    let title = pane_title(app, window, pane);
+    // ── models: what its model says when it will not answer now (Starting up…, offline, not
+    // served), after the name — the name keeps a dozen columns, the note is cut to what is left ──
+    if let Some(note) = app.panes.get(&pane).and_then(|p| crate::models::pane_note(app, &p.machine_id, &p.agent_id)) {
+        use unicode_width::UnicodeWidthStr;
+        let keep = title.width().min(12) + 4;
+        if columns > keep + 12 {
+            let note = clip_middle(&note, (columns - keep - 1).min(note.width()));
+            let head = compact_pane_heading(&title, app.pane_state(pane), watcher, columns - note.width() - 1, app.tick);
+            return format!("{head} #[fg=yellow]{note}#[fg=default]");
+        }
+    }
+    compact_pane_heading(&title, app.pane_state(pane), watcher, columns, app.tick)
 }
 
 /// Keep state visible after the name. Watcher detail yields before the pane's identity;
@@ -1288,8 +1326,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "host" => crate::app::full_hostname(),
         "host_short" => crate::app::full_hostname().split('.').next().unwrap_or("").to_string(),
         // This computer's name in Harness, including app renames; never the focused pane's.
-        "local_machine" => app.fleet.machine(&app.fleet.local_id).or_else(|| app.fleet.machines.iter().find(|m| m.local))
-            .map(|m| m.name.clone()).filter(|name| !name.is_empty()).unwrap_or_else(crate::app::full_hostname),
+        "local_machine" => app.fleet.local_machine_name(),
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
@@ -1370,7 +1407,11 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // Compact remaining allowance for every subscription, not just the one in danger.
         "usage_remaining" | "usage_remaining_mark" => quota_remaining(
             app.usage.iter().flat_map(|(machine, readings)| readings.iter().map(move |u| (machine.as_str(), u))),
-            &app.fleet.local_id, |id| app.fleet.machine_name(id), name == "usage_remaining_mark"),
+            &app.fleet.local_id, |id| app.fleet.machine_name(id), name == "usage_remaining_mark", false),
+        // The same, each subscription by its engine's icon (`✳ 43%  ◎ 80%`): the side bar's.
+        "usage_remaining_icons" => quota_remaining(
+            app.usage.iter().flat_map(|(machine, readings)| readings.iter().map(move |u| (machine.as_str(), u))),
+            &app.fleet.local_id, |id| app.fleet.machine_name(id), true, true),
         "usage_high" | "usage_high_mark" => quota_warning(app.usage.values().flatten(), name == "usage_high_mark"),
         "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
@@ -1669,6 +1710,96 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
 
 #[cfg(test)]
 mod tests {
+    fn status_fixture(windows: usize, agents: usize) -> crate::app::App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(19789, sink, (200, 60));
+        app.fleet.local_id = "render-test".into();
+        app.fleet.machines.push(crate::fleet::Machine { id: "render-test".into(), name: "Render test".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
+        for i in 0..agents {
+            let row = serde_json::json!({ "id": format!("agent-{i}"), "name": format!("Review project {i}"), "engine": "codex", "status": "active" });
+            let mut agent = crate::fleet::agent_from("render-test", &row, None);
+            agent.working = true;
+            app.fleet.agents.insert(agent.key(), agent);
+        }
+        app.tabs = (0..windows).map(|i| {
+            let mut tab = crate::app::Tab::with_wid(&format!("Project {i}"), i as u64);
+            tab.focus = Some(i as u64 + 1);
+            let mut pane = crate::pane::Pane::new(i as u64 + 1, "render-test", &format!("agent-{i}"), 80, 24);
+            pane.phase = crate::pane::Phase::Live;
+            app.panes.insert(pane.id, pane);
+            tab
+        }).collect();
+        app
+    }
+
+    /// An opt-in, repeatable CPU workload; no daemon, real sessions, or terminal is opened.
+    #[test]
+    #[ignore = "run with cargo test --release benchmark_status_formats -- --ignored --nocapture"]
+    fn benchmark_status_formats() {
+        for (windows, agents) in [(6, 32), (24, 512)] {
+            let app = status_fixture(windows, agents);
+            let fmt = app.options.get("status-format[0]", &app.tabs[0].id, None).unwrap();
+            let iterations = 2000;
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                std::hint::black_box(super::expand(&app, &fmt, 0, Some(1), true));
+            }
+            eprintln!("status windows={windows} agents={agents}: {:.1} us/expansion", start.elapsed().as_micros() as f64 / iterations as f64);
+        }
+    }
+
+    #[test]
+    fn repeated_values_keep_window_pane_and_loop_type_context() {
+        let mut app = status_fixture(2, 2);
+        for (i, tab) in app.tabs.iter_mut().enumerate() {
+            tab.root = Some(crate::layout::Node::new(i as u64 + 1, 80, 24));
+            app.options.windows.entry(tab.id.clone()).or_default().insert("@label".into(), format!("label-{i}"));
+        }
+        let fmt = "#{W:#{window_name}=#{@label}/#{window_format}/#{P:#{window_name}=#{@label}/#{window_format}/#{pane_format}/#{pane_id};}}";
+        assert_eq!(super::expand(&app, fmt, 0, Some(1), false),
+            "Project 0=label-0/1/Project 0=label-0/0/1/%0;Project 1=label-1/1/Project 1=label-1/0/1/%1;");
+        app.active = 1;
+        assert_eq!(super::expand(&app, "#{window_name}/#{window_active}/#{pane_id}", 1, Some(2), false), "Project 1/1/%1");
+    }
+
+    #[test]
+    fn each_expansion_observes_new_agent_option_and_environment_values() {
+        let mut app = status_fixture(1, 2);
+        app.options.global_session.insert("@label".into(), "first".into());
+        app.session_env.insert("RENDER_TEST".into(), crate::app::EnvVar { value: Some("before".into()), hidden: false });
+        let fmt = "#{fleet_working}/#{fleet_working}/#{@label}/#{@label}/#{RENDER_TEST}/#{RENDER_TEST}";
+        assert_eq!(super::expand(&app, fmt, 0, Some(1), false), "2/2/first/first/before/before");
+        app.fleet.agents.values_mut().next().unwrap().working = false;
+        app.options.global_session.insert("@label".into(), "second".into());
+        app.session_env.get_mut("RENDER_TEST").unwrap().value = Some("after".into());
+        assert_eq!(super::expand(&app, fmt, 0, Some(1), false), "1/1/second/second/after/after");
+    }
+
+    #[test]
+    fn repeated_raw_values_keep_distinct_modifiers_and_time_lookup_rules() {
+        let mut app = status_fixture(1, 1);
+        app.options.global_session.insert("@path".into(), "/tmp/project name".into());
+        app.options.global_session.insert("@clock".into(), "1700000000".into());
+        app.session_env.insert("RENDER_CLOCK".into(), crate::app::EnvVar { value: Some("1700000000".into()), hidden: false });
+        let fmt = "#{@path}|#{b:@path}|#{d:@path}|#{q:@path}|#{RENDER_CLOCK}|#{t:RENDER_CLOCK}|#{@clock}|#{t/f/%Y:@clock}";
+        assert_eq!(super::expand(&app, fmt, 0, Some(1), false), "/tmp/project name|project name|/tmp|/tmp/project\\ name|1700000000||1700000000|2023");
+        let (out, trace) = super::verbose(&app, "#{@path}/#{@path}", 0, Some(1));
+        assert_eq!(out, "/tmp/project name//tmp/project name");
+        assert_eq!(trace.iter().filter(|line| line.contains("format '@path' found: /tmp/project name")).count(), 2);
+    }
+
+    #[test]
+    fn shell_format_output_is_current_on_each_expansion() {
+        let mut app = status_fixture(1, 1);
+        app.options.global_session.insert("status-interval".into(), "0".into());
+        app.jobs.borrow_mut().insert("fixture".into(), super::Job {
+            expanded: "fixture".into(), out: Some("first".into()), generation: 1, ..Default::default()
+        });
+        assert_eq!(super::expand(&app, "#(fixture)/#(fixture)", 0, Some(1), false), "first/first");
+        app.jobs.borrow_mut().get_mut("fixture").unwrap().out = Some("second".into());
+        assert_eq!(super::expand(&app, "#(fixture)/#(fixture)", 0, Some(1), false), "second/second");
+    }
+
     #[test]
     fn compact_headings_reserve_state_and_keep_names_distinct() {
         use crate::fleet::State;
@@ -1705,8 +1836,8 @@ mod tests {
         let other = quota("other", Some("c"), &[30.0]);
         let empty = quota("missing", None, &[]);
         let readings = [("local", &other), ("local", &codex), ("local", &empty), ("local", &claude)];
-        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false), "Claude 58%  Codex 89%  Other 70%");
-        assert_eq!(super::quota_remaining(std::iter::empty(), "local", str::to_string, false), "");
+        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false, false), "Claude 58%  Codex 89%  Other 70%");
+        assert_eq!(super::quota_remaining(std::iter::empty(), "local", str::to_string, false, false), "");
         // The existing per-window format continues reporting used quota for custom configs.
         assert_eq!(claude.line(), "claude limit 42% limit 18%");
     }
@@ -1719,8 +1850,8 @@ mod tests {
         let unknown = quota("codex", None, &[11.0]);
         let readings = [("studio", &distinct), ("shared", &shared), ("local", &local), ("studio", &unknown), ("local", &unknown)];
         let expected = "Claude 58%  Claude@studio 20%  Codex 89%  Codex@studio 89%";
-        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false), expected);
-        assert_eq!(super::quota_remaining(readings.into_iter().rev(), "local", str::to_string, false), expected);
+        assert_eq!(super::quota_remaining(readings.into_iter(), "local", str::to_string, false, false), expected);
+        assert_eq!(super::quota_remaining(readings.into_iter().rev(), "local", str::to_string, false, false), expected);
     }
 
     #[test]
@@ -1728,8 +1859,8 @@ mod tests {
         for (used, number) in [(0.0, "100%"), (79.0, "21%"), (80.0, "20%"), (99.7, "<1%"), (100.0, "0%"), (120.0, "0%")] {
             let u = quota("claude", None, &[used]);
             let plain = format!("Claude {number}");
-            assert_eq!(super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, false), plain);
-            let styled = super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, true);
+            assert_eq!(super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, false, false), plain);
+            let styled = super::quota_remaining(std::iter::once(("local", &u)), "local", str::to_string, true, false);
             if used < 80.0 || crate::theme::no_color() { assert_eq!(styled, plain) }
             else { assert!(styled.starts_with("Claude #[fg=")); assert!(styled.ends_with(&format!("]{number}#[fg=default]"))); }
             assert!(!styled.contains("reverse") && !styled.contains("bg="));

@@ -812,8 +812,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           _rowHeight = cell.height * (singleLine ? 1 : 3);
         }
         if (desktop) {
-          _rowHeight =
-              scale.scale(14) * (search.isCommandMode ? 1.5 : 2.8) + 16;
+          // Commands and models are one line a row; everything else carries a second. A model row
+          // is still a resource row, and keeps the 44-point target every one of those has — the
+          // slot is 4 points taller than the row it holds.
+          final oneLine = scale.scale(14) * 1.5 + 16;
+          _rowHeight = search.isCommandMode
+              ? oneLine
+              : search.isModelMode
+              ? oneLine.clamp(48, double.infinity)
+              : scale.scale(14) * 2.8 + 16;
         }
         _desktopRows = desktop;
         _modelHeadingHeight = scale.scale(12) * 1.45 + 12;
@@ -953,7 +960,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   ),
                   // The dock uses its full-row highlight for
                   // selection; prefixes only appear in the input.
-                  leading: widget.terminal && !desktop
+                  // The models list has no icons: its section headings already say what each row
+                  // is, and one mark per kind added nothing the text did not.
+                  leading:
+                      (widget.terminal && !desktop) ||
+                          (desktop && search.isModelMode)
                       ? null
                       : desktop
                       ? row.isStore
@@ -1585,6 +1596,10 @@ class _SearchRowContent extends StatefulWidget {
 }
 
 class _SearchRowContentState extends State<_SearchRowContent> {
+  /// The arrow before an API's name, and the gap after it.
+  static const _apiMarkerSize = 16.0;
+  static const _apiMarkerGap = 4.0;
+
   /// The widest word a model row of yours ends with (`Downloading`): the column is that wide, so
   /// the size and speed columns ahead of it line up whatever each row says.
   static const _modelWordColumns = 11;
@@ -1688,10 +1703,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
           : DesktopChrome.muted;
       final title = widget.search.isModelMode && row.isCreate
           ? 'Add API connection'
-          : widget.search.isModelDownloadsRow(row)
-          ? widget.search.modelDownloadsVisible
-                ? 'Hide catalog'
-                : 'Get models'
+          : row.isModel
+          ? widget.search.modelRowTitle(row)
           : row.title;
       final unavailable = widget.search.sessionUnavailable(row);
       final api = row.isModel ? widget.search.apiRowState(row) : null;
@@ -1700,11 +1713,23 @@ class _SearchRowContentState extends State<_SearchRowContent> {
           ? widget.search.modelRowStatus(row)
           : null;
       final status = unavailable ?? api?.hint ?? modelStatus;
-      final modelFacts = row.isModel
+      // One line a model: a local model's size and speed sit muted before its word at the right.
+      final facts = row.isModel
           ? widget.search
                 .modelRowFacts(row)
                 ?.trim()
                 .replaceAll(RegExp(r' {2,}'), ' · ')
+          : null;
+      final modelFacts = facts?.isNotEmpty == true ? facts : null;
+      final subscription = row.isModel
+          ? widget.search.models?.entries[row.modelId]?.subscription
+          : null;
+      final account = '${subscription?['account'] ?? ''}'.trim();
+      final subscriptionAccount = subscription != null && account.isNotEmpty
+          ? (
+              provider: '${subscription['title'] ?? 'Subscription'}',
+              account: account,
+            )
           : null;
       final activity = widget.search.activityOf(row);
       final age = activity == null
@@ -1752,20 +1777,58 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   Icon(
                     key: ValueKey('api-row-marker:${row.id}'),
                     api.open ? AppIcons.chevronDown : AppIcons.chevronRight,
-                    size: 16,
+                    size: _apiMarkerSize,
                     color: muted,
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: _apiMarkerGap),
                 ],
                 Expanded(
-                  child: SearchResultText(
-                    title,
-                    matches: matches.where((match) => match.title),
-                    style: DesktopChrome.text(
-                      color: unavailable == null ? ink : muted,
+                  child: subscriptionAccount != null
+                      // A subscription names its provider, and the account after it in the quieter
+                      // colour: "Anthropic  315df1", not one run of text where the account reads
+                      // as part of the name.
+                      ? Row(
+                          children: [
+                            Flexible(
+                              child: SearchResultText(
+                                subscriptionAccount.provider,
+                                matches: matches.where((match) => match.title),
+                                style: DesktopChrome.text(
+                                  color: unavailable == null ? ink : muted,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SearchResultText(
+                              subscriptionAccount.account,
+                              key: ValueKey('model-row-account:${row.id}'),
+                              matches: matches.where((match) => match.title),
+                              style: DesktopChrome.text(color: muted),
+                            ),
+                          ],
+                        )
+                      : SearchResultText(
+                          title,
+                          matches: matches.where((match) => match.title),
+                          style: DesktopChrome.text(
+                            color: unavailable == null ? ink : muted,
+                          ),
+                        ),
+                ),
+                if (modelFacts != null) ...[
+                  const SizedBox(width: 12),
+                  // A fixed column, so size and speed start at the same place on every row.
+                  SizedBox(
+                    width: MediaQuery.textScalerOf(context).scale(120),
+                    child: Text(
+                      modelFacts,
+                      key: ValueKey('model-row-facts:${row.id}'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(color: muted),
                     ),
                   ),
-                ),
+                ],
                 if (status ?? age case final trailing?) ...[
                   const SizedBox(width: 12),
                   if (status == null && activity != null)
@@ -1783,16 +1846,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
               ],
             ),
-            if (modelFacts != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                modelFacts,
-                key: ValueKey('model-row-facts:${row.id}'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.metadata(color: muted),
-              ),
-            ] else if (!row.isCommand &&
+            if (!widget.search.isModelMode &&
+                !row.isCommand &&
                 !underApi &&
                 (detail.isNotEmpty || snippet != null)) ...[
               const SizedBox(height: 2),

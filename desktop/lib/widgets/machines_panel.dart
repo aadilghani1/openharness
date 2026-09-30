@@ -1506,7 +1506,7 @@ class _MachinePasswordState extends State<_MachinePassword> {
                         icon: const Icon(
                           AppIcons.circleHelp,
                           semanticLabel: 'Password help',
-                          size: 15,
+                          size: 16,
                         ),
                       ),
                     ],

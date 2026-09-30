@@ -575,7 +575,7 @@ class _Seal extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(AppIcons.lock, size: 13, color: grid.AppPalette.teal),
+            Icon(AppIcons.lock, size: 14, color: grid.AppPalette.teal),
             const SizedBox(width: 8),
             Text(
               'End-to-end encrypted',

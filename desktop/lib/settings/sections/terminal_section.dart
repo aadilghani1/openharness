@@ -8,6 +8,7 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_icon_button.dart';
 import '../../shared/widgets/app_select_field.dart';
 import '../../shared/widgets/setting_row.dart';
+import '../../shortcuts/app_shortcuts.dart' show linuxKeyLabels;
 import '../../terminal/terminal_font_store.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
@@ -317,10 +318,12 @@ class _ResetRow extends StatelessWidget {
       spacing: 10,
       runSpacing: 8,
       children: [
-        Text(
-          '⌘0',
-          style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
-        ),
+        // ⌘0 is the Mac's View menu row; Linux binds no font-size keys.
+        if (!linuxKeyLabels)
+          Text(
+            '⌘0',
+            style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
+          ),
         OutlinedButton(
           key: const Key('terminal-settings-reset-button'),
           // Dead at the default, because that is what pressing it would leave

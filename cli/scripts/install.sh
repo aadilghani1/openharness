@@ -10,7 +10,7 @@
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | bash               # the CLI and hn
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | sh -s -- --desktop  # Desktop: runtime + CLI only
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | sh -s -- --host     # Desktop: host requirements only
-#   hn                            # Harness in this terminal: signs in and starts the daemon the first time
+#   hn                            # Harness in this terminal: starts locally, no login required
 #   harness login
 #   harness start
 #   harness remote-password set   # so your other machines (and `harness remote`) can reach this one
@@ -695,13 +695,19 @@ const bin = path.join(os.homedir(), '.local', 'bin')
   const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'"
   fs.writeFileSync(path.join(bin, 'harness'), '#!/bin/sh\nexec ' + shellQuote(NODE) + ' ' + shellQuote(path.join(dir, 'cli.js')) + ' "$@"\n', { mode: 0o755 })
   console.log('  ✓ installed harness ' + entry.version + ' → ' + dir)
-  // `hn` is `harness tui`: it signs in and starts the daemon the first time, then opens hn. An `hn`
-  // that is someone else's (another program by that name) is left alone.
+  // Delegate through harness so runtime repairs and update pins apply to both commands.
+  // Preserve existing entries, including dangling development links. Never write through a link
+  // or infer ownership from `.harness` appearing somewhere in an executable's bytes.
   const hn = path.join(bin, 'hn')
-  let theirs = false
-  try { theirs = !fs.readFileSync(hn, 'utf8').includes('.harness') } catch { /* none yet */ }
-  if (theirs) console.log('  · ' + hn + ' is another program; run hn as: harness tui')
-  else fs.writeFileSync(hn, '#!/bin/sh\nexec ' + shellQuote(NODE) + ' ' + shellQuote(path.join(dir, 'cli.js')) + ' tui "$@"\n', { mode: 0o755 })
+  const staged = fs.mkdtempSync(path.join(bin, '.hn-'))
+  try {
+    const launcher = path.join(staged, 'hn')
+    fs.writeFileSync(launcher, '#!/bin/sh\nexec ' + shellQuote(path.join(bin, 'harness')) + ' tui "$@"\n', { mode: 0o755 })
+    try { fs.linkSync(launcher, hn) } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      console.log('  · Kept existing ' + hn + '; use harness tui, or harness tui --install to migrate an old Harness build.')
+    }
+  } finally { fs.rmSync(staged, { recursive: true, force: true }) }
 })().catch((err) => { console.error('✗ install failed: ' + err.message); process.exit(1) })
 HARNESSJS
 
@@ -764,7 +770,7 @@ else
   echo ""
   echo "  Start here — every harness on every machine, in this terminal:"
   echo ""
-  echo "      hn                             # signs in and connects this computer the first time"
+  echo "      hn                             # start locally; no login required"
   echo ""
   echo "  Or set this computer up step by step — three commands, in this order:"
   echo ""

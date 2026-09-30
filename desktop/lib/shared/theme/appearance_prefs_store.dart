@@ -22,7 +22,6 @@ class AppearancePrefs {
     this.palette = HarnessPalette.graphite,
     this.background = HarnessBackground.plain,
     this.custom = const CustomBackground(),
-    this.behindHarnesses = false,
     this.paneOpacity = paneOpacityDefault,
     this.prompt = const PromptPrefs(),
   });
@@ -35,23 +34,18 @@ class AppearancePrefs {
   /// click.
   final CustomBackground custom;
 
-  /// Also paint the background behind a running harness tab's panes. Kept
-  /// while Blank is selected, so choosing an image again brings it back.
-  final bool behindHarnesses;
-
-  /// How solid the panes are while [behindHarnesses] shows through them.
+  /// How solid the panes are while the background shows through them.
   final double paneOpacity;
   static const double paneOpacityDefault = 0.5;
   static const double paneOpacityMin = 0;
 
   /// Whether a running harness tab paints the background at all: Blank has
   /// nothing to show through.
-  bool get showsBehindHarnesses =>
-      behindHarnesses && background != HarnessBackground.plain;
+  bool get showsBackground => background != HarnessBackground.plain;
 
   /// The opacity panes paint their own fill at; 1 unless the background is
   /// showing behind them.
-  double get effectivePaneOpacity => showsBehindHarnesses ? paneOpacity : 1;
+  double get effectivePaneOpacity => showsBackground ? paneOpacity : 1;
 
   /// Legacy fields, retained for settings compatibility with older builds.
   final String? uiFamily;
@@ -70,7 +64,6 @@ class AppearancePrefs {
     HarnessPalette? palette,
     HarnessBackground? background,
     CustomBackground? custom,
-    bool? behindHarnesses,
     double? paneOpacity,
     PromptPrefs? prompt,
     bool clearUiFamily = false,
@@ -80,7 +73,6 @@ class AppearancePrefs {
     palette: palette ?? this.palette,
     background: background ?? this.background,
     custom: custom ?? this.custom,
-    behindHarnesses: behindHarnesses ?? this.behindHarnesses,
     paneOpacity: paneOpacity ?? this.paneOpacity,
     prompt: prompt ?? this.prompt,
   );
@@ -93,7 +85,6 @@ class AppearancePrefs {
       other.palette == palette &&
       other.background == background &&
       other.custom == custom &&
-      other.behindHarnesses == behindHarnesses &&
       other.paneOpacity == paneOpacity &&
       other.prompt == prompt;
 
@@ -104,7 +95,6 @@ class AppearancePrefs {
     palette,
     background,
     custom,
-    behindHarnesses,
     paneOpacity,
     prompt,
   );
@@ -129,13 +119,14 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   static const _paletteKey = 'app_color_palette';
   static const _backgroundKey = 'harness_start_background';
   static const _customKey = 'harness_custom_background';
-  static const _behindKey = 'harness_background_behind_harnesses';
+  // Named for the retired on/off choice; it now holds only pane opacity.
+  static const _paneOpacityKey = 'harness_background_behind_harnesses';
   static const _promptKey = 'workspace_prompt_v1';
   Future<void>? _promptSave;
   Future<void>? _paletteSave;
   Future<void>? _backgroundSave;
   Future<void>? _customSave;
-  Future<void>? _behindSave;
+  Future<void>? _paneOpacitySave;
 
   final LocalKeyValueStore _storage;
   final Directory? _backgroundsDirectory;
@@ -165,10 +156,9 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _paletteKey,
         _backgroundKey,
         _customKey,
-        _behindKey,
+        _paneOpacityKey,
         _promptKey,
       ]);
-      final (behind, opacity) = _behindFrom(saved[_behindKey]);
       final custom = _customFrom(saved[_customKey]);
       final background = HarnessBackground.fromId(saved[_backgroundKey]);
       value = AppearancePrefs(
@@ -181,8 +171,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
             ? HarnessBackground.plain
             : background,
         custom: custom,
-        behindHarnesses: behind,
-        paneOpacity: opacity,
+        paneOpacity: _paneOpacityFrom(saved[_paneOpacityKey]),
         prompt: _promptFrom(saved[_promptKey]),
       );
     } catch (_) {
@@ -290,48 +279,39 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     }
   }
 
-  /// Behind harnesses and pane opacity. Opacity changes are clamped to
-  /// [AppearancePrefs.paneOpacityMin]…1 rather than rejected.
-  Future<void> setBehindHarnesses({bool? on, double? opacity}) {
-    final next = value.copyWith(
-      behindHarnesses: on,
-      paneOpacity: opacity == null ? null : _clampOpacity(opacity),
-    );
-    if (next == value) return _behindSave ?? Future.value();
+  /// Pane opacity, clamped to [AppearancePrefs.paneOpacityMin]…1 rather than
+  /// rejected.
+  Future<void> setPaneOpacity(double opacity) {
+    final next = value.copyWith(paneOpacity: _clampOpacity(opacity));
+    if (next == value) return _paneOpacitySave ?? Future.value();
     value = next;
-    return _behindSave ??= _saveBehind();
+    return _paneOpacitySave ??= _savePaneOpacity();
   }
 
-  Future<void> _saveBehind() async {
+  Future<void> _savePaneOpacity() async {
     try {
       while (true) {
-        final on = value.behindHarnesses, opacity = value.paneOpacity;
-        await _storage.write(
-          _behindKey,
-          jsonEncode({'on': on, 'opacity': opacity}),
-        );
-        if (value.behindHarnesses == on && value.paneOpacity == opacity) break;
+        final opacity = value.paneOpacity;
+        await _storage.write(_paneOpacityKey, jsonEncode({'opacity': opacity}));
+        if (value.paneOpacity == opacity) break;
       }
     } catch (_) {
       // Keep the choice for this run if storage is unavailable.
     } finally {
-      _behindSave = null;
+      _paneOpacitySave = null;
     }
   }
 
-  static (bool, double) _behindFrom(String? raw) {
+  /// Older builds also saved an `on` flag here; it is ignored.
+  static double _paneOpacityFrom(String? raw) {
     try {
       final json = raw == null ? null : jsonDecode(raw);
-      if (json is! Map) return (false, AppearancePrefs.paneOpacityDefault);
-      final on = json['on'], opacity = json['opacity'];
-      return (
-        on == true,
-        opacity is num
-            ? _clampOpacity(opacity.toDouble())
-            : AppearancePrefs.paneOpacityDefault,
-      );
+      final opacity = json is Map ? json['opacity'] : null;
+      return opacity is num
+          ? _clampOpacity(opacity.toDouble())
+          : AppearancePrefs.paneOpacityDefault;
     } catch (_) {
-      return (false, AppearancePrefs.paneOpacityDefault);
+      return AppearancePrefs.paneOpacityDefault;
     }
   }
 
@@ -413,7 +393,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     await _paletteSave;
     await _backgroundSave;
     await _customSave;
-    await _behindSave;
+    await _paneOpacitySave;
     await _promptSave;
     try {
       await _storage.delete(_familyKey);
@@ -421,7 +401,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       await _storage.delete(_paletteKey);
       await _storage.delete(_backgroundKey);
       await _storage.delete(_customKey);
-      await _storage.delete(_behindKey);
+      await _storage.delete(_paneOpacityKey);
       await _storage.delete(_promptKey);
     } catch (_) {
       // See above.

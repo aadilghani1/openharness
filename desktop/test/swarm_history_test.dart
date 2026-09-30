@@ -109,7 +109,7 @@ void main() {
   });
 
   test(
-    'swarm History counts distinct machines, including offline and closed work',
+    'tab History counts distinct machines, including offline and closed work',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -338,7 +338,7 @@ void main() {
   });
 
   test(
-    'a chosen closed Swarm restores independently and stale tokens stay inert',
+    'a chosen closed Tab restores independently and stale tokens stay inert',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -381,13 +381,13 @@ void main() {
         const Agent(id: 'a0', name: 'Renamed agent', terminalAvailable: true),
         const Agent(id: 'a1', name: 'Agent 1', terminalAvailable: true),
       ];
-      app.renameSwarm(app.activeSwarmId, 'Renamed Swarm');
+      app.renameSwarm(app.activeSwarmId, 'Renamed Tab');
       final renamed = history.menuDestinations(app);
       expect(
         renamed.firstWhere((e) => e.agentId == 'a0').title,
         'Renamed agent',
       );
-      expect(renamed.firstWhere((e) => e.isSwarm).title, 'Renamed Swarm');
+      expect(renamed.firstWhere((e) => e.isSwarm).title, 'Renamed Tab');
       app.machineStates['m']!.nodeOnline = false;
       expect(history.menuDestinations(app).first.detail, contains('Offline'));
       await app.closePane(first.id);
