@@ -427,7 +427,8 @@ pub fn palette() -> (Color, Color, bool) {
 pub struct PanePalette {
     pub canvas: Color, pub surface: Color, pub inactive_surface: Color,
     pub foreground: Color, pub inactive_foreground: Color, pub muted: Color,
-    pub header: Color, pub active_header: Color, pub active_foreground: Color,
+    pub active_foreground: Color,
+    pub border: Color, pub active_border: Color,
     pub status: Color, pub status_foreground: Color,
 }
 
@@ -449,14 +450,14 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
     let green = if light { Color::Rgb(58, 102, 48) } else { Color::Rgb(133, 181, 105) };
     let inactive_surface = if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) };
     PanePalette {
-        // Inactive panes, gutters and outer space form one continuous backdrop.
-        canvas: inactive_surface,
+        // Separate pane cards sit on a quiet backdrop, with clear space between outlines.
+        canvas: if light { mix(bg, foreground, 14) } else { Color::Rgb(32, 32, 32) },
         surface: bg,
         inactive_surface,
         foreground, inactive_foreground: mix(foreground, bg, 9),
         muted: mix(foreground, bg, 30),
-        header: if light { mix(bg, foreground, 12) } else { Color::Rgb(64, 64, 64) },
-        active_header: bg,
+        border: mix(inactive_surface, foreground, 20),
+        active_border: if light { Color::Rgb(70, 86, 103) } else { Color::Rgb(226, 230, 235) },
         active_foreground: if light { Color::Rgb(74, 89, 105) } else { Color::Rgb(192, 200, 210) },
         // A familiar green anchor, subdued enough that the working pane keeps the attention.
         status: mix(bg, green, if light { 18 } else { 28 }),
@@ -1275,9 +1276,9 @@ mod palette_tests {
                          (Color::Rgb(247, 247, 247), Color::Rgb(26, 26, 26))] {
             let p = super::pane_palette_for(Some((bg, fg)));
             assert_ne!(p.surface, p.inactive_surface);
-            assert_eq!(p.inactive_surface, p.canvas);
+            assert_ne!(p.inactive_surface, p.canvas);
+            assert_ne!(p.border, p.active_border);
             assert_eq!(p.surface, bg);
-            assert_ne!(p.header, p.active_header);
             assert_eq!(p.foreground, fg);
             let luminance = |c: Color| { let Color::Rgb(r, g, b) = c else { panic!("RGB palette") };
                 299 * r as i32 + 587 * g as i32 + 114 * b as i32 };

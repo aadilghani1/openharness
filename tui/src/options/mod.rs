@@ -92,7 +92,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // Each pane's title row: the harness's name, then its state symbol, [watching — who
         // has it] when another window has the pane to type in, and its project and branch
         // where there is room. Git context stays here; the status bar keeps the location cue.
-        m.insert("pane-border-format".into(), " #{pane_title}#{?#{==:#{pane_agent_state},idle},,#{?pane_agent_icon, #{pane_agent_mark},}}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
+        m.insert("pane-border-format".into(), " #{pane_heading}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
         // Session and window navigation on the left; connection, quota, fleet, location and
         // clock on the right. A leading space keeps a full window list from running into it.
         m.insert("status-left".into(), "#{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} ".into());
@@ -154,8 +154,8 @@ fn pane_default(name: &str) -> Option<String> {
     Some(match name {
         "window-style" => pair(p.inactive_foreground, p.inactive_surface),
         "window-active-style" => pair(p.foreground, p.surface),
-        "pane-border-style" => pair(p.muted, p.header),
-        "pane-active-border-style" => pair(p.active_foreground, p.active_header),
+        "pane-border-style" => pair(p.border, p.inactive_surface),
+        "pane-active-border-style" => pair(p.active_border, p.surface),
         "status-style" | "window-status-style" => pair(p.status_foreground, p.status),
         "window-status-current-style" => format!("{},bold", pair(p.status_foreground, p.status)),
         "window-status-separator" => "  ".into(),
@@ -271,6 +271,13 @@ impl Store {
         }
         let inherit_window_style = name == "window-active-style" && layers.iter().flatten().any(|m| m.contains_key("window-style"));
         layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| self.default_of(name, inherit_window_style))
+    }
+
+    /// Whether a pane/window style or line setting was explicitly chosen at any inherited layer.
+    pub fn has_window_override(&self, name: &str, window: &str, pane: u64) -> bool {
+        self.panes.get(&pane).is_some_and(|m| m.contains_key(name))
+            || self.windows.get(window).is_some_and(|m| m.contains_key(name))
+            || self.global_window.contains_key(name)
     }
 
     /// As tmux's formats read it (options_to_string, numeric): a flag is 1 or 0; an array its items

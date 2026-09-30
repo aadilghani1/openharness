@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::fleet::ago;
+use crate::format::clip_middle;
 use crate::keys;
 use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
@@ -281,24 +282,28 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
 }
 
-/// Integrated titles and a thin focus outline in the gutters. Program cells retain their
-/// ANSI colours; moving focus changes no content dimensions or mouse coordinates.
+/// Integrated titles and thin outlines: bright for focus, muted otherwise.
+/// Program cells retain their ANSI colours; moving focus changes no content dimensions or mouse coordinates.
 fn pane_chrome(buf: &mut Buffer, app: &App) {
     let canvas = app.window_area(app.tab());
     for (id, rect) in &app.rects {
         let f = crate::pane_frame::frame(*rect, canvas, app.pane_status(app.tab()));
         let active = Some(*id) == app.focused();
-        let style = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, Some(*id));
-        if let Some(outline) = f.outline.filter(|_| active && app.rects.len() > 1) {
+        let style_name = if active { "pane-active-border-style" } else { "pane-border-style" };
+        let style = app.style_of(style_name, app.active, Some(*id));
+        let own = |name| app.options.has_window_override(name, &app.tab().id, *id);
+        let a = app.style_of("window-active-style", app.active, Some(*id));
+        let w = app.style_of("window-style", app.active, Some(*id));
+        let pane_bg = if active { a.bg.or(w.bg) } else { w.bg };
+        let bg = if own(style_name) { style.bg.or(pane_bg) } else { pane_bg };
+        let style = style.bg(bg.unwrap_or(Color::Reset));
+        if let Some(outline) = f.outline.filter(|_| app.rects.len() > 1) {
             let lines = app.options.get("pane-border-lines", &app.tab().id, Some(*id)).unwrap_or_default();
             let (tl, tr, bl, br, hz, vt, _, _) = box_set(&lines);
-            // The thin outline is drawn over the pane's own background, so the canvas
-            // cannot leave a gray band between the content and the border glyphs.
-            let a = app.style_of("window-active-style", app.active, Some(*id));
-            let w = app.style_of("window-style", app.active, Some(*id));
-            let border = style.bg(a.bg.or(w.bg).unwrap_or(Color::Reset));
+            // Border glyphs share the pane's fill: a canvas-colored border cell would
+            // leave a visible half-cell gap between the outline and its interior.
             let put = |buf: &mut Buffer, x, y, glyph| {
-                if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(glyph).set_style(border); }
+                if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(glyph).set_style(style); }
             };
             let (right, bottom) = (outline.right() - 1, outline.bottom() - 1);
             for x in outline.x + 1..right { put(buf, x, outline.y, hz); put(buf, x, bottom, hz); }
@@ -307,6 +312,10 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
             put(buf, outline.x, bottom, bl); put(buf, right, bottom, br);
         }
         let Some(title) = f.title else { continue };
+        let style = if own(style_name) { style } else {
+            let palette = theme::pane_palette();
+            style.fg(if active { palette.active_foreground } else { palette.muted })
+        };
         buf.set_style(title, style);
         let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
@@ -2360,27 +2369,6 @@ fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
     }
 }
 
-/// Keep a distinguishing suffix, such as "(3)", visible when a home title is long.
-fn clip_middle(text: &str, cols: usize) -> String {
-    use unicode_segmentation::UnicodeSegmentation;
-    if text.width() <= cols { return text.to_string() }
-    if cols == 0 { return String::new() }
-    let left_room = cols / 2;
-    let right_room = cols - 1 - left_room;
-    let mut left = String::new();
-    for g in text.graphemes(true) {
-        if left.width() + g.width() > left_room { break }
-        left.push_str(g);
-    }
-    let mut right = Vec::new();
-    let mut width = 0;
-    for g in text.graphemes(true).rev() {
-        if width + g.width() > right_room { break }
-        right.push(g);
-        width += g.width();
-    }
-    format!("{}…{}", left.trim_end(), right.into_iter().rev().collect::<String>().trim_start())
-}
 
 fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }

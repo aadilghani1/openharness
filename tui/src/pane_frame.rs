@@ -8,18 +8,25 @@ use crate::layout::Status;
 pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect>, pub outline: Option<Rect> }
 
 pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
-    let mut surface = tile;
+    let mut outer = tile;
     // A small pane gives its cells to the program. Larger panes keep one-cell outer space.
     if tile.width >= 12 && canvas.width >= 40 {
-        if tile.x == canvas.x { surface.x += 1; surface.width -= 1; }
-        if tile.right() == canvas.right() { surface.width = surface.width.saturating_sub(1); }
+        if tile.x == canvas.x { outer.x += 1; outer.width -= 1; }
+        if tile.right() == canvas.right() { outer.width = outer.width.saturating_sub(1); }
     }
     if tile.height >= 8 && canvas.height >= 12 {
         // With top/bottom status, tmux borrows the divider row for a pane title. Leave
         // that row as a gutter and draw the title inside the surface instead.
-        if tile.y == canvas.y || status == Status::Top { surface.y += 1; surface.height -= 1; }
-        if tile.bottom() == canvas.bottom() || status == Status::Bottom { surface.height = surface.height.saturating_sub(1); }
+        if tile.y == canvas.y || status == Status::Top { outer.y += 1; outer.height -= 1; }
+        if tile.bottom() == canvas.bottom() || status == Status::Bottom { outer.height = outer.height.saturating_sub(1); }
     }
+    // Each normal-sized tile owns its outline; the layout's divider remains a gap.
+    // A lone or zoomed pane, and compact panes, keep their content space instead.
+    let outline = (tile != canvas && tile.width >= 12 && canvas.width >= 40
+        && tile.height >= 8 && canvas.height >= 12).then_some(outer);
+    let surface = if outline.is_some() {
+        Rect::new(outer.x + 1, outer.y + 1, outer.width - 2, outer.height - 2)
+    } else { outer };
     let title = (surface.height > 1 && status != Status::Off).then(|| Rect::new(surface.x,
         if status == Status::Bottom { surface.bottom() - 1 } else { surface.y }, surface.width, 1));
     let mut content = surface;
@@ -29,12 +36,6 @@ pub fn frame(tile: Rect, canvas: Rect, status: Status) -> Frame {
     }
     if content.width >= 12 { content.x += 1; content.width -= 2; }
     if content.height >= 10 { content.y += 1; content.height -= 2; }
-    // The focus outline occupies existing gutter cells, never a program cell. Compact
-    // panes without a complete gutter keep all their space and rely on surface contrast.
-    let outline = (tile.width >= 12 && canvas.width >= 40 && tile.height >= 8 && canvas.height >= 12
-        && surface.x > canvas.x && surface.y > canvas.y
-        && surface.right() < canvas.right() && surface.bottom() < canvas.bottom())
-        .then(|| Rect::new(surface.x - 1, surface.y - 1, surface.width + 2, surface.height + 2));
     Frame { surface, content, title, outline }
 }
 
@@ -46,7 +47,8 @@ mod tests {
     fn small_panes_keep_usable_cells_and_every_rect_stays_inside() {
         for w in 1..=100 { for h in 1..=40 { for status in [Status::Off, Status::Top, Status::Bottom] {
             let tile = Rect::new(3, 2, w, h);
-            let f = frame(tile, tile, status);
+            let canvas = Rect::new(0, 0, w + 8, h + 6);
+            let f = frame(tile, canvas, status);
             assert_eq!(f.surface.intersection(tile), f.surface);
             assert_eq!(f.content.intersection(f.surface), f.content);
             assert!(f.content.width > 0 && f.content.height > 0);
@@ -64,15 +66,18 @@ mod tests {
         let canvas = Rect::new(0, 0, 120, 40);
         let left = frame(Rect::new(0, 0, 59, 40), canvas, Status::Top);
         let right = frame(Rect::new(60, 0, 60, 40), canvas, Status::Top);
-        assert_eq!(right.surface.x - left.surface.right(), 1);
+        assert_eq!(right.outline.unwrap().x - left.outline.unwrap().right(), 1);
+        assert_eq!(left.outline.unwrap().intersection(right.outline.unwrap()).width, 0);
         assert_eq!(left.outline.unwrap().intersection(right.surface).width, 0);
         assert_eq!(right.outline.unwrap().intersection(left.surface).width, 0);
         let top = frame(Rect::new(0, 0, 120, 20), canvas, Status::Top);
         let bottom = frame(Rect::new(0, 20, 120, 20), canvas, Status::Top);
-        assert_eq!(bottom.surface.y - top.surface.bottom(), 1);
+        assert_eq!(bottom.outline.unwrap().y - top.outline.unwrap().bottom(), 1);
+        assert_eq!(top.outline.unwrap().intersection(bottom.outline.unwrap()).height, 0);
         assert_eq!(top.outline.unwrap().intersection(bottom.surface).height, 0);
         assert_eq!(bottom.outline.unwrap().intersection(top.surface).height, 0);
         assert!(top.content.y > top.title.unwrap().y);
+        assert!(frame(canvas, canvas, Status::Top).outline.is_none());
         // Short inner tiles share a title row without the normal outer gutter.
         assert!(frame(Rect::new(20, 20, 40, 5), canvas, Status::Top).outline.is_none());
     }

@@ -1038,6 +1038,74 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
     agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) })
 }
 
+/// Keep a distinguishing suffix, such as "(3)", visible when a title is long.
+pub fn clip_middle(text: &str, cols: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    if text.width() <= cols { return text.to_string() }
+    if cols == 0 { return String::new() }
+    let left_room = cols / 2;
+    let right_room = cols - 1 - left_room;
+    let mut left = String::new();
+    for g in text.graphemes(true) {
+        if left.width() + g.width() > left_room { break }
+        left.push_str(g);
+    }
+    let mut right = Vec::new();
+    let mut width = 0;
+    for g in text.graphemes(true).rev() {
+        if width + g.width() > right_room { break }
+        right.push(g);
+        width += g.width();
+    }
+    format!("{}…{}", left.trim_end(), right.into_iter().rev().collect::<String>().trim_start())
+}
+
+/// Columns available to pane-border-format inside its frame.
+fn pane_heading_columns(app: &App, window: usize, pane: u64) -> usize {
+    if app.options.pane_look() {
+        let Some(tab) = app.tabs.get(window) else { return 0 };
+        let Some(tile) = tab_rect(app, window, pane) else { return 0 };
+        crate::pane_frame::frame(tile, app.window_area(tab), app.pane_status(tab)).title
+            .map(|r| r.width.saturating_sub(2) as usize).unwrap_or(0)
+    } else {
+        content_rect(app, window, pane).map(|r| r.width.saturating_sub(4) as usize).unwrap_or(0)
+    }
+}
+
+fn pane_heading(app: &App, window: usize, pane: u64) -> String {
+    let watcher = app.panes.get(&pane).and_then(|p| match &p.phase {
+        crate::pane::Phase::Watching(who) => Some(who.as_str()), _ => None,
+    });
+    compact_pane_heading(&pane_title(app, window, pane), app.pane_state(pane), watcher,
+        pane_heading_columns(app, window, pane).saturating_sub(1), app.tick)
+}
+
+/// Keep state visible after the name. Watcher detail yields before the pane's identity;
+/// a narrow title keeps both ends, so otherwise identical tasks retain their suffixes.
+fn compact_pane_heading(title: &str, state: Option<crate::fleet::State>, watcher: Option<&str>, columns: usize, tick: u64) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let mark = state.filter(|s| *s != crate::fleet::State::Ready).map(|s| agent_mark(s, tick)).unwrap_or_default();
+    let mark_width = crate::draw::format_width(&mark);
+    if columns <= mark_width { return if columns == mark_width { mark } else { String::new() } }
+    let state_room = if mark.is_empty() { 0 } else { mark_width + 1 };
+    let available = columns.saturating_sub(state_room);
+    let full_watch = watcher.map(|who| if who.is_empty() { "[watching]".to_string() } else { format!("[watching — {who} has it]") });
+    let watch = full_watch.map(|full| {
+        if full.width() + 1 <= available.saturating_sub(title.width().min(12)) { full }
+        else if "[watching]".width() + 1 <= available.saturating_sub(title.width().min(4)) { "[watching]".to_string() }
+        else { String::new() }
+    }).unwrap_or_default();
+    let watch_room = if watch.is_empty() { 0 } else { watch.width() + 1 };
+    let mut out = clip_middle(title, available.saturating_sub(watch_room));
+    if !mark.is_empty() { if !out.is_empty() { out.push(' ') } out.push_str(&mark) }
+    if !watch.is_empty() {
+        if !out.is_empty() { out.push(' ') }
+        out.push_str(&format!("#[fg=yellow]{watch}#[fg=default]"));
+    }
+    out
+}
+
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
 /// The clients showing the session in front: this one (not hn with no terminal, nor while a
 /// command has another session in front) and those showing it as this one has it — or, for a
@@ -1115,6 +1183,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_active" => (focus == tab.and_then(|t| t.focus)).then_some("1").unwrap_or("0").into(),
         "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base(window)).to_string()).unwrap_or_default(),
         "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
+        "pane_heading" => focus.map(|f| pane_heading(app, window, f)).unwrap_or_default(),
         "pane_id" => focus.map(crate::pane::tag).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.
@@ -1226,21 +1295,19 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // no git shows its name.
         "pane_where" => pane.zip(agent).and_then(|(p, a)| {
             if a.branch.is_empty() && a.project.is_empty() { return None }
-            let room = content_rect(app, window, p.id)?.width.saturating_sub(4) as usize;
+            let room = pane_heading_columns(app, window, p.id);
             let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
-            let mut left = 1 + width(&pane_title(app, window, p.id)) + 1;
-            if app.pane_state(p.id).is_some() { left += 2 }
-            if let crate::pane::Phase::Watching(who) = &p.phase { left += width(" [watching]") + if who.is_empty() { 0 } else { width(&format!(" — {who} has it")) } }
+            let left = 1 + crate::draw::format_width(&pane_heading(app, window, p.id));
             let pr = a.pr.as_ref().map(|p| format!(" {}", p.label())).unwrap_or_default();
             // A pane on another machine says which (scp's way: gpu-box:ml-lab).
             let far = (p.machine_id != app.fleet.local_id && !a.project.is_empty()).then(|| format!("{}:", app.fleet.machine_name(&p.machine_id))).filter(|m| m.len() > 1);
             let far_project = far.as_ref().map(|m| format!("{m}{}", a.project));
             // A folder that is not a git repository: its name alone (and the machine's).
-            if a.branch.is_empty() { return [far_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4) }
+            if a.branch.is_empty() { return [far_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 3) }
             [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} ⑂ {}{pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} ⑂ {}", a.branch)),
                 (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} ⑂ {}{pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} ⑂ {}", a.project, a.branch)),
                 (!pr.is_empty()).then(|| format!("⑂ {}{pr}", a.branch)), Some(format!("⑂ {}", a.branch)), Some(a.branch.clone())]
-                .into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4)
+                .into_iter().flatten().find(|c| room >= left + width(c) + 3)
         }).unwrap_or_default(),
         // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it
         // works on; a window's most urgent harness state, as the window list shows it.
@@ -1563,6 +1630,30 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_headings_reserve_state_and_keep_names_distinct() {
+        use crate::fleet::State;
+        let title = "Investigate checkout failures across browser versions (2)";
+        let header = super::compact_pane_heading(title, Some(State::NeedsInput), None, 32, 0);
+        assert!(header.starts_with("Investigate"), "{header}");
+        assert!(header.contains("(2) ") && header.contains('?'), "{header}");
+        assert!(header.contains('…'));
+        assert_eq!(crate::draw::format_width(&header), 32);
+        assert_eq!(super::compact_pane_heading("Idle", Some(State::Ready), None, 20, 0), "Idle");
+        for name in [title, "日本語の長いタスクを確認する (3)", "Cafe\u{301} checkout investigation (4)"] {
+            for columns in 0..80 {
+                let header = super::compact_pane_heading(name, Some(State::NeedsInput), Some("another terminal"), columns, 0);
+                assert!(crate::draw::format_width(&header) <= columns, "{columns}: {header}");
+                assert_eq!(header.contains('?'), columns > 0, "{columns}: {header}");
+                assert_eq!(header.contains("[watching"), header.contains("watching]") || header.contains("has it]"));
+            }
+        }
+        let compact = super::compact_pane_heading(title, Some(State::NeedsInput), Some("another terminal"), 32, 0);
+        assert!(compact.contains("[watching]") && !compact.contains("another terminal"));
+        let wide = super::compact_pane_heading("Review", None, Some("another terminal"), 80, 0);
+        assert!(wide.contains("[watching — another terminal has it]"));
+    }
+
     #[test]
     fn quota_warning_marks_only_high_usage_without_reversing_text() {
         let mut u = crate::fleet::Usage { provider: "claude".into(), account: None,

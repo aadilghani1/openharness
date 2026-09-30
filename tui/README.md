@@ -71,12 +71,13 @@ never a tmux server you have running.
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
-with one-cell gaps, inset terminal content and a thin outline around the focused pane. The
-surfaces follow the terminal's light/dark theme: the focused pane keeps full contrast and
-its background extends through the padding to the thin border;
-inactive dark panes use `rgb(64, 64, 64)` with softer text. This backdrop fills the padding
-and gaps up to the status bar. A lone or zoomed pane has no focus outline or gray surround.
-Light terminals keep a light counterpart.
+with one-cell gaps, inset terminal content and an outline around each pane. The focused
+outline is thin and bright; other outlines are equally thin and muted. The surfaces follow the
+terminal's light/dark theme: focus keeps the native background throughout the filled interior.
+Border cells share the pane background, so the fill reaches the outline without an inner gap.
+Inactive dark panes use `rgb(64, 64, 64)` with softer text, separated by dark gaps.
+A lone or zoomed pane has no focus outline or gray surround. Light terminals keep a light
+counterpart. Explicit border colors and line choices override the automatic appearance.
 Explicit program colors and user styles stay intact. The muted green status bar has a continuous
 background, with tabs ordered `number:name* status` (previous window: `number:name- status`).
 Quota warnings read `Claude 100%`, with amber or red only on the percentage. Padding
@@ -85,7 +86,8 @@ coordinates, copy selection and PTY dimensions follow the inset content. `window
 the original split structure. Use `set -g @hn-animations off` to keep
 working and loading indicators still. Some defaults differ, and your `.tmux.conf`
 overrides each: `pane-border-status top` (each pane's title row: its harness's name and state, and
-its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
+its project and branch where the pane has room; long names shorten in the middle to keep
+the state and distinguishing suffix visible), `allow-set-title off` (a pane's title is its
 harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps
 2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
 harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line:
@@ -159,14 +161,14 @@ pane counts as done and unread (`✓`) until you go to that pane.
 | `⠹` (turning) | working |
 | `?` | needs you: a question or a permission |
 | `✓` | done, and you haven't looked yet |
-| `·` | idle |
+| `·` | idle in lists; hidden in pane headers and tabs |
 | `✗` | failed |
 | `◌` `‖` `○` | starting, paused, offline |
 
-- **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you (reversed), one
-  failed, five are done and unread, and 41 are working. Idle ones aren't counted, and a state with
-  none drops out. The right side also shows the focused pane's machine, project and branch (only the
-  branch below 110 columns), so the window list keeps its room at 80.
+- **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you, one failed,
+  five are done and unread, and 41 are working. Idle ones aren't counted, and a state with none
+  drops out. The right side keeps the focused pane's `machine:folder` and the clock, with two
+  spaces between groups. Branch and pull request context stay in the pane header.
 - **`C-b s`** lists every harness, the most urgent nearest the prompt: needs you, failed, done and
   unread, working, then the rest. Each row has one line: the question, what it is doing now
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
@@ -204,7 +206,8 @@ For your own formats: `#{fleet}` (the status line's counts, ready to drop into y
 `#{fleet_needs}` `#{fleet_failed}` `#{fleet_done}` `#{fleet_working}` `#{fleet_idle}`, `#{spinner}`,
 `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle, starting, failed,
 paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row draws it),
-`#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
+`#{pane_heading}` (the name, state and watcher label fitted to the pane header; `#{pane_title}`
+stays complete), `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
 `#{pane_branch}`, `#{pane_where}` (`project ⑂ branch #123` as far as it fits beside the title),
 `#{pane_pr}` `#{pane_pr_state}` `#{pane_pr_url}` (the pull request for its branch), `#{pane_tokens}`
 and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
