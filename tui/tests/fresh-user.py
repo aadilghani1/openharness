@@ -46,8 +46,10 @@ class User:
         previous, changed = None, time.monotonic()
         deadline = changed + 5
         while time.monotonic() < deadline:
-            signature = tuple(line[line.index('│'):line.rindex('│') + 1]
-                              for line in self.screen().splitlines() if line.count('│') >= 2)
+            # Both the popup and pane chrome can be borderless. Ignore the animated
+            # braille spinners while waiting for text and mouse targets to settle.
+            signature = tuple(re.sub(r'[\u2800-\u28ff]', ' ', line)
+                              for line in self.screen().splitlines())
             if signature != previous:
                 previous, changed = signature, time.monotonic()
             elif time.monotonic() - changed >= .15:

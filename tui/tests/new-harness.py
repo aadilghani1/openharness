@@ -132,6 +132,7 @@ try:
                           *[f'{k}={v}' for k, v in ENV.items()], str(HN), '-L', PREFIX,
                           '--port', str(PORT), '-f', '/dev/null'])
     tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'test', '-x', '150', '-y', '42', command)
+    tmux('set-window-option', '-t', 'test', 'remain-on-exit', 'on')
     started = True
     shows('Fix flaky login test')
     first_window = hn('display-message', '-p', '#{window_id}')
@@ -215,8 +216,9 @@ try:
     new_form(); field('Agent'); type_text('claude'); keys('Enter'); field('Options'); choose_field('Approvals', 'plan'); shows('Plan first')
     keys('Escape'); new_form(); shows('Plan first')
     count = create_count()
-    for w, h in [(80, 24), (45, 14), (22, 5), (1, 1), (150, 42)]:
+    for w, h in [(80, 24), (45, 14), (22, 5), (1, 1), (150, 42)] * 3:
         tmux('resize-window', '-t', 'test', '-x', str(w), '-y', str(h)); time.sleep(.4)
+        assert tmux('display-message', '-p', '-t', 'test', '#{pane_dead}').strip() == '0', f'hn client exited after resize to {w}x{h}\n' + tmux('capture-pane', '-p', '-S', '-100', '-t', 'test')
         assert hn('display-message', '-p', '#{window_panes}').isdigit(), 'hn survives tiny resizes'
     field('Project'); shows('Search projects')
     tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24')
