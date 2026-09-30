@@ -128,7 +128,7 @@ sheet does not replace interaction checks.
 
 Reviewed the complete catalogue, all custom painters and SVG call sites,
 native menu/title-bar symbols and every icon-bearing desktop/web surface.
-The source inventory covers 485 Dart files and 141 shared symbols, plus 26
+The source inventory covers 492 Dart files and 143 shared symbols, alongside
 native SF Symbols. Rendered every catalogue entry and native symbol in light
 and dark; checked pane grids, Companions and Settings in context.
 
@@ -140,10 +140,16 @@ application-menu icons now use the same regular-symbol configuration as other
 native menus. Brand, PR, quantitative and content exceptions above were
 reviewed and retained deliberately.
 
-Validation: 189 targeted widget tests pass, including keyboard/mouse menu
+Validation: 221 targeted widget tests pass, including keyboard/mouse menu
 behavior, pane creation/zoom/close, viewer controls, companion memories,
-enlarged Settings text and subscription contrast across workspace palettes.
+enlarged Settings text, attachment handling, share badges, tab scrolling and
+subscription contrast across workspace palettes. Linux window controls,
+web share badges and tab scroller arrows also use the shared catalogue.
 First-party app code and the changed tests pass static analysis.
+
+Review captures use synthetic fixtures: [repeated pane controls](review/2026-09-30-pane-icons.png),
+[subscription allowance](review/2026-09-30-usage-ink.png) and
+[companion engine selection](review/2026-09-30-companion-engine.png).
 
 The historical toolbar SVG assets are still bundled for existing identity
 references; app toolbar controls now render catalogue symbols. New UI must

@@ -905,13 +905,13 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
         _WindowButton(
           key: const ValueKey('linux-window-minimize'),
           tooltip: 'Minimize',
-          icon: LucideIcons.minus,
+          icon: AppIcons.minus,
           onPressed: windowManager.minimize,
         ),
         _WindowButton(
           key: const ValueKey('linux-window-maximize'),
           tooltip: _maximized ? 'Restore' : 'Maximize',
-          icon: _maximized ? LucideIcons.copy : LucideIcons.square,
+          icon: _maximized ? AppIcons.copy : AppIcons.square,
           onPressed: () => _maximized
               ? windowManager.unmaximize()
               : windowManager.maximize(),
@@ -919,7 +919,7 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
         _WindowButton(
           key: const ValueKey('linux-window-close'),
           tooltip: 'Close',
-          icon: LucideIcons.x,
+          icon: AppIcons.close,
           // Through window_manager, as Quit does, so the exit lifecycle runs.
           onPressed: windowManager.close,
         ),

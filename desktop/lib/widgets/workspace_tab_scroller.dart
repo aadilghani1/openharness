@@ -1,7 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/workspace_bar_style.dart';
 import 'workspace_bar_control.dart';
 
@@ -112,7 +112,7 @@ class _WorkspaceTabScrollerState extends State<WorkspaceTabScroller> {
         width: cell.width * kWorkspaceTabArrowCells,
         height: workspaceBarControlHeight(context),
         child: Icon(
-          left ? LucideIcons.chevronLeft : LucideIcons.chevronRight,
+          left ? AppIcons.chevronLeft : AppIcons.chevronRight,
           size: 16,
           color: widget.color.withValues(
             alpha: !enabled

@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../sharing/share_harness_dialog.dart';
 import '../state/app_state.dart';
@@ -120,9 +120,9 @@ class _PaneShareBadgeState extends State<PaneShareBadge> {
             children: [
               Icon(
                 share.access == HarnessShareAccess.public
-                    ? LucideIcons.globe
-                    : LucideIcons.lock,
-                size: 13,
+                    ? AppIcons.globe
+                    : AppIcons.lock,
+                size: 14,
               ),
               if (!widget.compact) ...[
                 const SizedBox(width: 6),
