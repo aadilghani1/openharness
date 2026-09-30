@@ -109,7 +109,7 @@ void main() {
       app.newSwarm(name: 'Other work');
       app.openStore();
       final storeTab = app.activeSwarm;
-      app.newSwarm(); // an empty New Swarm of the person's own, left open behind the store
+      app.newSwarm(); // an empty New Tab of the person's own, left open behind the store
       final emptyTab = app.activeSwarm;
       expect(emptyTab.isEmptyStarter, isTrue);
       app.selectSwarm(storeTab.id);

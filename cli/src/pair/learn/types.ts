@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { basename, resolve } from 'node:path'
 
-export type SignalKind = 'correction' | 'repeat-failure' | 'repeat-steps' | 'borrowed'
+export type SignalKind = 'correction' | 'repeat-failure' | 'repeat-steps' | 'borrowed' | 'conversation'
 
 /** Where a signal came from. The project is a hash: the store never keeps a folder path. */
 export interface Provenance {
@@ -31,6 +31,8 @@ export interface Provenance {
   turn: number
   project: string | null
   at: number
+  /** A readable source conversation title, never a transcript path. */
+  title?: string
 }
 
 export interface Signal {
@@ -44,6 +46,8 @@ export interface Signal {
   /** Trimmed, redacted, stripped of instructions to a model. Still untrusted. */
   evidence: string[]
   at: number
+  /** Why an explicit conversation review proposed this lesson. */
+  reason?: string
   /** repeat-failure: what failed. */
   failure?: { what: 'test' | 'command'; name: string }
   /** repeat-steps: the steps, in order. */

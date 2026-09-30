@@ -36,6 +36,45 @@ private extension NSView {
     let bitmap = renderedBitmap()
     return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
   }
+
+  func renderedTree(background: NSColor) -> NSBitmapImageRep {
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+      pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    let scale = NSAffineTransform(); scale.scale(by: 2); scale.concat()
+    background.setFill(); bounds.fill()
+    func paint(_ view: NSView, parentFlipped: Bool) {
+      guard !view.isHidden else { return }
+      NSGraphicsContext.saveGraphicsState()
+      defer { NSGraphicsContext.restoreGraphicsState() }
+      // Match AppKit's coordinate system for each child. Calling draw directly
+      // in the bitmap's unflipped context concealed flipped-image bugs.
+      if view.isFlipped != parentFlipped {
+        let flip = NSAffineTransform()
+        flip.translateX(by: 0, yBy: view.bounds.height)
+        flip.scaleX(by: 1, yBy: -1)
+        flip.concat()
+      }
+      NSGraphicsContext.current = NSGraphicsContext(
+        cgContext: NSGraphicsContext.current!.cgContext, flipped: view.isFlipped)
+      view.bounds.clip()
+      view.draw(view.bounds)
+      for child in view.subviews {
+        NSGraphicsContext.saveGraphicsState()
+        let move = NSAffineTransform()
+        move.translateX(by: child.frame.minX - view.bounds.minX, yBy: child.frame.minY - view.bounds.minY)
+        move.concat()
+        paint(child, parentFlipped: view.isFlipped)
+        NSGraphicsContext.restoreGraphicsState()
+      }
+    }
+    paint(self, parentFlipped: false)
+    return bitmap
+  }
 }
 
 private func checkIconTooltipTracking() throws {
@@ -84,9 +123,9 @@ private extension SwarmTabButton {
     let width = preferredWidth
     let displayedWidth = frame.width
     let rect = activityRect
-    try checkTitlebar(label.string == "1:desktop" && activitySpace == cellWidth * 2,
+    try checkTitlebar(label.string == "desktop" && activitySpace >= activityRect.width + 6,
       "Activity measures its gap and cell separately from the tab name")
-    try checkTitlebar(rect.minX > ("1:desktop" as NSString).size(withAttributes: [.font: labelFont]).width,
+    try checkTitlebar(rect.minX >= titleRect.maxX + 6,
       "The native activity follows the complete tab name")
     var pictures = Set<Data>()
     for frame in 0..<10 {
@@ -103,8 +142,8 @@ private extension SwarmTabButton {
     for (mark, label) in states {
       activity = SwarmTabActivity(payload(mark, label))
       layoutSubtreeIfNeeded()
-      try checkTitlebar(preferredWidth == width && activityRect == rect,
-        "\(label) occupies the same reserved cell")
+      try checkTitlebar(preferredWidth == width && (mark.isEmpty || activityRect == rect),
+        "\(label) preserves tab width and visible marks share their inline cell")
       try checkTitlebar(toolTip == label && selectButton.accessibilityHelp() == label,
         "\(label) has readable hover and accessibility descriptions")
       for narrow in [CGFloat(28), CGFloat(56), width, displayedWidth] {
@@ -133,11 +172,11 @@ private extension SwarmTabButton {
   }
 
   func checkShortNamesFit() throws {
-    for name in ["1:desktop", "2:device", "3:swarm", "4:daemons", "5:web", "6:tui", "7:mobile"] {
+    for name in ["desktop", "device", "swarm", "daemons", "web", "tui", "mobile"] {
       displayLabel = name
       activity = SwarmTabActivity(["mark": "", "label": "Idle", "color": Int64(0xff999999)])
       frame.size.width = preferredWidth
-      let available = activityRect.minX - cellWidth - contentRect.minX
+      let available = titleRect.width
       try checkTitlebar(available >= max(label.size().width, emphasizedLabel.size().width),
         "\(name) fits at its preferred width in both weights without a false ellipsis")
     }
@@ -275,17 +314,17 @@ private extension SwarmTabButton {
     frame = NSRect(x: 0, y: 0, width: 160, height: 40)
     contentCenterY = 20
     name = "office"
-    displayLabel = "2:office"
+    displayLabel = "office"
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == nil, "A fully visible tab name has no repeating tooltip")
-    displayLabel = "2:code"
+    displayLabel = "code"
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == "office", "A different underlying tab name remains available")
     name = "code"
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == nil, "Renaming a tab clears a redundant tooltip immediately")
     name = "a-very-long-project-name"
-    displayLabel = "2:\(name)"
+    displayLabel = name
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == displayLabel, "An ellipsized tab reveals its full label")
     frame.size.width = 400
@@ -293,25 +332,35 @@ private extension SwarmTabButton {
     layoutSubtreeIfNeeded()
     try checkTitlebar(toolTip == nil, "Widening a tab removes a now-redundant tooltip")
 
-    let symbol = SwarmStatusSymbolButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
-    symbol.title = "+"
+    let symbol = SwarmPlainIconButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
+    symbol.image = HarnessControlSymbols.image("plus")
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     let symbolResting = symbol.renderedPixels()
     symbol.mouseEntered(with: hover)
     try checkTitlebar(symbol.renderedPixels() != symbolResting &&
       symbol.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
-      "Symbols become bold on hover without adding a background")
+      "Symbols emphasize their ink on hover without changing weight or adding a background")
+    shortcutHint = "⌘2"
+    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
+    layoutSubtreeIfNeeded()
     let width = preferredWidth
     let resting = renderedPixels()
     mouseEntered(with: hover)
     let hovered = renderedBitmap()
-    let filledRows = (0..<hovered.pixelsHigh).filter { hovered.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
-    try checkTitlebar(filledRows.isEmpty && renderedPixels() != resting,
-      "Tabs become bold on hover without adding a background")
-    try checkTitlebar(preferredWidth == width &&
-      NSFontManager.shared.traits(of: emphasizedLabel.attribute(.font, at: 0, effectiveRange: nil) as! NSFont).contains(.boldFontMask),
-      "Hover uses a bold font while preserving the tab width")
+    try checkTitlebar(hovered.colorAt(x: 20, y: 12)!.alphaComponent > 0 && renderedPixels() != resting,
+      "Hover quietly marks the tab surface")
+    try checkTitlebar(preferredWidth == width && !closeButton.isHidden && drawnFont == labelFont,
+      "Hover reveals the right close button without changing tab width or type")
+    let titleBeforeHint = titleRect, closeBeforeHint = closeButton.frame
+    showsShortcutHint = true
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(displaysShortcut && !closeButton.isHidden && renderedPixels() != Data(bytes: hovered.bitmapData!, count: hovered.bytesPerRow * hovered.pixelsHigh),
+      "Holding Command replaces status with its shortcut while keeping the hover close action")
+    try checkTitlebar(titleRect == titleBeforeHint && closeButton.frame == closeBeforeHint && preferredWidth == width,
+      "Command hints never move the title, close target or tab boundaries")
+    showsShortcutHint = false
+    try checkTitlebar(!closeButton.isHidden, "Releasing Command keeps the hovered close action")
     mouseExited(with: hover)
     selectButton.highlight(true)
     try checkTitlebar(renderedPixels() != resting, "Pressing a tab uses the same visible highlight")
@@ -323,18 +372,105 @@ private extension SwarmTabButton {
     selected = true
     let active = renderedBitmap()
     let selectedRows = (0..<active.pixelsHigh).filter { active.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
-    try checkTitlebar(selectedRows.count == Int(bounds.height) && active.colorAt(x: 1, y: 20)!.alphaComponent == 1,
-      "Selected tabs fill the full bar height")
+    try checkTitlebar(selectedRows.count > 0 && selectedRows.count < 8 &&
+      active.colorAt(x: 1, y: 20)!.alphaComponent == 0 &&
+      active.colorAt(x: 20, y: 20)!.alphaComponent == 1 &&
+      active.colorAt(x: 20, y: 0)!.alphaComponent == 0,
+      "The selected tab has upper curves, lower outward shoulders and a clear top inset")
     mouseExited(with: hover)
     for argb in [Int64(0xff282828), Int64(0xfff0f2f5)] {
       palette = SwarmNativePalette(["workspace": argb])
       let background = palette.workspace
-      let pixel = renderedBitmap().colorAt(x: 1, y: 1)!.usingColorSpace(.sRGB)!
+      let pixel = renderedBitmap().colorAt(x: 20, y: Int(bounds.height) - 2)!.usingColorSpace(.sRGB)!
       try checkTitlebar(abs(pixel.redComponent - background.redComponent) < 0.01 &&
         abs(pixel.greenComponent - background.greenComponent) < 0.01 &&
         abs(pixel.blueComponent - background.blueComponent) < 0.01,
         "Active tabs join the workspace color in light and dark palettes")
     }
+  }
+
+  func checkHoverCloseAndShortcutHints() throws {
+    frame = NSRect(x: 0, y: 0, width: 240, height: 40)
+    contentCenterY = 20
+    name = "1: Release planning"
+    displayLabel = name
+    shortcutHint = "⌘2"
+    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
+    layoutSubtreeIfNeeded()
+    let title = titleRect, close = closeButton.frame, width = preferredWidth
+    try checkTitlebar(closeButton.isHidden && !displaysShortcut,
+      "Resting tabs show neither a close icon nor a persistent shortcut")
+    var events: [String] = []
+    emit = { method, _ in events.append(method) }
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    mouseEntered(with: hover)
+    try checkTitlebar(!closeButton.isHidden && closeButton.frame.minX > title.maxX &&
+      closeButton.frame.size == NSSize(width: 32, height: 32),
+      "A hovered tab exposes a separate 32pt close target on the right")
+    try checkTitlebar(accessibilityChildren()?.count == 2 && closeButton.accessibilityLabel() == "Close 1: Release planning",
+      "The hover close button has the exact custom title as its accessible purpose")
+    let closeBitmap = closeButton.renderedBitmap()
+    let closeInk = (0..<closeBitmap.pixelsWide).flatMap { x in
+      (0..<closeBitmap.pixelsHigh).compactMap { y -> NSPoint? in
+        (closeBitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+          ? NSPoint(x: x, y: y) : nil
+      }
+    }
+    let inkWidth = (closeInk.map(\.x).max() ?? 0) - (closeInk.map(\.x).min() ?? 0) + 1
+    let inkHeight = (closeInk.map(\.y).max() ?? 0) - (closeInk.map(\.y).min() ?? 0) + 1
+    try checkTitlebar(!closeInk.isEmpty && inkWidth <= 7 && inkHeight <= 7,
+      "The tab close paints a tiny regular cross inside its unchanged 32pt target")
+    closeButton.performClick(nil)
+    try checkTitlebar(events == ["close"], "Clicking the close control closes once without selecting the tab")
+    showsShortcutHint = true
+    try checkTitlebar(displaysShortcut && !closeButton.isHidden && shortcutLabel?.string == "⌘2",
+      "Command reveals the supplied shortcut beside the name without hiding hover close")
+    try checkTitlebar(indicatorRect.minX == titleRect.maxX + 6 &&
+      indicatorRect.maxX <= closeButton.frame.minX,
+      "The inline Command hint stays outside the close action's entire hit target")
+    let commandBitmap = renderedBitmap()
+    let hasActivityInk = (0..<commandBitmap.pixelsWide).contains { x in
+      (0..<commandBitmap.pixelsHigh).contains { y in
+        guard let pixel = commandBitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          pixel.alphaComponent > 0.2 else { return false }
+        return pixel.blueComponent - pixel.redComponent > 0.15 &&
+          pixel.greenComponent - pixel.redComponent > 0.1
+      }
+    }
+    try checkTitlebar(!hasActivityInk && selectButton.accessibilityHelp() == "Working",
+      "Command hides the visual activity mark while retaining its accessible status")
+    try checkTitlebar(titleRect == title && closeButton.frame == close && preferredWidth == width,
+      "Modifier changes preserve every tab and title boundary")
+    mouseExited(with: hover)
+    try checkTitlebar(displaysShortcut && closeButton.isHidden,
+      "Command hints remain visible without pointer hover")
+    showsShortcutHint = false
+    try checkTitlebar(closeButton.isHidden && accessibilityChildren()?.count == 1,
+      "Releasing Command returns an unhovered tab to its quiet state")
+    shortcutHint = "⌃⌥⌘R"
+    layoutSubtreeIfNeeded()
+    showsShortcutHint = true
+    try checkTitlebar(shortcutLabel?.string == "⌃⌥⌘R" && indicatorRect.width >= shortcutLabel!.size().width,
+      "A remapped shortcut remains exact and fits its inline status position")
+    shortcutHint = nil
+    try checkTitlebar(!displaysShortcut, "Unbound and unnumbered tabs invent no shortcut hint")
+    actionsEnabled = false
+    mouseEntered(with: hover)
+    closeButton.performClick(nil)
+    try checkTitlebar(closeButton.isHidden && events == ["close"], "A modal disables and hides the hover close action")
+    emit = nil
+  }
+
+  func drawWithHoverControl() {
+    draw(bounds)
+    guard !closeButton.isHidden else { return }
+    NSGraphicsContext.saveGraphicsState()
+    let transform = NSAffineTransform()
+    transform.translateX(by: closeButton.frame.minX, yBy: closeButton.frame.minY)
+    transform.concat()
+    closeButton.draw(closeButton.bounds)
+    NSGraphicsContext.restoreGraphicsState()
   }
 
   func checkDoubleClickIsolation() throws {
@@ -385,9 +521,17 @@ private extension SwarmTabButton {
 
   func checkCenteredLabel() throws {
     let paragraph = label.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
-    try checkTitlebar(paragraph?.alignment == .center, "The tab label is centered")
-    try checkTitlebar(selectButton.frame == bounds, "Selection spans the whole tab without a close slot")
-    try checkTitlebar(subviews.count == 1, "Hover and keyboard focus never add a close button")
+    let group = activitySpace == 0 ? titleRect : titleRect.union(indicatorRect)
+    try checkTitlebar(paragraph?.alignment == .center && abs(group.midX - bounds.midX) < 0.01,
+      "The visible title and adjacent indicator form a centered group")
+    try checkTitlebar(selectButton.frame == bounds, "Selection and drag retain the whole tab target beneath its accessory")
+    try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX - 8,
+      "The close action stays inset inside the tab's curved body")
+  }
+
+  func checkCompleteNameFits() throws {
+    try checkTitlebar(titleRect.width >= naturalTitleWidth,
+      "The eight-tab fixture keeps each ordinary name readable")
   }
 
   func clickBothActions() {
@@ -399,7 +543,7 @@ private extension SwarmTabButton {
 private extension SwarmTabStrip {
   /// Every frame the bar lays out, apart from the daemon's own.
   func barFrames() -> [NSRect] {
-    [scroll.frame, document.frame, newButton.frame, contextButton.frame, focusedModelButton.frame,
+    [scroll.frame, document.frame, newButton.frame, contextButton.frame, subscriptionUsageButton.frame,
      pullRequestButton.frame] + tabs.map { $0.frame }
   }
 
@@ -412,7 +556,7 @@ private extension SwarmTabStrip {
     let base: [String: Any] = ["enabled": true, "activeId": "off-3",
       "tabs": (0..<7).map { ["id": "off-\($0)", "name": "Off \($0)", "label": "\($0 + 1):code"] },
       "focusedContext": ["text": "Codex  M2:project  (main)", "canSelectModel": true],
-      "focusedModel": ["text": "gpt-5", "paneId": 3, "agentId": "a1"],
+      "subscriptionUsage": ["text": "gpt-5", "paneId": 3, "agentId": "a1"],
       "pullRequest": ["text": "PR #298 · Merged", "url": "https://github.com/acme/repo/pull/298"]]
     daemonMayAppear = { true }
     for width in [480.0, 720.0, 1024.0, 1440.0, 1920.0] {
@@ -460,6 +604,191 @@ private extension SwarmTabStrip {
       "A slot withdrawn before it appeared never appears")
   }
 
+  func checkDaemonArtwork() throws {
+    let originalArt = daemonArt, originalEmit = emit
+    defer { daemonArt = originalArt; emit = originalEmit; daemonMayAppear = nil; update([:]) }
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("daemon-art-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // A large source verifies eager thumbnail decoding, aspect ratio and cache
+    // behavior independently of the exact shape of the generated illustration.
+    for (name, color) in [("fixture_egg-00", NSColor.systemYellow), ("fixture_tim-00", NSColor.systemPurple)] {
+      let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 256, pixelsHigh: 128,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+      color.setFill()
+      NSRect(x: 0, y: 0, width: 256, height: 128).fill()
+      NSGraphicsContext.restoreGraphicsState()
+      try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
+    }
+    var reads = 0
+    daemonArt = SwarmDaemonArt(assetURL: { asset in
+      reads += 1
+      return directory.appendingPathComponent((asset as NSString).lastPathComponent)
+    })
+    let egg = "assets/daemon-art/slot/fixture_egg-00.png"
+    let tim = "assets/daemon-art/slot/fixture_tim-00.png"
+    guard let eggImage = daemonArt.image(asset: egg) else {
+      throw TitlebarCheckFailure(message: "The bundled PNG fixture must load")
+    }
+    try checkTitlebar(eggImage.size == NSSize(width: 32, height: 16) &&
+      eggImage.representations.allSatisfy { $0.pixelsWide <= 64 && $0.pixelsHigh <= 64 },
+      "Native creature artwork preserves aspect ratio in an eagerly decoded 64px maximum thumbnail")
+    try checkTitlebar(daemonArt.image(asset: egg) === eggImage && reads == 1,
+      "Repeated animation frames reuse the same decoded native image")
+    let invalid = ["https://example.org/tim.png", "/tmp/tim.png", "assets/daemon-art/slot/../tim.png",
+      "assets/daemon-art/slot/sub/tim.png", "assets/daemon-art/slot/.png",
+      "assets/daemon-art/slot/tim.svg", "assets/daemon-art/slot/tim 0.png", "assets/daemon-art/slot/tím.png",
+      "assets/daemon-art/slot/%2e%2e.png", "assets/daemon-art/slot/tim.png?x=1",
+      "assets/daemon-art/portrait/tim.png", "assets/daemon-art/slot/" + String(repeating: "a", count: 160) + ".png"]
+    for asset in invalid {
+      try checkTitlebar(!SwarmDaemonArt.opens(asset) && daemonArt.image(asset: asset) == nil,
+        "Untrusted or non-slot artwork is rejected before a file lookup: \(asset)")
+    }
+    try checkTitlebar(reads == 1, "Invalid artwork paths never touch the file resolver")
+    let missing = "assets/daemon-art/slot/not_bundled.png"
+    try checkTitlebar(daemonArt.image(asset: missing) == nil && daemonArt.image(asset: missing) == nil && reads == 2,
+      "Missing bundled frames are cached as misses")
+    daemonMayAppear = { true }
+    var state: [String: Any] = ["enabled": true, "tabs": [["id": "art", "name": "Art"]], "activeId": "art"]
+    var daemon: [String: Any] = ["visible": true, "glyph": "[oo]", "art": egg]
+    state["daemon"] = daemon
+    update(state)
+    let geometry = barFrames(), frame = daemonButton.frame
+    let eggPixels = daemonButton.renderedPixels()
+    try checkTitlebar(daemonButton.art === eggImage && daemonButton.frame.width == 44,
+      "The daemon payload selects cached artwork in the fixed native slot")
+    daemon["art"] = tim
+    updateDaemon(daemon)
+    let timPixels = daemonButton.renderedPixels()
+    try checkTitlebar(timPixels != eggPixels && barFrames() == geometry && daemonButton.frame == frame,
+      "Egg, hatch and growth frames repaint without moving a native control")
+    daemon["art"] = invalid[0]
+    updateDaemon(daemon)
+    try checkTitlebar(daemonButton.art == nil && daemonButton.glyph == "[oo]" &&
+      daemonButton.renderedPixels() != timPixels && barFrames() == geometry,
+      "Missing or invalid art falls back to the existing safe ASCII face")
+    daemon["art"] = tim
+    updateDaemon(daemon)
+    var messages: [(String, Bool?)] = []
+    emit = { method, args in messages.append((method, (args as? [String: Bool])?["hovered"])) }
+    let pointer = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    daemonButton.mouseEntered(with: pointer)
+    try checkTitlebar(messages.map(\.0) == ["daemonLook", "daemonHover"] && messages.last?.1 == true,
+      "Native hover sends look before asking Flutter to show the full-size portrait")
+    daemonButton.performClick(nil)
+    try checkTitlebar(messages.suffix(2).map(\.0) == ["daemonHover", "daemon"] && messages.dropLast().last?.1 == false,
+      "A click dismisses the hover preview before opening the existing daemon action")
+    daemonButton.mouseExited(with: pointer)
+    let afterClick = messages.count
+    daemonButton.mouseExited(with: pointer)
+    try checkTitlebar(messages.count == afterClick, "Repeated exits do not send duplicate hover closures")
+    daemonButton.mouseEntered(with: pointer)
+    updateDaemon([:])
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false && daemonButton.art == nil,
+      "Hiding the creature closes the Flutter preview and releases the selected image")
+    updateDaemon(daemon)
+    daemonButton.mouseEntered(with: pointer)
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false,
+      "Application deactivation closes the creature preview")
+    daemonButton.mouseEntered(with: pointer)
+    state["enabled"] = false
+    state["daemon"] = daemon
+    update(state)
+    try checkTitlebar(messages.last?.0 == "daemonHover" && messages.last?.1 == false && !daemonButton.isEnabled,
+      "Opening a modal disables the slot and closes its preview")
+  }
+
+  func checkBundledDaemonArtwork() throws {
+    guard let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] else {
+      throw TitlebarCheckFailure(message: "Native artwork checks require the bundled asset directory")
+    }
+    let assets = URL(fileURLWithPath: root)
+    let slotDirectory = assets.appendingPathComponent("daemon-art/slot")
+    let files = try FileManager.default.contentsOfDirectory(at: slotDirectory,
+      includingPropertiesForKeys: nil).filter { $0.pathExtension == "png" }
+    try checkTitlebar(!files.isEmpty, "The illustrated daemon's slot frames are bundled")
+    let art = SwarmDaemonArt(assetURL: { asset in
+      assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    })
+    for file in files {
+      let path = "assets/daemon-art/slot/" + file.lastPathComponent
+      guard let image = art.image(asset: path) else {
+        throw TitlebarCheckFailure(message: "Bundled daemon frame failed native decoding: \(file.lastPathComponent)")
+      }
+      try checkTitlebar(image.size.width <= 32 && image.size.height <= 32 &&
+        image.representations.allSatisfy { $0.pixelsWide <= 64 && $0.pixelsHigh <= 64 },
+        "Native PNG decoding bounds \(file.lastPathComponent) to its slot-sized bitmap")
+    }
+    let species = ["tim", "gnu", "lynx", "mutt", "yak", "gopher", "bug", "tux", "auk", "beastie"]
+    for id in species {
+      let asset = "assets/daemon-art/slot/\(id)_baby_idle_0.png"
+      let normal = art.image(asset: asset)!
+      let styled = art.image(asset: asset, style: ["colour": 2, "mark": 1])!
+      let other = art.image(asset: asset, style: ["colour": 4, "mark": 3])!
+      try checkTitlebar(styled !== normal && other !== styled && styled.tiffRepresentation != normal.tiffRepresentation,
+        "Rolled coat and markings change native pixels for \(id)")
+      try checkTitlebar(art.image(asset: asset, style: ["colour": 2, "mark": 1]) === styled,
+        "An individual reuses its decoded native frame for \(id)")
+    }
+    let stages = ["egg_first_p0_0", "egg_first_p4_0", "egg_first_burst_0", "egg_first_open_0"] +
+      species.flatMap { id in ["baby", "young", "adult"].map { "\(id)_\($0)_idle_0" } }
+    let bar = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
+    bar.daemonMayAppear = { true }
+    bar.statusBar.frame = NSRect(x: 0, y: 0, width: 900, height: 40)
+    bar.daemonArt = art
+    bar.storeButton.image = SwarmHistoryIcons(assetURL: { asset in
+      assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    }).image(engine: "store", asset: "assets/store/polymath.png")
+    let previousAppearance = NSApp.appearance
+    defer { NSApp.appearance = previousAppearance }
+    for light in [false, true] {
+      let foreground: Int64 = light ? 0xff242424 : 0xffe8e8e8
+      let background: Int64 = light ? 0xfff4f4f4 : 0xff222222
+      var state: [String: Any] = ["enabled": true,
+        "tabs": [["id": "design", "label": "1:design", "name": "Design"],
+                 ["id": "firmware", "label": "2:firmware", "name": "Firmware"]],
+        "activeId": "design", "barStyle": ["size": 13, "foreground": foreground],
+        "palette": ["tabBar": background, "workspace": background, "foreground": foreground,
+                    "dark": light ? 0 : 1]]
+      var pictures: Set<Data> = []
+      for stage in stages {
+        state["daemon"] = ["visible": true, "glyph": "[oo]", "art": "assets/daemon-art/slot/\(stage).png"]
+        bar.update(state)
+        try checkTitlebar(bar.daemonButton.art != nil && bar.daemonButton.frame.width == 44 &&
+          bar.daemonButton.superview === bar.statusBar && bar.daemonButton.frame.minX == bar.subscriptionUsageButton.frame.maxX,
+          "\(stage) is illustrated in the footer on the \(light ? "light" : "dark") native bar")
+        pictures.insert(bar.daemonButton.renderedPixels())
+        let bitmap = bar.statusBar.renderedTree(background: bar.palette.workspace)
+        if stage == "egg_first_p0_0" || stage.hasSuffix("idle_0") {
+          var top = bitmap.pixelsHigh, bottom = -1
+          for y in 0..<bitmap.pixelsHigh {
+            for x in Int(bar.daemonButton.frame.minX * 2)..<Int(bar.daemonButton.frame.maxX * 2) {
+              guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+              let channels = [c.redComponent, c.greenComponent, c.blueComponent]
+              if channels.max()! - channels.min()! > 0.10 {
+                top = min(top, y); bottom = max(bottom, y)
+              }
+            }
+          }
+          try checkTitlebar(bottom >= top && abs(Double(top + bottom + 1) / 2 - Double(bitmap.pixelsHigh) / 2) <= 2,
+            "\(stage) centres its visible artwork on the bar, independent of transparent padding")
+        }
+        if let capture = ProcessInfo.processInfo.environment["HARNESS_DAEMON_NATIVE_CAPTURE_DIR"] {
+          let directory = URL(fileURLWithPath: capture)
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          try bitmap.representation(using: .png, properties: [:])!.write(to:
+            directory.appendingPathComponent("native-\(light ? "light" : "dark")-\(stage).png"))
+        }
+      }
+      try checkTitlebar(pictures.count == stages.count, "Native egg, hatch and three growth stages are visually distinct")
+    }
+  }
+
   func checkDaemon() throws {
     let originalSize = frame.size
     let originalEmit = emit
@@ -473,7 +802,7 @@ private extension SwarmTabStrip {
     var state: [String: Any] = ["enabled": true, "activeId": "pet-11",
       "tabs": (0..<12).map { ["id": "pet-\($0)", "name": "Pet \($0)", "label": "\($0 + 1):code"] },
       "focusedContext": ["text": "Codex  M2:project  (main)", "canSelectModel": true],
-      "focusedModel": ["text": "gpt-5", "paneId": 3, "agentId": "a1"],
+      "subscriptionUsage": ["text": "gpt-5", "paneId": 3, "agentId": "a1"],
       "pullRequest": ["text": "PR #298 · Merged", "url": "https://github.com/acme/repo/pull/298"],
       "daemon": daemon]
     update(state)
@@ -496,39 +825,40 @@ private extension SwarmTabStrip {
           setFrameSize(NSSize(width: width, height: originalSize.height))
           update(state)
           try checkTitlebar(daemonButton.glyph == glyph, "Every nest stage and drop 1 sprite is drawn as sent")
-          try checkTitlebar(daemonButton.font == tabs[0].labelFont,
+          try checkTitlebar(daemonButton.font == contextButton.font,
             "The daemon shares the workspace bar font at \(size)pt")
           try checkTitlebar(daemonButton.frame.maxX <= bounds.width &&
-            daemonButton.frame.minX >= pullRequestButton.frame.maxX &&
+            daemonButton.frame.maxX <= contextButton.frame.minX &&
             contextButton.frame.maxX <= pullRequestButton.frame.minX &&
-            contextButton.superview === statusBar && newButton.frame.maxX < searchButton.frame.minX,
+            contextButton.superview === statusBar && daemonButton.superview === statusBar &&
+            newButton.frame.maxX < searchButton.frame.minX,
             "Footer controls and top navigation do not overlap at \(width)px / \(size)pt")
-          try checkTitlebar(abs(daemonButton.frame.width - ceil(workspaceBarTextWidth("m", font: daemonButton.font!)) * 10) < 0.5,
-            "Eight cells plus a one-cell gutter each side at \(size)pt")
+          try checkTitlebar(daemonButton.frame.width == 44,
+            "Every growth stage keeps a 44pt footer slot at \(size)pt")
           try checkActiveVisible()
         }
       }
     }
     let tab = tabs[0]
-    try checkTitlebar(pullRequestButton.frame.maxX <= daemonButton.frame.minX &&
-      daemonButton.frame.height == focusedModelButton.frame.height &&
-      daemonButton.frame.midY == focusedModelButton.frame.midY,
-      "The daemon follows the focused context and shares the controls' height and inner gutters")
+    try checkTitlebar(daemonButton.frame.maxX <= contextButton.frame.minX &&
+      daemonButton.frame.height == subscriptionUsageButton.frame.height &&
+      daemonButton.frame.midY == subscriptionUsageButton.frame.midY,
+      "The daemon precedes focused context and shares the controls' height and inner gutters")
     scroll.contentView.scroll(to: .zero)
     let scrollFrame = scroll.frame, visible = scroll.documentVisibleRect
     let documentFrame = document.frame, daemonFrame = daemonButton.frame
     let contextFrame = contextButton.frame, prFrame = pullRequestButton.frame
-    let modelFrame = focusedModelButton.frame
+    let modelFrame = subscriptionUsageButton.frame
     func unmoved() -> Bool {
       tabs[0] === tab && scroll.frame == scrollFrame && scroll.documentVisibleRect == visible &&
         document.frame == documentFrame && daemonButton.frame == daemonFrame &&
         contextButton.frame == contextFrame && pullRequestButton.frame == prFrame &&
-        focusedModelButton.frame == modelFrame
+        subscriptionUsageButton.frame == modelFrame
     }
     for glyph in eggs + sprites + ["\\[=|=]/", "|[=|=]|", "/[=|=]\\", "-[=|=]-", "[==] |"] {
       daemon["glyph"] = glyph
       updateDaemon(daemon)
-      try checkTitlebar(unmoved(), "Moods and work frames keep the same eight-cell slot and move nothing else")
+      try checkTitlebar(unmoved(), "Moods and work frames keep the same 44pt slot and move nothing else")
     }
     // Anything that is not at most eight printable ASCII cells draws nothing, never a stand-in.
     daemon["glyph"] = "[oo]"
@@ -577,7 +907,8 @@ private extension SwarmTabStrip {
     daemonButton.mouseEntered(with: pointer)
     daemonButton.mouseExited(with: pointer)
     daemonButton.mouseEntered(with: pointer)
-    try checkTitlebar(events == ["daemonLook", "daemonLook"], "Each hover entry emits one look")
+    try checkTitlebar(events == ["daemonLook", "daemonHover", "daemonHover", "daemonLook", "daemonHover"],
+      "Each hover entry looks first, then opens the Flutter preview; exit closes it")
     daemonButton.mouseExited(with: pointer)
     // Voice: tmux's message line replaces the status, and nothing moves.
     daemon["voice"] = "pip: two agents idle. nothing needs you."
@@ -587,12 +918,12 @@ private extension SwarmTabStrip {
       voiceLabel.color == statusColor(0xffd7af5f, fallback: .clear) &&
       voiceLabel.accessibilityLabel() == voiceLabel.text && voiceLabel.accessibilityRole() == .staticText,
       "The daemon's line shows in the message colour")
-    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden,
-      "Its line replaces the left context while the model stays available on the right")
+    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !subscriptionUsageButton.isHidden,
+      "Its line replaces the right context while subscription usage stays available on the left")
     try checkTitlebar(unmoved(), "Speaking moves no tab, status control or the slot")
-    try checkTitlebar(voiceLabel.frame.maxX < daemonButton.frame.minX &&
-      voiceLabel.frame.minX == ceil(("m" as NSString).size(withAttributes: [.font: daemonButton.font!]).width),
-      "The line spans the status area up to the slot")
+    try checkTitlebar(voiceLabel.frame.minX >= daemonButton.frame.maxX &&
+      voiceLabel.frame.maxX <= statusBar.bounds.width,
+      "The line spans the status area after the slot")
     let voicePixels = voiceLabel.renderedPixels()
     daemon["voice"] = String(repeating: "a very long line ", count: 40)
     updateDaemon(daemon)
@@ -600,7 +931,7 @@ private extension SwarmTabStrip {
       "A long line truncates in place")
     state["daemon"] = daemon
     update(state)
-    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden && !voiceLabel.isHidden,
+    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !subscriptionUsageButton.isHidden && !voiceLabel.isHidden,
       "A workspace update while it speaks keeps the message line")
     try checkTitlebar(unmoved(), "A workspace update while it speaks lays out as if the status were shown")
     // The pair brain's line, exactly as sent, keys first: each offered key in
@@ -676,15 +1007,14 @@ private extension SwarmTabStrip {
     daemon["voice"] = nil
     updateDaemon(daemon)
     try checkTitlebar(voiceLabel.isHidden && !contextButton.isHidden && !pullRequestButton.isHidden &&
-      !focusedModelButton.isHidden && unmoved(),
+      !subscriptionUsageButton.isHidden && unmoved(),
       "Silence restores the status exactly where it was")
     // The ten cells as Flutter drew them and the grue's patch. No count labels.
-    let cellWidth = ceil(workspaceBarTextWidth("m", font: daemonButton.font!))
     daemon["glyph"] = "[o o]"
     daemon["cell"] = "  [o o]   "
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.cells == "  [o o]   " && unmoved(),
-      "The slot draws the ten cells it is sent, in the same eight-cell slot")
+      "The slot fits the ten legacy ASCII cells into its fixed footprint")
     let plainCell = daemonButton.renderedPixels()
     daemon["cell"] = "  [= =] / "
     updateDaemon(daemon)
@@ -699,9 +1029,9 @@ private extension SwarmTabStrip {
     daemon["tallyCells"] = 13
     daemon["tallyColor"] = 0xff808080
     updateDaemon(daemon)
-    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * 10) < 0.5 && unmoved() &&
+    try checkTitlebar(daemonButton.frame.width == 44 && unmoved() &&
       daemonButton.renderedPixels() == spriteOnly,
-      "Only the creature occupies the native focus bar, without count labels or reserved space")
+      "Only the creature occupies the native top slot, without count labels or extra reserved space")
     daemon["tally"] = nil
     daemon["tallyCells"] = nil
     daemon["tallyColor"] = nil
@@ -722,13 +1052,13 @@ private extension SwarmTabStrip {
     updateDaemon(daemon)
     state["daemon"] = daemon
     state["pullRequest"] = nil
-    state["focusedModel"] = nil
+    state["subscriptionUsage"] = nil
     update(state)
     daemon["voice"] = "pip: pong."
     updateDaemon(daemon)
     daemon["voice"] = ""
     updateDaemon(daemon)
-    try checkTitlebar(pullRequestButton.isHidden && focusedModelButton.isHidden && !contextButton.isHidden,
+    try checkTitlebar(pullRequestButton.isHidden && subscriptionUsageButton.isHidden && !contextButton.isHidden,
       "Silence restores only what the status holds")
     state["enabled"] = false
     update(state)
@@ -754,7 +1084,7 @@ private extension SwarmTabStrip {
       setFrameSize(NSSize(width: width, height: 40))
       update(state)
       try checkTitlebar(searchButton.isEnabled && searchButton.frame.width > 0 &&
-        searchButton.frame.maxX == storeButton.frame.minX &&
+        searchButton.frame.maxX < storeButton.frame.minX &&
         storeButton.frame.maxX <= bounds.width &&
         newButton.frame.maxX < searchButton.frame.minX &&
         contextButton.superview === statusBar,
@@ -804,7 +1134,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(!shareButton.isHidden && shareButton.isEnabled &&
         shareButton.frame.width == shareButton.preferredWidth &&
         shareButton.frame.maxX <= bounds.width &&
-        contextButton.frame.maxX < shareButton.frame.minX &&
+        shareButton.frame.maxX <= contextButton.frame.minX &&
         shareButton.superview === statusBar,
         "Share stays in the footer without overlapping context at width \(width)")
       update(hidden)
@@ -863,14 +1193,14 @@ private extension SwarmTabStrip {
             "activeId": "font-tab", "enabled": true,
             "barStyle": ["family": ".AppleSystemUIFontMonospaced", "size": 13.0,
                               "foreground": Int64(0xffd0d0d0), "selection": Int64(0xff444444)]])
-    try checkTitlebar(tabs[0].labelFont == NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-      "Numbered tabs use 13 pt SF Mono regular")
-    try checkTitlebar(tabs[0].drawnFont == tabs[1].drawnFont && contextButton.font == tabs[0].labelFont,
-      "Active tabs, inactive tabs, and pane context share one font")
+    try checkTitlebar(tabs[0].labelFont == NSFont.systemFont(ofSize: 13, weight: .regular),
+      "Tabs use 13 pt regular system UI type")
+    try checkTitlebar(tabs[0].drawnFont == tabs[1].drawnFont && contextButton.font != tabs[0].labelFont,
+      "Tab navigation is independent of the chosen status-line font")
     for control in [newButton, storeButton] {
-      try checkTitlebar(control.font == contextButton.font && control.frame.midY == bounds.midY &&
+      try checkTitlebar(control.font == tabs[0].labelFont && control.frame.midY == bounds.midY &&
         contextButton.frame.midY == statusBar.bounds.midY,
-        "Top actions and footer context share a font and center within their own rows")
+        "Navigation uses system type and each control centers within its own row")
     }
     try checkTitlebar(tabs[0].frame.width == tabs[0].preferredWidth &&
       tabs[1].frame.width == tabs[1].preferredWidth &&
@@ -878,6 +1208,121 @@ private extension SwarmTabStrip {
       "Tabs keep their label widths instead of expanding to fill the row")
     try checkTitlebar(tabs[0].menu?.font == menuFont, "Native context menus retain the system menu font")
 
+  }
+
+  func checkTabPresentationAndCapture() throws {
+    setFrameSize(NSSize(width: 900, height: 40))
+    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
+      let assets = URL(fileURLWithPath: root)
+      storeButton.image = SwarmHistoryIcons(assetURL: { asset in
+        assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+      }).image(engine: "store", asset: "assets/store/polymath.png")
+    }
+    let rows: [[String: Any]] = [
+      ["id": "new", "name": "New Tab", "label": "New Tab", "shortcutHint": "⌘1"],
+      ["id": "work", "name": "Desktop", "label": "Desktop", "shortcutHint": "⌘2",
+       "activity": ["mark": "⠋", "label": "Working", "working": true, "color": Int64(0xff64d2ff)]],
+      ["id": "custom", "name": "1: Release planning", "label": "1: Release planning", "shortcutHint": "⌃⌥⌘R"],
+      ["id": "unbound", "name": "Notes", "label": "Notes", "shortcutHint": NSNull()],
+    ]
+    update(["enabled": true, "activeId": "work", "tabs": rows])
+    try checkTitlebar(tabs.map(\.displayLabel) == ["New Tab", "Desktop", "1: Release planning", "Notes"],
+      "Clean labels preserve numeric-looking custom names and omit generated prefixes")
+    try checkTitlebar(tabs.map(\.shortcutHint) == ["⌘1", "⌘2", "⌃⌥⌘R", nil],
+      "Native tab hints preserve effective remaps and intentionally unbound shortcuts")
+    let initial = tabs.map(\.frame)
+    var statusChanged: [String: Any] = ["enabled": true, "activeId": "work", "tabs": rows,
+      "barStyle": ["family": "Menlo", "size": 28.0, "foreground": Int64(0xffdddddd)]]
+    update(statusChanged)
+    try checkTitlebar(tabs.map(\.frame) == initial && tabs.allSatisfy { $0.labelFont.pointSize == 13 },
+      "A large custom status font cannot resize system-font tab navigation")
+    statusChanged["barStyle"] = ["family": "Menlo", "size": 13.0, "foreground": Int64(0xffdddddd)]
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    for (name, values) in [
+      ("dark", ["workspace": Int64(0xff282828), "tabBar": Int64(0xff1c1c1c), "accent": Int64(0xffbdcbdc)]),
+      ("light", ["workspace": Int64(0xfff0f2f5), "tabBar": Int64(0xffe4e6e9), "accent": Int64(0xff3d5a8a)]),
+    ] {
+      statusChanged["palette"] = values
+      update(statusChanged)
+      let ink = tabs[0].foreground.usingColorSpace(.sRGB)!
+      try checkTitlebar(name == "light" ? ink.redComponent < 0.2 : ink.redComponent > 0.8,
+        "Tab labels remain readable on the UI surface with an independently chosen status foreground")
+      setShortcutHintsVisible(false)
+      try captureTabPresentation("native-tabs-\(name)-rest")
+      tabs[1].mouseEntered(with: hover)
+      try captureTabPresentation("native-tabs-\(name)-hover")
+      setShortcutHintsVisible(true)
+      try checkTitlebar(tabs.allSatisfy(\.showsShortcutHint) && tabs.map(\.frame) == initial,
+        "Holding Command reveals hints across the strip without moving tabs")
+      try captureTabPresentation("native-tabs-\(name)-command")
+      tabs[1].mouseExited(with: hover)
+      setShortcutHintsVisible(false)
+    }
+    update(["enabled": false, "activeId": "work", "tabs": rows])
+    setShortcutHintsVisible(true)
+    try checkTitlebar(tabs.allSatisfy { !$0.showsShortcutHint }, "Disabled native navigation never advertises active shortcuts")
+    setShortcutHintsVisible(false)
+    let crowdedNames = ["New Tab", "Desktop", "Docs", "Web", "Notes", "API", "Tests", "Release"]
+    let crowdedRows: [[String: Any]] = crowdedNames.enumerated().map { index, name in
+      ["id": "dense-\(index)", "name": name, "label": name, "shortcutHint": "⌘\(index + 1)",
+       "activity": ["mark": index == 1 ? "⠋" : "", "label": index == 1 ? "Working" : "Idle",
+                    "color": Int64(0xff64d2ff)]]
+    }
+    setFrameSize(NSSize(width: 1440, height: 40))
+    for (name, values) in [
+      ("dark", ["workspace": Int64(0xff282828), "tabBar": Int64(0xff1c1c1c), "accent": Int64(0xffbdcbdc)]),
+      ("light", ["workspace": Int64(0xfff0f2f5), "tabBar": Int64(0xffe4e6e9), "accent": Int64(0xff3d5a8a)]),
+    ] {
+      update(["enabled": true, "activeId": "dense-1", "tabs": crowdedRows, "palette": values])
+      try captureTabPresentation("native-tabs-eight-\(name)-rest")
+      try checkTitlebar(tabs.last!.frame.maxX <= scroll.bounds.width,
+        "Eight ordinary tab names with inset close targets fit a 1440pt strip: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
+      for tab in tabs {
+        try tab.checkCenteredLabel()
+        try tab.checkCompleteNameFits()
+      }
+      setShortcutHintsVisible(true)
+      try captureTabPresentation("native-tabs-eight-\(name)-command")
+      tabs[1].mouseEntered(with: hover)
+      try captureTabPresentation("native-tabs-eight-\(name)-command-hover")
+      tabs[1].mouseExited(with: hover)
+      setShortcutHintsVisible(false)
+    }
+  }
+
+  func captureTabPresentation(_ name: String) throws {
+    guard let directory = ProcessInfo.processInfo.environment["HARNESS_TAB_CAPTURE_DIR"] else { return }
+    let height = Int(bounds.height) + 40
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width), pixelsHigh: height,
+      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    palette.tabBar.setFill()
+    NSRect(x: 0, y: 0, width: bounds.width, height: CGFloat(height)).fill()
+    palette.workspace.setFill()
+    NSRect(x: 0, y: 0, width: bounds.width, height: 40).fill()
+    for tab in tabs {
+      NSGraphicsContext.saveGraphicsState()
+      let transform = NSAffineTransform()
+      transform.translateX(by: scroll.frame.minX + tab.frame.minX, yBy: 40)
+      transform.concat()
+      tab.drawWithHoverControl()
+      NSGraphicsContext.restoreGraphicsState()
+    }
+    for control in [newButton, searchButton, storeButton] {
+      NSGraphicsContext.saveGraphicsState()
+      let transform = NSAffineTransform()
+      transform.translateX(by: control.frame.minX, yBy: control.frame.minY + 40)
+      transform.concat()
+      control.draw(control.bounds)
+      NSGraphicsContext.restoreGraphicsState()
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    let destination = URL(fileURLWithPath: directory)
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    try bitmap.representation(using: .png, properties: [:])!.write(to: destination.appendingPathComponent(name + ".png"))
   }
 
   func checkStartupPalette(_ expected: SwarmNativePalette) throws {
@@ -1016,39 +1461,39 @@ private extension SwarmTabStrip {
     }
     try checkTitlebar(clickedFields.map { $0.0 } == ["machine", "project", "branch"] &&
       clickedFields.allSatisfy { $0.1 == 7 }, "Each context action preserves field and pane identity")
-    linked["focusedModel"] = ["text": "Fable", "paneId": 7, "agentId": "a0", "interactive": true,
-      "detail": "Switch model · Subscription or local models",
-      "segments": [["text": "Fable", "foreground": Int64(0xffdddddd)]]]
-    var modelClicks: [(Int, String)] = []
-    emit = { method, args in
-      if method == "focusedModel", let args = args as? [String: Any],
-         let pane = args["paneId"] as? Int, let agent = args["agentId"] as? String {
-        modelClicks.append((pane, agent))
-      }
+    linked["subscriptionUsage"] = ["text": "Claude 0%  Codex 13%", "interactive": true,
+      "detail": "Remaining subscription usage",
+      "segments": [["text": "Claude ", "foreground": Int64(0xffdddddd)],
+                   ["text": "0%", "foreground": Int64(0xffff6b6b)],
+                   ["text": "  Codex ", "foreground": Int64(0xffdddddd)],
+                   ["text": "13%", "foreground": Int64(0xffffc857)]]]
+    var usageClicks = 0
+    emit = { method, _ in
+      if method == "subscriptions" { usageClicks += 1 }
     }
     update(linked)
-    try checkTitlebar(!focusedModelButton.isHidden && focusedModelButton.isEnabled,
-      "Focused model has its own enabled status control")
-    try checkTitlebar(focusedModelButton.frame.minX > pullRequestButton.frame.maxX &&
-      focusedModelButton.frame.height == contextButton.frame.height &&
-      focusedModelButton.frame.maxX <= statusBar.bounds.width,
-      "Model sits on the right of the footer opposite machine/repo/branch/PR")
-    try checkTitlebar(focusedModelButton.toolTip == "Switch model · Subscription or local models",
-      "Model hint explains switching without repeating the visible name")
-    let modelResting = focusedModelButton.renderedPixels()
-    focusedModelButton.mouseEntered(with: pointer)
-    try checkTitlebar(focusedModelButton.renderedPixels() != modelResting &&
-      focusedModelButton.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
-      "Model uses bold hover feedback without a background well")
-    focusedModelButton.mouseExited(with: pointer)
-    focusedModelButton.performClick(nil)
-    try checkTitlebar(modelClicks.count == 1 && modelClicks[0].0 == 7 && modelClicks[0].1 == "a0",
-      "Model actions carry the focused pane and agent identity")
+    try checkTitlebar(!subscriptionUsageButton.isHidden && subscriptionUsageButton.isEnabled,
+      "Subscription usage has its own enabled status control")
+    try checkTitlebar(subscriptionUsageButton.frame.maxX < contextButton.frame.minX &&
+      subscriptionUsageButton.frame.height == contextButton.frame.height &&
+      subscriptionUsageButton.frame.maxX <= statusBar.bounds.width,
+      "Usage sits on the left opposite machine/repo/branch/PR")
+    try checkTitlebar(subscriptionUsageButton.toolTip == "Remaining subscription usage",
+      "Usage hint explains that percentages are remaining")
+    let usageResting = subscriptionUsageButton.renderedPixels()
+    subscriptionUsageButton.mouseEntered(with: pointer)
+    try checkTitlebar(subscriptionUsageButton.renderedPixels() != usageResting &&
+      subscriptionUsageButton.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
+      "Usage uses hover feedback without a background well")
+    subscriptionUsageButton.mouseExited(with: pointer)
+    subscriptionUsageButton.performClick(nil)
+    try checkTitlebar(usageClicks == 1,
+      "Usage opens subscriptions without a pane or retarget action")
     linked["enabled"] = false
     update(linked)
-    focusedModelButton.performClick(nil)
-    try checkTitlebar(!focusedModelButton.isEnabled && modelClicks.count == 1,
-      "Disabled model controls cannot switch a harness")
+    subscriptionUsageButton.performClick(nil)
+    try checkTitlebar(!subscriptionUsageButton.isEnabled && usageClicks == 1,
+      "Disabled usage controls cannot dispatch")
     linked["enabled"] = false
     update(linked)
     for control in contextButton.fieldButtons {
@@ -1064,22 +1509,47 @@ private extension SwarmTabStrip {
     update(state(rows, active: "swarm-11"))
     try checkTitlebar(pullRequestButton.actionURL == nil && pullRequestButton.accessibilityValue() as? String == "",
       "Changing to a pane without a PR clears the old link and state")
+    var covered = state(rows, active: "swarm-11")
+    covered["footerCovered"] = true
+    update(covered)
+    try checkTitlebar(statusBar.isHidden,
+      "Flutter's modal backdrop covers the native footer too")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == false,
+      "The covered footer is removed from the native accessibility tree")
+    covered["footerCovered"] = false
+    update(covered)
+    try checkTitlebar(!statusBar.isHidden,
+      "Closing the modal restores the native footer")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == true,
+      "Closing the modal restores the footer's accessibility controls")
+    covered["footerPassive"] = true
+    covered["enabled"] = false
+    update(covered)
+    try checkTitlebar(!statusBar.isHidden,
+      "Status customization keeps the footer visible as a passive preview")
+    try checkTitlebar(accessibilityChildren()?.contains(where: { $0 as? NSView === statusBar }) == false,
+      "A passive footer is excluded from modal accessibility traversal")
+    try checkTitlebar(!subscriptionUsageButton.isEnabled && !pullRequestButton.isEnabled,
+      "Passive footer controls cannot activate underlying commands")
+    covered["footerPassive"] = false
+    covered["enabled"] = true
+    update(covered)
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
     try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
     try tabs[0].checkDoubleClickIsolation()
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
-    try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
-      "Overflow tabs keep a readable minimum width and their numbered names")
-    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(tabs[0].frame.width < 136 && tabs[0].displayLabel == "code",
+      "Overflow tabs keep readable names without persistent number prefixes")
+    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
-    for (control, symbol) in zip(controls, ["+"]) {
-      try checkTitlebar(control.image == nil && control.title == symbol && !control.isBordered,
-        "Management controls are plain terminal text without a resting button well")
-      try checkTitlebar(control.frame.height >= 28 && control.frame.width > workspaceBarTextWidth(symbol, font: barFont),
-        "The new-tab control keeps the shared click height and padding around its text")
+    for control in controls {
+      try checkTitlebar(control.image != nil && control.title.isEmpty && !control.isBordered,
+        "Management controls use the regular outline family without a resting button well")
+      try checkTitlebar(control.frame.height >= 28 && control.frame.width > HarnessControlSymbols.size,
+        "The new-tab control keeps the shared click height and padding around its icon")
       try checkTitlebar(control.accessibilityLabel() == "New Tab" && control.toolTip?.contains("New Tab") == true,
         "Every symbol explains its action through a tooltip and accessible name")
       let resting = control.renderedPixels()
@@ -1131,7 +1601,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(accessibleTabs.map(\.swarmId) == tabs.map(\.swarmId), "Accessible order follows visual order")
     try checkActiveVisible()
     update(state([["id": "swarm-0", "name": "Custom name", "label": "1:blender"]], active: "swarm-0"))
-    try checkTitlebar(tabs[0] === original && original.displayLabel == "1:blender",
+    try checkTitlebar(tabs[0] === original && original.displayLabel == "blender",
       "Type changes update the existing tab without renaming its saved workspace")
     try original.checkAccessibility(expectedName: "Custom name", active: true)
     try checkTitlebar(newButton.toolTip == "New Tab", "New Tab has a label before its keymap arrives")
@@ -1162,7 +1632,11 @@ private extension SwarmTabStrip {
     update(["enabled": true, "activeId": "keyboard-23",
       "tabs": (0..<24).map { ["id": "keyboard-\($0)", "name": "Keyboard \($0)"] }])
     let tab = tabs[0]
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    tab.mouseEntered(with: hover)
     let buttons = tab.accessibilityChildren()!.compactMap { $0 as? NSButton }
+    try checkTitlebar(buttons.count == 2, "Hover exposes selection and close to native accessibility")
     for button in buttons {
       try checkTitlebar(window.makeFirstResponder(button), "An enabled tab action accepts keyboard focus")
       try tab.checkCenteredLabel()
@@ -1181,6 +1655,7 @@ private extension SwarmTabStrip {
       try tab.checkCenteredLabel()
       try checkTitlebar(messenger.calls.count == before + 1, "Each native tab activation sends one action")
     }
+    tab.mouseExited(with: hover)
     tab.attention = true
     try checkTitlebar(buttons[0].accessibilityHelp()?.contains("Needs your input") == true,
       "The attention dot has an accessible description")
@@ -1198,13 +1673,13 @@ private extension SwarmTabStrip {
     stale.clickBothActions()
     try checkTitlebar(messenger.calls.count == beforeStale, "A removed tab's retained controls cannot dispatch actions")
     let unfocusedNew = newButton.renderedPixels()
-    try checkTitlebar(window.makeFirstResponder(newButton), "New tab accepts keyboard focus")
+    try checkTitlebar(window.makeFirstResponder(newButton), "New Tab accepts keyboard focus")
     try checkTitlebar(newButton.hasKeyboardFocus && newButton.renderedPixels() != unfocusedNew,
       "Keyboard focus gives the new-tab symbol the same bold emphasis as hover")
     newButton.performClick(nil)
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "new",
-      "New tab returns keyboard ownership to the workspace")
+      "New Tab returns keyboard ownership to the workspace")
     updateDaemon(["visible": true, "glyph": "\\_O_/"])
     try checkTitlebar(window.makeFirstResponder(daemonButton), "The daemon accepts keyboard focus")
     daemonButton.performClick(nil)
@@ -1213,14 +1688,14 @@ private extension SwarmTabStrip {
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "daemon",
       "The daemon panel receives the next keystroke")
-    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
-      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     let beforeLook = messenger.calls.count, pendingReplies = messenger.replies.count
     daemonButton.mouseEntered(with: hover)
     daemonButton.mouseExited(with: hover)
-    try checkTitlebar(messenger.calls.count == beforeLook + 1 && messenger.calls.last?.method == "daemonLook" &&
+    let expectedHoverCalls = NSApp.isActive ? 3 : 0
+    try checkTitlebar(messenger.calls.count == beforeLook + expectedHoverCalls &&
+      (!NSApp.isActive || messenger.calls.suffix(3).map(\.method) == ["daemonLook", "daemonHover", "daemonHover"]) &&
       messenger.replies.count == pendingReplies && window.firstResponder === window.contentInput,
-      "Hovering the daemon sends one look and never moves keyboard focus")
+      "Hovering an active native window toggles preview without focus; inactive windows stay quiet")
     updateDaemon([:])
     let current = tabs[0].accessibilityChildren()!.first as! NSButton
     window.makeFirstResponder(current)
@@ -1303,10 +1778,11 @@ private extension SwarmTabStrip {
     emit = { method, args in if method == "reorder", let args = args as? [String: Any] { moves.append(args) } }
     let info = TitlebarCheckDrag()
     info.draggingSource = tabs[0]
-    info.draggingPasteboard.setString("drag-0", forType: swarmPasteboardType)
+    try checkTitlebar(info.draggingPasteboard.setString("drag-0", forType: swarmPasteboardType),
+      "The native fixture can write its isolated drag pasteboard")
     info.draggingLocation = document.convert(NSPoint(x: tabs[2].frame.midX + 1, y: 20), to: nil)
     try checkTitlebar(draggingEntered(info) == .move && draggingUpdated(info) == .move,
-      "An owned tab can move within the visible tab area")
+      "An owned tab can move within the visible tab area: \(scroll.frame), \(scroll.documentVisibleRect), \(info.draggingLocation)")
     try checkTitlebar(performDragOperation(info) && moves.last?["index"] as? Int == 2,
       "Moving right accounts for removing the source tab first")
     moves.removeAll()
@@ -1676,7 +2152,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(validateMenuItem(reopen), "Closed-Tab recovery becomes available")
     let closePane = agent.items.first(where: { $0.representedObject as? String == "closePane" })!
     canClosePane = false
-    try checkTitlebar(!validateMenuItem(closePane), "Remove Agent is disabled in New tab")
+    try checkTitlebar(!validateMenuItem(closePane), "Remove Agent is disabled in New Tab")
     canClosePane = true
     try checkTitlebar(validateMenuItem(closePane), "Remove Agent is enabled for a focused pane")
     let create = agent.items.first(where: { $0.representedObject as? String == "new" })!
@@ -1989,9 +2465,13 @@ do {
   try strip.checkTopActions()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
+  try SwarmTabButton(id: "close-shortcuts").checkHoverCloseAndShortcutHints()
+  try strip.checkTabPresentationAndCapture()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
   try strip.checkDaemonOff()
+  try strip.checkDaemonArtwork()
+  try strip.checkBundledDaemonArtwork()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

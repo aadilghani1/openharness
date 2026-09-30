@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
+import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES } from './lib/e2ee/applicationFrames.js'
 
 describe('local model lifecycle RPCs', () => {
@@ -2594,30 +2595,108 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
 
     expect(await listModels()).toMatchObject({ gridName: GRID_NAME, gridCli: 'path' })
   })
+})
 
-  it('waits for an in-flight grid reconcile before answering, so the first open after an update is not empty', async () => {
-    fake = installFakeGrid(plan)
+describe('grid is set up on demand — by an act, never by a read', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const READY: GridAttachResult = { status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: '', ownGrid: 'created' }
+
+  /** A daemon whose grid set-up and local models are stubs, asked over a local frame. */
+  function daemon(ready: GridAttachResult = READY) {
     const socket = new BackendSocket('token')
-    // No local fallback and no machine_meta: the name can only come from the reconcile below, so a
-    // non-empty answer proves the RPC waited for it rather than answering "no grid" straight away.
-    socket.deriveGridName = async () => null
-    let settle: () => void = () => {}
-    const reconcile = new Promise<void>((resolve) => {
-      settle = () => { socket.setHarnessGridName(GRID_NAME); resolve() }
+    socket.deriveGridName = async () => 'kelvin-1a2b3c4d'
+    let setUp = false
+    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => {
+      if (ready.status === 'signed-in' || ready.status === 'converged') setUp = true
+      return ready
     })
-    socket.gridReadyProbe = () => reconcile
-    socket.connect()
-    const ws = wsMock.instances[0]
-    ws.open()
-    ws.message(sealedDown(socket, 'web-1', 'grid_models_list', { requestId: 'r' }))
-    // The reconcile lands a moment later, within the RPC's wait window.
-    setTimeout(() => settle(), 20)
-    await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'grid_models_list_result')).toBe(true), { timeout: 10_000 })
-    const reply = parseSent(ws)
-      .map((item) => item.frame as { type?: string; payload?: Record<string, unknown> } | undefined)
-      .find((frame) => frame?.type === 'grid_models_list_result')
-    await socket.stop()
-    expect(reply?.payload).toMatchObject({ gridName: GRID_NAME })
+    socket.ensureGrid = ensureGrid
+    socket.gridSetUp = () => setUp
+    const list = vi.fn(async () => ({ models: [], observedAt: 'now', busy: false }))
+    const act = vi.fn(async () => ({}))
+    Object.assign(socket as unknown as Record<string, unknown>, { localModels: { list, act } })
+    socket.onRetargetAgent = async () => ({ ok: true })
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    let asked = 0
+    const ask = async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      const requestId = `${type}-${++asked}`
+      socket.handleLocalFrame('local:grid', { type, payload: { requestId, ...payload } })
+      const answer = (): Record<string, unknown> | undefined => frames
+        .map((frame) => frame.payload as Record<string, unknown> | undefined)
+        .find((body) => body?.requestId === requestId)
+      await vi.waitFor(() => expect(answer()).toBeDefined())
+      return answer()!
+    }
+    return { socket, ensureGrid, list, act, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
+  }
+
+  it('the list read a picker polls sets nothing up, and says when it is needed', async () => {
+    const d = daemon()
+    const answer = await d.ask('grid_fleet_models_list')
+    expect(d.ensureGrid).not.toHaveBeenCalled()
+    expect(answer).toMatchObject({ gridSetupNeeded: true })
+    await d.done()
+  })
+
+  it("Set up — a list read carrying `setup` — signs grid in with the account's own grid, then answers", async () => {
+    const d = daemon()
+    const answer = await d.ask('grid_fleet_models_list', { setup: true })
+    expect(d.ensureGrid).toHaveBeenCalledExactlyOnceWith({ ownGrid: true })
+    expect(answer).not.toHaveProperty('gridSetupNeeded')
+    expect(answer).not.toHaveProperty('gridSetupError')
+    // Read fresh: the catalog was unreachable a moment ago.
+    expect(d.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true)
+    await d.done()
+  })
+
+  it("a Get signs grid in; a Use also makes sure of the account's grid; a Stop does neither", async () => {
+    const d = daemon()
+    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
+    await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })
+    await d.ask('grid_fleet_model_stop', { modelId: 'org/Model-GGUF' })
+    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
+    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download', 'start', 'stop'])
+    await d.done()
+  })
+
+  it('a set-up grid refused is said, and the act waiting on it does not run', async () => {
+    const d = daemon({ status: 'handoff-failed', name: 'kelvin-1a2b3c4d', detail: 'grid is too old for --harness' })
+    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'grid is too old for --harness' })
+    expect(d.act).not.toHaveBeenCalled()
+    expect(await d.ask('grid_fleet_models_list', { setup: true }))
+      .toMatchObject({ gridSetupNeeded: true, gridSetupError: 'grid is too old for --harness' })
+    await d.done()
+  })
+
+  it("an account grid that could not be made fails a Use, not a Get", async () => {
+    const d = daemon({ status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: 'free plan: one grid per account', ownGrid: 'failed' })
+    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'free plan: one grid per account' })
+    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
+    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download'])
+    await d.done()
+  })
+
+  it('a Grid harness command runs against grid as it stands — its viewer asks on its own, so it never sets grid up', async () => {
+    const d = daemon()
+    const run = vi.fn(async () => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null }))
+    Object.assign(d.socket as unknown as Record<string, unknown>, { gridFleet: { run, cancel: () => false } })
+    await d.ask('grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(d.ensureGrid).not.toHaveBeenCalled()
+    await d.done()
+  })
+
+  it("a move onto a grid model signs grid in first — with the account's own grid only when the model is on it", async () => {
+    // Refused, so the move stops at the set-up and no grid is read: what is pinned is what was asked.
+    const d = daemon({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa' }))
+      .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'no grid on this computer' })
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
+      .toMatchObject({ error: 'GRID_UNAVAILABLE' })
+    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
+    await d.done()
   })
 })
 
@@ -2632,8 +2711,7 @@ describe('the connect burst with no network', () => {
     // three again, for as long as the wifi stayed off. The terminal on the same computer read
     // "offline" the whole time.
     const socket = new BackendSocket('token')
-    socket.deriveGridName = async () => null
-    socket.gridReadyProbe = () => new Promise<void>(() => {}) // a reconcile that never lands
+    socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
     socket.accountUsageReader = () => new Promise(() => {})   // a vendor that never answers
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })

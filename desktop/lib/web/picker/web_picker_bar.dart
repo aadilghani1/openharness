@@ -22,13 +22,8 @@ class WebPickerBar extends StatelessWidget {
       listenable: search,
       builder: (context, _) => Padding(
         key: const ValueKey('web-picker-bar'),
-        // Four cells in, like the input and the result titles under it.
-        padding: EdgeInsets.fromLTRB(
-          cell.width * 4,
-          cell.height * .5,
-          cell.width,
-          0,
-        ),
+        // Align the host scopes with the shared search editor text.
+        padding: EdgeInsets.fromLTRB(57, cell.height * .5, cell.width, 0),
         child: Row(
           children: [
             if (search.canGoBack) ...[

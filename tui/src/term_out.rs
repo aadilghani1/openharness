@@ -195,9 +195,13 @@ static TERMINAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static TERMINAL_ANSWERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Query without waiting: the normal input reader separates replies from typeahead.
+/// OSC 11 (default background) is asked, and now OSC 10 (default foreground) too: hn reports
+/// them to each machine's daemon (`theme_set`) so agent panes are painted to match, exactly as
+/// the desktop app does. Asking OSC 10 is what keeps hn's chrome on the terminal's own
+/// foreground (an ivory/cream), not a white computed from the background.
 pub fn ask_terminal() {
     let mut out = io::stdout();
-    let _ = out.write_all(b"\x1b[>q\x1b[c");
+    let _ = out.write_all(b"\x1b[>q\x1b[c\x1b]11;?\x07\x1b]10;?\x07");
     let _ = out.flush();
 }
 
@@ -222,6 +226,71 @@ fn modern_terminal() -> bool {
 static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 24);
 
 pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relaxed) }
+
+/// The terminal's own default background and foreground, from its OSC 10/11 answers, as
+/// `#rrggbb` (bg, fg). None until the terminal answers. hn starts on top of the terminal, so
+/// these are asked directly and answer reliably; the daemon uses them to paint agent panes.
+#[derive(Clone)]
+struct TerminalColours { bg: String, fg: String, foreground_reported: bool }
+static TERMINAL_FG_BG: std::sync::RwLock<Option<TerminalColours>> = std::sync::RwLock::new(None);
+
+fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let h = hex.trim_start_matches('#');
+    if h.len() != 6 { return None }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    Some(((v >> 16) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8))
+}
+
+/// A foreground that reads on the background: dark on light, light on dark.
+fn companion_fg(bg: &str) -> String {
+    let Some((r, g, b)) = hex_rgb(bg) else { return "#f5f5f5".into() };
+    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
+    if lum > 128.0 { "#1a1a1a".into() } else { "#f5f5f5".into() }
+}
+
+/// What the terminal answered for its default colours, (bg, fg) hex, when it answered.
+pub fn terminal_colours() -> Option<(String, String)> {
+    TERMINAL_FG_BG.read().ok()?.as_ref().map(|c| (c.bg.clone(), c.fg.clone()))
+}
+
+/// Record an OSC 10/11 answer. A half left blank keeps the other (a terminal may answer bg only);
+/// a missing foreground is chosen for contrast on the background.
+pub fn set_terminal_colours(bg: Option<String>, fg: Option<String>) {
+    if let Ok(mut guard) = TERMINAL_FG_BG.write() {
+        *guard = updated_terminal_colours(guard.as_ref(), bg, fg);
+    }
+}
+
+fn updated_terminal_colours(existing: Option<&TerminalColours>, bg: Option<String>, fg: Option<String>) -> Option<TerminalColours> {
+    let foreground_reported = fg.is_some() || existing.is_some_and(|c| c.foreground_reported);
+    let bg = bg.or_else(|| existing.map(|c| c.bg.clone()))?;
+    let fg = fg.or_else(|| existing.filter(|c| c.foreground_reported).map(|c| c.fg.clone()))
+        .unwrap_or_else(|| companion_fg(&bg));
+    Some(TerminalColours { bg, fg, foreground_reported })
+}
+
+#[cfg(test)]
+mod terminal_colour_tests {
+    use super::*;
+
+    #[test]
+    fn a_background_change_recomputes_inferred_foreground_only() {
+        let dark = updated_terminal_colours(None, Some("#101010".into()), None).unwrap();
+        assert_eq!(dark.fg, "#f5f5f5");
+        let light = updated_terminal_colours(Some(&dark), Some("#f7f7f7".into()), None).unwrap();
+        assert_eq!(light.fg, "#1a1a1a");
+        let own = updated_terminal_colours(Some(&light), None, Some("#202020".into())).unwrap();
+        let next = updated_terminal_colours(Some(&own), Some("#eeeeee".into()), None).unwrap();
+        assert_eq!(next.fg, "#202020");
+    }
+}
+
+/// Whether the terminal's background is light, from its OSC 11 answer, when it answered.
+pub fn terminal_is_light() -> Option<bool> {
+    let (bg, _) = terminal_colours()?;
+    let (r, g, b) = hex_rgb(&bg)?;
+    Some(0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64 > 128.0)
+}
 
 /// The terminal's colours from its name and what it says of itself, and what the config says of
 /// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, an explicit RGB

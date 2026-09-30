@@ -157,7 +157,7 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const ValueKey('swarm-search-type-hints')),
+          find.byKey(const ValueKey('search-category-Harnesses')),
           findsOneWidget,
         );
         await key(tester, LogicalKeyboardKey.escape);

@@ -96,6 +96,8 @@ pub struct Pane {
     /// select-pane -d: keys for this pane are dropped until select-pane -e.
     pub input_off: bool,
     pub opening: bool,
+    /// A user requested app-wide control while this pane's passive open was in flight.
+    pub takeover_pending: bool,
     pub read_only: bool,
     pub last_alive: Instant,
     pub dirty: bool,
@@ -456,6 +458,7 @@ impl Pane {
             osc_title: String::new(),
             input_off: false,
             opening: false,
+            takeover_pending: false,
             read_only: false,
             last_alive: Instant::now(),
             dirty: true,

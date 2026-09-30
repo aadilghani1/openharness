@@ -96,6 +96,14 @@ export interface LocalWsServerOptions {
   onRouteSend?: (agentId: string, text: string) => { ok: true } | { ok: false; machine: string; reason: string }
   /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
   dialStatus?: () => { attached: boolean; fw?: string; updating?: string }
+  /**
+   * A window changed a device's settings. `id` names which device on this desk; the rest of the payload
+   * is the patch, and an absent field is a setting the window is not changing.
+   *
+   * There is no reply frame. The device answers its own `settings.set` with what it now holds, and that
+   * arrives as an ordinary `dial_status` — which is also what corrects a window whose change was refused.
+   */
+  onDialSettings?: (id: string, patch: Record<string, unknown>) => void
   /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
    *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
   openQuestions?: () => Frame[]
@@ -122,6 +130,7 @@ export interface LocalWsServerOptions {
   onDaemonPresence?: (connId: string, payload: Record<string, unknown>, meta: { ui: boolean }) => void
   /** `daemon_talk { requestId, text }`: the person's words to their daemon (the pair harness) → `daemon_talk_result`. */
   onDaemonTalk?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
+  onDaemonOpen?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
   /** `daemon_shown { id }`: this window has displayed that line, detail and all. */
   onDaemonShown?: (connId: string, payload: Record<string, unknown>) => void
   /** `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`. */
@@ -141,7 +150,7 @@ export interface LocalWsServerOptions {
 /** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
 const DAEMON_IN = DAEMON_IN_TYPES
 /** The reply each request among them gets. */
-const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_confirm: 'daemon_confirm_result' }
+const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_open: 'daemon_open_result', daemon_confirm: 'daemon_confirm_result' }
 
 /** One candidate, as the window draws it in the picker. */
 export interface RouteCandidate {
@@ -667,7 +676,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           if (!ui) { answer({ ok: false, error: 'UI_ONLY', detail: 'Keys, talk and confirmations come from a window on this machine\'s own socket.' }); return }
           const reply = (frame: Frame): boolean => sink.sendFrame(frame)
           if (type === 'daemon_shown') { options.onDaemonShown?.(connId, payload); return }
-          const handler = type === 'daemon_act' ? options.onDaemonAct : type === 'daemon_talk' ? options.onDaemonTalk : options.onDaemonConfirm
+          const handler = type === 'daemon_act' ? options.onDaemonAct : type === 'daemon_talk' ? options.onDaemonTalk : type === 'daemon_open' ? options.onDaemonOpen : options.onDaemonConfirm
           if (handler) { handler(connId, payload, reply); return }
           answer({ ok: false, error: 'UNSUPPORTED' })
           return
@@ -694,6 +703,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           if (parsed?.type === 'terminal_open' && !explicitFocusClients.size && typeof agentId === 'string' && agentId) {
             options.onAppFocus?.(boundMachineId, agentId)
           }
+        }
+
+        // A device on THIS desk, named by the fleet's id. Like app_focus it is answered here and never
+        // forwarded: a robot plugged into this computer is nothing a remote machine can act on, and the
+        // reply is the ordinary `dial_status` the device's own answer produces.
+        if (parsed?.type === 'dial_settings') {
+          const payload = (parsed.payload ?? {}) as Record<string, unknown>
+          const id = typeof payload.id === 'string' ? payload.id : ''
+          options.onDialSettings?.(id, payload)
+          return
         }
 
         if (relay) {

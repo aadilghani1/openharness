@@ -19,8 +19,9 @@ python3 "$here/../scripts/gen_tux_moods.py" --check
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_character" "$here/test_character.c" \
-   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
    "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
+   "$here/../main/ui/habitat/focus.c" \
    "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
    "$here/../main/ui/habitat/ascii_clip.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
@@ -39,13 +40,6 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 cc -std=c11 -Wall -Wextra -Werror -O1 \
    -o "$out/test_cable_machines" "$here/test_cable_machines.c" "$here/../main/cable_machines.c"
 "$out/test_cable_machines"
-
-# The carousel's column<->ring map. Pure arithmetic, and the one part of the swipe-direction setting that
-# can be wrong without looking wrong on the board — every jump still lands on a real tile, just a mirrored
-# one. Cheaper to prove here than to squint at a dial.
-cc -std=c11 -Wall -Wextra -Werror -O1 \
-   -o "$out/test_carousel_ring" "$here/test_carousel_ring.c" "$here/../main/ui/carousel_ring.c"
-"$out/test_carousel_ring"
 
 # Which dial this image is on, decided from who answered on the I2C bus. Two boards ship on one image;
 # the table that tells them apart is arithmetic on a list of addresses, so it is proved here.
@@ -182,6 +176,8 @@ python3 "$here/test_question_ui.py"
 python3 "$here/test_voice_ui.py"
 python3 "$here/test_touch_ui.py"
 python3 "$here/test_brightness_ui.py"
+# The preferences the desktop app now owns, driven through the device's own read/apply/worker path.
+python3 "$here/test_device_settings.py"
 python3 "$here/test_touch_driver.py"
 python3 "$here/test_render_guard.py"
 python3 "$here/test_display_power.py"
@@ -212,7 +208,10 @@ if [[ -n "${IDF_PATH:-}" ]]; then
         "$here/../main/cable_scroll.c" "$IDF_PATH/components/json/cJSON/cJSON.c"
     "$out/test_cable_scroll"
     python3 "$here/test_cable_json_parse.py"
+    python3 "$here/test_companion_protocol.py"
     python3 "$here/test_cable_identity.py"
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"
 fi
+
+python3 "$here/test_companions.py"

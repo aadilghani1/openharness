@@ -173,7 +173,7 @@ describe('parsePairArgs: words to the payload', () => {
   })
 
   it('lessons: an unknown action, a missing id; --create only on approve, --dry-run only on export, no id on export', () => {
-    expect(() => parsePairArgs('lessons', ['teach'])).toThrow('lessons has no "teach" (list, show, approve, skip, revert, restore, export).')
+    expect(() => parsePairArgs('lessons', ['teach'])).toThrow('lessons has no "teach" (list, show, approve, skip, revert, restore, export, review_recent, cancel_review).')
     expect(() => parsePairArgs('lessons', ['show'])).toThrow('lessons show needs a lesson id (harness pair lessons list).')
     expect(parsePairArgs('lessons', ['show', 'beef01', '--create', '--dry-run']).payload).toEqual({ verb: 'lessons', action: 'show', id: 'beef01' })
     expect(parsePairArgs('lessons', ['export', 'beef01']).payload).toEqual({ verb: 'lessons', action: 'export' })

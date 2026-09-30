@@ -20,6 +20,9 @@ const List<List<WebMenuItem>> kWebMenuGroups = [
   ],
   [
     (command: 'agent.share', label: 'Share harness', width: WebMenuWidth.any),
+    // One split, always to the right: a second "down" row only lengthens the
+    // menu, and All commands still has Split down.
+    (command: 'pane.split_right', label: 'Split pane', width: WebMenuWidth.any),
     (command: 'pane.close', label: 'Close pane', width: WebMenuWidth.any),
   ],
   [

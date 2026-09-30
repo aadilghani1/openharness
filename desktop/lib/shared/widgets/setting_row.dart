@@ -16,6 +16,7 @@ class SettingRow extends StatelessWidget {
     required this.title,
     this.detail,
     required this.control,
+    this.controlSemanticLabel,
     this.footer,
     this.alignTop = false,
   });
@@ -23,6 +24,12 @@ class SettingRow extends StatelessWidget {
   final String title;
   final String? detail;
   final Widget control;
+
+  /// Purpose of a single otherwise unlabeled control, such as a switch.
+  ///
+  /// Opt in only when [control] has one action. Rows containing several fields
+  /// or buttons keep their separate labels and actions instead of merging them.
+  final String? controlSemanticLabel;
 
   /// Guidance or feedback that belongs inside this setting's block.
   final Widget? footer;
@@ -51,6 +58,9 @@ class SettingRow extends StatelessWidget {
         ],
       ],
     );
+    final labeledControl = controlSemanticLabel == null
+        ? control
+        : Semantics(label: controlSemanticLabel, child: control);
 
     return Container(
       // A raised block: fill plus a soft lift, no rim. The same recipe the rest
@@ -76,7 +86,11 @@ class SettingRow extends StatelessWidget {
                     MediaQuery.textScalerOf(context).scale(_stackBelow)
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [text, const SizedBox(height: 10), control],
+                    children: [
+                      text,
+                      const SizedBox(height: 10),
+                      labeledControl,
+                    ],
                   )
                 : Row(
                     crossAxisAlignment: alignTop
@@ -85,7 +99,7 @@ class SettingRow extends StatelessWidget {
                     children: [
                       Expanded(child: text),
                       const SizedBox(width: 20),
-                      control,
+                      labeledControl,
                     ],
                   ),
           ),

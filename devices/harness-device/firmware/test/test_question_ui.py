@@ -29,6 +29,7 @@ static bool cable_client_supports(uint32_t features) { (void)features; return tr
 '''
 code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_READ_TOKEN_MAX')
 code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
+code += defines('FACE_CX', source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
 code += source[source.index('typedef struct {\n    char key[256]'):source.index('static EXT_RAM_BSS_ATTR struct {')]
 code += r'''
@@ -49,7 +50,7 @@ static cJSON object(cJSON *children,int n) {
     for (int i=0;i<n;i++) children[i].next=i+1<n ? &children[i+1] : NULL;
     return (cJSON){.type=JOBJECT,.child=n ? children : NULL};
 }
-static struct { question_t q; bool voice_open,voice_waiting; uint32_t voice_question_revision,notice_sequence; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
+static struct { question_t q; bool voice_open,voice_waiting,touch_down; uint32_t voice_question_revision,notice_sequence; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
 typedef struct { char id[64],name[96]; } agent_t;
 static agent_t agents[2]={{.id="a",.name="Research helper"},{.id="b",.name="Remote helper"}};
 static bool b_known;
@@ -75,6 +76,8 @@ static void view(view_t v) { input_cancel(); s.view=v; s.offset=0; }
 static void voice_close(void) { s.voice_open=s.voice_waiting=false; }
 static void display_lock(void) {}
 static void display_unlock(void) {}
+static int wakes;
+static void display_wake(void) { wakes++; }
 static bool queue(action_t a) {
     if (congested) return false;
     queued=a; if (a.kind==A_ANSWER) queued_answers++; return true;
@@ -224,6 +227,10 @@ int main(int argc,char **argv) {
     reset(false);s.view=MESSAGE;visit.available=true;strcpy(visit.agent,"b");b_known=false;
     ui_focus_project("b");assert(!strcmp(s.pending_focus,"b") && s.view==MESSAGE);
     b_known=true;ui_focus_project("b");assert(s.view==QUESTION && s.q.loading && !strcmp(s.q.agent,"b"));
+    // A question does NOT change the screen — the home face shows it in the recap's place — but it
+    // does wake the display, and it still counts in the bell until it is answered.
+    reset(false);view(HOME);wakes=0;notices=0;
+    ui_question_show("b","Other","M2","q-b2",NULL);assert(s.view==HOME && wakes==1 && notices==1);
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
     // at their real capacities and prove that no neighboring state changes.

@@ -19,7 +19,8 @@ class Swarm {
        nameIsCustom =
            nameIsCustom ??
            (normalizeName(name) != defaultName &&
-               !(kind == 'store' && name == storeName));
+               !(kind == 'store' && name == storeName) &&
+               !(kind == 'companions' && name == companionsName));
 
   /// What the tab holds: `harness` — panes of agents (the default); `store` —
   /// the Harness Store, no panes. A store tab is a tab like any other —
@@ -33,12 +34,15 @@ class Swarm {
   bool get isBlankNewTab =>
       isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;
   bool get isStore => kind == 'store';
+  bool get isCompanions => kind == 'companions';
+  bool get isUtility => isStore || isCompanions;
   bool get isOrchestrator =>
       kind == 'orchestrator' &&
       orchestratorId != null &&
       orchestratorMachineId != null;
   String? orchestratorId, orchestratorMachineId;
   static const storeName = 'Harness Store';
+  static const companionsName = 'Companions';
 
   static const defaultName = 'New Tab';
   // 'New Harness' was the default until 2026-09-15, 'New Agent' for a day
@@ -140,7 +144,7 @@ class Swarm {
 
   Map<String, Object?> toJson() {
     final agents = panes
-        .where((p) => p.agentId != null)
+        .where((p) => !isCompanions && p.agentId != null)
         .toList(growable: false);
     return {
       'id': id,

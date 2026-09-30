@@ -123,20 +123,22 @@ class HarnessApp extends StatelessWidget {
       ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
-      // One theme, no `darkTheme`/`themeMode` to resolve between: the chosen
-      // palette says whether it is light or dark.
+      // The chosen palette owns the appearance; platform text scaling remains
+      // available to app controls.
       theme: grid.buildAppTheme(brightness: prefs.palette.brightness),
-      // The chosen point size is already applied to every style and terminal
-      // cell. A second UI scale would make the chrome disagree with the grid.
-      builder: (context, child) => MediaQuery.withNoTextScaling(
-        child: _GridTokenScope(
-          child: keymap == null
-              ? child ?? const SizedBox.shrink()
-              : KeymapProvider(
-                  keymap: keymap!,
-                  child: child ?? const SizedBox.shrink(),
-                ),
-        ),
+      highContrastTheme: grid.buildAppTheme(
+        brightness: prefs.palette.brightness,
+        highContrast: true,
+      ),
+      // Desktop forms respect the platform's text size. Fixed-grid terminal
+      // surfaces own their no-scaling boundary alongside terminal zoom.
+      builder: (context, child) => _GridTokenScope(
+        child: keymap == null
+            ? child ?? const SizedBox.shrink()
+            : KeymapProvider(
+                keymap: keymap!,
+                child: child ?? const SizedBox.shrink(),
+              ),
       ),
       home: StatsLifecycle(
         child: RootShell(authenticatedScreen: authenticatedScreen),

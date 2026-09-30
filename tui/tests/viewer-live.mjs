@@ -298,6 +298,119 @@ try {
   await page.close()
   assert.ok((await owner.rpc('agents_list')).agents.some(a => a.id === agentId))
   pass('closing the browser leaves the harness running')
+
+  // A real daemon expires the stream if this disposable hn process stops sending alive/acks.
+  // Its tmux program must survive; waking the client must restore the existing pane and input.
+  await hn('new-session', '-d', '-s', 'recovery')
+  await hn('open-harness', '-s', agentId)
+  const terminalPane = (await hn('display-message', '-p', '#{pane_id}')).stdout.trim()
+  await until('real terminal before pause', async () => (await hn('capture-pane', '-p', '-t', terminalPane)).stdout.includes('HN_VIEWER_ENGINE_READY'))
+  const terminalBefore = (await exec(tmux, ['-L', prefix, 'list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], { env: daemonEnv })).stdout
+  const hnPid = Number((await hn('display-message', '-p', '#{pid}')).stdout.trim())
+  assert.ok(Number.isInteger(hnPid) && hnPid > 1)
+  const command = (await exec('ps', ['-p', String(hnPid), '-o', 'command='])).stdout.trim()
+  assert.ok(command.startsWith(hnBinary + ' ') && command.includes(`-L ${prefix} `), 'only stop this fixture hn')
+  const daemonLog = join(root, 'daemon.log')
+  const logStart = (await readFile(daemonLog, 'utf8')).length
+  process.kill(hnPid, 'SIGSTOP')
+  try {
+    await until('actual daemon heartbeat expiry', async () => (await readFile(daemonLog, 'utf8')).slice(logStart).includes("reason: 'heartbeat timeout'"), 45000)
+  } finally {
+    process.kill(hnPid, 'SIGCONT')
+  }
+  // capture-pane contains the previous screen during reconnect; the input round trip proves live I/O.
+  await until('real terminal accepts input after lease expiry', async () => {
+    await hn('send-keys', '-t', terminalPane, '-l', 'HN_LEASE_RECOVERED')
+    return (await hn('capture-pane', '-p', '-t', terminalPane)).stdout.includes('ECHO:HN_LEASE_RECOVERED')
+  }, 15000)
+  const terminalAfter = (await exec(tmux, ['-L', prefix, 'list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], { env: daemonEnv })).stdout
+  assert.equal(terminalAfter, terminalBefore, 'recovery must keep the same programs')
+  assert.equal((await hn('display-message', '-p', '-t', terminalPane, '#{pane_id}')).stdout.trim(), terminalPane)
+  pass('real daemon lease expiry recovers the same hn pane and process with working terminal input')
+  // A second, isolated hn client uses the real shared desk through this daemon/backend.
+  // Start with stacked panes, then exercise the actual prefix key through a private PTY.
+  const layoutPrefix = prefix + '-layout', outerPrefix = prefix + '-layout-outer'
+  const layoutEnv = { ...hnEnv, HN_SOCKET_NAME: layoutPrefix, HARNESS_TUI_DESK: 'sync' }
+  const layoutTab = randomUUID().replaceAll('-', '')
+  const desk = async ops => {
+    const response = await fetch(`http://127.0.0.1:${ports.daemon}/api/desk${ops ? '/ops' : ''}`, {
+      method: ops ? 'POST' : 'GET', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      ...(ops ? { body: JSON.stringify({ ops }) } : {}),
+    })
+    assert.equal(response.status, 200)
+    const result = await response.json()
+    return result.data ?? result
+  }
+  const layoutHn = (...args) => {
+    assert.equal(layoutEnv.PORT, String(ports.daemon)); assert.equal(layoutEnv.HN_SOCKET_NAME, layoutPrefix)
+    return exec(hnBinary, ['-L', layoutPrefix, '--port', String(ports.daemon), '-f', '/dev/null', ...args], { env: layoutEnv, timeout: 15000 })
+  }
+  const outer = (...args) => exec(tmux, ['-L', outerPrefix, ...args], { env: layoutEnv, timeout: 15000 })
+  await desk([
+    { op: 'tab.create', id: layoutTab, name: 'Layout fixture', nameIsCustom: true },
+    ...[agentId, controlsId].map(id => ({ op: 'pane.add', tabId: layoutTab, machineId, agentId: id })),
+    { op: 'tab.layout', id: layoutTab, layout: { presets: { 2: 'rows' } } },
+  ])
+  cleanups.push(() => outer('kill-server').catch(() => {}))
+  cleanups.push(() => layoutHn('kill-server').catch(() => {}))
+  await outer('-f', '/dev/null', 'new-session', '-d', '-s', 'layout', '-x', '120', '-y', '36',
+    'env', '-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'HN_SOCKET', hnBinary, '-L', layoutPrefix,
+    '--port', String(ports.daemon), '-f', '/dev/null')
+  await until('real desk panes', async () => (await outer('capture-pane', '-p', '-t', 'layout')).stdout.includes('HN_VIEWER_ENGINE_READY'))
+  await until('two real desk panes', async () => (await layoutHn('display-message', '-p', '#{window_panes}')).stdout.trim() === '2')
+  const paneIds = (await layoutHn('list-panes', '-F', '#{pane_id}')).stdout
+  await outer('send-keys', '-t', 'layout', 'C-b', 'Space')
+  await until('C-b Space changes real desk to columns', async () => {
+    const positions = (await layoutHn('list-panes', '-F', '#{pane_left} #{pane_top}')).stdout.trim().split('\n').map(row => row.split(' '))
+    return positions.length === 2 && positions[0][0] !== positions[1][0] && positions[0][1] === positions[1][1]
+  })
+  const chosen = (await layoutHn('display-message', '-p', '#{window_layout}')).stdout.trim()
+  await until('real backend stores native layout', async () => (await desk()).tabs.find(t => t.id === layoutTab)?.layout?.tmux === chosen)
+  await desk([{ op: 'tab.rename', id: layoutTab, name: 'Remote rename', nameIsCustom: true }])
+  for (let i = 0; i < 12; i++) {
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal((await layoutHn('display-message', '-p', '#{window_layout}')).stdout.trim(), chosen, 'real desk reply reverted the layout')
+  }
+  assert.equal((await layoutHn('list-panes', '-F', '#{pane_id}')).stdout, paneIds)
+  const desktopLayout = structuredClone((await desk()).tabs.find(t => t.id === layoutTab).layout)
+  assert.equal(desktopLayout.presets['2'], 'columns', 'C-b Space must update the desktop preset too')
+  delete desktopLayout.tmux
+  desktopLayout.sizes = {}
+  await desk([{ op: 'tab.layout', id: layoutTab, layout: desktopLayout }])
+  for (let i = 0; i < 10; i++) {
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal((await layoutHn('display-message', '-p', '#{window_layout}')).stdout.trim(), chosen,
+      'desktop layout serialization reset the real terminal')
+  }
+  desktopLayout.presets['2'] = 'rows'
+  await desk([{ op: 'tab.layout', id: layoutTab, layout: desktopLayout }])
+  await until('intentional desktop layout reaches hn', async () => {
+    const positions = (await layoutHn('list-panes', '-F', '#{pane_left} #{pane_top}')).stdout.trim().split('\n').map(row => row.split(' '))
+    return positions.length === 2 && positions[0][0] === positions[1][0] && positions[0][1] !== positions[1][1]
+  })
+  assert.equal((await layoutHn('list-panes', '-F', '#{pane_id}')).stdout, paneIds)
+  pass('real C-b Space survives desktop serialization; deliberate remote changes still apply without replacing panes')
+  // Reordering from desktop uses the same real desk API as the UI. Keep the
+  // unequal slots and focused harness, then exercise the reverse direction.
+  const placed = async () => (await layoutHn('list-panes', '-F',
+    '#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}')).stdout.trim().split('\n')
+      .map(row => row.split('|')).sort((a, b) => Number(a[2]) - Number(b[2]) || Number(a[1]) - Number(b[1]))
+  const initial = await placed()
+  await layoutHn('select-pane', '-t', initial[1][0])
+  await layoutHn('resize-pane', '-t', initial[0][0], '-D', '2')
+  const resized = (await layoutHn('display-message', '-p', '#{window_layout}')).stdout.trim()
+  await until('real divider saved before reorder', async () => (await desk()).tabs.find(t => t.id === layoutTab)?.layout?.tmux === resized)
+  const slots = (await placed()).map(row => row.slice(1))
+  await desk([{ op: 'pane.move', tabId: layoutTab, machineId, agentId: controlsId, index: 0 }])
+  await until('real desktop reorder reaches hn', async () => (await placed())[0][0] === initial[1][0])
+  assert.deepEqual((await placed()).map(row => row.slice(1)), slots)
+  assert.equal((await layoutHn('display-message', '-p', '#{pane_id}')).stdout.trim(), initial[1][0])
+  await layoutHn('swap-pane', '-s', initial[0][0], '-t', initial[1][0], '-d')
+  await until('real terminal swap reaches desktop', async () => (await desk()).tabs.find(t => t.id === layoutTab).panes[0].agentId === agentId)
+  assert.deepEqual((await placed()).map(row => row[0]), initial.map(row => row[0]))
+  pass('desktop reorder and terminal swap share pane order through the real backend, preserving focus and dividers')
+  await layoutHn('kill-server')
+
   await owner.rpc('agent_delete', { agentId: controlsId }); controlsId = null
   await owner.rpc('agent_delete', { agentId }); agentId = null
   complete = true

@@ -284,6 +284,7 @@ class TerminalViewState extends State<TerminalView> {
           textStyle: widget.textStyle,
           textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
           theme: widget.theme,
+          fillsBackground: widget.backgroundOpacity >= 1,
           focusNode: _focusNode,
           cursorType: widget.cursorType,
           alwaysShowCursor: widget.alwaysShowCursor,
@@ -703,6 +704,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     required this.textStyle,
     required this.textScaler,
     required this.theme,
+    this.fillsBackground = true,
     required this.focusNode,
     required this.cursorType,
     required this.alwaysShowCursor,
@@ -733,6 +735,9 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final TerminalTheme theme;
 
+  /// See [RenderTerminal.fillsBackground].
+  final bool fillsBackground;
+
   final FocusNode focusNode;
 
   final TerminalCursorType cursorType;
@@ -760,6 +765,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       textStyle: textStyle,
       textScaler: textScaler,
       theme: theme,
+      fillsBackground: fillsBackground,
       focusNode: focusNode,
       cursorType: cursorType,
       alwaysShowCursor: alwaysShowCursor,
@@ -784,6 +790,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..textStyle = textStyle
       ..textScaler = textScaler
       ..theme = theme
+      ..fillsBackground = fillsBackground
       ..focusNode = focusNode
       ..cursorType = cursorType
       ..alwaysShowCursor = alwaysShowCursor

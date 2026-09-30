@@ -11,6 +11,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/swarm_resource_preview.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
@@ -266,6 +267,8 @@ void main() {
         expect(picker.modelSection(running), ModelSearchSection.local);
         expect(picker.modelSection(downloaded), ModelSearchSection.local);
         expect(picker.modelSection(download), ModelSearchSection.catalog);
+        picker.move(picker.rows.indexOf(download) - picker.cursor);
+        await tester.pumpAndSettle();
         expect(
           find.text('Get for ${thisComputerName()} · 64 GB'),
           findsOneWidget,
@@ -281,15 +284,12 @@ void main() {
         expect(_statusColor(tester, downloaded), isNot(_live));
         expect(_status(tester, download), 'Get');
         expect(_statusColor(tester, download), isNot(_live));
-        expect(
-          _statusColor(tester, download),
-          _statusColor(tester, downloaded),
-        );
+        expect(_statusColor(tester, download), DesktopChrome.selectionDetail);
 
         // Size, then speed — measured while it runs, else the catalog's estimate for this machine.
-        expect(_facts(tester, running), ' 25 GB   21 tok/s');
-        expect(_facts(tester, download), '5.6 GB  ~10 tok/s');
-        expect(_facts(tester, downloaded), '7.3 GB           ');
+        expect(_facts(tester, running), '25 GB · 21 tok/s');
+        expect(_facts(tester, download), '5.6 GB · ~10 tok/s');
+        expect(_facts(tester, downloaded), '7.3 GB');
         // Every row's columns line up: the size, the speed and the word start where the next row's do.
         final rightEdges = {
           for (final row in [running, downloaded, download])
@@ -321,7 +321,7 @@ void main() {
         final picker = await _open(tester, app);
         final running = _row(picker, 'Qwen3.6-35B-A3B');
         expect(_status(tester, running), SwarmSearchController.inUseWord);
-        expect(_statusColor(tester, running), _live);
+        expect(_statusColor(tester, running), DesktopChrome.selectionDetail);
         // Cmd-I opens on the model the harness is on.
         expect(picker.selected!.id, running.id);
         expect(_inPreview('Running · this harness is on it'), findsOneWidget);
@@ -438,7 +438,10 @@ void main() {
         expect(picker.usingLabel, 'Downloading 42%…');
         expect(find.textContaining('Downloading 42%…'), findsOneWidget);
         expect(_status(tester, _row(picker, 'Qwen3.5-9B')), 'Downloading');
-        expect(_statusColor(tester, _row(picker, 'Qwen3.5-9B')), _live);
+        expect(
+          _statusColor(tester, _row(picker, 'Qwen3.5-9B')),
+          DesktopChrome.selectionDetail,
+        );
         // A longer word does not push its row's columns out of line with a row that says Use.
         double factsLeft(String title) => tester
             .getTopLeft(

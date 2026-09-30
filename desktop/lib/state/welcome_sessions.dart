@@ -19,7 +19,7 @@ class WelcomeSessions extends ChangeNotifier {
   WelcomeSessions(
     this.app, {
     this.projects = const [],
-    this.limit = 9,
+    this.limit = 6,
     this.window = const Duration(days: 30),
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;

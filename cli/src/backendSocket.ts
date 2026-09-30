@@ -44,6 +44,7 @@ import {
   forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, presentGridSections, retargetPrewarm, type GridSection,
 } from './lib/gridModels.js'
 import { resolveGridTarget } from './lib/gridTarget.js'
+import type { GridAttachResult } from './lib/gridAttach.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
@@ -163,10 +164,6 @@ const APP_PRESENCE_UP_MS = 60_000
 // `this.ws` set, every later connect() returning early, and the daemon reporting "cloud
 // reconnecting…" until someone restarted it.
 const HANDSHAKE_TIMEOUT_MS = 15_000
-/** How long `resolveGridName` waits for a grid reconcile still in flight before answering with
- *  whatever is resolved. Well under the app's 12s `grid_models_list` timeout, leaving that RPC room
- *  for its own `grid` spawns; a reconcile slower than this lands by the next open. */
-const GRID_ATTACH_WAIT_MS = 6_000
 /** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
  *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at
  *  once, would otherwise push a frame to every client for each flick. Exported for the spec. */
@@ -324,8 +321,9 @@ export function deviceAgentRow(raw: unknown): boolean {
 }
 
 /**
- * How many models the DEVICE picker may receive. Matches its own PICK_MAX (ui_screens.c) so the wheel
- * never renders more rows than it was built for; the web picker is unbounded and still gets everything.
+ * How many models the DEVICE picker may receive. It has room for 48 (`models[48]` in ui_habitat.c) and
+ * is handed half of that, so the list it draws is never one it was not built for; the web picker is
+ * unbounded and still gets everything.
  */
 const DEVICE_PICKER_MAX_MODELS = 24
 
@@ -981,10 +979,14 @@ export class BackendSocket {
   private harnessGridName: string | null = null
   /** Injected so the derivation (a `grid` spawn) is a seam in tests; see `lib/gridDerive.ts`. */
   deriveGridName: () => Promise<string | null> = deriveHarnessGridName
-  /** The daemon-start grid reconcile (`lib/gridAttach.ts`), while it is running — so the first
-   *  `grid_models_list` / retarget after an update waits for the sign-in it may still be arranging
-   *  rather than answering "no grid". Set by `cli.ts`; returns null when nothing is in flight. */
-  gridReadyProbe: (() => Promise<unknown> | null) | null = null
+  /** Have grid ready for a grid feature the person is using now (`lib/gridAttach.ts`): `grid` installed,
+   *  signed in as this account with its harness token, and — `ownGrid` — the account's own grid there.
+   *  Asked by acts only (Set up, Get, Use, a move onto a grid model, a Model Manager command), never by
+   *  a read. Set by `cli.ts`; null (tests) reads grid as it stands. */
+  ensureGrid: ((request?: { ownGrid?: boolean }) => Promise<GridAttachResult>) | null = null
+  /** Offline, cheap: is there a `grid` here holding a sign-in? Answers the list read's
+   *  `gridSetupNeeded`. Null (tests) reads as set up. */
+  gridSetUp: (() => boolean) | null = null
 
   /** Set the account's private grid name from the reconcile that just confirmed it, so the RPCs
    *  answer with it at once rather than waiting for the next `machine_meta` (`lib/gridAttach.ts`). */
@@ -1019,24 +1021,25 @@ export class BackendSocket {
    * work out for itself (`lib/gridDerive.ts`). A backend that predates `machine_meta.gridName`
    * left every picker empty while `grid models` listed the model fine; the derivation is the
    * skill's own rule, so the daemon and the agent it opens agree on which grid is "yours".
-   *
-   * Waits, once and briefly, for a grid reconcile still in flight — the machine that just updated is
-   * signing in to grid in the background, and a picker opened in that window would otherwise read
-   * "no grid" for the one moment the answer is about to arrive. Bounded so a slow reconcile (a fresh
-   * sign-in and a grid create) never holds the RPC past the app's own timeout; whatever is resolved
-   * by then is answered, and the next open — after the reconcile has landed — is correct regardless.
    */
   private async resolveGridName(): Promise<string | null> {
-    const inFlight = this.gridReadyProbe?.()
-    if (inFlight) {
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        inFlight.catch(() => {}),
-        new Promise<void>((resolve) => { timer = setTimeout(resolve, GRID_ATTACH_WAIT_MS) }),
-      ])
-      if (timer) clearTimeout(timer)
-    }
     return this.harnessGridName ?? await this.deriveGridName()
+  }
+
+  /**
+   * Grid set up for an act, or the sentence saying why it could not be: null when it is ready — or
+   * when this daemon has no [ensureGrid] to ask (tests), which reads grid as it stands.
+   */
+  private async gridNotReady(ownGrid: boolean): Promise<string | null> {
+    if (!this.ensureGrid) return null
+    const ready = await this.ensureGrid({ ownGrid })
+    if (ready.status !== 'converged' && ready.status !== 'signed-in') {
+      return ready.detail || 'Grid could not be set up on this computer. Try again.'
+    }
+    if (ownGrid && ready.ownGrid && !['created', 'existed', 'adopted'].includes(ready.ownGrid)) {
+      return ready.detail || 'Your grid could not be created. Try again.'
+    }
+    return null
   }
 
   connect(): void {
@@ -2025,9 +2028,25 @@ export class BackendSocket {
         case 'grid_fleet_model_stop': {
           // A daemon-owned operation survives panel closure and a lost reply.
           // Keep hardware/catalog/network reads off the ordered terminal queue.
-          void this.resolveGridName().then(async grid => type === 'grid_fleet_models_list'
-            ? this.localModels.list(grid, payload.refresh === true)
-            : this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_download' ? 'download' : type === 'grid_fleet_model_start' ? 'start' : 'stop'))
+          //
+          // Grid is set up here only for an ACT: the picker's Set up (a list read carrying `setup`),
+          // a Get, a Use. The list read the app polls while a picker is open never sets anything up —
+          // it says whether it is needed (`gridSetupNeeded`). A Get needs a sign-in (the catalog is
+          // grid's); a Use serves on the account's own grid, and so does the Set up that offers it.
+          void (async () => {
+            const list = type === 'grid_fleet_models_list'
+            const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
+            const notReady = setup ? await this.gridNotReady(type !== 'grid_fleet_model_download') : null
+            const grid = await this.resolveGridName()
+            if (list) {
+              const snapshot = await this.localModels.list(grid, payload.refresh === true || setup)
+              const needed = this.gridSetUp ? !this.gridSetUp() : false
+              if (setup && !notReady) void this.pushGridModels()
+              return { ...snapshot, ...(needed ? { gridSetupNeeded: true } : {}), ...(notReady ? { gridSetupError: notReady } : {}) }
+            }
+            if (notReady) return { error: notReady }
+            return this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_download' ? 'download' : type === 'grid_fleet_model_start' ? 'start' : 'stop')
+          })()
             .then(result => reply(type, requestId, { ...result }))
             .catch(() => reply(type, requestId, { error: 'Models are unavailable. Try again.' }))
           return
@@ -2039,6 +2058,11 @@ export class BackendSocket {
           const request = parseGridFleetRequest(payload)
           if (!request || typeof requestId !== 'string') { reply(type, requestId, { error: 'INVALID_GRID_COMMAND' }); return }
           // Detached: pulls/builds can take minutes. Keep typing, cancellation, and telemetry responsive.
+          // ⚠️ Run against grid AS IT STANDS — never set up first. A Grid harness session issues these
+          // on its own the moment its viewer comes up (every open one, on every daemon start), so
+          // setting grid up here signed a machine in to grid right after a Harness-only sign-in,
+          // with nobody asking. A person sets grid up through the picker's Set up or by opening the
+          // Model Manager; until then grid answers these in its own words.
           void this.gridFleet.run(connId, requestId, request)
             .then(result => reply(type, requestId, { ...result }))
             .catch(() => reply(type, requestId, { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }))
@@ -2881,9 +2905,15 @@ export class BackendSocket {
           if (picked && payload.grid === undefined && !clear) {
             // The grid the model was picked FROM, when the picker says (a shared grid's section);
             // the account's own grid otherwise, as before.
-            const pickedGrid = typeof payload.gridName === 'string' && payload.gridName.trim()
-              ? payload.gridName.trim()
-              : await this.resolveGridName()
+            // A move onto a grid model is a grid feature in use: grid is signed in first, if it is not
+            // yet — and the account's own grid made sure of when that is where the model is.
+            const named = typeof payload.gridName === 'string' && payload.gridName.trim() ? payload.gridName.trim() : null
+            const notReady = await this.gridNotReady(!named || named === this.harnessGridName)
+            if (notReady) {
+              reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: notReady })
+              return
+            }
+            const pickedGrid = named ?? await this.resolveGridName()
             const resolved = await resolveGridTarget(pickedGrid, picked)
             if (!resolved) {
               reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: 'Could not read this machine\'s grid endpoint.' })

@@ -116,8 +116,11 @@ try:
     launch('new-session', '-s', 'work')
     wait(lambda: hn('list-panes', '-t', 'work', '-F', '#{pane_id}', check=False).stdout.strip() == '%0', 'initial local shell')
     send("printf 'ENV:%s:%s:%s:%s:%s:%s\\n' \"$$\" \"$SHELL\" \"$HNE_KEEP\" \"${HNE_REMOVE-unset}\" \"${HNE_HIDDEN-unset}\" \"$TMUX_PANE\"; HNE_PERSIST=remembered")
-    wait(lambda: ':kept:unset:unset:%0' in capture(), 'configured environment and stable pane ID')
-    pid = int(next(line for line in capture().splitlines() if line.startswith('ENV:')).split(':')[1])
+    # An interactive shell may leave its startup prompt before the record. Match every
+    # field from one capture instead of assuming that output starts in column zero.
+    record = wait(lambda: re.search(r'ENV:(\d+):/bin/sh:kept:unset:unset:%0(?=\s|$)',
+                                    capture()), 'configured environment and stable pane ID')
+    pid = int(record.group(1))
     sockets = list((BASE / f'hn-{os.getuid()}').glob('*.pty'))
     assert len(sockets) == 1 and stat.S_IMODE(sockets[0].stat().st_mode) == 0o600
     assert stat.S_IMODE(sockets[0].parent.stat().st_mode) == 0o700
@@ -183,7 +186,12 @@ try:
     wait(lambda: 'Mock Claude' in hn('list-harnesses', check=False).stdout, 'Harness daemon arrives', 15)
     send("printf 'WITH_DAEMON:%s:%s\\n' \"$$\" \"$HNE_PERSIST\"")
     wait(lambda: f'WITH_DAEMON:{pid}:remembered' in capture(), 'original local shell survives daemon arrival')
-    print('PASS daemon arrival preserves local shell', flush=True)
+    wait(lambda: hn('display-message', '-p', '#{local_machine}|#{pane_machine}').stdout.strip() == 'mock-local|mock-local',
+         'local shell and status share the machine name from the app')
+    tm('send-keys', '-t', 'outer', 'C-b', 'N')
+    wait(lambda: 'mock-local:' in tm('capture-pane', '-p', '-t', 'outer').stdout, 'New Harness uses the app machine name')
+    tm('send-keys', '-t', 'outer', 'Escape')
+    print('PASS daemon arrival preserves local shell and uses the app machine name everywhere', flush=True)
 
     hn('kill-server', check=False)
     wait(lambda: not own_processes(), 'all test hn processes stop')
@@ -214,6 +222,7 @@ try:
     wait(lambda: len(hn('list-windows', '-t', 'desk', '-F', '#{window_id}').stdout.splitlines()) == 2, 'local window after daemon loss')
     send('printf LOCAL_WINDOW', 'desk:1.0')
     wait(lambda: 'LOCAL_WINDOW' in capture('desk:1.0'), 'local window runs')
+    assert hn('display-message', '-p', '-t', 'desk:1.0', '#{local_machine}|#{pane_machine}').stdout.strip() == 'mock-local|mock-local'
     os.kill(mock.pid, signal.SIGCONT)
     hn('send-keys', '-t', 'desk:0.0', 'RETURNED_DESK')
     wait(lambda: 'RETURNED_DESK' in capture('desk:0.0'), 'daemon stream reconnects', 25)

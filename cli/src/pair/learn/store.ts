@@ -47,6 +47,7 @@ export interface LessonRecord {
   source: LessonSource
   /** Where a borrowed lesson came from, in words: `borrowed from hermes`. */
   provenance?: string | null
+  reason?: string
   created: number
   status: LessonStatus
   /** The day it was approved (YYYY-MM-DD). */
@@ -167,6 +168,7 @@ export class LessonStore {
       hash, signal: { kind: signal.kind, key: signal.key }, project: signal.project, projectName: signal.projectName,
       learnedBy: input.learnedBy, from: signal.from.slice(0, 8), evidence: signal.evidence.slice(0, 8), source: input.source,
       ...(input.provenance ? { provenance: input.provenance } : {}),
+      ...(signal.reason ? { reason: signal.reason } : {}),
       created: this.now(), status: 'pending', approved: null,
     }
     // The guard once more, over the file an agent would read — front matter, provenance and evidence too.

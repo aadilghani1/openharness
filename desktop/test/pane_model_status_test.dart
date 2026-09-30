@@ -294,7 +294,7 @@ void main() {
       await tester.tap(find.text('Pick another'));
       await tester.pumpAndSettle();
       // The pane's own model picker, open on its models.
-      expect(find.text('SUBSCRIPTION'), findsOneWidget);
+      expect(find.text('Subscription'), findsOneWidget);
       expect(find.text('Gemma-4-12B'), findsOneWidget);
     },
   );

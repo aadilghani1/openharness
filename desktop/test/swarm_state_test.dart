@@ -132,6 +132,7 @@ void main() {
   for (final legacy in [
     'New Swarm',
     'New swarm',
+    'New Tab',
     'New tab',
     'New Tab',
     'New Harness',

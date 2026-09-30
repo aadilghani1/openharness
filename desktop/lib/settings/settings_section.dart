@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../logging/debug_surface.dart';
 
@@ -11,16 +11,16 @@ import '../logging/debug_surface.dart';
 /// rail, the search filter and the pane all read this list, so a section cannot
 /// be listed without a screen behind it or reachable without a row.
 enum SettingsSection {
-  account(LucideIcons.user300, 'Account'),
-  profiles(LucideIcons.monitor300, 'Profiles'),
-  usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
-  customize(LucideIcons.palette300, 'Customize'),
-  notifications(LucideIcons.bell300, 'Notifications'),
-  experimental(LucideIcons.flaskConical300, 'Experimental'),
-  devices(LucideIcons.zap300, 'Autonomous robots'),
-  shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
-  debug(LucideIcons.bug300, 'Debug'),
-  about(LucideIcons.info300, 'About');
+  account(AppIcons.user, 'Account'),
+  profiles(AppIcons.monitor, 'Profiles'),
+  usage(AppIcons.chartNoAxesColumn, 'Usage'),
+  customize(AppIcons.palette, 'Customize'),
+  notifications(AppIcons.bell, 'Notifications'),
+  experimental(AppIcons.flaskConical, 'Experimental'),
+  devices(AppIcons.zap, 'Autonomous robots'),
+  shortcuts(AppIcons.keyboard, 'Keyboard shortcuts'),
+  debug(AppIcons.bug, 'Debug'),
+  about(AppIcons.info, 'About');
 
   const SettingsSection(this.icon, this.label);
 

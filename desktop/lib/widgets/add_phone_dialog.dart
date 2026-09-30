@@ -6,19 +6,15 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:qr/qr.dart';
-import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../api/api_client.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart' show WsRequestFailure, WsRequestTimeout;
-import '../terminal/terminal_text.dart';
-import '../terminal/terminal_theme.dart';
-import '../terminal/terminal_theme_store.dart';
-import 'box_chrome.dart';
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
 import 'terminal_prompt.dart';
-import 'terminal_text_action.dart';
 
 /// Harness ▸ Add Phone… — a QR the phone scans to sign in to this account AND
 /// pair with this computer, end to end encrypted, with no password typed.
@@ -554,78 +550,37 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
 
   void _close() => Navigator.of(context).maybePop();
 
-  TerminalTheme get _theme =>
-      terminalThemeFor(grid.AppTheme.palette.value, terminalThemeStore.value);
-  Color get _faint => _theme.muted;
-  TextStyle _ink([Color? color]) =>
-      terminalContentStyle(color: color ?? _theme.foreground);
+  Color get _faint => DesktopChrome.muted;
+  TextStyle _ink([Color? color]) => DesktopChrome.text(color: color);
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    // Live font and colour changes reach an open dialog too — see the dialog
-    // guide, design/terminal-dialogs.md.
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        terminalFontStore,
-        terminalThemeStore,
-        grid.AppTheme.palette,
-      ]),
-      builder: (context, _) => _dialog(context),
-    );
+    grid.AppTheme.watch(context);
+    return _dialog(context);
   }
 
   Widget _dialog(BuildContext context) {
-    // The grid: margins in whole character columns, spacing in whole rows.
-    final cell = terminalCellSizeOf(context);
-    final margin = cell.width * 2;
-    final row = cell.height;
-    // The window is the QR and one line: 240 points — a phone camera reads that
-    // from across a desk — in a whole number of rows, so the line under it stays
-    // on the grid, and the window just wider than the code.
-    final qrSide = (240 / row).ceil() * row;
-    final width = math.min(
-      qrSide + margin * 4,
-      MediaQuery.sizeOf(context).width - 32,
-    );
     return TerminalPromptKeys(
       cancel: _close,
-      child: Dialog(
-        insetPadding: const EdgeInsets.all(16),
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        child: SizedBox(
-          width: width,
-          child: Material(
-            elevation: 0,
-            color: _theme.background,
-            surfaceTintColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-              side: terminalPaneBorder(focused: true),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: DefaultTextStyle.merge(
-              style: _ink(),
-              child: SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(margin, row, margin, row),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Add your phone',
-                      textAlign: TextAlign.center,
-                      style: _ink(),
-                    ),
-                    SizedBox(height: row),
-                    ..._body(qrSide, row),
-                  ],
+      child: DesktopPromptSurface(
+        width: 440,
+        body: LayoutBuilder(
+          builder: (context, constraints) => DesktopPromptScrollBody(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Semantics(
+                  header: true,
+                  child: Text('Add your phone', style: DesktopChrome.heading()),
                 ),
-              ),
+                const SizedBox(height: 24),
+                ..._body(math.min(240, constraints.maxWidth), 16),
+              ],
             ),
           ),
         ),
+        actions: [TextButton(onPressed: _close, child: const Text('Done'))],
       ),
     );
   }
@@ -641,12 +596,12 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
           Text('Connect a computer to add your phone.', style: _ink()),
           if (widget.onConnectMachine case final connect?) ...[
             SizedBox(height: row),
-            TerminalTextAction(
-              label: 'Connect a machine',
+            TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
                 connect();
               },
+              child: const Text('Connect a machine'),
             ),
           ],
         ];
@@ -662,7 +617,16 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     }
     // A moment's wait for the sign-in code, in the QR's own space: a QR that
     // changed right after it appeared would be one scanned without it.
-    if (!_signInAsked) return [SizedBox(height: qrSide + row * 2)];
+    if (!_signInAsked) {
+      return [
+        SizedBox(
+          height: qrSide + row * 2,
+          child: Center(
+            child: Text('Preparing your code…', style: _ink(_faint)),
+          ),
+        ),
+      ];
+    }
     final link = phonePairLink(
       email: target.email,
       machineId: target.machineId,
@@ -705,17 +669,17 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       Text(
         'Paired with this ${_thisComputer()}',
         key: const ValueKey('add-phone-devices'),
-        style: _ink(_faint),
+        style: DesktopChrome.metadata(),
       ),
+      const SizedBox(height: 8),
       for (final device in shown) _deviceRow(device),
       if (more > 0)
         Align(
           alignment: Alignment.centerLeft,
-          child: TerminalTextAction(
+          child: TextButton(
             key: const ValueKey('add-phone-more-devices'),
-            label: '+ $more more',
-            padding: EdgeInsets.zero,
             onPressed: () => setState(() => _allDevices = true),
+            child: Text('Show $more more'),
           ),
         ),
     ];
@@ -723,37 +687,49 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
 
   Widget _deviceRow(PairedDevice device) {
     final removing = _removing.contains(device.fingerprint);
-    return Row(
+    return Padding(
       key: ValueKey('add-phone-device-${device.fingerprint}'),
-      children: [
-        Expanded(
-          child: Text(
-            device.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: _ink(),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  device.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.control(),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  device.online ? 'Online' : _pairedAgo(device.pairedAt),
+                  style: DesktopChrome.metadata(
+                    color: device.online ? grid.AppPalette.online : _faint,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        Text(
-          device.online ? 'online' : _pairedAgo(device.pairedAt),
-          style: _ink(device.online ? _theme.green : _faint),
-        ),
-        TerminalTextAction(
-          label: removing ? 'removing…' : 'remove',
-          onPressed: removing || widget.removeDevice == null
-              ? null
-              : () => unawaited(_remove(device)),
-        ),
-      ],
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: removing || widget.removeDevice == null
+                ? null
+                : () => unawaited(_remove(device)),
+            child: Text(removing ? 'Removing…' : 'Remove'),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _status() {
     final connected = _connected;
     final (text, color) = connected != null
-        ? ('✓ Connected $connected', _theme.green)
+        ? ('✓ Connected $connected', grid.AppPalette.online)
         : _message != null
-        ? (_message!, _theme.red)
+        ? (_message!, Theme.of(context).colorScheme.error)
         : ('Scan with Harness on your iPhone', _faint);
     return Semantics(
       liveRegion: true,

@@ -311,7 +311,7 @@ void main() {
   );
 
   testWidgets(
-    'in the workspace an empty tab keys the list, and gets it back after Cmd-P',
+    'empty workspace keeps recent sessions available before connecting a local machine',
     (tester) async {
       newHarnessOpensInBox = true;
       addTearDown(() => newHarnessOpensInBox = false);
@@ -319,21 +319,17 @@ void main() {
       final app = sessions.app;
       await mount(tester, app);
       await tester.pump(const Duration(milliseconds: 50));
-      String? focused() => FocusManager.instance.primaryFocus?.debugLabel;
       expect(find.byKey(const ValueKey('welcome-sessions')), findsOneWidget);
-      expect(focused(), 'Welcome sessions');
+      expect(find.text('Choose a machine'), findsOneWidget);
 
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.pump(const Duration(milliseconds: 100));
-      expect(focused(), isNot('Welcome sessions'));
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump(const Duration(milliseconds: 100));
-      expect(focused(), 'Welcome sessions');
+      expect(find.text('Choose a machine'), findsOneWidget);
 
-      // 1 Command palette (a1), 2 NFC chat, 3 Deploy latest firmware (a2).
-      await key(tester, LogicalKeyboardKey.arrowDown);
-      await key(tester, LogicalKeyboardKey.arrowDown);
-      await key(tester, LogicalKeyboardKey.enter);
+      await tester.tap(find.text('Deploy latest firmware'));
       await tester.pump(const Duration(milliseconds: 100));
       expect(app.panes.map((pane) => pane.agentId), ['a2']);
       await tester.pumpWidget(const SizedBox());
@@ -394,7 +390,7 @@ void main() {
       expect(find.text('Investigate Harness crash'), findsOneWidget);
       expect(find.text('In the Codex app'), findsNothing);
 
-      await key(tester, LogicalKeyboardKey.digit1);
+      await tester.tap(find.text('Investigate Harness crash'));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
       expect(

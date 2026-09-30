@@ -2,6 +2,7 @@
 """Exercise hn's public viewer commands against a private mock and a recording browser opener."""
 import json
 import os
+import signal
 from pathlib import Path
 import shutil
 import shlex
@@ -188,7 +189,26 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
             mux('kill-server', ok=False)
 
     finally:
-        hn('kill-server', ok=False)
-        mock.terminate()
-        try: mock.wait(timeout=5)
-        except subprocess.TimeoutExpired: mock.kill(); mock.wait(timeout=5)
+        try:
+            hn('kill-server', ok=False)
+            # kill-server acknowledges before the headless client finishes saving. Deleting
+            # HOME then races its final writes (rmtree: directory not empty on Linux).
+            def clients():
+                rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True).splitlines()
+                return [int(pid) for row in rows if len(parts := row.strip().split(None, 1)) == 2
+                        for pid, command in [parts] if any(command.startswith(str(path) + ' ') for path in (binary, binary.resolve()))
+                        and f'-L {prefix} ' in command]
+            deadline = time.monotonic() + 5
+            while clients() and time.monotonic() < deadline:
+                time.sleep(.05)
+            for pid in clients():
+                try: os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+            deadline = time.monotonic() + 5
+            while clients() and time.monotonic() < deadline:
+                time.sleep(.05)
+            assert not clients(), 'viewer test clients did not exit'
+        finally:
+            mock.terminate()
+            try: mock.wait(timeout=5)
+            except subprocess.TimeoutExpired: mock.kill(); mock.wait(timeout=5)

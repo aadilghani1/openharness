@@ -395,10 +395,13 @@ pub mod fzfcolor {
 }
 
 
-// Hn's own chrome speaks the 16 ANSI colours, as tmux's does: the terminal's theme decides what
-// they look like, so it reads on dark, light and Solarized alike. SOFT and MUTED are not colours
-// but emphasis (the terminal's dim), `fg` turns them into that.
-pub const ACCENT: Color = Color::Blue;
+/// Readable accent for hn controls. ANSI blue can be nearly black in terminal themes.
+/// Keep engine branding and explicitly configured tmux colors separate from chrome.
+pub fn accent() -> Color {
+    if palette().2 { Color::Rgb(0, 100, 120) } else { Color::Rgb(95, 215, 230) }
+}
+// Semantic status colors use the terminal palette. SOFT and MUTED represent emphasis;
+// `fg` applies it to the theme's foreground.
 pub const ACCENT_SOFT: Color = Color::Cyan;
 pub const ONLINE: Color = Color::Green;
 pub const WARN: Color = Color::Yellow;
@@ -408,6 +411,64 @@ pub const TEAL: Color = Color::Cyan;
 pub const MUTED: Color = Color::Indexed(8);
 pub const SOFT: Color = Color::Indexed(7);
 pub const TEXT: Color = Color::Reset;
+
+/// hn's chrome from the terminal's OSC 10/11 answer: `(background, foreground, is_light)`.
+/// Every piece of hn's chrome — the status bar, the message line, the pane borders — takes its
+/// colours from this one palette, so none of it disagrees with the theme. The foreground is made
+/// readable on the background; a deterministic dark default holds until the terminal answers.
+pub fn palette() -> (Color, Color, bool) {
+    let (bg, fg) = crate::term_out::terminal_colours()
+        .unwrap_or_else(|| ("#201f26".to_string(), "#f5f5f5".to_string()));
+    let light = crate::term_out::terminal_is_light().unwrap_or(false);
+    let bg = crate::tmuxconf::colour(&bg).unwrap_or(Color::Reset);
+    let fg = crate::tmuxconf::colour(&fg).unwrap_or(Color::Reset);
+    (bg, fg, light)
+}
+
+/// Surface colors derived from the terminal theme, with a stable fallback before OSC replies.
+#[derive(Clone, Copy, Debug)]
+pub struct PanePalette {
+    pub surface: Color, pub inactive_surface: Color,
+    pub foreground: Color, pub inactive_foreground: Color, pub muted: Color,
+    pub active_foreground: Color,
+    pub border: Color, pub active_border: Color,
+    pub status: Color, pub status_foreground: Color,
+}
+
+pub fn pane_palette() -> PanePalette {
+    let native = crate::term_out::terminal_colours().and_then(|(bg, fg)|
+        Some((crate::tmuxconf::colour(&bg)?, crate::tmuxconf::colour(&fg)?)));
+    pane_palette_for(native)
+}
+
+fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
+    let (bg, foreground) = native.unwrap_or((Color::Rgb(28, 31, 36), Color::Rgb(220, 225, 231)));
+    let Color::Rgb(r, g, b) = bg else { unreachable!("terminal background is RGB") };
+    let light = 299 * r as u32 + 587 * g as u32 + 114 * b as u32 > 128_000;
+    let mix = |a: Color, b: Color, amount: u16| {
+        let (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (a, b) else { return a };
+        let c = |a: u8, b: u8| ((a as u16 * (100 - amount) + b as u16 * amount) / 100) as u8;
+        Color::Rgb(c(ar, br), c(ag, bg), c(ab, bb))
+    };
+    let green = if light { Color::Rgb(58, 102, 48) } else { Color::Rgb(133, 181, 105) };
+    let inactive_surface = if light { mix(bg, foreground, 8) } else { Color::Rgb(64, 64, 64) };
+    // Panes sit directly on the native terminal background. Lift the focused fill
+    // just enough to distinguish its edge while retaining the terminal's theme.
+    let surface = mix(bg, foreground, if light { 4 } else { 10 });
+    let surface = if surface == inactive_surface { mix(bg, foreground, if light { 2 } else { 6 }) } else { surface };
+    PanePalette {
+        surface,
+        inactive_surface,
+        foreground, inactive_foreground: mix(foreground, bg, 9),
+        muted: mix(foreground, bg, 30),
+        border: mix(inactive_surface, foreground, 20),
+        active_border: if light { Color::Rgb(70, 86, 103) } else { Color::Rgb(226, 230, 235) },
+        active_foreground: if light { Color::Rgb(74, 89, 105) } else { Color::Rgb(192, 200, 210) },
+        // A familiar green anchor, subdued enough that the working pane keeps the attention.
+        status: mix(bg, green, if light { 18 } else { 28 }),
+        status_foreground: if light { Color::Rgb(35, 62, 29) } else { Color::Rgb(196, 216, 183) },
+    }
+}
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
@@ -517,7 +578,14 @@ fn fzf_base() -> &'static Fzf {
             i += 1;
         }
         // No base named: the renderer's own — 256 colours, or the 16 on a terminal without them.
-        let base = base.unwrap_or(if depth() < 256 { DEFAULT16 } else { DARK256 });
+        // The terminal's own background (when it answered) chooses light over dark, so a light
+        // terminal gets the light palette rather than the stock dark one.
+        let base = base.unwrap_or_else(|| {
+            if let Some(light) = crate::term_out::terminal_is_light() {
+                return if light { LIGHT256 } else { DARK256 };
+            }
+            if depth() < 256 { DEFAULT16 } else { DARK256 }
+        });
         if black { theme.bg.col = Col::Idx(0) }
         let pal = init(theme, base, bold);
         let fg = |p: P| p.style().fg.unwrap_or(Color::Reset);
@@ -1036,7 +1104,14 @@ pub const TMUX_DISPLAY_PANES_ACTIVE: Color = Color::Red;
 
 pub fn fg(color: Color) -> Style {
     match color {
-        MUTED | SOFT => Style::default().add_modifier(Modifier::DIM),
+        MUTED | SOFT if no_color() => Style::default().add_modifier(Modifier::DIM),
+        // MUTED/SOFT are emphasis (the theme's dim), so they dim the theme's own readable text —
+        // not the terminal's raw default foreground, which can disagree with the theme (the mixed
+        // colour source that made hn's chrome read teal on some terminals).
+        MUTED | SOFT => {
+            let (_, fg, _) = palette();
+            Style::default().fg(depth_fit(fg)).add_modifier(Modifier::DIM)
+        }
         _ if no_color() => Style::default(),
         c => Style::default().fg(depth_fit(c)),
     }
@@ -1100,7 +1175,7 @@ fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
         "grok" => ("X", TEXT),
         "devin" => ("◆", TEAL),
         "copilot" => ("◉", Color::Rgb(0x8B, 0x94, 0x9E)),
-        "commandcode" => ("⌘", ACCENT),
+        "commandcode" => ("⌘", Color::Blue),
         "muse" => ("♪", ATTENTION),
         "agy" => ("◈", Color::Rgb(0x42, 0x85, 0xF4)),
         "terminal" => ("❯", SOFT),
@@ -1195,5 +1270,61 @@ mod opts_tests {
         assert_eq!(parse_label_pos("3:bottom"), (3, true));
         assert_eq!(parse_label_pos("-2"), (-2, false));
         assert_eq!(parse_label_pos("bottom"), (0, true));
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    #[test]
+    fn pane_surfaces_remain_distinct_on_dark_and_light_terminals() {
+        for (bg, fg) in [(Color::Rgb(0, 0, 0), Color::Rgb(245, 245, 245)),
+                         (Color::Rgb(247, 247, 247), Color::Rgb(26, 26, 26))] {
+            let p = super::pane_palette_for(Some((bg, fg)));
+            assert_ne!(p.surface, p.inactive_surface);
+            assert_ne!(p.surface, bg);
+            assert_ne!(p.border, p.active_border);
+            assert_eq!(p.foreground, fg);
+            let luminance = |c: Color| { let Color::Rgb(r, g, b) = c else { panic!("RGB palette") };
+                299 * r as i32 + 587 * g as i32 + 114 * b as i32 };
+            assert!((luminance(p.surface) - luminance(p.foreground)).abs() > 180_000);
+            assert!((luminance(p.inactive_surface) - luminance(p.inactive_foreground)).abs() > 150_000);
+            assert!((luminance(p.status) - luminance(p.status_foreground)).abs() > 120_000);
+        }
+        let fallback = super::pane_palette_for(None);
+        assert_eq!(fallback.surface, Color::Rgb(47, 50, 55));
+        assert_eq!(fallback.inactive_surface, Color::Rgb(64, 64, 64));
+    }
+
+    use super::palette;
+    use ratatui::style::Color;
+
+    /// The schema: a dark terminal answers a dark background and a light text; the palette must
+    /// keep them, mark the terminal dark, and the readable text must come back as the light one.
+    /// A light terminal inverts both. This is the invariant every piece of chrome uses, so none
+    /// of it disagrees with the theme.
+    #[test]
+    fn palette_follows_the_terminal_answer() {
+        crate::term_out::set_terminal_colours(Some("#201f26".into()), Some("#f5f5f5".into()));
+        let (bg, fg, light) = palette();
+        assert_eq!(bg, Color::Rgb(0x20, 0x1f, 0x26), "dark bg must map to the terminal's rgb");
+        assert_eq!(fg, Color::Rgb(0xf5, 0xf5, 0xf5), "the readable text on dark is light");
+        assert!(!light, "a dark background must not read as light");
+
+        // MUTED/SOFT are emphasis, so they must dim the theme's readable text (the palette fg), never
+        // dip into the terminal's raw default foreground — the mixed colour source that made hn's
+        // chrome read as teal on some terminals while the status bar was light.
+        for c in [super::MUTED, super::SOFT] {
+            let s = super::fg(c);
+            let expected = (!super::no_color()).then(|| super::depth_fit(fg));
+            assert_eq!(s.fg, expected, "{c:?} follows the theme and NO_COLOR");
+            assert!(s.add_modifier.contains(ratatui::style::Modifier::DIM), "{c:?} stays emphasis (dim)");
+        }
+
+        // A light terminal, in the same thread.
+        crate::term_out::set_terminal_colours(Some("#f7f7f7".into()), Some("#1a1a1a".into()));
+        let (bg, fg, light) = palette();
+        assert_eq!(bg, Color::Rgb(0xf7, 0xf7, 0xf7));
+        assert_eq!(fg, Color::Rgb(0x1a, 0x1a, 0x1a));
+        assert!(light, "a light background reads as light");
     }
 }

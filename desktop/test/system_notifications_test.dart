@@ -3,6 +3,7 @@
 // and how each platform's notifier is driven.
 import 'dart:async';
 import 'dart:io' show ProcessException, ProcessResult;
+import 'dart:ui' show SemanticsAction, Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -483,6 +484,44 @@ void main() {
             ),
           ),
         );
+
+    testWidgets('each alert switch announces its own purpose and state', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        final os = _Recorder();
+        final system = SystemNotifications(
+          store: store(on: false),
+          notifier: os,
+        );
+        await pump(tester, system);
+        for (final (key, label) in [
+          ('settings-screen-alerts', 'On-screen alerts'),
+          ('settings-alert-sounds', 'Alert sounds'),
+          ('settings-desktop-notifications', 'Desktop notifications'),
+        ]) {
+          final toggle = find.byKey(Key(key));
+          final node = tester.getSemantics(toggle);
+          final before = node.getSemanticsData();
+          expect(before.label, label);
+          expect(before.flagsCollection.isToggled, Tristate.isFalse);
+          expect(before.hasAction(SemanticsAction.tap), isTrue);
+          tester
+              .renderObject(toggle)
+              .owner!
+              .semanticsOwner!
+              .performAction(node.id, SemanticsAction.tap);
+          await tester.pumpAndSettle();
+          final after = tester.getSemantics(toggle).getSemanticsData();
+          expect(after.label, label);
+          expect(after.flagsCollection.isToggled, Tristate.isTrue);
+        }
+        expect(os.authorizations, 1);
+      } finally {
+        semantics.dispose();
+      }
+    });
 
     testWidgets('a switch that asks for permission when turned on', (
       tester,

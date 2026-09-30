@@ -1,8 +1,6 @@
-//! Drawing, the way tmux and fzf draw. A frame is the active window's panes (edge to edge when
-//! there is one; tmux borders with `pane-border-status top` when there are several), then the
-//! status line — tmux's: green, at the bottom, `[harness] 0:name* 1:name-`, the pane's title and
-//! the time on the right; prompts and messages take it over in yellow. The search is fzf's own
-//! layout and colours, with a preview window.
+//! Pane surfaces with space between them, integrated titles, and a status line at the bottom.
+//! The tmux split tree remains intact beneath presentation insets. Classic and tmux looks
+//! retain line borders; the search keeps fzf's layout and colours with a preview window.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::fleet::ago;
+use crate::format::clip_middle;
 use crate::keys;
 use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
@@ -71,12 +70,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
+    let msg_style = app.message_style();
     if let Some(modal) = &mut app.modal {
         match modal {
             // (--no-input: no prompt, no cursor.)
             // (Too small to hold a list — a window being dragged, a drop-down terminal opening: none
             // drawn until it has the room, as fzf clamps and tmux draws what fits; never a crash.)
-            Modal::Picker { kind, picker } if body.height >= 1 && body.width >= 2 => { let at = fzf(buf, body, picker, kind, search_busy); cursor = (!theme::fzf_opts().no_input).then_some(at) }
+            Modal::Picker { kind, picker } if body.height >= 1 && body.width >= 2 => { let at = fzf(buf, body, picker, kind, search_busy, msg_style); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
@@ -124,6 +124,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
+    if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
@@ -188,7 +189,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
     // The keys a tmux user reaches for every day first (what fits of a small window is those),
     // then the rest in the table's order.
-    const FIRST: &[&str] = &["c", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+    const FIRST: &[&str] = &["c", "N", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
     items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
     let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
@@ -222,7 +223,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         if col >= cols || (items.len() > fits && i + 1 >= fits) { break }
         let x = area.x + 2 + (col * col_w) as u16;
         let y = area.y + 1 + row as u16;
-        buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD));
+        buf.set_string(x, y, format!("{key:>key_w$}"), bold(theme::accent()));
         let room = col_w - key_w - 3;
         buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default());
     }
@@ -232,9 +233,14 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
 
 // ── the window ───────────────────────────────────────────────────────────────
 
-/// The active window's panes, then their borders and status lines as tmux draws them.
+/// The active window's programs, then their pane surfaces or classic borders and titles.
 fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let focus = app.focused();
+    let surfaces = app.options.pane_look();
+    if surfaces {
+        crate::term_out::clear_extras(body);
+        buf.set_style(body, Style::default().bg(Color::Reset));
+    }
     let rects = app.rects.clone();
     let mut cursor = None;
     for (id, rect) in rects.iter() {
@@ -245,6 +251,11 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         // window-style (both the pane's own, its window's or the global ones).
         let (a, w) = (app.style_of("window-active-style", app.active, Some(*id)), app.style_of("window-style", app.active, Some(*id)));
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
+        if surfaces {
+            let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.pane_status(app.tab()));
+            // Single and zoomed panes also sit directly on the terminal background.
+            buf.set_style(f.surface, Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset)));
+        }
         // choose-tree's tree, over the pane.
         if app.panes.get(id).map(|p| p.tree_top()).unwrap_or(false) {
             if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
@@ -267,8 +278,36 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             pane.dirty = false;
         }
     }
-    borders(buf, app, body);
+    if surfaces { pane_chrome(buf, app); } else { borders(buf, app, body); }
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
+}
+
+/// Integrated titles on borderless pane surfaces. Background contrast identifies focus.
+/// Program cells retain their ANSI colours; moving focus changes no content dimensions or mouse coordinates.
+fn pane_chrome(buf: &mut Buffer, app: &App) {
+    let canvas = app.window_area(app.tab());
+    for (id, rect) in &app.rects {
+        let f = crate::pane_frame::frame(*rect, canvas, app.pane_status(app.tab()));
+        let active = Some(*id) == app.focused();
+        let style_name = if active { "pane-active-border-style" } else { "pane-border-style" };
+        let style = app.style_of(style_name, app.active, Some(*id));
+        let own = |name| app.options.has_window_override(name, &app.tab().id, *id);
+        let a = app.style_of("window-active-style", app.active, Some(*id));
+        let w = app.style_of("window-style", app.active, Some(*id));
+        let pane_bg = if active { a.bg.or(w.bg) } else { w.bg };
+        let bg = if own(style_name) { style.bg.or(pane_bg) } else { pane_bg };
+        let style = style.bg(bg.unwrap_or(Color::Reset));
+        let Some(title) = f.title else { continue };
+        let style = if own(style_name) { style } else {
+            let palette = theme::pane_palette();
+            style.fg(if active { palette.active_foreground } else { palette.muted })
+        };
+        buf.set_style(title, style);
+        let marker = if app.marked == Some(*id) { "◆" } else { " " };
+        if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
+        let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
+        title_line(buf, app, *id, text, style);
+    }
 }
 
 /// screen-redraw.c over the window: every border cell (its junction, the active pane's in
@@ -288,7 +327,7 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
     };
     for c in frame.cells() {
         let style = border_style(app, c.paint == crate::borders::Paint::Active);
-        let style = if c.marked { style.add_modifier(Modifier::REVERSED) } else { style };
+        let style = if c.marked { style.add_modifier(if app.options.tmux_look() { Modifier::REVERSED } else { Modifier::BOLD }) } else { style };
         if let Some(cell) = buf.cell_mut((body.x + c.x as u16, body.y + c.y as u16)) { cell.set_symbol(&c.glyph).set_style(style); }
     }
     for t in frame.titles() {
@@ -302,12 +341,22 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
 /// pane-border-style, or for the active pane pane-active-border-style (tmux's: yellow while the
 /// pane is in copy mode, red while the window's panes are synchronized, else green), as the
 /// window has them: colours, background and attributes, a format in them expanded for the pane.
+/// hn leaves a stock border — tmux's green active border — alone only when you set one yourself;
+/// otherwise it takes the theme's readable foreground (the active pane dimmed), so the selected
+/// pane reads as the theme rather than tmux's green.
 fn border_style(app: &App, active: bool) -> Style {
-    app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, app.focused())
+    let mut s = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, app.focused());
+    let own = if active { app.look.active_border.is_some() } else { app.look.border.is_some() };
+    if !own && !app.options.tmux_look() {
+        let (_, fg, _) = crate::theme::palette();
+        s = s.fg(fg);
+        if !active { s = s.add_modifier(Modifier::DIM) }
+    }
+    s
 }
 
 /// A pane's status line over its border characters: its pane-border-format (hn's: the harness's
-/// symbol, its name, and as far as the pane is wide, its project and branch), drawn as
+/// name, its state symbol, and as far as the pane is wide, its project and branch), drawn as
 /// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
 /// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
 /// writes nothing.
@@ -325,15 +374,17 @@ const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ �
 
 fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     let rows = home_rows(app);
+    let (_, theme_fg, _) = crate::theme::palette();
     let width = area.width.min(84).saturating_sub(4);
     let left = area.x + (area.width.saturating_sub(width)) / 2;
     let compact = area.height < 22;
     let mut lines: Vec<Line> = Vec::new();
-    if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::ACCENT))) } lines.push(Line::raw("")) }
-    else { lines.push(Line::styled("harness", bold(theme::ACCENT))) }
-    let local = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_default();
-    let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
-    let sub = if app.fleet.machines.len() > 1 { format!("{local} · {up}/{} machines connected", app.fleet.machines.len()) } else { local };
+    if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::accent()))) } lines.push(Line::raw("")) }
+    else { lines.push(Line::styled("harness", bold(theme::accent()))) }
+    let local = app.fleet.local_machine_name();
+    let up = app.fleet.visible_machines().filter(|m| m.usable()).count();
+    let total = app.fleet.visible_machines().count();
+    let sub = if total > 1 { format!("{local} · {up}/{total} machines connected") } else { local };
     lines.push(Line::styled(sub, fg(theme::MUTED)));
     lines.push(Line::raw(""));
     let centered = lines.len();
@@ -345,9 +396,9 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     } else if rows.is_empty() {
         lines.push(Line::styled("Nothing running.", fg(theme::SOFT)));
         let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
-        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
+        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::accent())), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::accent())), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
-        let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+        let many = up > 1;
         for (index, row) in rows.iter().enumerate() {
             // A harness as its state says; a conversation Harness did not start as a paused one
             // would be (nothing running), its folder where the project goes.
@@ -379,12 +430,12 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let selected = app.home_moved && index == app.home_cursor;
             // The chosen row as fzf draws its current line (reverse video where there is no colour).
             let bg = match (selected, theme::fzf().bw) { (true, true) => Style::default().add_modifier(Modifier::REVERSED), (true, false) => Style::default().bg(theme::fzf().bg_plus), _ => Style::default() };
-            let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.add_modifier(Modifier::DIM) } else { bg.fg(theme::paint(c)) };
+            let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::DIM) } else { bg.fg(theme::paint(c)) };
             lines.push(Line::from(vec![
-                Span::styled(format!("{} ", index + 1), tint(theme::ACCENT)),
+                Span::styled(format!("{} ", index + 1), tint(theme::accent())),
                 Span::styled(format!("{dot} "), tint(color)),
                 Span::styled(format!("{mark} "), tint(mark_color)),
-                Span::styled(format!("{name}  "), bg.add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{name}  "), bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::BOLD)),
                 Span::styled(detail_text, tint(detail.1)),
                 Span::styled(" ".repeat(pad), bg),
                 Span::styled(right, tint(theme::MUTED)),
@@ -402,14 +453,14 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     for (k, w) in keys {
         let piece_w = k.width() + w.width() + 4;
         if row_w + piece_w > width as usize { lines.push(Line::from(std::mem::take(&mut row))); row_w = 0 }
-        row.push(Span::styled(k.clone(), bold(theme::ACCENT)));
+        row.push(Span::styled(k.clone(), bold(theme::accent())));
         row.push(Span::styled(format!(" {w}   "), fg(theme::SOFT)));
         row_w += piece_w;
     }
     if !row.is_empty() { lines.push(Line::from(row)) }
     lines.push(Line::raw(""));
     let prefix = crate::keys::name(&app.keymap.prefix);
-    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::ACCENT)), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(format!("{prefix} d"), bold(theme::ACCENT)), Span::styled(" detach — everything keeps running", fg(theme::SOFT))]));
+    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::accent())), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(format!("{prefix} d"), bold(theme::accent())), Span::styled(" detach — everything keeps running", fg(theme::SOFT))]));
     let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
     for (index, line) in lines.iter().enumerate() {
         let y = top + index as u16;
@@ -430,7 +481,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     status_formats(buf, app, rect);
     let line = app.options.get("message-line", "", None).and_then(|n| n.parse::<u16>().ok()).unwrap_or(0).min(rect.height.saturating_sub(1));
     let rect = Rect::new(rect.x, rect.y + line, rect.width, 1);
-    // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
+    // Messages inherit the configured status message colors.
     let yellow = app.message_style();
     // (A prompt's completion menu keeps the prompt on the status line under it.)
     let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
@@ -958,7 +1009,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
 /// fzf 0.67's default layout, measured: rows bottom-up (best nearest the prompt), `▌` gutter
 /// (236; the current row's in 161 on 236), matches in 108 (151 on the current row), the info line
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
-fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, search_busy: bool) -> Position {
+fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, search_busy: bool, msg_style: Style) -> Position {
     let frame = fzf_frame(body, picker);
     crate::term_out::clear_extras(frame.screen);
     picker.screen_area.set(frame.screen);
@@ -1221,7 +1272,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, sea
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
         let fx = (ia.x + ia.width).saturating_sub(text.width() as u16 + 1);
-        buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
+        buf.set_string(fx, info_y, &text, msg_style);
     }
     let header_y = if !o.no_input || in_header.is_some() { header_y } else if prompt_top { area.y } else { bottom.saturating_sub(1) };
     if let Some(h) = &header { let (hx, hw) = in_header.map(|r| (r.x, r.width)).unwrap_or((area.x, area.width)); buf.set_line(hx, header_y, h, hw); }
@@ -2126,10 +2177,10 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
         for i in 0..thumb { bar_cells.1[header + start + i] = true }
     }
     if let Some(bar) = &scrollbar { for (row, marked) in bar_cells.1.iter().enumerate() { if *marked { buf.set_string(pb.bar_x, inner.y + row as u16, bar, pal.preview_scrollbar.style()); } } }
-    // Its offset, N/M, at the top right in the info colour reversed (not with noinfo).
+    // The preview offset is a quiet label; exact tmux/fzf appearance keeps its inverse style.
     let mark = format!("{}/{}", offset + 1, total);
     if scrollable && pw.info && (mark.width() as u16) < inner.width {
-        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(Modifier::REVERSED));
+        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(if app.options.tmux_look() { Modifier::REVERSED } else { Modifier::BOLD }));
     }
 }
 
@@ -2305,27 +2356,6 @@ fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
     }
 }
 
-/// Keep a distinguishing suffix, such as "(3)", visible when a home title is long.
-fn clip_middle(text: &str, cols: usize) -> String {
-    use unicode_segmentation::UnicodeSegmentation;
-    if text.width() <= cols { return text.to_string() }
-    if cols == 0 { return String::new() }
-    let left_room = cols / 2;
-    let right_room = cols - 1 - left_room;
-    let mut left = String::new();
-    for g in text.graphemes(true) {
-        if left.width() + g.width() > left_room { break }
-        left.push_str(g);
-    }
-    let mut right = Vec::new();
-    let mut width = 0;
-    for g in text.graphemes(true).rev() {
-        if width + g.width() > right_room { break }
-        right.push(g);
-        width += g.width();
-    }
-    format!("{}…{}", left.trim_end(), right.into_iter().rev().collect::<String>().trim_start())
-}
 
 fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
@@ -2463,8 +2493,10 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         let note = &note;
         buf.set_style(area, Style::default().add_modifier(Modifier::DIM));
         let row = Rect::new(area.x, area.y, area.width, 1);
-        buf.set_style(row, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
-        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" {note}"), w = area.width as usize), area.width as usize, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        let notice = Style::default().fg(window.0.unwrap_or(Color::Reset)).bg(window.1.unwrap_or(Color::Reset))
+            .remove_modifier(Modifier::DIM | Modifier::REVERSED).add_modifier(Modifier::BOLD);
+        buf.set_style(row, notice);
+        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" ! {note}"), w = area.width as usize), area.width as usize, notice);
         return None;
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.
@@ -2543,7 +2575,7 @@ mod fzf_list_tests {
     fn screen(p: &mut Picker) -> String {
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
-        fzf(&mut buf, area, p, &PickerKind::Output { title: String::new(), lines: vec![] }, false);
+        fzf(&mut buf, area, p, &PickerKind::Output { title: String::new(), lines: vec![] }, false, Style::default());
         (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
     }
 

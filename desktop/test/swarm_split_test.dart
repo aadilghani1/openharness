@@ -12,6 +12,7 @@ import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
 
@@ -653,7 +654,13 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(find.text('New Pane to the Right'), findsOneWidget);
-    expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
+    expect(
+      tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search
+          .canAccept,
+      isTrue,
+    );
     expect(find.byType(AlertDialog), findsNothing);
     await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pump();

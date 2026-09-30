@@ -127,14 +127,14 @@ function runHook(opts: RunHookOpts): Promise<string> {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
+async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
       requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
-      res.end('{}')
+      res.end(JSON.stringify(response))
     })
   })
   servers.push(server)
@@ -145,6 +145,16 @@ async function collect(): Promise<{ port: number; requests: Array<{ url: string;
 }
 
 describe('hook notify terminal scope', () => {
+  it.each(['claude', 'codex'] as const)('adds daemon-verified companion context to the actual %s user turn', async engine => {
+    const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
+    const { port, requests } = await collect({ ok: true, additionalContext })
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const input = recordings[engine].input
+    const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
+    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
+    expect(requests[0]?.body.prompt).toBe(input.prompt)
+    expect(await runHook({ port, engine, tmuxPane: '%42', input: { ...input, hook_event_name: 'SessionStart' } })).toBe('')
+  })
   it.each(['claude', 'codex', 'grok'] as const)('forwards the actual %s accepted prompt without changing the model input', async engine => {
     const { port, requests } = await collect()
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))

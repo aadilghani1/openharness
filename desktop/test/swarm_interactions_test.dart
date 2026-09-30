@@ -226,7 +226,8 @@ void main() {
         if (native) {
           final tab = (updates.last['tabs'] as List).single as Map;
           expect(tab['id'], office.id);
-          expect(tab['label'], '1:office');
+          expect(tab['label'], 'office');
+          expect(tab['shortcutHint'], '⌘1');
         } else {
           expect(find.text('office'), findsOneWidget);
         }

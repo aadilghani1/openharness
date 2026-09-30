@@ -77,7 +77,7 @@ export interface PairBrainDeps {
   }
   /** A guest's window says which daemon its local zoo pairs (daemon_presence.pair), its dial, and whether
    *  the person agreed to being watched (`consent`, the first-day screen's answer). */
-  onGuestPair?: (daemonId: string | null) => void
+  onGuestPair?: (daemonId: string | null, identity?: unknown) => void
   onGuestAutonomy?: (autonomy: string | null) => void
   onGuestConsent?: (watching: boolean) => void
   /** The brain started or stopped thinking (cli.ts keeps the router's worker warm while it does). */
@@ -88,7 +88,11 @@ export interface PairBrainDeps {
    */
   shown?: ShownLines
   /** `daemon_talk`: the person's words to the pair harness (pair/pairHarness.ts), which starts or wakes. */
-  talk?: (text: string) => Promise<Record<string, unknown>>
+  talk?: (text: string, companionUid?: string) => Promise<Record<string, unknown>>
+  /** Open the pair's terminal without typing into it or starting a model turn. */
+  open?: (companionUid?: string) => Promise<Record<string, unknown>>
+  /** The collection's persistent agent and its observed model. Local windows only. */
+  companionHarness?: () => Record<string, unknown>
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
   relayLimits?: Array<{ windowMs: number; max: number }>
   /**
@@ -108,6 +112,7 @@ export interface PairBrainDeps {
    * the line was shown here; the nonce in the id is checked by the learner. Absent: a lesson key is refused.
    */
   lessonKey?: (connId: string) => Promise<{ ok: true } | { ok: false; error: string; detail: string }>
+  lessonReview?: (id: string) => Record<string, unknown>
   now: () => number
 }
 
@@ -190,7 +195,7 @@ export class PairBrain {
    */
   onPresence(connId: string, payload: Record<string, unknown>, meta: { ui: boolean } = { ui: true }): void {
     if (meta.ui && 'consent' in payload) this.deps.onGuestConsent?.(payload.consent === true)
-    if (meta.ui && 'pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null)
+    if (meta.ui && 'pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null, payload.companion)
     if (meta.ui && 'autonomy' in payload) this.deps.onGuestAutonomy?.(typeof payload.autonomy === 'string' ? payload.autonomy : null)
     const prior = this.presence.get(connId)
     // What the person is looking at: never spoken about. `null` clears it; absent keeps what was said.
@@ -515,7 +520,20 @@ export class PairBrain {
       reply({ ok: false, error: 'RATE_LIMITED', detail: 'Six talks a minute, sixty an hour.', retryAfterMs: this.talkLimit.retryAfter(connId) })
       return
     }
-    const result = await this.deps.talk(text).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+    const uid = str(payload.companionUid, 64)
+    const result = await (uid ? this.deps.talk(text, uid) : this.deps.talk(text)).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+    reply(result)
+  }
+
+  /** A local window opens its companion's DSH terminal, including engine setup. */
+  async onOpen(connId: string, payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): Promise<void> {
+    const requestId = str(payload.requestId, 120)
+    const reply = (fields: Record<string, unknown>): void => { send({ type: 'daemon_open_result', payload: { requestId, ...fields } }) }
+    if (!this.clients.has(connId)) { reply({ ok: false, error: 'UI_ONLY' }); return }
+    if (!this.deps.open) { reply({ ok: false, error: 'UNSUPPORTED' }); return }
+    const uid = str(payload.companionUid, 64)
+    if (!uid) { reply({ ok: false, error: 'STALE_COMPANION' }); return }
+    const result = await this.deps.open(uid).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
     reply(result)
   }
 
@@ -523,6 +541,16 @@ export class PairBrain {
   onShown(connId: string, payload: Record<string, unknown>): void {
     const id = str(payload.id, 200)
     if (id && this.clients.has(connId)) this.deps.shown?.shown(connId, id)
+  }
+
+  /** A review capability is offered only to the verified window that requested it. */
+  async reviewLesson(connId: string, id: string): Promise<Record<string, unknown>> {
+    if (!this.active || !this.clients.has(connId)) return { ok: false, error: 'UI_ONLY' }
+    const verdict = await this.deps.lessonKey?.(connId).catch(() => ({ ok: false as const, error: 'UNVERIFIED' }))
+    if (!verdict?.ok) return { ok: false, error: verdict?.error ?? 'PERSON_ONLY' }
+    const result = this.deps.lessonReview?.(id) ?? { ok: false, error: 'UNSUPPORTED' }
+    if (result.ok && typeof result.reviewId === 'string') this.deps.shown?.offer([result.reviewId], [connId])
+    return result
   }
 
   /**
@@ -658,6 +686,7 @@ export class PairBrain {
       })
     return {
       pair: daemonId,
+      ...(this.deps.companionHarness ? { companionHarness: this.deps.companionHarness() } : {}),
       needs,
       working: harnesses.filter((h) => h.harness.working && !h.harness.question).length,
       failing: harnesses.filter((h) => h.harness.failing).map((h) => ({

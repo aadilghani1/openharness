@@ -54,6 +54,43 @@ static void punctuation_checks(void)
     }
 }
 
+static void vietnamese_checks(void)
+{
+    // Every codepoint Vietnamese needs beyond Latin-1: the 0x1EA0 block and the eight that live
+    // outside it. Each must be one cell, must not fall back to '?', and must keep its exact bytes
+    // in the scene — the wire text is never rewritten, only the cell it is drawn from changes.
+    static const uint32_t scattered[]={0x102,0x103,0x110,0x111,0x1a0,0x1a1,0x1af,0x1b0};
+    const ht_font_t *fonts[]={&ht_mono_16,&ht_mono_20,&ht_mono_24,&ht_mono_28};
+    for (unsigned f=0;f<sizeof fonts/sizeof fonts[0];f++) {
+        for (unsigned i=0;i<0x5a+sizeof scattered/sizeof scattered[0];i++) {
+            uint32_t cp = i<0x5a ? 0x1ea0+i : scattered[i-0x5a];
+            char utf8[4]={(char)(0xe0|(cp>>12)),(char)(0x80|((cp>>6)&0x3f)),(char)(0x80|(cp&0x3f)),0};
+            if (cp<0x800) { utf8[0]=(char)(0xc0|(cp>>6)); utf8[1]=(char)(0x80|(cp&0x3f)); utf8[2]=0; }
+            assert(ht_can_display(utf8,fonts[f],fonts[f]->width,1));
+            ht_scene_t a,b; ht_scene_clear(&a,0); ht_scene_clear(&b,0);
+            ht_text(&a,80,100,fonts[f]->width,fonts[f],0xffff,0,utf8);
+            assert(!strcmp(a.runs[0].text,utf8)); // storage remains exact
+            ht_raster(&a,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},full);
+            ht_text(&b,80,100,fonts[f]->width,fonts[f],0xffff,0,"?");
+            ht_raster(&b,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},scratch);
+            assert(memcmp(full,scratch,sizeof full)); // a real glyph, not the fallback
+        }
+    }
+    // The gate the work was specified against, and two more shapes a recap actually takes.
+    assert(ht_can_display("Đã sửa xong phần flush",&ht_mono_28,384,4));
+    assert(ht_can_display("Lượng bộ nhớ đã giảm",&ht_mono_20,348,6));
+    assert(ht_can_display("Kiểm tra lại các tuỳ chọn",&ht_mono_24,420,4));
+    // The horned pair is the one place a missing tail entry would still look plausible.
+    ht_scene_t horn,plain; ht_scene_clear(&horn,0); ht_scene_clear(&plain,0);
+    ht_text(&horn,80,100,ht_mono_28.width,&ht_mono_28,0xffff,0,"ư");
+    ht_text(&plain,80,100,ht_mono_28.width,&ht_mono_28,0xffff,0,"u");
+    ht_raster(&horn,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},full);
+    ht_raster(&plain,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},scratch);
+    assert(memcmp(full,scratch,sizeof full));
+    // The pixel face carries no Vietnamese and must say so rather than draw a wrong cell.
+    assert(!ht_can_display("đã",&ht_pixel_40,400,4));
+}
+
 static void inline_arrow_checks(void)
 {
     const ht_font_t *fonts[]={&ht_mono_20,&ht_mono_28};
@@ -338,6 +375,7 @@ int main(void)
     lock_dot_checks();
     arc_checks();
     punctuation_checks();
+    vietnamese_checks();
     inline_arrow_checks();
     bell_checks();
     notification_marks();

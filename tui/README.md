@@ -8,6 +8,13 @@ curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash    # installs har
 hn                                                                 # or: harness tui
 ```
 
+The installed CLI keeps hn up to date automatically: it checks at daemon startup and on the
+same schedule as CLI updates, including when only hn has a new release. Reopen hn to use the
+new version; running clients and panes keep working. `harness update` also checks hn when
+the CLI is already current. `ADAPTER_UPDATE_DISABLE=true` disables automatic updates for both;
+local CLI builds and `HARNESS_TUI_BIN` overrides stay untouched. The first hn launch downloads
+it if missing; `harness tui --install` explicitly reinstalls the latest published build.
+
 hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your harnesses on
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).
@@ -41,8 +48,8 @@ this computer unless you name it); the others are this computer's, kept between 
 
 **More than one terminal** works as with one tmux server. Each `hn` is a client. `hn attach -t
 main` from a second terminal (or over SSH) shows `main` in both, as tmux does: a split, a new
-window or a window chosen in either shows in both, and either can type into its panes (the first
-key takes the pane's keyboard). `attach -r` only watches; `attach -d` takes the session and
+window or a window chosen in either shows in both, and either can type into its panes (typing
+into a watcher takes control across that TUI's tabs). `attach -r` only watches; `attach -d` takes the session and
 detaches the others. Commands from a shell reach every session, whichever terminal has it. `hn
 ls`, `list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in
 any order: the last one showing a session keeps it. What tmux's server
@@ -69,16 +76,46 @@ tmux. `run-shell` lines run too: a plugin's `tmux …` reaches hn (the `tmux` on
 never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
-and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same
-pane numbers and the same active pane after each. Use `set -g @hn-animations off` to keep
+and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
+pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
+with one-cell gaps and inset terminal content. Panes have no drawn borders: background
+contrast identifies focus. The margins and gaps keep the terminal's native background. The focused
+pane uses a subtly contrasting fill (`#181818` on a black terminal), while inactive dark panes use
+`rgb(64, 64, 64)` with softer text. A lone or zoomed pane keeps the same focused surface. Light
+terminals keep a light counterpart.
+Explicit pane-border styles still customize the title; border line choices apply in classic and
+tmux appearances.
+Explicit program colors and user styles stay intact. The muted green status bar has a continuous
+background, with tabs ordered `number:name* status` (previous window: `number:name- status`).
+Subscription allowances read `Claude 0%  Codex 89%` **remaining**, with amber at 20% or less
+and red at 0% only on the percentage. Padding
+shrinks automatically in small panes. The space between panes remains a resize handle; mouse
+coordinates, copy selection and PTY dimensions follow the inset content. `window_layout` keeps
+the original split structure. Use `set -g @hn-animations off` to keep
 working and loading indicators still. Some defaults differ, and your `.tmux.conf`
-overrides each: `pane-border-status top` (each pane's title row: its harness's state and name, and
-its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
+overrides each: `pane-border-status top` (each pane's title row: its harness's name and state, and
+its project and branch where the pane has room; long names shorten in the middle to keep
+the state and distinguishing suffix visible), `allow-set-title off` (a pane's title is its
 harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps
 2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
-harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line: each window's most urgent harness state before its name,
-and on the right the focused pane's machine (when it is another one), project and branch —
-`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title. One key differs on purpose: ⇧⏎
+harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line:
+each window's most urgent harness state follows its name and tmux marker; idle dots are hidden
+in tabs and pane headers. Connection, quota,
+fleet counts, the quoted local machine name and clock sit on the right. The git branch stays in its pane
+header, aligned to the right with its PR and written `⎇ branch` without redundant punctuation.
+Status-bar groups are separated by two spaces, with one space at each outer edge to align
+with the pane surfaces. Window tabs start at the left, without a machine/session label.
+Local and remote machines use their names from the app everywhere, such as `"office"`.
+Local shell panes keep that same name across daemon disconnects and reconnects. Unnamed account
+machines use `machine-<id8>`, as on desktop and phone; before this computer is known, it is
+`This computer`. The status bar names the machine running hn, independent of the focused pane
+or session name.
+Custom status formats and the prefix cue remain supported.
+Take Control (`C-b : take-control`, or `take`) reclaims all available local and remote panes
+across the TUI's tabs, including hidden ones, without changing focus. Typing into a watched pane
+does the same; the input goes only to that pane. Reconnects keep watching until a person asks
+for control again, and read-only clients keep their read-only behavior.
+One key differs on purpose: ⇧⏎
 reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
 sends a plain Enter).
 
@@ -104,12 +141,34 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | | |
 |---|---|
 | `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list; `M-a` types an answer — an option's number, several for a multi-choice question, `1,3`, or your own words) |
-| `C-b N` `C-b T` | new harness (an agent: machine, agent, folder — `M-w` for a new git worktree of it, on a branch of its own — then its first message) / new terminal. Agents start in `@hn-permission-mode` (auto unless you `set -g @hn-permission-mode plan`, `acceptEdits`, `ask` …) |
+| `C-b N` `C-b T` | New Harness popup / new terminal. The popup keeps Agent, Project and Options together, with searchable choices. Options match desktop: Model, Approvals, applicable Profile, Branch and Worktree. |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
-In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
+`C-b N` opens the compact desktop-style New Harness form with Agent, Project, collapsed
+Options and New Harness. The initial destination is the connected local Harness machine, with successful agent
+and project choices remembered. Explicit project commands keep their destination. Enter starts
+with the displayed choices; Up/Down moves between fields and previews their chooser. Enter,
+Right or typing enters the chooser. Tab switches between the form and chooser; Enter accepts
+an item and returns to New Harness. A second Enter starts it in the current window, splitting
+beside the focused pane when needed. Lowercase `C-b n` remains next window.
+
+Agent combines coding agents and installed Store harnesses; a Store harness then offers its
+compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
+machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
+a path. Options contains Model, agent-specific Approvals, Codex Profile, Branch and Worktree.
+Git projects default to a new worktree from main, as on desktop; missing main requires a branch
+choice. Models and profiles are checked on the selected machine before starting.
+
+Choosers sit beside the form, or occupy its column in narrow terminals. Escape returns through
+nested choosers and preserves a dismissed draft. Confirmed failures keep the draft and reuse
+any prepared project folder on retry. A lost reply offers Check status for the original launch;
+repeated Enter cannot start another harness while its outcome is unknown. Input in the form
+never reaches a working pane. No reverse-video selection is used.
+
+
+In the harness and command lists, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
 `S-↑/↓` scrolls it, `M-/` wraps long rows (`--wrap`), `C-a C-e C-w C-u` edit the query, `enter`
 opens, `C-t` in a new window, `C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works
 (`'exact ^prefix suffix$ !not a | b`), and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`,
@@ -143,14 +202,14 @@ pane counts as done and unread (`✓`) until you go to that pane.
 | `⠹` (turning) | working |
 | `?` | needs you: a question or a permission |
 | `✓` | done, and you haven't looked yet |
-| `·` | idle |
+| `·` | idle in lists; hidden in pane headers and tabs |
 | `✗` | failed |
 | `◌` `‖` `○` | starting, paused, offline |
 
-- **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you (reversed), one
-  failed, five are done and unread, and 41 are working. Idle ones aren't counted, and a state with
-  none drops out. The right side also shows the focused pane's machine, project and branch (only the
-  branch below 110 columns), so the window list keeps its room at 80.
+- **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you, one failed,
+  five are done and unread, and 41 are working. Idle ones aren't counted, and a state with none
+  drops out. The right side keeps the quoted local machine name and the clock, with two
+  spaces between groups. Branch and pull request context stay in the pane header.
 - **`C-b s`** lists every harness, the most urgent nearest the prompt: needs you, failed, done and
   unread, working, then the rest. Each row has one line: the question, what it is doing now
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
@@ -179,23 +238,38 @@ pane counts as done and unread (`✓`) until you go to that pane.
 All of this is in options, which `show -g`, `show -gw` and `C-b C` print as they are:
 `status-left`, `status-right`, the window formats and each pane's title row
 (`pane-border-format`). Set them in your `~/.tmux.conf` as you would for tmux; what you set
-replaces hn's. `set -g @hn-look tmux` puts back all of tmux's own: no title rows, tmux's status
-line and window list.
+replaces hn's. The default is `set -g @hn-look panes`. `set -g @hn-look classic` restores hn's
+previous line borders. `set -g @hn-look tmux` uses tmux's appearance and
+content dimensions: no padding or title rows, and tmux's status line and window list. Changing
+the look takes effect immediately and preserves pane identities and the split structure.
 
 For your own formats: `#{fleet}` (the status line's counts, ready to drop into your theme) and
 `#{fleet_needs}` `#{fleet_failed}` `#{fleet_done}` `#{fleet_working}` `#{fleet_idle}`, `#{spinner}`,
 `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle, starting, failed,
 paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row draws it),
-`#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
-`#{pane_branch}`, `#{pane_where}` (`project git:(branch) #123` as far as it fits beside the title),
+`#{pane_heading}` (the name, state and watcher label fitted to the pane header; `#{pane_title}`
+stays complete), `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
+`#{pane_branch}`, `#{pane_where}` (`machine:project ⎇ branch #123` as far as it fits beside the title;
+local and remote machine prefixes yield to project, branch and PR context in narrow panes),
 `#{pane_pr}` `#{pane_pr_state}` `#{pane_pr_url}` (the pull request for its branch), `#{pane_tokens}`
 and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
 `#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
 `#{usage}` (the agent accounts' rate limits on the focused pane's machine: `claude 5h 42% week
-18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80%; the status line shows
-it reversed, so you know before you start more agents),
-`#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
+18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80% used).
+
+The status line uses `#{usage_remaining_mark}`: `Claude 0%  Codex 89%`, showing **remaining**
+allowance for every subscription with quota data, even when healthy. Each figure is the lowest
+remaining percentage across that account's reported windows. Amber starts at 20% left, red at
+0%; a nonzero allowance below 1% reads `<1%`. Shared account keys appear once across machines,
+with the local reading preferred; different or unknown accounts stay separate. When a provider
+has multiple accounts, extra remote accounts say `Claude@studio 20%` to distinguish them.
+`#{usage_remaining}` provides the same figures without color. The daemon currently reads Claude
+and Codex; Grok and other providers are not listed until a quota source is available. Existing
+`usage`, `usage_high` and `usage_high_mark` formats retain their used-quota meaning for custom
+configurations. Other formats:
+`#{local_machine}` (this computer's name in the app),
+`#{pane_machine}` (the focused pane's machine), `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
 
@@ -281,7 +355,9 @@ are sitting at, over SSH too.
 ## Two windows, one harness
 
 A terminal has one keyboard. Opening a harness another window is driving shows it read-only
-("watching"); the first key you type takes it over, and the other window starts watching.
+("watching"); taking control here reclaims this TUI's panes across all tabs, and the other
+window starts watching. The first key typed into a watcher also takes control, preserving that
+key for its intended pane.
 
 ## The dial
 

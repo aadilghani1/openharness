@@ -316,6 +316,12 @@ pub struct Tab {
     /// The desk's layout document for this tab, kept whole: a preset chosen here updates its entry
     /// and leaves the sizes other windows saved alone.
     pub layout: Value,
+    /// Last layout observed on the desk, separate from the local edit awaiting its reply.
+    pub desk_layout: Value,
+    /// Last pane sequence received from the desk, independent of local tmux numbering.
+    desk_panes: Vec<(String, String)>,
+    /// A named choice awaiting publication, separate from the last observed desk document.
+    desk_preset: Option<(usize, &'static str)>,
 }
 
 impl Tab {
@@ -327,7 +333,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None }
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -507,6 +513,8 @@ pub struct App {
     pub started: Instant,
     pub daemon_down: bool,
     pub dsh: HashMap<String, Vec<Value>>,
+    /// A dismissed New Harness draft, including any pending creation receipt.
+    pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
     /// Each harness's selectable models (`models_list`), for ⌥I.
     pub models: HashMap<(String, String), Vec<Value>>,
     /// Each machine's local models (the grid): downloaded, running, available.
@@ -531,8 +539,12 @@ pub struct App {
     orphans: HashMap<Uuid, (Instant, Vec<proto::Frame>)>,
     /// Native exit notices can race the same terminal_ready callback as its first frame.
     orphan_exits: HashMap<Uuid, (Instant, pane::Exit)>,
-    /// Desk writes sent and not yet answered; while any are out, the desk is not reconciled.
-    desk_inflight: u32,
+    /// One desk write at a time: an older layout must not land after a newer choice.
+    desk_inflight: bool,
+    desk_pending: Vec<Value>,
+    /// Accepted layouts since the last reconciliation. Their replies acknowledge our local
+    /// geometry, including when an older backend can store only the desktop preset.
+    desk_acked_layouts: HashMap<String, Value>,
     /// The desk moved while writes were out: fetch it once they land.
     desk_stale: bool,
     /// tmux's s->lastw: the windows current before, the most recent first, by tab id — C-b l goes
@@ -946,6 +958,7 @@ impl App {
             started: Instant::now(),
             daemon_down: false,
             dsh: HashMap::new(),
+            new_harness_draft: None,
             models: HashMap::new(),
             local_models: HashMap::new(),
             rtt: HashMap::new(),
@@ -959,7 +972,9 @@ impl App {
             status_ranges: Vec::new(),
             orphans: HashMap::new(),
             orphan_exits: HashMap::new(),
-            desk_inflight: 0,
+            desk_inflight: false,
+            desk_pending: Vec::new(),
+            desk_acked_layouts: HashMap::new(),
             desk_stale: false,
             lastw: Vec::new(),
             terminal_focused: true,
@@ -1096,8 +1111,9 @@ impl App {
                 }
                 if id.is_empty() { return }
                 app.fleet.local_id = id.clone();
+                for machine in &mut app.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
                 if app.fleet.machine(&id).is_none() {
-                    app.fleet.machines.insert(0, Machine { id: id.clone(), name: hostname(), local: true, status: "running".into(), reach: Reach::Unknown });
+                    app.fleet.machines.insert(0, Machine { id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
                 }
                 app.connect(&id);
                 app.refresh_machines();
@@ -1135,7 +1151,7 @@ impl App {
 
     fn ensure_local_shells(&mut self) {
         if self.fleet.machine(crate::local::MACHINE).is_none() {
-            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: hostname(), local: true, status: "running".into(), reach: Reach::Unknown });
+            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: "This computer".into(), local: true, status: "running".into(), reach: Reach::Unknown });
         }
         self.connect(crate::local::MACHINE);
     }
@@ -1157,10 +1173,10 @@ impl App {
             for row in rows {
                 let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
                 if id.is_empty() { continue }
-                let name = ["name", "hostname"].iter().filter_map(|k| row.get(*k).and_then(Value::as_str)).map(str::trim).find(|s| !s.is_empty()).unwrap_or(&id[..8.min(id.len())]).to_string();
+                let name = fleet::machine_display_name(&id, row.get("name").and_then(Value::as_str));
                 let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown").to_string();
                 match app.fleet.machine_mut(&id) {
-                    Some(machine) => { machine.name = name; machine.status = status }
+                    Some(machine) => { machine.name = name; machine.status = status; machine.local = id == local }
                     None => app.fleet.machines.push(Machine { local: id == local, id: id.clone(), name, status, reach: Reach::Unknown }),
                 }
             }
@@ -1185,16 +1201,39 @@ impl App {
 
     fn schedule_reconnect(&mut self, machine_id: &str) {
         let Some(state) = self.links.get_mut(machine_id) else { return };
-        state.link = None;
+        if let Some(link) = state.link.take() { link.close(); }
         state.attempts += 1;
         let wait = Duration::from_millis((500 * 2u64.pow(state.attempts.min(5))).min(15_000));
         state.retry_at = Some(Instant::now() + wait);
     }
 
+    /// Tell every connected machine's daemon the terminal's own colours (`theme_set`), so it
+    /// paints the panes to match and the agents in them read the right light/dark. Called when
+    /// the terminal answers OSC 11 and again when a machine connects; the daemon restyles the
+    /// existing sessions too, as the desktop app's `theme_set` does.
+    pub fn push_theme(&mut self) {
+        let Some((mut bg, mut fg)) = crate::term_out::terminal_colours() else { return };
+        if self.options.pane_look() {
+            let palette = crate::theme::pane_palette();
+            bg = crate::tmuxconf::colour_name(palette.surface);
+            fg = crate::tmuxconf::colour_name(palette.foreground);
+        }
+        let machines: Vec<String> = self.fleet.machines.iter()
+            .filter(|m| self.link(&m.id).is_some())
+            .map(|m| m.id.clone()).collect();
+        for machine_id in machines {
+            let Some(link) = self.link(&machine_id) else { continue };
+            let bg = bg.clone(); let fg = fg.clone();
+            self.spawn(async move { link.rpc("theme_set", json!({ "background": bg, "foreground": fg }), Duration::from_secs(5)).await }, |_app, _reply| {});
+        }
+    }
+
     // ── machine events ───────────────────────────────────────────────────────
 
     pub fn on_machine(&mut self, machine_id: String, generation: u64, event: MachineEvent) {
-        let current = self.links.get(&machine_id).map(|s| s.generation) == Some(generation);
+        // A cancelled link can already have queued events. Ignore them during backoff too,
+        // before the replacement connection has a new generation.
+        let current = self.links.get(&machine_id).is_some_and(|s| s.generation == generation && s.link.is_some());
         if !current { return }
         match event {
             MachineEvent::Connected => {
@@ -1205,6 +1244,7 @@ impl App {
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
                 if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
+                self.push_theme();
                 // Its home folder, so its paths read `~/…` like this machine's do.
                 if !self.homes.contains_key(&machine_id) {
                     if let Some(link) = self.link(&machine_id) {
@@ -1233,17 +1273,18 @@ impl App {
                 for pane in self.panes.values_mut().filter(|p| p.machine_id == machine_id) {
                     pane.stream = None;
                     pane.opening = false;
+                    pane.takeover_pending = false;
                     pane.open_token += 1;
                     if !matches!(pane.phase, Phase::Card { .. }) {
                         pane.phase = if needs_link {
                             Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (machines, then C-l), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("choose-tree -m").unwrap_or_default(), "machines".into())] }
                         } else {
-                            Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machines.iter().find(|m| m.id == machine_id).map(|m| m.name.clone()).unwrap_or_default()))
+                            Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machine_name(&machine_id)))
                         };
                     }
                     pane.dirty = true;
                 }
-                if needs_link { if let Some(state) = self.links.get_mut(&machine_id) { state.link = None } }
+                if needs_link { if let Some(state) = self.links.get_mut(&machine_id) { if let Some(link) = state.link.take() { link.close(); } state.retry_at = None; } }
                 else { self.schedule_reconnect(&machine_id) }
             }
             MachineEvent::Terminal(frame) => self.on_terminal(frame),
@@ -1507,7 +1548,15 @@ impl App {
                     self.open_stream(id, false);
                 } else {
                     let id = pane.id;
-                    self.after_end(id, payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed").to_string());
+                    let reason = payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed");
+                    if matches!(reason, "heartbeat timeout" | "backend disconnected") {
+                        // A lease expiry says nothing about the process. Renew the machine route
+                        // and all its panes, including hidden windows and split shells, without
+                        // restarting anything or taking the keyboard from another client.
+                        self.recover_streams(machine_id, reason);
+                    } else {
+                        self.after_end(id, reason.to_string());
+                    }
                 }
             }
             "terminal_error" => {
@@ -1607,6 +1656,33 @@ impl App {
 
     // ── streams ─────────────────────────────────────────────────────────────
 
+    fn recover_streams(&mut self, machine_id: &str, detail: &str) {
+        if let Some(state) = self.links.get(machine_id) {
+            self.on_machine(machine_id.to_string(), state.generation,
+                MachineEvent::Closed(RpcError::new("TERMINAL_CONNECTION_LOST", detail)));
+        }
+    }
+
+    /// A user asks for control of this TUI: reclaim every available pane across its tabs and
+    /// sessions without moving focus. Reconnects and ownership notifications never call this.
+    pub fn take_control(&mut self) {
+        if self.read_only() { return }
+        let mut ids: Vec<u64> = self.tabs.iter().chain(self.sessions.iter()
+            .filter(|s| !s.mirror.as_ref().is_some_and(|m| m.readonly))
+            .flat_map(|s| s.tabs.iter())).flat_map(Tab::panes).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            let Some(pane) = self.panes.get_mut(&id) else { continue };
+            if pane.dead.is_some() || matches!(pane.phase, Phase::Card { .. }) { continue }
+            if pane.stream.is_some() && !pane.read_only && !matches!(pane.phase, Phase::Watching(_)) { continue }
+            if !self.fleet.machine(&pane.machine_id).is_some_and(Machine::usable)
+                || !self.links.get(&pane.machine_id).is_some_and(|s| s.link.is_some()) { continue }
+            if pane.opening { pane.takeover_pending = true }
+            else { self.open_stream(id, true) }
+        }
+    }
+
     /// Open (or re-open) a pane's terminal. [takeover]: take the keyboard from any other window.
     pub fn open_stream(&mut self, pane_id: u64, takeover: bool) {
         let content = self.content_size(pane_id);
@@ -1624,7 +1700,10 @@ impl App {
         }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         if pane.opening { return }
-        let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else {
+        // Do not send an open before machine_select has succeeded: its reply could otherwise
+        // be discarded by the selecting link, leaving this pane waiting for 45 seconds.
+        let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone())
+            .filter(|_| self.fleet.machine(&pane.machine_id).is_some_and(Machine::usable)) else {
             pane.phase = Phase::Connecting("Connecting…".into());
             return;
         };
@@ -1643,7 +1722,7 @@ impl App {
         // recognised by this token and not allowed to overwrite the current state.
         pane.open_token += 1;
         let token = pane.open_token;
-        let host = hostname();
+        let host = self.fleet.local_machine_name();
         self.spawn(async move {
             link.request("terminal_open", json!({
                 "protocolVersion": 3,
@@ -1671,6 +1750,7 @@ impl App {
         }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         pane.opening = false;
+        let takeover_requested = std::mem::take(&mut pane.takeover_pending);
         match reply {
             Ok((ty, payload)) if ty == "terminal_ready" => {
                 pane.stream = stream;
@@ -1682,7 +1762,8 @@ impl App {
                 pane.phase = if pane.read_only {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
-                let queued = std::mem::take(&mut pane.queued);
+                let retake = takeover_requested && pane.read_only;
+                let queued = if retake { Vec::new() } else { std::mem::take(&mut pane.queued) };
                 let read_only = pane.read_only;
                 // The tile changed size while this was opening: tell the far pane now.
                 if !read_only && pane.want != asked {
@@ -1704,6 +1785,9 @@ impl App {
                     let death = stream.and_then(|id| self.orphan_exits.remove(&id).map(|(_, death)| death)).or_else(|| serde_json::from_value::<pane::Exit>(payload["exit"].clone()).ok());
                     if let Some(death) = death { self.local_ended(pane_id, death) }
                 }
+                if retake && self.panes.get(&pane_id).is_some_and(|p| p.dead.is_none() && matches!(p.phase, Phase::Watching(_))) {
+                    self.open_stream(pane_id, true);
+                }
             }
             Ok((_, payload)) => {
                 let code = payload.get("code").and_then(Value::as_str).unwrap_or("TERMINAL_OPEN_FAILED").to_string();
@@ -1712,6 +1796,11 @@ impl App {
                 } else {
                     pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: code, keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
                 }
+            }
+            Err(error) if matches!(error.code.as_str(), "TIMEOUT" | "DISCONNECTED") => {
+                // A local WebSocket pong cannot establish that the remote terminal route is
+                // healthy. Drop that route so retrying cannot wait on the same stuck request.
+                self.recover_streams(machine_id, &error.to_string());
             }
             Err(error) => {
                 pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: error.to_string(), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
@@ -2119,7 +2208,7 @@ impl App {
         self.fit_panes();
     }
 
-    /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
+    /// tmux's #S: the session alias, or this computer's name by default.
     pub fn session_name(&self) -> String {
         if let Some(a) = &self.session_alias { return a.clone() }
         self.machine_session_name()
@@ -2129,8 +2218,7 @@ impl App {
     fn machine_session_name(&self) -> String {
         // (Before the daemon has said which it is, this computer as the fleet was last seen:
         // `hn attach -t studio` finds the desk's session at once.)
-        let m = if self.fleet.local_id.is_empty() { self.fleet.machines.iter().find(|m| m.local) } else { self.fleet.machine(&self.fleet.local_id) };
-        m.map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(hostname)
+        self.fleet.local_machine_name()
     }
 
     fn stash_name(&self, s: &Stash) -> String { s.alias.clone().unwrap_or_else(|| self.machine_session_name()) }
@@ -3384,6 +3472,7 @@ impl App {
         tab.root = layout::arrange(named, &ids, body.width, body.height, status, (&mw, &mh), (&ow, &oh));
         tab.zoomed = false;
         tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named);
+        if tab.on_desk { tab.desk_preset = named_to_desk(named, ids.len()).map(|preset| (ids.len(), preset)); }
         self.fit_panes();
         self.layout_changed(index);
     }
@@ -3578,15 +3667,36 @@ impl App {
     /// where they are not `default` (NO_COLOR or not: tmux doesn't read it).
     pub fn status_style(&self) -> Style {
         let mut s = self.style_of("status-style", self.active, None);
+        let mut own = !self.look.status_bg.is_none() || !self.look.status_fg.is_none();
         for (name, fg) in [("status-fg", true), ("status-bg", false)] {
             let c = self.options.get(name, "", None).and_then(|v| crate::tmuxconf::colour(&v)).filter(|c| *c != Color::Reset);
-            if let Some(c) = c { s = if fg { s.fg(c) } else { s.bg(c) } }
+            if let Some(c) = c { own = true; s = if fg { s.fg(c) } else { s.bg(c) } }
+        }
+        // No status colours of its own and the terminal has told us what it looks like: the bar
+        // swaps the theme's own colours — its background the terminal's foreground, its text the
+        // terminal's background — so the bar is the theme's text colour with the theme's
+        // background as its lettering (an ivory bar with dark text on a dark terminal), not a
+        // transparent one, and not tmux's stock green.
+        if !own && !self.options.pane_look() && !self.options.tmux_look() {
+            let (bg, fg, _) = crate::theme::palette();
+            s = s.bg(fg).fg(bg);
         }
         s
     }
 
     /// message-style (tmux's yellow), for messages and prompts.
-    pub fn message_style(&self) -> Style { self.style_of("message-style", self.active, None) }
+    pub fn message_style(&self) -> Style {
+        let mut s = self.style_of("message-style", self.active, None);
+        let own = self.look.message_fg.is_some() || self.look.message_bg.is_some();
+        // No message colours of its own and the terminal has told us what it looks like: the
+        // message line shows the theme's readable text on the terminal's own background (left
+        // transparent), so it blends with the theme instead of tmux's stock yellow.
+        if !own && !self.options.tmux_look() {
+            let (_, fg, _) = crate::theme::palette();
+            s = s.bg(Color::Reset).fg(fg);
+        }
+        s
+    }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {
@@ -3603,13 +3713,19 @@ impl App {
         layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
     }
 
-    /// A pane's own cells within its tile: the status line taken off, above or below.
-    pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
+    /// The structural cells used by tmux navigation and divider dragging.
+    pub fn layout_content_of(&self, tab: &Tab, r: Rect) -> Rect {
         match self.pane_status(tab) {
             layout::Status::Top => Rect::new(r.x, r.y + 1, r.width, r.height.saturating_sub(1)),
             layout::Status::Bottom => Rect::new(r.x, r.y, r.width, r.height.saturating_sub(1)),
             layout::Status::Off => r,
         }
+    }
+
+    /// The program's actual viewport, shared by drawing, PTY resizing and mouse coordinates.
+    pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
+        if self.options.pane_look() { crate::pane_frame::frame(r, self.window_area(tab), self.pane_status(tab)).content }
+        else { self.layout_content_of(tab, r) }
     }
 
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
@@ -3957,7 +4073,7 @@ impl App {
             let (w, h) = self.tabs[t].root.as_ref().map(|r| r.size()).unwrap_or((body.width, body.height));
             if at.dir == Dir::Horizontal { w } else { h }
         } else {
-            at.pane.and_then(|p| crate::format::content_rect(self, t, p)).map(|r| if at.dir == Dir::Horizontal { r.width } else { r.height }).unwrap_or(0)
+            at.pane.and_then(|p| crate::format::layout_rect(self, t, p)).map(|r| if at.dir == Dir::Horizontal { r.width } else { r.height }).unwrap_or(0)
         };
         let size = at.size.map(|(n, pct)| if pct { cur as u32 * n as u32 / 100 } else { n as u32 });
         self.fit_panes_of(t);
@@ -4367,7 +4483,10 @@ impl App {
             if &old.3 != focus && old.3.is_some() { crate::commands::notify(self, "window-pane-changed", Some(w), None) }
         }
         if before.current != now.current && before.current.is_some() { let (sid, name) = (self.session_id, self.session_name()); crate::commands::notify_session(self, "session-window-changed", sid, &name, None) }
-        for id in resized { if let Some(w) = at(self, &id) { self.layout_changed(w) } }
+        // Fitting a shared layout to this terminal fires tmux's resize hook, but is not
+        // a new desk arrangement. Publishing it makes differently sized clients resize
+        // one another indefinitely. Explicit layout/divider edits use layout_changed.
+        for id in resized { if let Some(w) = at(self, &id) { crate::commands::notify(self, "window-layout-changed", Some(w), None) } }
         // Pane focus (window_pane_update_focus), where tmux looks again: a window's active pane
         // that changed and a window that became current only with focus-events; a window whose
         // active pane went away (window_lost_pane), and the client's own focus, always.
@@ -4413,16 +4532,32 @@ impl App {
     /// The desk windows whose layout changed here: their tmux layout to the desk (tab.layout).
     pub fn send_desk_layouts(&mut self) {
         if self.desk_layouts.is_empty() || !self.session_desk { return }
+        let mut ops = Vec::new();
         for id in std::mem::take(&mut self.desk_layouts) {
             let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else { continue };
             let Some(root) = tab.root.as_ref() else { continue };
             if !tab.layout.is_object() { tab.layout = json!({}) }
-            let now = root.to_tmux();
-            if tab.layout.get("tmux").and_then(Value::as_str) == Some(now.as_str()) { continue }
-            tab.layout["tmux"] = json!(now);
-            let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
-            self.desk_op(op);
+            let before = tab.layout.clone();
+            tab.layout["tmux"] = json!(root.to_tmux());
+            // C-b Space and select-layout use this path too. Keep the desktop's
+            // corresponding shape current, instead of leaving an older preset behind.
+            if let Some((count, preset)) = tab.desk_preset.take() {
+                if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
+                tab.layout["presets"][count.to_string()] = json!(preset);
+            }
+            if tab.layout != before { ops.push(json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout })); }
+            // Desktop uses the shared list in screen order, not our stable pane numbers.
+            // Publish both together, including swaps, rotations and mirrored layouts.
+            let panes: Vec<_> = desk_pane_ids(root).iter().filter_map(|id| self.panes.get(id))
+                .filter(|p| !crate::local::is_local(&p.machine_id))
+                .map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
+            if panes != tab.desk_panes {
+                for (index, (machine, agent)) in panes.iter().enumerate() {
+                    ops.push(json!({ "op": "pane.move", "tabId": tab.id, "machineId": machine, "agentId": agent, "index": index }));
+                }
+            }
         }
+        self.desk_ops(ops);
     }
 
     /// window_pane_update_focus: [pane] is focused when it is the current window's active pane,
@@ -4434,7 +4569,7 @@ impl App {
     /// before break-pane goes to its new window is looked at while the old one still is).
     fn update_focus_in(&mut self, pane: u64, focused: &mut Vec<u64>, notify: bool, current: usize) {
         let Some(w) = self.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
-        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }));
+        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }) | Some(crate::modal::Modal::NewHarness(_)));
         let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
         let client = !focus_events || self.terminal_focused;
         let is = w == current && self.tabs[w].focus == Some(pane) && client && !overlay;
@@ -4652,18 +4787,21 @@ impl App {
         let mut out = Vec::new();
         if let Some(root) = tab.root.as_ref() { root.rects(body, &mut out) }
         tab.panes().into_iter().filter_map(|id| out.iter().find(|(p, _)| *p == id).map(|(_, r)| {
-            let c = self.content_of(tab, *r);
+            let c = self.layout_content_of(tab, *r);
             (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y - body.y) as u32, w: c.width as u32, h: c.height as u32 })
         })).collect()
     }
 
     /// The current window's panes as drawn (a zoomed window's one pane filling it), where their
     /// contents are in the window: tmux's xoff/yoff/sx/sy for the mouse.
-    pub fn visible_geoms(&self) -> Vec<(u64, layout::Geom)> {
+    pub fn visible_geoms(&self) -> Vec<(u64, layout::Geom)> { self.visible_geoms_for(true) }
+    pub fn visible_layout_geoms(&self) -> Vec<(u64, layout::Geom)> { self.visible_geoms_for(false) }
+
+    fn visible_geoms_for(&self, inset: bool) -> Vec<(u64, layout::Geom)> {
         let body = self.body();
         let tab = self.tab();
         tab.panes().into_iter().filter_map(|id| self.rects.iter().find(|(p, _)| *p == id).map(|(_, r)| {
-            let c = self.content_of(tab, *r);
+            let c = if inset { self.content_of(tab, *r) } else { self.layout_content_of(tab, *r) };
             (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y.saturating_sub(body.y)) as u32, w: c.width as u32, h: c.height as u32 })
         })).collect()
     }
@@ -4867,6 +5005,7 @@ impl App {
         tab.zoomed &= keep_zoom;
         self.sync_titles();
         self.fit_panes();
+        self.layout_changed(w);
     }
 
     /// next-layout / previous-layout (layout_set_next/previous): tmux's seven named layouts in its
@@ -4889,19 +5028,6 @@ impl App {
     /// select-layout -t: that window's panes in that shape.
     pub fn apply_preset_at(&mut self, index: usize, preset: Preset) {
         self.arrange_tab(index, layout::Named::of(preset));
-        let Some(tab) = self.tabs.get_mut(index) else { return };
-        let ids = tab.panes();
-        // The same shape on every window: the desk's layout keys presets by pane count.
-        if tab.on_desk && !ids.is_empty() {
-            if !tab.layout.is_object() { tab.layout = json!({}) }
-            if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
-            tab.layout["presets"][ids.len().to_string()] = json!(preset_to_desk(preset, ids.len()));
-            // (And as tmux lays it out, which the other terminals take over the preset.)
-            if let Some(root) = tab.root.as_ref() { tab.layout["tmux"] = json!(root.to_tmux()) }
-            let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
-            self.desk_op(op);
-        }
-        self.fit_panes();
     }
 
     // ── the desk: tabs shared with every window on the account ─────────────────
@@ -4939,10 +5065,10 @@ impl App {
     }
 
     fn fetch_desk(&mut self) {
-        if self.desk_inflight > 0 { self.desk_stale = true; return }
+        if self.desk_inflight { self.desk_stale = true; return }
         let port = self.port;
         self.spawn(async move { http_json(port, "GET", "/api/desk", None).await }, |app, desk| {
-            if app.desk_inflight > 0 { app.desk_stale = true; return }
+            if app.desk_inflight { app.desk_stale = true; return }
             if let Ok(desk) = desk { app.apply_desk(&desk) }
             if !app.desk_answered { app.desk_answered = true; app.maybe_start_shell() }
         });
@@ -4964,6 +5090,7 @@ impl App {
         let revision = desk.get("revision").and_then(Value::as_i64).unwrap_or(0);
         if revision <= self.desk_revision { return }
         self.desk_revision = revision;
+        let acknowledged = std::mem::take(&mut self.desk_acked_layouts);
         let Some(rows) = desk.get("tabs").and_then(Value::as_array) else { return };
         let first_load = self.tabs.iter().all(|t| !t.on_desk);
         let mut seen = Vec::new();
@@ -4983,30 +5110,53 @@ impl App {
                     // stays as automatic-rename gives it here, from what the window runs.
                     if named { tab.name = name; tab.named = true } else if tab.named { tab.named = false }
                     tab.on_desk = true;
-                    let relayout = tab.layout != layout_doc;
+                    // A reply to our own write is an acknowledgement, not a request to
+                    // arrange again. In particular, a legacy desk omits layout.tmux. Also
+                    // keep input queued in this event batch until its layout is sent.
+                    // Desktop serializes presets/sizes, dropping the tmux-only field.
+                    // That round-trip, or another pane count's settings, is not a new
+                    // arrangement. Compare only the geometry this window consumes.
+                    let relayout = desk_layout_changed(&tab.desk_layout, &layout_doc, panes.len())
+                        && desk_layout_changed(&tab.layout, &layout_doc, panes.len())
+                        && acknowledged.get(&id) != Some(&layout_doc)
+                        && !self.desk_layouts.contains(&id);
+                    let reordered = tab.desk_panes != panes && !self.desk_layouts.contains(&id);
+                    tab.desk_panes = panes.clone();
+                    tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
-                    if relayout && missing_is_empty(&tab.panes(), &panes, &self.panes) {
-                        let ids = tab.panes();
-                        let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                        tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
+                    let missing = panes.iter().any(|want| !have.iter().any(|(_, key)| key == want));
+                    let extra: Vec<u64> = have.iter().filter(|(_, key)| !panes.contains(key)).map(|(pid, _)| *pid).collect();
+                    if !missing && extra.is_empty() {
+                        let ids: Vec<u64> = panes.iter().filter_map(|key| have.iter().find(|(_, k)| k == key).map(|(id, _)| *id)).collect();
+                        if relayout {
+                            let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
+                            tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                            if reordered { tab.order = ids; }
+                        } else if reordered {
+                            // A desktop drag changes only the sequence. Keep our exact
+                            // split sizes and the focused harness while changing places.
+                            if let Some(root) = &mut tab.root {
+                                if desk_pane_ids(root) != ids { desk_reorder(root, &ids); tab.order = ids; }
+                            }
+                        }
                         continue;
                     }
-                    let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
-                    let missing: Vec<&(String, String)> = panes.iter().filter(|want| !have.iter().any(|(_, k)| k == *want)).collect();
-                    let extra: Vec<u64> = have.iter().filter(|(_, k)| !panes.contains(k)).map(|(pid, _)| *pid).collect();
-                    if missing.is_empty() && extra.is_empty() { continue }
                     for pid in &extra {
                         let tab = &mut self.tabs[index];
                         tab.root = tab.root.take().and_then(|r| r.remove(*pid));
                         self.drop_pane(*pid);
                     }
-                    let mut new_ids = Vec::new();
-                    for (m, a) in missing { new_ids.push(self.new_pane_as(m, a, Some(crate::ids::desk(crate::ids::Kind::Pane, &format!("{m}:{a}"))))) }
+                    // Insertions belong at their shared index, including before an existing
+                    // pane. Never append all new panes after the old local sequence.
+                    let ids: Vec<u64> = panes.iter().map(|(m, a)| {
+                        have.iter().find(|(_, key)| &key.0 == m && &key.1 == a).map(|(id, _)| *id)
+                            .unwrap_or_else(|| self.new_pane_as(m, a, Some(crate::ids::desk(crate::ids::Kind::Pane, &format!("{m}:{a}")))))
+                    }).collect();
                     let tab = &mut self.tabs[index];
-                    let mut ids = tab.panes();
-                    ids.extend(new_ids.iter().copied());
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
                     tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.order = ids.clone();
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
                 // The same window another session has (link-window, a group), already read: that
@@ -5015,6 +5165,15 @@ impl App {
                     let Some(mut tab) = self.sessions.iter().flat_map(|s| s.tabs.iter()).find(|t| t.id == id && t.root.is_some()).cloned() else { continue };
                     tab.alerts = 0;
                     tab.on_desk = true;
+                    let have = tab.panes();
+                    let ids: Vec<_> = panes.iter().filter_map(|(m, a)| have.iter().copied().find(|id|
+                        self.panes.get(id).is_some_and(|p| &p.machine_id == m && &p.agent_id == a))).collect();
+                    if ids.len() == have.len() && ids.len() == panes.len() {
+                        if let Some(root) = &mut tab.root { desk_reorder(root, &ids); }
+                        tab.order = ids;
+                    }
+                    tab.desk_panes = panes.clone();
+                    tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
                     if named { tab.name = name; tab.named = true }
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
@@ -5028,9 +5187,12 @@ impl App {
                     tab.id = id;
                     tab.named = named;
                     tab.on_desk = true;
+                    tab.desk_panes = panes.clone();
+                    tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
                     tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.order = ids.clone();
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -5084,23 +5246,36 @@ impl App {
 
     pub fn desk_op(&mut self, op: Value) { self.desk_ops(vec![op]) }
 
-    /// Send ops as one write. The reply is the whole desk, other windows' changes included; it is
-    /// reconciled only when none of this window's writes are still out — reconciling to a desk that
-    /// has the tab but not yet its pane would close the tab this window just made.
+    /// Preserve input order across writes, including the retry for an older desk schema.
+    /// Only reconcile once the queue drains, so an earlier reply cannot undo a later edit.
     pub fn desk_ops(&mut self, ops: Vec<Value>) {
         if self.desk_mode != DeskMode::Sync || !self.session_desk || ops.is_empty() { return }
-        // A layout's tmux form (layout.tmux) goes only to a desk that keeps it: one that refuses
-        // it (a backend from before it) is sent the layout without it from then on.
+        self.desk_pending.extend(ops);
+        self.send_desk_ops();
+    }
+
+    fn send_desk_ops(&mut self) {
+        if self.desk_inflight || self.desk_pending.is_empty() { return }
         let strip = |ops: &[Value]| -> Vec<Value> { ops.iter().cloned().map(|mut o| { if let Some(l) = o.get_mut("layout").and_then(Value::as_object_mut) { l.remove("tmux"); } o }).collect() };
+        // The backend accepts at most 200 operations per request.
+        let ops: Vec<Value> = self.desk_pending.drain(..self.desk_pending.len().min(200)).collect();
         let ops = if self.desk_no_tmux { strip(&ops) } else { ops };
-        let tried_tmux = ops.iter().any(|o| o.pointer("/layout/tmux").is_some());
-        let again = tried_tmux.then(|| strip(&ops));
+        let again = ops.iter().any(|o| o.pointer("/layout/tmux").is_some()).then(|| strip(&ops));
+        let layouts: HashMap<String, Value> = ops.iter().filter(|o| o["op"] == "tab.layout")
+            .filter_map(|o| Some((o["id"].as_str()?.to_string(), o["layout"].clone()))).collect();
         let port = self.port;
-        self.desk_inflight += 1;
+        self.desk_inflight = true;
         self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": ops }))).await }, move |app, reply| {
-            app.desk_inflight = app.desk_inflight.saturating_sub(1);
-            if let (Err(_), Some(ops)) = (&reply, again) { app.desk_no_tmux = true; return app.desk_ops(ops) }
-            if app.desk_inflight > 0 { app.desk_stale = true; return }
+            app.desk_inflight = false;
+            // Network/auth/server failures do not mean the schema lacks tmux layouts.
+            if let (Err(error), Some(ops)) = (&reply, again) { if error.code == "HTTP_400" {
+                app.desk_no_tmux = true;
+                app.desk_pending.splice(0..0, ops);
+                app.send_desk_ops();
+                return;
+            } }
+            if reply.is_ok() { app.desk_acked_layouts.extend(layouts) }
+            if !app.desk_pending.is_empty() { app.desk_stale = true; app.send_desk_ops(); return }
             match reply {
                 Ok(desk) => app.apply_desk(&desk),
                 Err(_) => app.fetch_desk(),
@@ -5419,8 +5594,28 @@ pub const DESK_MAIN: (&str, &str) = ("50%", "50%");
 /// A desk tab's panes laid out: as another terminal left them (its tmux layout, fitted to this
 /// one's size), else its preset for that many panes.
 fn desk_root(doc: &Value, preset: Preset, ids: &[u64], w: u16, h: u16) -> Option<Node> {
-    doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
-        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))
+    let mut root = doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
+        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))?;
+    // Numeric pane IDs belong to one hn server. The desk's ordered identities are
+    // authoritative even if a saved native layout has stale or coincidentally matching IDs.
+    desk_reorder(&mut root, ids);
+    Some(root)
+}
+
+/// Desktop numbers its tiles across the top, then down; tmux tree traversal and
+/// pane numbering can differ (a mirrored layout, or columns containing stacks).
+fn desk_pane_ids(root: &Node) -> Vec<u64> {
+    let (w, h) = root.size();
+    let mut rects = Vec::new();
+    root.rects(Rect::new(0, 0, w, h), &mut rects);
+    rects.sort_by_key(|(_, r)| (r.y, r.x));
+    rects.into_iter().map(|(id, _)| id).collect()
+}
+
+fn desk_reorder(root: &mut Node, ids: &[u64]) {
+    let before = desk_pane_ids(root);
+    if before.len() != ids.len() { return }
+    root.relabel(&mut |old| before.iter().position(|p| *p == old).map(|i| ids[i]).unwrap_or(old));
 }
 
 fn preset_from_desk(id: &str, count: usize) -> Preset {
@@ -5434,19 +5629,39 @@ fn preset_from_desk(id: &str, count: usize) -> Preset {
     }
 }
 
-fn preset_to_desk(preset: Preset, count: usize) -> &'static str {
-    match preset {
-        Preset::Columns => match count { 2 => "columns", 3 => "cols3", 4 => "cols4", 5 => "cols5", _ => "columns" },
-        Preset::Rows => "rows",
-        Preset::MainStack => "mainAndStack",
-        Preset::MainRow => "mainOverGrid",
-        Preset::Grid => if count == 4 { "quad" } else { "auto" },
+/// Native layouts take precedence when present. Their omission by a desktop save
+/// is not an instruction to reset the terminal; only a changed current-count preset is.
+fn desk_layout_changed(before: &Value, after: &Value, count: usize) -> bool {
+    if let Some(native) = after.get("tmux").and_then(Value::as_str) {
+        return before.get("tmux").and_then(Value::as_str) != Some(native);
     }
+    let path = format!("/presets/{count}");
+    let preset = |doc: &Value| preset_from_desk(doc.pointer(&path).and_then(Value::as_str).unwrap_or(""), count);
+    preset(before) != preset(after)
 }
 
-/// Whether a tab already shows exactly the desk's panes (only the layout changed).
-fn missing_is_empty(have: &[u64], want: &[(String, String)], panes: &HashMap<u64, Pane>) -> bool {
-    have.len() == want.len() && have.iter().all(|id| panes.get(id).map(|p| want.contains(&(p.machine_id.clone(), p.agent_id.clone()))).unwrap_or(false))
+/// Desktop presets with the same split topology. Unsupported shapes retain their
+/// exact native layout without publishing an invalid preset for that pane count.
+fn named_to_desk(named: layout::Named, count: usize) -> Option<&'static str> {
+    use layout::Named::*;
+    Some(match (count, named) {
+        (2, EvenHorizontal | MainVertical | MainVerticalMirrored) => "columns",
+        (2, _) => "rows",
+        (3, EvenHorizontal) => "cols3",
+        (4, EvenHorizontal) => "cols4",
+        (5, EvenHorizontal) => "cols5",
+        (3 | 4, EvenVertical) => "rows",
+        (3, MainHorizontal) => "oneOverTwo",
+        (3, MainHorizontalMirrored | Tiled) => "twoOverOne",
+        (3, MainVertical) => "mainLeft",
+        (3, MainVerticalMirrored) => "mainRight",
+        (4, MainHorizontal) => "mainOverGrid",
+        (4, MainVertical) => "mainAndStack",
+        (4, Tiled) => "quad",
+        (5 | 6, Tiled) => "balanced2",
+        (9, Tiled) => "balanced3",
+        _ => return None,
+    })
 }
 
 /// split-window's: where the new pane goes — beside a pane of a window (-t), before it (-b), across
@@ -5519,4 +5734,397 @@ pub fn hostname() -> String {
         let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         if raw.is_empty() { "this computer".into() } else { raw }
     }).clone()
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    // Current-thread tests never yield to this link: it is cancelled before it can connect.
+    // No daemon, disk cache, real pane or server socket is used.
+    fn fixture() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.fleet.machines.push(Machine { id: "test-peer".into(), name: "Peer".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        let link = Link::spawn(app.port, "test-peer", 1, app.sink.clone());
+        app.links.insert("test-peer".into(), LinkState { link: Some(link), generation: 1, attempts: 0, retry_at: None });
+        for id in 1..=4 {
+            let mut pane = Pane::new(id, if id == 4 { "other-peer" } else { "test-peer" }, &format!("agent-{id}"), 80, 24);
+            pane.phase = Phase::Live;
+            pane.stream = Some(Uuid::new_v4());
+            pane.open_token = 7;
+            app.panes.insert(id, pane);
+        }
+        app.panes.get_mut(&3).unwrap().phase = Phase::Card { title: "Paused".into(), detail: String::new(), keys: Vec::new() };
+        app.panes.get_mut(&3).unwrap().stream = None;
+        app.shells.insert(("test-peer".into(), "agent-2".into()));
+        app
+    }
+
+    #[tokio::test]
+    async fn taking_control_reclaims_hidden_local_and_remote_panes_without_moving_focus() {
+        let mut app = fixture();
+        app.fleet.machines[0].local = true;
+        app.fleet.local_id = "test-peer".into();
+        app.fleet.machines.push(Machine { id: "other-peer".into(), name: "Remote".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.links.insert("other-peer".into(), LinkState { link: Some(Link::spawn(app.port, "other-peer", 1, app.sink.clone())), generation: 1, attempts: 0, retry_at: None });
+        let mut controlled = Pane::new(5, "test-peer", "already-controlled", 80, 24);
+        controlled.stream = Some(Uuid::new_v4());
+        controlled.phase = Phase::Live;
+        let stream = controlled.stream;
+        app.panes.insert(5, controlled);
+        app.tabs = (1..=5).map(|id| {
+            let mut tab = Tab::with_wid("Control test", id);
+            tab.root = Some(Node::new(id, 80, 23));
+            tab.focus = Some(id);
+            tab
+        }).collect();
+        app.active = 1;
+        for id in [1, 2, 4] {
+            let pane = app.panes.get_mut(&id).unwrap();
+            pane.phase = Phase::Watching("another app".into());
+            pane.read_only = true;
+        }
+        app.client_flags.push("read-only".into());
+        app.take_control();
+        assert!(![1, 2, 4].iter().any(|id| app.panes[id].opening));
+        app.client_flags.clear();
+        app.take_control();
+        for id in [1, 2, 4] {
+            assert!(app.panes[&id].opening);
+            assert_eq!(app.panes[&id].open_token, 8);
+        }
+        assert!(matches!(app.panes[&3].phase, Phase::Card { .. }));
+        assert_eq!(app.panes[&5].stream, stream);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.focused(), Some(2));
+        app.take_control();
+        for id in [1, 2, 4] { assert_eq!(app.panes[&id].open_token, 8); }
+        for state in app.links.values() { state.link.as_ref().unwrap().close(); }
+    }
+
+    #[tokio::test]
+    async fn taking_control_during_a_passive_open_preserves_input_and_claims_once() {
+        let mut app = fixture();
+        app.tabs[0].root = Some(Node::new(1, 80, 23));
+        app.tabs[0].focus = Some(1);
+        let pane = app.panes.get_mut(&1).unwrap();
+        pane.phase = Phase::Watching("another app".into());
+        pane.read_only = true;
+        pane.opening = true;
+        pane.stream = None;
+        pane.queued.push(b"hello".to_vec());
+        app.take_control();
+        assert!(app.panes[&1].takeover_pending);
+        assert_eq!(app.panes[&1].open_token, 7);
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
+        assert!(app.panes[&1].opening);
+        assert!(!app.panes[&1].takeover_pending);
+        assert_eq!(app.panes[&1].open_token, 8);
+        assert_eq!(app.panes[&1].queued, [b"hello".to_vec()]);
+        app.opened(1, "test-peer", 8, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":false}))));
+        assert!(matches!(app.panes[&1].phase, Phase::Live));
+        assert!(app.panes[&1].queued.is_empty());
+        app.take_control();
+        assert_eq!(app.panes[&1].open_token, 8);
+        // A passive watcher response with no new gesture must never retake a terminal.
+        app.opened(2, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
+        assert!(matches!(app.panes[&2].phase, Phase::Watching(_)));
+        assert!(!app.panes[&2].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn expired_lease_recovers_hidden_shells_and_ignores_cancelled_events() {
+        let mut app = fixture();
+        let other = app.panes[&4].stream;
+        let expired = app.panes[&2].stream.unwrap();
+        app.on_machine("test-peer".into(), 1, MachineEvent::Frame { ty: "terminal_closed".into(), payload: json!({"streamId":expired.to_string(),"reason":"heartbeat timeout"}) });
+        assert_eq!(app.panes.len(), 4);
+        assert!(app.shells.contains(&("test-peer".into(), "agent-2".into())));
+        for id in [1, 2] {
+            assert!(matches!(app.panes[&id].phase, Phase::Connecting(_)));
+            assert!(app.panes[&id].stream.is_none());
+            assert_eq!(app.panes[&id].open_token, 8);
+        }
+        assert!(matches!(app.panes[&3].phase, Phase::Card { .. }));
+        assert_eq!(app.panes[&4].stream, other);
+        assert!(app.links["test-peer"].link.is_none());
+        let retry = app.links["test-peer"].retry_at;
+        assert!(retry.is_some());
+        // Events already queued by the cancelled task cannot resurrect it or delay the retry.
+        app.on_machine("test-peer".into(), 1, MachineEvent::Connected);
+        app.on_machine("test-peer".into(), 1, MachineEvent::Closed(RpcError::new("DISCONNECTED", "")));
+        assert_eq!(app.links["test-peer"].retry_at, retry);
+        assert!(matches!(app.fleet.machines[0].reach, Reach::Error(_)));
+        let late = Uuid::new_v4();
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":late.to_string()}))));
+        assert!(app.panes[&1].stream.is_none());
+        assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+    }
+
+    #[tokio::test]
+    async fn open_timeout_and_disconnect_recover_but_protocol_refusals_do_not() {
+        for code in ["TIMEOUT", "DISCONNECTED", "TERMINAL_PROTOCOL_UNSUPPORTED"] {
+            let mut app = fixture();
+            app.panes.get_mut(&1).unwrap().phase = Phase::Connecting("Opening…".into());
+            app.panes.get_mut(&1).unwrap().opening = true;
+            app.opened(1, "test-peer", 7, (80, 24), Err(RpcError::new(code, "test failure")));
+            assert!(!app.panes[&1].opening);
+            if code == "TERMINAL_PROTOCOL_UNSUPPORTED" {
+                assert!(matches!(app.panes[&1].phase, Phase::Card { .. }));
+                assert!(app.links["test-peer"].retry_at.is_none());
+                app.links["test-peer"].link.as_ref().unwrap().close();
+            } else {
+                assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+                assert!(app.links["test-peer"].retry_at.is_some());
+                assert!(app.links["test-peer"].link.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_waits_for_machine_selection_before_opening() {
+        let mut app = fixture();
+        app.fleet.machines[0].reach = Reach::Connecting;
+        app.panes.get_mut(&1).unwrap().stream = None;
+        app.open_stream(1, false);
+        assert!(!app.panes[&1].opening);
+        assert_eq!(app.panes[&1].open_token, 7);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+}
+
+
+#[cfg(test)]
+mod desk_layout_tests {
+    use super::*;
+
+    fn fixture() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19809, sink, (120, 36));
+        app.session_desk = true;
+        let mut tab = Tab::with_wid("Layout test", 1);
+        tab.id = "layout-test".into();
+        tab.on_desk = true;
+        tab.layout = json!({"presets":{"3":"columns"}});
+        tab.desk_layout = tab.layout.clone();
+        tab.desk_panes = (1..=3).map(|id| ("layout-peer".into(), format!("agent-{id}"))).collect();
+        tab.root = layout::arrange(layout::Named::MainHorizontal, &[1, 2, 3], 120, 35, layout::Status::Top, ("80", "12"), ("0", "0"));
+        tab.focus = Some(1);
+        for id in 1..=3 {
+            let mut pane = Pane::new(id, "layout-peer", &format!("agent-{id}"), 120, 35);
+            pane.phase = Phase::Live;
+            app.panes.insert(id, pane);
+        }
+        app.tabs = vec![tab];
+        app.desk_revision = 1;
+        app
+    }
+
+    fn desk(revision: i64, layout: Value) -> Value {
+        json!({"revision":revision,"tabs":[{"id":"layout-test","name":"Layout test","layout":layout,
+            "panes":(1..=3).map(|id| json!({"machineId":"layout-peer","agentId":format!("agent-{id}")})).collect::<Vec<_>>()}]})
+    }
+
+    fn geometry(app: &App) -> String { app.tabs[0].root.as_ref().unwrap().to_tmux() }
+
+    #[test]
+    fn remote_pane_reorder_keeps_dividers_and_focused_identity() {
+        let mut app = fixture();
+        app.tabs[0].order = vec![1, 2, 3];
+        app.tabs[0].focus = Some(2);
+        let mut expected = app.tabs[0].root.clone().unwrap();
+        expected.relabel(&mut |id| match id { 1 => 3, 2 => 1, 3 => 2, _ => id });
+        let mut update = desk(2, app.tabs[0].layout.clone());
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), expected.to_tmux());
+        assert_eq!(app.tabs[0].panes(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].focus, Some(2));
+        assert_eq!(app.panes.len(), 3);
+        assert!(app.panes.values().all(|p| matches!(p.phase, Phase::Live)));
+        update["revision"] = json!(3);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), expected.to_tmux());
+    }
+
+    #[test]
+    fn remote_order_and_layout_change_apply_together() {
+        let mut app = fixture();
+        let mut update = desk(2, json!({"presets":{"3":"rows"}}));
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(app.tabs[0].root.as_ref().unwrap().leaves(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].panes(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].focus, Some(1));
+    }
+
+    #[test]
+    fn saved_native_layout_uses_desk_order_instead_of_old_pane_numbers() {
+        let native = layout::arrange(layout::Named::EvenHorizontal, &[29, 31, 13], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        let root = desk_root(&json!({"tmux": native.to_tmux()}), Preset::Columns,
+            &[31, 13, 29], 120, 35).unwrap();
+        assert_eq!(root.leaves(), vec![31, 13, 29]);
+    }
+
+    #[test]
+    fn queued_local_rotation_survives_an_older_desk_snapshot() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read;
+        app.tabs[0].order = vec![1, 2, 3];
+        app.rotate(0, 1, false);
+        let chosen = geometry(&app);
+        let mut update = desk(2, app.tabs[0].layout.clone());
+        update["tabs"][0]["panes"].as_array_mut().unwrap().swap(0, 1);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        app.send_desk_layouts();
+        assert_eq!(geometry(&app), chosen);
+        // Once observed, the same snapshot is metadata, not a fresh reorder.
+        update["revision"] = json!(3);
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        update["revision"] = json!(4);
+        update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
+        app.apply_desk(&update);
+        assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn shared_pane_sequence_is_spatial_not_tree_or_tmux_number_order() {
+        let mut root = layout::arrange(layout::Named::MainVerticalMirrored, &[1, 2, 3], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        assert_eq!(desk_pane_ids(&root), vec![2, 1, 3]);
+        desk_reorder(&mut root, &[3, 1, 2]);
+        assert_eq!(desk_pane_ids(&root), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn unchanged_remote_layout_does_not_undo_an_unsaved_local_edit() {
+        let mut app = fixture();
+        let chosen = geometry(&app);
+        app.tabs[0].layout["tmux"] = json!(chosen);
+        // A failed save or read-only desk: a rename elsewhere bumps the revision, but this
+        // tab's server layout is still what it was before the local change.
+        app.apply_desk(&desk(2, json!({"presets":{"3":"columns"}})));
+        assert_eq!(geometry(&app), chosen);
+        // An actual subsequent layout choice elsewhere still takes effect.
+        app.apply_desk(&desk(3, json!({"presets":{"3":"rows"}})));
+        assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn a_desktop_round_trip_keeps_a_two_pane_layout_choice() {
+        let mut app = fixture();
+        app.tabs[0].root = layout::arrange(layout::Named::MainHorizontal, &[1, 2], 120, 35,
+            layout::Status::Top, ("80", "12"), ("0", "0"));
+        app.panes.remove(&3);
+        let chosen = geometry(&app);
+        app.tabs[0].layout = json!({"presets":{"2":"columns"},"tmux":chosen});
+        app.tabs[0].desk_layout = app.tabs[0].layout.clone();
+        let mut update = desk(2, json!({"presets":{"2":"columns"},"sizes":{}}));
+        update["tabs"][0]["panes"].as_array_mut().unwrap().pop();
+        // Desktop knows presets/sizes, but its serializer drops the terminal-only field.
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        // Editing another pane count's preset also leaves this two-pane window alone.
+        update["revision"] = json!(3);
+        update["tabs"][0]["layout"]["presets"]["3"] = json!("rows");
+        app.apply_desk(&update);
+        assert_eq!(geometry(&app), chosen);
+        // A deliberate remote choice for the current count still applies.
+        update["revision"] = json!(4);
+        update["tabs"][0]["layout"]["presets"]["2"] = json!("rows");
+        app.apply_desk(&update);
+        assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn desktop_metadata_and_preset_aliases_do_not_reset_native_geometry() {
+        let mut app = fixture();
+        let chosen = geometry(&app);
+        app.tabs[0].layout = json!({"presets":{"3":"cols3"},"tmux":chosen});
+        app.tabs[0].desk_layout = app.tabs[0].layout.clone();
+        app.apply_desk(&desk(2, json!({"presets":{"3":"columns","4":"quad"},"sizes":{"4:quad":[]}})));
+        assert_eq!(geometry(&app), chosen);
+        // Another hn's explicit native geometry is still authoritative.
+        let root = layout::arrange(layout::Named::EvenVertical, &[1, 2, 3], 120, 35,
+            layout::Status::Top, DESK_MAIN, ("0", "0")).unwrap();
+        app.apply_desk(&desk(3, json!({"presets":{"3":"columns"},"tmux":root.to_tmux()})));
+        assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn queued_preset_survives_reconciliation_without_overwriting_later_remote_choices() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read; // Inspect publication without any HTTP task.
+        app.arrange_tab(0, layout::Named::EvenHorizontal);
+        let chosen = geometry(&app);
+        app.apply_desk(&desk(2, json!({"presets":{"3":"rows"}})));
+        app.send_desk_layouts();
+        assert_eq!(geometry(&app), chosen);
+        assert_eq!(app.tabs[0].layout["presets"]["3"], "cols3");
+        let sent = app.tabs[0].layout.clone();
+        app.apply_desk(&desk(3, sent));
+        app.apply_desk(&desk(4, json!({"presets":{"3":"rows"}})));
+        assert_ne!(geometry(&app), chosen);
+        // A divider edit after the remote choice must not revive our old preset.
+        app.layout_changed(0);
+        app.send_desk_layouts();
+        assert_eq!(app.tabs[0].layout["presets"]["3"], "rows");
+    }
+
+    #[test]
+    fn named_layouts_publish_desktop_presets_valid_for_the_pane_count() {
+        use layout::Named::*;
+        for named in layout::Named::ALL {
+            assert_eq!(named_to_desk(named, 1), None);
+            assert!(matches!(named_to_desk(named, 2), Some("columns" | "rows")));
+        }
+        assert_eq!(named_to_desk(MainHorizontal, 3), Some("oneOverTwo"));
+        assert_eq!(named_to_desk(MainHorizontalMirrored, 3), Some("twoOverOne"));
+        assert_eq!(named_to_desk(MainVertical, 3), Some("mainLeft"));
+        assert_eq!(named_to_desk(MainVerticalMirrored, 3), Some("mainRight"));
+        assert_eq!(named_to_desk(MainVertical, 4), Some("mainAndStack"));
+        assert_eq!(named_to_desk(EvenHorizontal, 6), None);
+        assert_eq!(named_to_desk(EvenVertical, 5), None);
+    }
+
+    #[test]
+    fn fitting_a_shared_layout_does_not_publish_an_edit() {
+        let mut app = fixture();
+        app.notify_changes();
+        app.size = (96, 28);
+        app.fit_panes();
+        assert!(!app.pending_resize_hooks.is_empty());
+        app.notify_changes();
+        assert!(app.pending_resize_hooks.is_empty());
+        assert!(app.desk_layouts.is_empty());
+        // An intentional edit still marks the window for desk synchronization.
+        app.step_layout(0, true);
+        assert!(app.desk_layouts.contains("layout-test"));
+    }
+
+    #[test]
+    fn legacy_acknowledgement_and_queued_input_keep_exact_geometry() {
+        let mut app = fixture();
+        let chosen = geometry(&app);
+        let accepted = json!({"presets":{"3":"mainOverGrid"}});
+        app.tabs[0].layout = accepted.clone();
+        app.tabs[0].layout["tmux"] = json!(chosen);
+        app.desk_acked_layouts.insert("layout-test".into(), accepted.clone());
+        // A preset's fallback proportions differ from tmux's explicit 12-row main pane.
+        app.apply_desk(&desk(2, accepted));
+        assert_eq!(geometry(&app), chosen);
+        assert!(app.desk_acked_layouts.is_empty());
+        // A reply and a key can be drained in one event batch, before save_if_changed.
+        app.desk_layouts.insert("layout-test".into());
+        app.apply_desk(&desk(3, json!({"presets":{"3":"rows"}})));
+        assert_eq!(geometry(&app), chosen);
+        app.desk_layouts.clear();
+        app.apply_desk(&desk(4, json!({"presets":{"3":"columns"}})));
+        assert_ne!(geometry(&app), chosen);
+    }
 }

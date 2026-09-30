@@ -1,8 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/workspace_bar_style.dart';
 import '../store/store_mark.dart';
+import 'desktop_chrome.dart';
 import 'workspace_bar_control.dart';
 
 /// The Store's rounded, marked button, restored from the original tab bar.
@@ -18,8 +20,19 @@ class WorkspaceStoreButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onPressed;
 
-  static double widthOf(BuildContext context) =>
-      workspaceBarTextSizeOf(context, 'Harness Store').width + 52;
+  static Size _labelSize(BuildContext context) {
+    final painter = TextPainter(
+      text: TextSpan(text: 'Harness Store', style: DesktopChrome.control()),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final size = painter.size;
+    painter.dispose();
+    return size;
+  }
+
+  static double widthOf(BuildContext context) => _labelSize(context).width + 52;
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +45,10 @@ class WorkspaceStoreButton extends StatelessWidget {
       onPressed: onPressed,
       builder: (context, emphasized) => Container(
         width: width,
-        height: workspaceBarControlHeight(context),
+        height: math.max(
+          grid.AppControl.heightSmall,
+          _labelSize(context).height + 12,
+        ),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: ShapeDecoration(
           color: Color.alphaBlend(
@@ -61,7 +77,7 @@ class WorkspaceStoreButton extends StatelessWidget {
                 'Harness Store',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: workspaceBarTextStyle(
+                style: DesktopChrome.control(
                   color: accent.withValues(alpha: enabled ? 1 : .45),
                 ),
               ),
