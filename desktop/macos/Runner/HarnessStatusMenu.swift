@@ -181,8 +181,8 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     }
     let image = NSImage(size: NSSize(width: 28, height: 22), flipped: false) { bounds in
       // Balance the portrait's fine cutouts against neighboring system symbols.
-      logo?.draw(in: NSRect(x: label.isEmpty ? (bounds.width - 18) / 2 : 2, y: label.isEmpty ? 2 : 3,
-                           width: 18, height: 18))
+      logo?.draw(in: NSRect(x: label.isEmpty ? (bounds.width - 17) / 2 : 2, y: label.isEmpty ? 2.5 : 4,
+                           width: 17, height: 17))
       if !label.isEmpty, let context = NSGraphicsContext.current?.cgContext {
         let badge = NSRect(x: bounds.maxX - 15, y: 0.5, width: 12.5, height: 12.5)
         context.saveGState()
