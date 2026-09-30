@@ -2181,7 +2181,7 @@ impl App {
         self.fit_panes();
     }
 
-    /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
+    /// tmux's #S: the session alias, or this computer's name by default.
     pub fn session_name(&self) -> String {
         if let Some(a) = &self.session_alias { return a.clone() }
         self.machine_session_name()

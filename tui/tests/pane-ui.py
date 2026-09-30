@@ -31,7 +31,8 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_USAGE='100')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "  #{usage_remaining_mark}  #{s/ /  /:fleet}  #{pane_machine}:#{b:pane_current_path}  20:41 "\n')
+CONF.write_text('set -g automatic-rename off\n'
+                'set -g status-right \'  #{usage_remaining_mark}  #{s/ /  /:fleet}  "#{=/21/…:host}"  20:41 \'\n')
 OUTPUT = Path(os.environ['HN_PANE_UI_OUTPUT']) if os.environ.get('HN_PANE_UI_OUTPUT') else None
 if OUTPUT:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -221,38 +222,44 @@ try:
     assert plain_header.startswith(title + ' '), (title, plain_header)
     hn('set', '-gu', 'status-right')
     default_status = hn('show', '-gv', 'status-right', strip=False)
-    assert all(part not in default_status for part in ('pane_branch', 'pane_where', 'git:'))
-    location = value('#{pane_machine}:#{b:pane_current_path}')
-    assert location in value(default_status), (location, value(default_status))
-    wait(lambda: location in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'bottom right shows the focused machine and folder')
+    assert all(part not in default_status for part in ('pane_branch', 'pane_where', 'pane_machine', 'pane_current_path', 'pane_project', 'git:'))
+    assert value('#{host}') == socket.gethostname(), 'status host is the machine running hn'
+    host_label = value('"#{=/21/…:host}"')
+    assert host_label in value(default_status), (host_label, value(default_status))
+    def local_host_status():
+        line = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
+        return re.search(re.escape(host_label) + r'  \d{2}:\d{2}$', line.rstrip()) and '[' + session + ']' not in line
     def aligned_status_edges():
         line = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
-        return line.startswith(' [') and len(line.rstrip()) == 149
+        return re.match(r' \d+:', line) and len(line.rstrip()) == 149
     wait(lambda: 'Claude 0%  Codex 89%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'default status includes both subscription allowances')
     wait(aligned_status_edges, 'default status text has one outer space matching the pane margins')
-    hn('set', '-g', 'status-right', custom_status)
     default_left = hn('show', '-gv', 'status-left', strip=False)
     session = value('#{session_name}')
     assert session == value('#{pane_machine}'), 'desk session is named for the local machine'
     for target in (third, second, first):
         hn('select-pane', '-t', target)
-        assert value(default_left).strip() == '[' + session + ']'
-        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith(' [' + session + ']'), 'local machine label stays visible across local and remote panes')
+        assert value(default_left).strip() == ''
+        wait(local_host_status, 'quoted local host stays beside the clock across local and remote panes; no machine label on the left')
+        if target in (first, third):
+            snapshot('status-local' if target == first else 'status-remote')
     for window in hn('list-windows', '-F', '#{window_id}').splitlines():
         hn('select-window', '-t', window)
-        assert value(default_left).strip() == '[' + session + ']'
-        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith(' [' + session + ']'), 'local machine label stays visible in every window')
+        assert value(default_left).strip() == ''
+        wait(local_host_status, 'quoted local host stays beside the clock in every window')
     hn('select-window', '-t', current)
     hn('select-pane', '-t', first)
     keys('C-b')
-    wait(lambda: '[' + session + '] ›' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'prefix cue stays beside the local machine label')
+    wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1].startswith(' › '), 'prefix cue remains before the window tabs')
     keys('Escape')
     hn('rename-session', 'work-review')
-    assert value(default_left).strip() == '[work-review]', 'distinct session labels remain visible'
+    assert value(default_left).strip() == '', 'renaming a session does not add a left label'
+    wait(local_host_status, 'renaming a session does not change the quoted host')
     hn('set', '-g', 'status-left', '[custom] ')
     assert value(hn('show', '-gv', 'status-left')).strip() == '[custom]'
     hn('set', '-gu', 'status-left')
     hn('rename-session', session)
+    hn('set', '-g', 'status-right', custom_status)
     for option in ('window-status-activity-style', 'window-status-bell-style'):
         assert hn('show', '-gwv', option) == 'bold'
     assert 'reverse' not in hn('show', '-gv', 'status-format[1]')
