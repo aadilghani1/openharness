@@ -403,3 +403,25 @@ unmerged.
   Flutter renders were inspected in both appearances.
 - The normal macOS debug app builds and was reopened for review. Physical
   AppKit input and VoiceOver were not exercised in this small visual update.
+
+
+### Coding memory owner viewer, 2026-09-30
+
+- The existing companion DSH viewer contains a local coding library with personal
+  and project records, evidence, correction drafts, dependent-forget previews and
+  independent Learn/Recall settings. Its real terminal and workspace placement
+  are unchanged. Existing approved lessons remain available; the 24-hour test
+  action is hidden when the new development service is available.
+- Forms use the shared desktop surface, typography and controls. Content scrolls
+  above persistent actions. Destructive previews focus Cancel; pending requests
+  disable dismissal and duplicate application. Account changes purge displayed
+  evidence, while a stale correction preserves the owner's draft for comparison.
+- Validation spans 94 desktop checks across the broad and targeted runs, including
+  the original companion, workspace, WebSocket and experimental-toggle suites.
+  Scoped analysis and the icon audit pass. Synthetic normal and 200% real-font
+  renders were inspected in both appearances: [dark detail](../../docs/research/2026-09-30-memory-viewer/memory-dark-1.0x.png),
+  [narrow light detail](../../docs/research/2026-09-30-memory-viewer/memory-light-2.0x.png).
+- The normal macOS review build and signature verification pass; no installed app
+  was replaced or launched. Native viewer interaction, physical IME and VoiceOver
+  remain unverified. Human-readable project names, scope changes, per-session
+  privacy controls and a delivery/usefulness view remain outstanding.

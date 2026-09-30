@@ -222,10 +222,12 @@ export class CodingMemoryRuntime {
 
   async preparePromptRecall(agentId: string, request: RecallRequest): Promise<PreparedRecall> {
     const session = this.session(agentId)
-    // Only this release has demonstrated additionalContext in an outgoing native model request.
+    // These releases demonstrated additionalContext in an outgoing native model request.
     // An extraction certificate or a successful stdout write does not certify hook delivery.
     // Manual recall remains available; add native releases after the same isolated transport check.
-    if (session?.engine !== 'claude' || session.cliVersion !== '2.1.286') return { packet: empty('unavailable'), receipt: null }
+    const tested = session?.engine === 'claude' ? session.cliVersion === '2.1.286'
+      : session?.engine === 'codex' && session.cliVersion === '0.159.0'
+    if (!tested) return { packet: empty('unavailable'), receipt: null }
     return this.recallBound(agentId, request, 'prompt_hook')
   }
 

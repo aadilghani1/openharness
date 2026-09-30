@@ -186,12 +186,23 @@ it('prepares a host-bound prompt receipt and rejects a native-session replacemen
   expect(await runtime.promptRecallReceipts('agent')).toEqual([])
 })
 
-it('keeps native prompt delivery unavailable on an unverified release while preserving explicit scoped recall', async () => {
+it.each(['claude', 'codex'] as const)('keeps %s prompt delivery unavailable on an unverified release while preserving explicit scoped recall', async engine => {
   await learn()
-  sessions[0].cliVersion = '2.99.0'
+  sessions[0] = { ...sessions[0], engine, cliVersion: '2.99.0' }
   expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
   expect(await runtime.promptRecallReceipts('agent')).toEqual([])
   expect((await runtime.recall('agent', { query: 'coding changes' })).items).toHaveLength(1)
+})
+
+it('prepares Codex prompt memory only for its tested native release', async () => {
+  await learn()
+  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion: '0.159.0' }
+  const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+  expect(prepared.packet.items).toHaveLength(1)
+  expect(prepared.receipt?.delivery).toBe('unverified')
+  expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(true)
+  sessions[0].cliVersion = undefined
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
 })
 
 it('withholds prepared context when privacy changes before the hook response', async () => {

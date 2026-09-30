@@ -96,9 +96,10 @@ try {
   const code=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve)})
   clearTimeout(timer)
   const events=stdout.split('\n').flatMap(line=>{try{return [JSON.parse(line)]}catch{return []}})
-  console.log(JSON.stringify({engine,version,code,nativeContextVerified:requests.some(request=>request.contextReceived),hooks,requests,
+  console.log(JSON.stringify({engine,version,code,interactive,nativeContextVerified:requests.some(request=>request.contextReceived),hooks,requests,
     events:events.map(event=>({type:event.type,subtype:event.subtype})),
-    diagnostics:{hookTrustNeeded:/hook.*trust|hook.*review/i.test(stderr),stderrPresent:!!stderr}},null,2))
+    diagnostics:{stdioCaptured:!interactive,hookTrustNeeded:interactive ? null : /hook.*trust|hook.*review/i.test(stderr),
+      stderrPresent:interactive ? null : !!stderr}},null,2))
 } finally {
   for(const server of [provider,adapter]) { server.closeAllConnections();await new Promise(resolve=>server.close(resolve)) }
   await rm(fixture,{recursive:true,force:true})

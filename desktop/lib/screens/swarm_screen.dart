@@ -3891,6 +3891,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: ValueKey('companion-home:${_zoo.scope}'),
     face: _face,
     brain: _brain,
+    openMemoryConnection: _zoo.isPreview
+        ? null
+        : app.openCodingMemoryConnection,
     onHatch: _hatch,
     onOpenControls: _openCompanionControls,
     onSelectEngine: _zoo.isPreview || !_brain.active || _zoo.paired == null

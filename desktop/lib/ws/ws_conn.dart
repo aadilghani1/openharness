@@ -93,6 +93,9 @@ class WsConn {
   bool get _directObserver => !isLocal && observerShareId != null;
   final int localProtocolVersion;
 
+  /// An auxiliary local client must not count as an active desktop window.
+  final bool localToolClient;
+
   /// A flat delay between reconnect attempts instead of the exponential backoff (1s→30s). Set for
   /// the socket to THIS computer's daemon: a refused connect on the loopback costs microseconds and
   /// nothing on the wire, and the daemon comes back within a second or two of a restart or an
@@ -198,6 +201,7 @@ class WsConn {
     this.observerShareId,
     this.observerLink = false,
     this.localProtocolVersion = 1,
+    this.localToolClient = false,
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
@@ -346,6 +350,7 @@ class WsConn {
             'machineId': machineId,
             if (observerShareId != null) 'shareId': observerShareId,
             if (isLocal) 'localProtocolVersion': localProtocolVersion,
+            if (isLocal && localToolClient) 'tool': true,
             if (isLocal && forceRelayReconnect) 'forceReconnect': true,
           },
         });
@@ -606,6 +611,10 @@ class WsConn {
       !type.startsWith('command_bar') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
+      // Pair responses can contain retained memory quotations and one-use
+      // owner capabilities. Never copy them into a second log retention path.
+      type != 'pair' &&
+      type != 'pair_result' &&
       !type.startsWith('observer_');
 
   Future<Map<String, dynamic>> request(
