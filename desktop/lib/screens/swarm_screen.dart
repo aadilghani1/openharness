@@ -6390,9 +6390,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          if (app.panes.isEmpty &&
-                              !newHarnessOpensInBox &&
-                              !app.activeSwarm.isNewTabPage)
+                          if (app.panes.isEmpty
+                              ? !newHarnessOpensInBox &&
+                                    !app.activeSwarm.isNewTabPage
+                              // Behind harnesses: seen through the panes and
+                              // their gutters, on harness tabs only.
+                              : appearancePrefsStore
+                                        .value
+                                        .showsBehindHarnesses &&
+                                    !app.activeSwarm.isUtility &&
+                                    !app.activeSwarm.isOrchestrator)
                             const RepaintBoundary(
                               key: ValueKey('harness-start-background'),
                               child: SwarmWallpaper(),
@@ -6427,98 +6434,103 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   child: Stack(
                                     children: [
                                       Positioned.fill(
-                                        child: PaneGrid(
-                                          notifier: app,
-                                          swarmMode: true,
-                                          onOpenModels: _openPaneModels,
-                                          companionViewer:
-                                              _creatureEnabled && _zoo.loaded
-                                              ? _companionViewer
-                                              : null,
-                                          soloFocused: _compact(context),
-                                          empty:
-                                              app.panes.isEmpty &&
-                                                  !app.activeSwarm.isUtility &&
-                                                  !app
-                                                      .activeSwarm
-                                                      .isOrchestrator
-                                              ? newHarnessOpensInBox ||
-                                                        app
-                                                            .activeSwarm
-                                                            .isNewTabPage
-                                                    ? _startGuide()
-                                                    : HarnessStartPage(
-                                                        key: ValueKey(
-                                                          'harness-start:${app.activeSwarmId}',
-                                                        ),
-                                                        focusNode:
-                                                            _startSearchFocus,
-                                                        createSearch: () =>
-                                                            SwarmSearchController(
-                                                              app,
-                                                              _navigation
-                                                                  .recent,
-                                                              projects:
-                                                                  _projects,
-                                                              commands:
-                                                                  _searchCommands,
-                                                              recentCommands: () =>
-                                                                  _navigation
-                                                                      .recentCommands,
-                                                              // The first box a new
-                                                              // person meets is the same
-                                                              // box: its placeholder
-                                                              // promises `?` and a way
-                                                              // to create, so it has them.
-                                                              modes:
-                                                                  _searchModes,
-                                                              adding: true,
-                                                              offersCreate:
-                                                                  true,
-                                                              placement:
-                                                                  HarnessPlacement
-                                                                      .currentTab,
-                                                              catalog:
-                                                                  _searchCatalog,
-                                                            ),
-                                                        onNewTab: _newTab,
-                                                        onNewPane: () =>
-                                                            unawaited(
-                                                              _addAgent(
-                                                                query: '',
-                                                              ),
-                                                            ),
-                                                        onCommands:
-                                                            _showSearchCommands,
-                                                        onQuickStart:
-                                                            _learning.offer
-                                                            ? _startQuickStart
-                                                            : null,
-                                                        onPractice:
-                                                            _practiceKeyboard,
-                                                        onNew: () => _newAgent(
-                                                          placement:
-                                                              HarnessPlacement
-                                                                  .currentTab,
-                                                        ),
-                                                        onNewWithTask: (task) =>
-                                                            _newAgent(
-                                                              task: task,
-                                                              placement:
-                                                                  HarnessPlacement
-                                                                      .currentTab,
-                                                            ),
-                                                        onStore: _openStore,
-                                                        onResourceSearch:
-                                                            (query) =>
-                                                                _openSearch(
-                                                                  adding: true,
-                                                                  query: query,
+                                        child: PaneOpacity(
+                                          opacity: appearancePrefsStore
+                                              .value
+                                              .effectivePaneOpacity,
+                                          child: PaneGrid(
+                                            notifier: app,
+                                            swarmMode: true,
+                                            onOpenModels: _openPaneModels,
+                                            companionViewer:
+                                                _creatureEnabled && _zoo.loaded
+                                                ? _companionViewer
+                                                : null,
+                                            soloFocused: _compact(context),
+                                            empty:
+                                                app.panes.isEmpty &&
+                                                    !app
+                                                        .activeSwarm
+                                                        .isUtility &&
+                                                    !app
+                                                        .activeSwarm
+                                                        .isOrchestrator
+                                                ? newHarnessOpensInBox ||
+                                                          app
+                                                              .activeSwarm
+                                                              .isNewTabPage
+                                                      ? _startGuide()
+                                                      : HarnessStartPage(
+                                                          key: ValueKey(
+                                                            'harness-start:${app.activeSwarmId}',
+                                                          ),
+                                                          focusNode:
+                                                              _startSearchFocus,
+                                                          createSearch: () => SwarmSearchController(
+                                                            app,
+                                                            _navigation.recent,
+                                                            projects: _projects,
+                                                            commands:
+                                                                _searchCommands,
+                                                            recentCommands: () =>
+                                                                _navigation
+                                                                    .recentCommands,
+                                                            // The first box a new
+                                                            // person meets is the same
+                                                            // box: its placeholder
+                                                            // promises `?` and a way
+                                                            // to create, so it has them.
+                                                            modes: _searchModes,
+                                                            adding: true,
+                                                            offersCreate: true,
+                                                            placement:
+                                                                HarnessPlacement
+                                                                    .currentTab,
+                                                            catalog:
+                                                                _searchCatalog,
+                                                          ),
+                                                          onNewTab: _newTab,
+                                                          onNewPane: () =>
+                                                              unawaited(
+                                                                _addAgent(
+                                                                  query: '',
                                                                 ),
-                                                        onChoose:
-                                                            _chooseStartSearch,
-                                                      )
-                                              : null,
+                                                              ),
+                                                          onCommands:
+                                                              _showSearchCommands,
+                                                          onQuickStart:
+                                                              _learning.offer
+                                                              ? _startQuickStart
+                                                              : null,
+                                                          onPractice:
+                                                              _practiceKeyboard,
+                                                          onNew: () => _newAgent(
+                                                            placement:
+                                                                HarnessPlacement
+                                                                    .currentTab,
+                                                          ),
+                                                          onNewWithTask:
+                                                              (
+                                                                task,
+                                                              ) => _newAgent(
+                                                                task: task,
+                                                                placement:
+                                                                    HarnessPlacement
+                                                                        .currentTab,
+                                                              ),
+                                                          onStore: _openStore,
+                                                          onResourceSearch:
+                                                              (
+                                                                query,
+                                                              ) => _openSearch(
+                                                                adding: true,
+                                                                query: query,
+                                                              ),
+                                                          onChoose:
+                                                              _chooseStartSearch,
+                                                        )
+                                                : null,
+                                          ),
                                         ),
                                       ),
                                     ],

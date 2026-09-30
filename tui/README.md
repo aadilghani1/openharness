@@ -8,6 +8,13 @@ curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash    # installs har
 hn                                                                 # or: harness tui
 ```
 
+The installed CLI keeps hn up to date automatically: it checks at daemon startup and on the
+same schedule as CLI updates, including when only hn has a new release. Reopen hn to use the
+new version; running clients and panes keep working. `harness update` also checks hn when
+the CLI is already current. `ADAPTER_UPDATE_DISABLE=true` disables automatic updates for both;
+local CLI builds and `HARNESS_TUI_BIN` overrides stay untouched. The first hn launch downloads
+it if missing; `harness tui --install` explicitly reinstalls the latest published build.
+
 hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your harnesses on
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).

@@ -20,6 +20,7 @@ import '../state/app_state.dart';
 import '../state/model_start_watch.dart';
 
 import 'agent_drag.dart';
+import 'box_chrome.dart';
 import 'rename_agent_dialog.dart';
 import 'terminal_composer.dart';
 import '../shortcuts/app_keymap.dart';
@@ -2107,89 +2108,97 @@ class _TerminalPanelState extends State<TerminalPanel>
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
+    // Behind harnesses: each part paints its own fill at this opacity (the
+    // header, the screen) or solid (the composer), over nothing — a fill
+    // underneath them all would stack with theirs.
+    final paneOpacity = PaneOpacity.of(context);
+    final chromeFill = PaneOpacity.fill(context, grid.AppPalette.windowBg);
     return KeymapRegion(
       contextKind: KeymapContext.terminal,
       composing: () =>
           _focusNode.hasFocus &&
           _terminalViewKey.currentState?.isComposing == true,
       child: ColoredBox(
-        color: grid.AppPalette.windowBg,
+        color: paneOpacity < 1 ? Colors.transparent : grid.AppPalette.windowBg,
         child: Column(
           children: [
             if (widget.showHeader)
-              Stack(
-                children: [
-                  Visibility(
-                    visible: _find == null,
-                    maintainSize: true,
-                    maintainAnimation: true,
-                    maintainState: true,
-                    child: _buildHeader(context),
-                  ),
-                  // Attach the focused pane's input before Find is requested.
-                  // Hidden/unfocused panes need no dormant editor or index.
-                  if (_find != null || (widget.visible && widget.focused))
-                    Positioned.fill(
-                      child: Offstage(
-                        offstage: _find == null,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) => Row(
-                            children: [
-                              if (constraints.maxWidth > 520)
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: _stripPadding,
-                                    ),
-                                    child: Text(
-                                      session.agentName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      // The header's own ink, which this
-                                      // line stands in for while Find is open.
-                                      style: grid.AppType.monoLabel(
-                                        color: terminalThemeFor(
-                                          grid.AppTheme.palette.value,
-                                          terminalThemeStore.value,
-                                        ).foreground.withValues(alpha: .70),
-                                        fontWeight: FontWeight.w400,
+              ColoredBox(
+                color: chromeFill,
+                child: Stack(
+                  children: [
+                    Visibility(
+                      visible: _find == null,
+                      maintainSize: true,
+                      maintainAnimation: true,
+                      maintainState: true,
+                      child: _buildHeader(context),
+                    ),
+                    // Attach the focused pane's input before Find is requested.
+                    // Hidden/unfocused panes need no dormant editor or index.
+                    if (_find != null || (widget.visible && widget.focused))
+                      Positioned.fill(
+                        child: Offstage(
+                          offstage: _find == null,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) => Row(
+                              children: [
+                                if (constraints.maxWidth > 520)
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: _stripPadding,
+                                      ),
+                                      child: Text(
+                                        session.agentName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        // The header's own ink, which this
+                                        // line stands in for while Find is open.
+                                        style: grid.AppType.monoLabel(
+                                          color: terminalThemeFor(
+                                            grid.AppTheme.palette.value,
+                                            terminalThemeStore.value,
+                                          ).foreground.withValues(alpha: .70),
+                                          fontWeight: FontWeight.w400,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                )
-                              else
-                                const Spacer(),
-                              SizedBox(
-                                width: math.min(constraints.maxWidth, 380),
+                                  )
+                                else
+                                  const Spacer(),
+                                SizedBox(
+                                  width: math.min(constraints.maxWidth, 380),
 
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 4,
-                                  ),
-                                  child: TerminalFindBar(
-                                    key: _findBarKey,
-                                    search: _find,
-                                    initialQuery: _lastFindQuery,
-                                    initialCaseSensitive:
-                                        _lastFindCaseSensitive,
-                                    readOnly:
-                                        widget.readOnly ||
-                                        !session.acceptsInput,
-                                    onQuery: _queryFind,
-                                    onStep: _stepFind,
-                                    onClose: _closeFind,
-                                    onFocus: () =>
-                                        widget.onRendererFocus?.call(),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 4,
+                                    ),
+                                    child: TerminalFindBar(
+                                      key: _findBarKey,
+                                      search: _find,
+                                      initialQuery: _lastFindQuery,
+                                      initialCaseSensitive:
+                                          _lastFindCaseSensitive,
+                                      readOnly:
+                                          widget.readOnly ||
+                                          !session.acceptsInput,
+                                      onQuery: _queryFind,
+                                      onStep: _stepFind,
+                                      onClose: _closeFind,
+                                      onFocus: () =>
+                                          widget.onRendererFocus?.call(),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
 
             // Goes with the row above it: the phone draws its own rule under
@@ -2249,6 +2258,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                                 terminalThemeStore.value,
                               ),
                               padding: const EdgeInsets.all(10),
+                              backgroundOpacity: paneOpacity,
                               textStyle: terminalFontStore.value,
                               // The chosen point size already sizes each terminal cell.
                               // Applying the OS text scale again would change rows/cols
@@ -2362,16 +2372,23 @@ class _TerminalPanelState extends State<TerminalPanel>
             if (!widget.compactHeader &&
                 remote &&
                 widget.onToggleComposer != null)
-              ComposerGrip(
-                expanded: widget.composerVisible,
-                onPressed: widget.onToggleComposer!,
+              ColoredBox(
+                color: chromeFill,
+                child: ComposerGrip(
+                  expanded: widget.composerVisible,
+                  onPressed: widget.onToggleComposer!,
+                ),
               ),
+            // Solid whatever the pane opacity: this is where you type.
             if (showComposer)
-              TerminalComposer(
-                tabId: widget.paneLocation?.$1,
-                session: session,
-                focusNode: _composerFocus,
-                inputEnabled: !widget.readOnly,
+              ColoredBox(
+                color: grid.AppPalette.windowBg,
+                child: TerminalComposer(
+                  tabId: widget.paneLocation?.$1,
+                  session: session,
+                  focusNode: _composerFocus,
+                  inputEnabled: !widget.readOnly,
+                ),
               ),
           ],
         ),

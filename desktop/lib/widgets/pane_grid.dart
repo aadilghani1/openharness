@@ -36,7 +36,7 @@ import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
-import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder;
+import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder, PaneOpacity;
 import 'desktop_chrome.dart';
 
 /// The view drawn alone when only one fits (a phone): the real zoom, else the
@@ -1248,7 +1248,12 @@ class _PaneCell extends StatelessWidget {
           // shows a seam between the header strip and the terminal under it.
           // What changes to make the gaps visible is the field BEHIND the grid
           // (see _GridField), which is the part the gaps actually show.
-          color: grid.AppPalette.windowBg,
+          //
+          // Behind harnesses: a terminal paints its own translucent fills, so
+          // the frame adds none (two would stack); a status pane has only this.
+          color: PaneOpacity.of(context) < 1 && pane.session != null
+              ? null
+              : PaneOpacity.fill(context, grid.AppPalette.windowBg),
           borderRadius: BorderRadius.circular(_paneRadius),
           // The rim is always drawn — it is what gives an unfocused card its
           // edge, now that no shared line does. It only CHANGES COLOUR on

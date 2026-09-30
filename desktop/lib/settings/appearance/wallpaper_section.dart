@@ -35,7 +35,7 @@ class WallpaperSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'A little curiosity for your new swarms.',
+            'Shown on new tabs, and behind your harnesses if you like.',
             style: grid.AppType.body(color: grid.AppPalette.textSecondary),
           ),
           const SizedBox(height: 16),
@@ -84,6 +84,11 @@ class WallpaperSection extends StatelessWidget {
           if (!kIsWeb && value.background == HarnessBackground.custom) ...[
             const SizedBox(height: 20),
             _CustomControls(prefs: prefs, custom: value.custom),
+          ],
+          // Blank has nothing to show through; the choice is kept for later.
+          if (value.background != HarnessBackground.plain) ...[
+            const SizedBox(height: 20),
+            _BehindHarnessesControls(prefs: prefs, value: value),
           ],
         ],
       ),
@@ -402,6 +407,64 @@ class _CustomControls extends StatelessWidget {
           onSelectionChanged: (selection) =>
               prefs.setCustomBackground(fit: selection.first),
         ),
+      ],
+    );
+  }
+}
+
+/// Behind harnesses, and how solid the panes stay while it shows through them.
+class _BehindHarnessesControls extends StatelessWidget {
+  const _BehindHarnessesControls({required this.prefs, required this.value});
+  final AppearancePrefsStore prefs;
+  final AppearancePrefs value;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = grid.AppType.label(color: grid.AppPalette.textPrimary);
+    final percent = '${(value.paneOpacity * 100).round()}%';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          key: const ValueKey('background-behind-harnesses'),
+          contentPadding: EdgeInsets.zero,
+          value: value.behindHarnesses,
+          onChanged: (on) => prefs.setBehindHarnesses(on: on),
+          title: Text('Behind harnesses', style: label),
+          subtitle: Text(
+            'Show it through the panes of running tabs.',
+            style: grid.AppType.label(color: grid.AppPalette.textSecondary),
+          ),
+        ),
+        if (value.behindHarnesses) ...[
+          const SizedBox(height: 8),
+          Text('Pane opacity', style: label),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  key: const ValueKey('background-pane-opacity'),
+                  value: value.paneOpacity,
+                  min: AppearancePrefs.paneOpacityMin,
+                  divisions: 20,
+                  label: percent,
+                  onChanged: (opacity) =>
+                      prefs.setBehindHarnesses(opacity: opacity),
+                ),
+              ),
+              SizedBox(
+                width: 44,
+                child: Text(
+                  percent,
+                  textAlign: TextAlign.end,
+                  style: grid.AppType.label(
+                    color: grid.AppPalette.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
