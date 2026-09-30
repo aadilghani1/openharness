@@ -5454,6 +5454,7 @@ class AppNotifier extends ChangeNotifier {
       final prev = byId[agent.id];
       if (prev == null ||
           prev.name != agent.name ||
+          prev.title != agent.title ||
           prev.sessionId != agent.sessionId ||
           prev.engine != agent.engine ||
           prev.engineDisplayName != agent.engineDisplayName ||
@@ -5461,6 +5462,11 @@ class AppNotifier extends ChangeNotifier {
           prev.codexHome != agent.codexHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
+          prev.gridModel != agent.gridModel ||
+          prev.gridWebSearch != agent.gridWebSearch ||
+          prev.gridBaseUrl != agent.gridBaseUrl ||
+          prev.gridState != agent.gridState ||
+          _gridNoteValue(prev.gridNote) != _gridNoteValue(agent.gridNote) ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.gitContext != agent.gitContext ||
@@ -5480,12 +5486,28 @@ class AppNotifier extends ChangeNotifier {
           prev.viewerUrl != agent.viewerUrl ||
           prev.viewerError != agent.viewerError ||
           prev.viewerName != agent.viewerName ||
-          prev.verdict != agent.verdict) {
+          prev.verdict != agent.verdict ||
+          prev.forkedFrom?.agentId != agent.forkedFrom?.agentId ||
+          prev.forkedFrom?.name != agent.forkedFrom?.name ||
+          prev.forkable != agent.forkable ||
+          prev.resumeMode != agent.resumeMode ||
+          prev.permissionMode != agent.permissionMode ||
+          prev.bypassPermission != agent.bypassPermission ||
+          prev.namedAgent != agent.namedAgent) {
         return false;
       }
     }
     return true;
   }
+
+  static (Type?, String?, String?) _gridNoteValue(GridNote? note) => (
+    note?.runtimeType,
+    note?.model,
+    switch (note) {
+      GridNoteOffline(:final machine) => machine,
+      _ => null,
+    },
+  );
 
   /// Public retry hook used by the offline join guide's "Retry now" action.
   Future<void> retryOfflineMachine(String machineId) =>
@@ -7259,10 +7281,22 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  void _upsertAgent(MachineState machine, Agent agent) {
+  bool _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
     agent = retainNewerGitContext(agent, previous);
+    // Discovery repeatedly sends the same snapshot. Preserve the existing
+    // object (pane presentation keys include it), and do not refetch previews
+    // or invalidate the workspace for a snapshot with no new information.
+    if (previous != null &&
+        agentsEqual([previous], [agent]) &&
+        machine.agentLoadStatus == AgentLoadStatus.loaded &&
+        machine.agentsLoadError == null &&
+        !machine.pendingProcessingSessions.contains(agent.sessionId)) {
+      // The layout can change independently of the agent snapshot: a newly
+      // opened terminal still needs its viewer, and an orphaned viewer must go.
+      return _syncViewerPane(machine, previous);
+    }
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -7314,16 +7348,19 @@ class AppNotifier extends ChangeNotifier {
         _lastErrorRetryable = false;
       }
     }
+    return true;
   }
 
-  void _renameAgent(MachineState machine, String agentId, String name) {
+  bool _renameAgent(MachineState machine, String agentId, String name) {
     final index = machine.agents.indexWhere((agent) => agent.id == agentId);
-    if (index == -1 || name.trim().isEmpty) return;
+    if (index == -1 || name.trim().isEmpty) return false;
     final cleanName = name.trim();
+    if (machine.agents[index].name == cleanName) return false;
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
     _recordAgentName(machine, machine.agents[index]);
     _syncAgentName(machine, machine.agents[index]);
+    return true;
   }
 
   // Creation can be in flight while a Stop reply removes the old final pane.
@@ -7430,7 +7467,7 @@ class AppNotifier extends ChangeNotifier {
   /// changes, and takes the tile down when the viewer or the terminal goes.
   /// It never steals focus: the person is typing in the terminal the viewer
   /// belongs to. Nothing is persisted — see [PaneKind.web].
-  void _syncViewerPane(MachineState machine, Agent agent) {
+  bool _syncViewerPane(MachineState machine, Agent agent) {
     final machineId = machine.machine.machineId;
     final url = agent.viewerUrl;
     final viewerState = url ?? agent.viewerError;
@@ -7466,6 +7503,8 @@ class AppNotifier extends ChangeNotifier {
         // The same page again is nothing new; a different one navigates in
         // place rather than reopening a tile.
         for (final pane in viewers) {
+          changed =
+              changed || pane.url != url || pane.viewerError != agent.viewerError;
           pane.url = url;
           pane.viewerError = agent.viewerError;
         }
@@ -7501,6 +7540,7 @@ class AppNotifier extends ChangeNotifier {
       changed = true;
     }
     if (changed) _persistLayout();
+    return changed;
   }
 
   /// Whether the active tab shows this agent's viewer beside its terminal.
@@ -13203,8 +13243,8 @@ class AppNotifier extends ChangeNotifier {
         if (raw is Map) {
           try {
             final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
+            var changed = _upsertAgent(machine, agent);
             if (agent.terminalAvailable) {
-              _upsertAgent(machine, agent);
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
@@ -13217,13 +13257,13 @@ class AppNotifier extends ChangeNotifier {
               // agent are still alive. Keep the pane/layout intent and let a
               // later available sync reattach it. A confirmed `agent_deleted`
               // event remains the sole path that removes a person's panes.
-              _upsertAgent(machine, agent);
               for (final pane in panesFor(machine.machine.machineId)) {
-                if (pane.agentId != agent.id) continue;
+                if (pane.agentId != agent.id || pane.session == null) continue;
                 await _detachSession(pane, sendClose: false);
+                changed = true;
               }
-              notifyListeners();
             }
+            if (!changed) return;
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));
           }
@@ -13251,7 +13291,7 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         final name = payload['name'];
         if (agentId != null && name is String) {
-          _renameAgent(machine, agentId, name);
+          if (!_renameAgent(machine, agentId, name)) return;
         } else {
           unawaited(_loadMachineData(machine, force: true));
         }
@@ -13451,6 +13491,10 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      default:
+        // RPC replies and frames owned by other controllers carry no app
+        // state changes. They must not trigger a full workspace rebuild.
+        return;
     }
     notifyListeners();
   }
