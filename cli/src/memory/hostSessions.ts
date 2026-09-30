@@ -3,7 +3,7 @@ import type { MemoryHostSession } from './runtime.js'
 
 interface RegisteredMemorySession {
   agentId: string; engine: string; sessionId: string; cwd: string | null; transcriptPath: string | null
-  dsh?: string | null; forkedFrom?: unknown; registeredAt: number
+  dsh?: string | null; forkedFrom?: unknown; registeredAt: number; cliVersion?: string | null
 }
 // These bundled DSHs have explicit software-development workflows. A package's arbitrary category
 // string, viewer, or use of a coding CLI cannot opt a general-domain DSH into personal coding memory.
@@ -28,6 +28,7 @@ export class MemorySessionRoster {
       this.recent.set(session.agentId, { seenAt: this.now(), session: { agentId: session.agentId,
         engine: session.engine as 'claude' | 'codex', sessionId: session.sessionId, workspace: session.cwd,
         transcriptPath: session.transcriptPath, coding: true, busy: busy(session.sessionId), scope: companion ? 'profile' : 'project',
+        ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.forkedFrom ? { liveFrom: session.registeredAt } : {}) } })
     }
     for (const [agentId, row] of this.recent) {

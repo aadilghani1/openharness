@@ -7,7 +7,7 @@ import { MemoryError } from './types.js'
 import { runInferenceProcess } from './inferenceProcess.js'
 
 const exec = promisify(execFile)
-const CERTIFIED_CLAUDE_VERSIONS = new Set(['2.1.285'])
+const CERTIFIED_CLAUDE_VERSIONS = new Set(['2.1.285', '2.1.286'])
 export async function claudeMemoryCapability(signal?: AbortSignal): Promise<{ supported: boolean; version: string | null }> {
   try {
     const result = await exec(process.env.CLAUDE_PATH || 'claude', ['--version'], { timeout: 5_000, maxBuffer: 2_000,

@@ -4096,7 +4096,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    onPromptContext: (agentId) => companionPromptContext(agentId),
+    onPromptContext: async (agentId, prompt) => {
+      const persona = companionPromptContext(agentId)
+      const recalled = await codingMemory?.preparePromptRecall(agentId, { query: prompt })
+      return { additionalContext: [persona, recalled?.packet.text].filter(Boolean).join('\n\n'),
+        ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
+    },
+    onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }

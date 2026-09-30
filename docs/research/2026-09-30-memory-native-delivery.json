@@ -1,0 +1,87 @@
+{
+  "date": "2026-09-30",
+  "kind": "synthetic-native-hook-transport-check",
+  "runner": "cli/scripts/memory-native-hook-probe.mjs",
+  "claude": {
+    "engine": "claude",
+    "version": "2.1.286 (Claude Code)",
+    "code": 0,
+    "nativeContextVerified": true,
+    "hooks": [
+      {
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "claude",
+        "receipt": false
+      },
+      {
+        "route": "/api/hook/memory-emitted",
+        "engine": "claude",
+        "receipt": true
+      }
+    ],
+    "requests": [
+      {
+        "route": "/v1/messages",
+        "contextReceived": true,
+        "contextRoles": [
+          "user"
+        ],
+        "promptReceived": true,
+        "tools": []
+      }
+    ],
+    "events": [
+      {
+        "type": "system",
+        "subtype": "hook_started"
+      },
+      {
+        "type": "system",
+        "subtype": "hook_response"
+      },
+      {
+        "type": "system",
+        "subtype": "init"
+      },
+      {
+        "type": "assistant"
+      },
+      {
+        "type": "system",
+        "subtype": "informational"
+      },
+      {
+        "type": "result",
+        "subtype": "success"
+      }
+    ],
+    "diagnostics": {
+      "hookTrustNeeded": false,
+      "stderrPresent": false
+    }
+  },
+  "codex": {
+    "version": "0.159.0",
+    "execProbe": {
+      "exitCode": 0,
+      "hookRequests": 0,
+      "syntheticPromptReceived": true,
+      "memoryContextReceived": false
+    },
+    "interactiveProbe": "Stopped at the native folder-trust prompt; no model request was made.",
+    "approval": "Automatic review rejected accepting folder trust; explicit approval requested and pending.",
+    "automaticMemoryDeliveryEnabled": false
+  },
+  "limitations": [
+    "The provider is a localhost mock with fake credentials; no model reasoned about the memory.",
+    "The adapter endpoint is a synthetic fixture. Host process ownership and receipt binding are separately covered by tests.",
+    "The Claude check demonstrates one UserPromptSubmit path in print mode with explicit temporary settings, not all TUI, resume or compaction behavior.",
+    "Production receipts remain delivery-unverified; the fixture request observation is not a native acknowledgement for real sessions.",
+    "Original conversations, provider history and earlier native context cannot be erased by deleting the Harness record."
+  ],
+  "references": [
+    "https://code.claude.com/docs/en/hooks",
+    "https://learn.chatgpt.com/docs/hooks"
+  ]
+}

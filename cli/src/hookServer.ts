@@ -55,9 +55,29 @@ export interface PairOutcome {
   body: Record<string, unknown>
 }
 
+export interface NativePromptContext { additionalContext: string; memoryReceiptId?: string }
+type PromptContext = NativePromptContext | string | null
+
+/** Optional recall must never hang an engine's prompt or expose a failed lookup as a hook failure. */
+async function boundedPromptContext(read: () => PromptContext | Promise<PromptContext>): Promise<NativePromptContext | null> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const result = await Promise.race([Promise.resolve().then(read),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 225) })])
+    const context = typeof result === 'string' ? { additionalContext: result } : result
+    if (!context || typeof context.additionalContext !== 'string' || !context.additionalContext
+      || Buffer.byteLength(context.additionalContext) > 8_000) return null
+    return { additionalContext: context.additionalContext,
+      ...(typeof context.memoryReceiptId === 'string' && /^[a-f0-9-]{36}$/.test(context.memoryReceiptId)
+        ? { memoryReceiptId: context.memoryReceiptId } : {}) }
+  } catch { return null } finally { if (timer) clearTimeout(timer) }
+}
+
 export interface HookServerHandlers {
   /** Context for a verified process-owned agent, only on its real user turn. */
-  onPromptContext?: (agentId: string) => string | null
+  onPromptContext?: (agentId: string, prompt: string) => PromptContext | Promise<PromptContext>
+  /** Called only for the same process-owned native session after its hook writes context to stdout. */
+  onMemoryContextEmitted?: (agentId: string, receiptId: string) => Promise<boolean>
   onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
@@ -167,7 +187,7 @@ const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
   'engine', 'launcherId', 'sessionId', 'transcriptPath', 'cwd', 'source', 'tmuxPane', 'title', 'model',
   'cliVersion', 'runtimeHints', 'callerPid', 'hookEvent', 'pluginVersion', 'reason', 'status', 'toolUseId',
-  'toolName', 'input', 'prompt',
+  'toolName', 'input', 'prompt', 'memoryReceiptId',
 ])
 
 function optionalBoundedString(value: unknown, max: number): boolean {
@@ -201,6 +221,7 @@ function validHookBody(value: unknown): value is BoundHookBody {
     || !optionalBoundedString(body.status, 100)
     || !optionalBoundedString(body.toolUseId, 200)
     || !optionalBoundedString(body.toolName, 200)
+    || !optionalBoundedString(body.memoryReceiptId, 36)
     || !optionalBoundedJson(body.input, 128 * 1024)) return false
   if (body.callerPid !== undefined
     && (!Number.isSafeInteger(body.callerPid) || (body.callerPid as number) <= 0)) return false
@@ -257,6 +278,7 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
 }
 
 type BoundHookBody = RegisterInput & {
+  memoryReceiptId?: string
   prompt?: string
   sessionId?: string
   reason?: string
@@ -562,10 +584,25 @@ export function startHookServer(
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        const context = body.hookEvent === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex')
-          ? handlers.onPromptContext?.(result.entry.agentId) : null
-        json(200, { ok: true, ...(context ? { additionalContext: context } : {}) })
+        const context = body.hookEvent === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex') && handlers.onPromptContext
+          ? await boundedPromptContext(() => handlers.onPromptContext!(result.entry.agentId, body.prompt ?? '')) : null
+        json(200, { ok: true, ...context })
         return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/memory-emitted') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: BoundHookBody
+        try {
+          const parsed: unknown = JSON.parse(await readBody(req))
+          if (!validHookBody(parsed) || !/^[a-f0-9-]{36}$/.test(parsed.memoryReceiptId ?? '')
+            || !['claude', 'codex'].includes(parsed.engine ?? '')) { json(400, { error: 'invalid hook body' }); return }
+          body = parsed
+        } catch { json(400, { error: 'bad json' }); return }
+        const agent = await verifiedBoundMutation(body, handlers)
+        if (!agent) { json(403, { error: 'UNBOUND_HOOK' }); return }
+        const recorded = await handlers.onMemoryContextEmitted?.(agent.agentId, body.memoryReceiptId!).catch(() => false) ?? false
+        json(200, { ok: true, recorded, delivery: 'unverified' }); return
       }
 
       if (req.method === 'POST' && url === '/api/hook/session-end') {

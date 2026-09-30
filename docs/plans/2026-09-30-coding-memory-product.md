@@ -2,7 +2,7 @@
 
 Build memory that helps any supported coding agent work like a colleague who understands the developer, the codebase, and the task. It should improve engineering choices, produce changes that fit the project, and reduce repeated explanation. Tim is the interface to that knowledge. General DSH domains and cross-machine synchronization are outside this product scope.
 
-This document defines the coding-specific product model. The [architecture](2026-09-30-tim-memory.md) defines storage, learning, recall, adapters, and controls. The examples below are illustrative, not a profile inferred about the current user. This is a design proposal; runtime implementation and behavioral evaluation remain to be done.
+This document defines the coding-specific product model. The [architecture](2026-09-30-tim-memory.md) defines storage, learning, recall, adapters, and controls. The examples below are illustrative, not a profile inferred about the current user. A development-gated runtime prototype now exists; the [review log](2026-09-30-coding-memory-review-log.md) tracks what has been implemented and tested. User-facing integration and behavioral evaluation remain incomplete.
 
 The [historical design council](2026-09-30-coding-memory-council.md) applies ten complementary engineering perspectives to this model. Its central addition is memory of engineering judgment: how someone approaches a problem, why a decision made sense, what evidence supports it, and what would warrant changing it. These perspectives inform our design; they are not preset personalities assigned to developers.
 

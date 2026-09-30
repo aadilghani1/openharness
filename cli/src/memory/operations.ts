@@ -5,7 +5,8 @@ import type { MemoryQueue } from './queue.js'
 export type MemoryOperations = Pick<CodingMemoryStore,
   'controls' | 'setControls' | 'preferences' | 'setPreferences' | 'maintain' | 'registerProject' | 'projectForLocator' | 'linkProjectLocator' | 'setProjectIncluded'
   | 'sessionPolicy' | 'setSessionIncluded' | 'capturePolicy'
-  | 'ingest' | 'source' | 'propose' | 'revise' | 'correctFromUser' | 'read' | 'history' | 'support' | 'list' | 'recall' | 'putTopic' | 'topic' | 'forget'>
+  | 'ingest' | 'source' | 'propose' | 'revise' | 'correctFromUser' | 'read' | 'history' | 'support' | 'list' | 'recall'
+  | 'prepareRecall' | 'recallEmitted' | 'recallReceipts' | 'putTopic' | 'topic' | 'forget'>
   & Pick<MemoryQueue, 'capture' | 'checkpoint' | 'pendingReview' | 'claim' | 'finish' | 'defer' | 'cursor' | 'episodeOpen' | 'status'>
 export type Operation = keyof MemoryOperations
 export type Arguments<K extends Operation> = Parameters<MemoryOperations[K]>
@@ -14,5 +15,6 @@ export type MemoryPort = { request<K extends Operation>(operation: K, args: Argu
 
 export const STORE_OPERATIONS = ['controls', 'setControls', 'preferences', 'setPreferences', 'maintain', 'registerProject', 'projectForLocator', 'linkProjectLocator', 'setProjectIncluded',
   'sessionPolicy', 'setSessionIncluded', 'capturePolicy',
-  'ingest', 'source', 'propose', 'revise', 'correctFromUser', 'read', 'history', 'support', 'list', 'recall', 'putTopic', 'topic', 'forget'] as const
+  'ingest', 'source', 'propose', 'revise', 'correctFromUser', 'read', 'history', 'support', 'list', 'recall',
+  'prepareRecall', 'recallEmitted', 'recallReceipts', 'putTopic', 'topic', 'forget'] as const
 export const QUEUE_OPERATIONS = ['capture', 'checkpoint', 'pendingReview', 'claim', 'finish', 'defer', 'cursor', 'episodeOpen', 'status'] as const

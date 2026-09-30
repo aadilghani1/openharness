@@ -54,7 +54,7 @@ beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'memory-runtime-'))
   now = 1_000
   context = { experimental: true, watching: true, profileId: 'owner_a' }
-  sessions = [{ agentId: 'agent', engine: 'claude', sessionId: 'native', workspace: '/authorized/project',
+  sessions = [{ agentId: 'agent', engine: 'claude', cliVersion: '2.1.286', sessionId: 'native', workspace: '/authorized/project',
     transcriptPath: join(directory, 'conversation.jsonl'), busy: false, coding: true }]
   target = { state: 'ready', key: 'selected' }
   inference = { target: vi.fn(async () => target), run: vi.fn(async prompt => {
@@ -122,6 +122,55 @@ it('never captures an unclassified general-domain DSH and does not resolve its w
   expect(stores.get('owner_a')!.learning.status().capturedStreams).toBe(0)
   expect(locate).not.toHaveBeenCalled()
   expect((await runtime.recall('agent', { query: 'coding' })).status).toBe('denied')
+})
+
+it('prepares a host-bound prompt receipt and rejects a native-session replacement acknowledging it', async () => {
+  await learn()
+  const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+  expect(prepared.packet.items).toHaveLength(1)
+  expect(prepared.receipt?.delivery).toBe('unverified')
+  expect((await runtime.promptRecallReceipts('agent'))[0].emittedAt).toBeNull()
+  expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(true)
+  expect((await runtime.promptRecallReceipts('agent'))[0].emittedAt).toBe(now)
+  sessions[0] = { ...sessions[0], sessionId: 'replacement' }
+  expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(false)
+  expect(await runtime.promptRecallReceipts('agent')).toEqual([])
+})
+
+it('keeps native prompt delivery unavailable on an unverified release while preserving explicit scoped recall', async () => {
+  await learn()
+  sessions[0].cliVersion = '2.99.0'
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
+  expect(await runtime.promptRecallReceipts('agent')).toEqual([])
+  expect((await runtime.recall('agent', { query: 'coding changes' })).items).toHaveLength(1)
+})
+
+it('withholds prepared context when privacy changes before the hook response', async () => {
+  await learn()
+  intercept = async operation => { if (operation === 'prepareRecall') stores.get('owner_a')!.setSessionIncluded('claude', 'native', false) }
+  const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+  expect(result.packet.status).toBe('denied')
+  expect(result.receipt).toBeNull()
+  expect(await runtime.promptRecallReceipts('agent')).toEqual([])
+})
+
+it.each(['forgotten', 'corrected'] as const)('withholds a prepared packet when its memory is %s before the response', async change => {
+  await learn()
+  intercept = async (operation, value) => {
+    if (operation !== 'prepareRecall') return
+    const item = (value as import('./receipts.js').PreparedRecall).packet.items[0]
+    const access = { profileId: 'owner_a', projectIds: [item.scope.projectId!], includeProfile: true }
+    const store = stores.get('owner_a')!
+    if (change === 'forgotten') store.forget(item.id, item.revision, access)
+    else {
+      const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated,
+        evidence: _evidence, evidenceClass: _class, ...draft } = store.read(item.id, access)!
+      store.correctFromUser(item.id, item.revision, { ...draft, claim: 'Group related coding changes together.' }, access)
+    }
+  }
+  const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+  expect(result.packet.status).toBe('denied')
+  expect(result.receipt).toBeNull()
 })
 
 it('learns explicit personal coding preferences in the collection conversation and recalls them in other projects', async () => {

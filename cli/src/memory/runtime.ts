@@ -7,6 +7,7 @@ import { MemoryLearner, type LearningOutcome, type MemoryInference } from './lea
 import { locateProject, type ProjectContext } from './project.js'
 import type { Arguments, MemoryPort, Operation, Result } from './operations.js'
 import type { MemoryPreferences } from './store.js'
+import type { PreparedRecall, RecallReceipt } from './receipts.js'
 import { MemoryError, type RecallPacket, type RecallRequest } from './types.js'
 
 export interface MemoryHostContext {
@@ -18,6 +19,7 @@ export interface MemoryHostContext {
 export interface MemoryHostSession {
   agentId: string
   engine: 'claude' | 'codex'
+  cliVersion?: string | null
   sessionId: string
   workspace: string
   transcriptPath: string
@@ -125,26 +127,68 @@ export class CodingMemoryRuntime {
 
   /** Callers identify their process-owned agent; they never supply profile or project authority. */
   async recall(agentId: string, request: RecallRequest): Promise<RecallPacket> {
-    const deadline = performance.now() + 200
-    const remaining = (): number => Math.max(1, deadline - performance.now())
+    return (await this.recallBound(agentId, request, false)).packet
+  }
+
+  async preparePromptRecall(agentId: string, request: RecallRequest): Promise<PreparedRecall> {
+    const session = this.session(agentId)
+    // Only this release has demonstrated additionalContext in an outgoing native model request.
+    // An extraction certificate or a successful stdout write does not certify hook delivery.
+    // Manual recall remains available; add native releases after the same isolated transport check.
+    if (session?.engine !== 'claude' || session.cliVersion !== '2.1.286') return { packet: empty('unavailable'), receipt: null }
+    return this.recallBound(agentId, request, true)
+  }
+
+  /** A host-verified hook acknowledges its stdout write; this is not model-context verification. */
+  async promptRecallEmitted(agentId: string, receiptId: string): Promise<boolean> {
     try {
       const active = this.requireActive()
-      if (!active.preferences.recall) return empty('off')
       const session = this.session(agentId)
-      if (!session) return empty('denied')
+      const project = session && active.projects.get(projectKey(session))
+      if (!session || !project || this.now() - project.checkedAt > 60_000) return false
+      return await active.port.request('recallEmitted', [receiptId,
+        { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route: 'prompt_hook' },
+        { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }], 100)
+    } catch { return false }
+  }
+
+  async promptRecallReceipts(agentId: string): Promise<RecallReceipt[]> {
+    const active = this.requireActive()
+    const session = this.session(agentId)
+    const project = session && active.projects.get(projectKey(session))
+    if (!session || !project || this.now() - project.checkedAt > 60_000) return []
+    const receipts = await active.port.request('recallReceipts', [
+      { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route: 'prompt_hook' },
+      { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }])
+    return this.sameSession(session) ? receipts : []
+  }
+
+  private async recallBound(agentId: string, request: RecallRequest, prepare: boolean): Promise<PreparedRecall> {
+    const deadline = performance.now() + 200
+    const remaining = (): number => Math.max(1, deadline - performance.now())
+    const unavailable = (status: RecallPacket['status']): PreparedRecall => ({ packet: empty(status), receipt: null })
+    try {
+      const active = this.requireActive()
+      if (!active.preferences.recall) return unavailable('off')
+      const session = this.session(agentId)
+      if (!session) return unavailable('denied')
       // Recall must not wait for Git or SQLite startup on the user's input path. Background capture
       // primes the identity cache; the first unprimed request safely gets no additional context.
       const project = active.projects.get(projectKey(session))
-      if (!project || this.now() - project.checkedAt > 60_000) return empty('unavailable')
+      if (!project || this.now() - project.checkedAt > 60_000) return unavailable('unavailable')
       const policy = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], 50)
-      if (!policy.included) return empty('denied')
-      const packet = await active.port.request('recall', [request,
-        { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }], remaining())
+      if (!policy.included) return unavailable('denied')
+      const access = { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }
+      const result: PreparedRecall = prepare
+        ? await active.port.request('prepareRecall', [request,
+          { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route: 'prompt_hook' }, access], remaining())
+        : { packet: await active.port.request('recall', [request, access], remaining()), receipt: null }
       const current = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], remaining())
-      if (performance.now() >= deadline) return empty('timeout')
-      if (!current.included || current.generation !== policy.generation || !active.preferences.recall || !this.sameSession(session)) return empty('denied')
-      return packet
-    } catch (error) { return empty(error instanceof MemoryError && error.code === 'memory_deadline' ? 'timeout' : 'unavailable') }
+      if (performance.now() >= deadline) return unavailable('timeout')
+      if (!current.included || current.generation !== policy.generation || current.knowledgeEpoch !== policy.knowledgeEpoch
+        || !active.preferences.recall || !this.sameSession(session)) return unavailable('denied')
+      return result
+    } catch (error) { return unavailable(error instanceof MemoryError && error.code === 'memory_deadline' ? 'timeout' : 'unavailable') }
   }
 
   async close(): Promise<void> {
@@ -184,6 +228,7 @@ export class CodingMemoryRuntime {
     return !!current && current.engine === session.engine && current.sessionId === session.sessionId
       && current.workspace === session.workspace && current.transcriptPath === session.transcriptPath && current.liveFrom === session.liveFrom
       && (current.scope ?? 'project') === (session.scope ?? 'project')
+      && current.cliVersion === session.cliVersion
   }
 
   private async detach(): Promise<void> {

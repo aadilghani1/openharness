@@ -11,6 +11,8 @@ import { admission, assertSafe, canonical, digest, proposalFingerprint } from '.
 import type { ProjectLocator } from './project.js'
 import type { Database } from './database.js'
 import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
+import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt } from './receipts.js'
+import { visibleEvidenceSql } from './visibility.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
   type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
@@ -32,7 +34,15 @@ export class CodingMemoryStore {
   private closed = false
   private transactionDepth = 0
   readonly learning: MemoryQueue
+  private readonly receipts: MemoryReceipts
   private constructor(private readonly db: Database, readonly profileId: string, private readonly now: () => number) {
+    this.receipts = new MemoryReceipts({ db, profileId, now, transaction: run => this.transaction(run),
+      recall: (request, access) => this.recall(request, access), read: (id, access) => this.read(id, access),
+      allowed: (binding, access) => access.profileId === this.profileId && access.includeProfile
+        && (binding.projectId === null ? access.projectIds.length === 0
+          : access.projectIds.length === 1 && access.projectIds[0] === binding.projectId)
+        && this.capturePolicy(binding.projectId, binding.engine, binding.sessionId).included,
+    })
     this.learning = new MemoryQueue({ db, profileId, now, transaction: operation => this.transaction(operation),
       controls: () => this.controls(), included: projectId => this.included(projectId),
       sessionIncluded: (engine, sessionId) => this.sessionPolicy(engine, sessionId).included,
@@ -136,11 +146,13 @@ export class CodingMemoryStore {
           CREATE TABLE IF NOT EXISTS suppressed_sources (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS tombstones (id TEXT PRIMARY KEY, last_revision INTEGER NOT NULL, at INTEGER NOT NULL);
           ${QUEUE_SCHEMA}
+          ${RECEIPT_SCHEMA}
         `)
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('profile', ?)").run(options.profileId)
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('schema', ?)").run(String(SCHEMA))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('controls', ?)").run(JSON.stringify({ learn: false, recall: false, generation: 0, captureEpoch: 0, learnSince: null }))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('preferences',?)").run(JSON.stringify({ learn: true, recall: true }))
+        db!.exec("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('knowledge_epoch','0')")
         db!.prepare('INSERT OR IGNORE INTO source_lifecycle(source_id,captured_at,needs_compaction) SELECT id,?,1 FROM sources').run(store.now())
         db!.exec("INSERT INTO memory_fts(memory_fts, rank) VALUES('secure-delete', 1)")
       })
@@ -236,10 +248,11 @@ export class CodingMemoryStore {
       : { included: true, epoch: 0, liveFrom: 0 }
   }
 
-  capturePolicy(projectId: string | null, engine: string, sessionId: string): Controls & { included: boolean; sessionEpoch: number; projectEpoch: number; liveFrom: number } {
+  capturePolicy(projectId: string | null, engine: string, sessionId: string): Controls & { included: boolean; sessionEpoch: number; projectEpoch: number; liveFrom: number; knowledgeEpoch: number } {
     const policy = this.sessionPolicy(engine, sessionId)
     const project = this.db.prepare('SELECT epoch,live_from FROM memory_project_policy WHERE project_id=?').get(projectId)
     return { ...this.controls(), included: this.included(projectId) && policy.included,
+      knowledgeEpoch: Number(this.db.prepare("SELECT value FROM memory_meta WHERE key='knowledge_epoch'").get()!.value),
       sessionEpoch: policy.epoch, projectEpoch: Number(project?.epoch ?? 0), liveFrom: Math.max(policy.liveFrom, Number(project?.live_from ?? 0)) }
   }
 
@@ -339,6 +352,7 @@ export class CodingMemoryStore {
         ORDER BY l.captured_at LIMIT 512`).all(this.now() - PENDING_RETENTION_MS)
       const result = this.compactSources(rows.map(row => String(row.source_id)))
       this.learning.pruneMetadata()
+      this.receipts.prune()
       return { ...result, expiredJobs }
     })
   }
@@ -557,6 +571,18 @@ export class CodingMemoryStore {
     return packet
   }
 
+  prepareRecall(request: RecallRequest, binding: MemoryDeliveryBinding, access: MemoryAccess): PreparedRecall {
+    return this.receipts.prepare(request, binding, access)
+  }
+
+  recallEmitted(receiptId: string, binding: MemoryDeliveryBinding, access: MemoryAccess): boolean {
+    return this.receipts.emitted(receiptId, binding, access)
+  }
+
+  recallReceipts(binding: MemoryDeliveryBinding, access: MemoryAccess, limit = 20): RecallReceipt[] {
+    return this.receipts.list(binding, access, limit)
+  }
+
   putTopic(input: TopicDraft, access: MemoryAccess, expectedRevision = 0, expectedGeneration = this.controls().generation): TopicPage {
     const draft = parse(topicSchema, input)
     assertSafe(draft)
@@ -625,6 +651,7 @@ export class CodingMemoryStore {
         this.db.prepare('DELETE FROM memories WHERE id = ?').run(record.id)
         this.db.prepare('INSERT INTO tombstones(id, last_revision, at) VALUES(?, ?, ?)').run(record.id, record.revision, this.now())
       }
+      this.bumpKnowledgeEpoch()
       for (const sourceId of sourceIds) {
         const quotes = this.db.prepare('SELECT quote FROM evidence WHERE source_id = ? UNION SELECT quote FROM memory_support WHERE source_id = ?')
           .all(sourceId, sourceId).map(row => String(row.quote))
@@ -751,6 +778,7 @@ export class CodingMemoryStore {
   }
 
   private writeRecord(record: MemoryRecord, invalidateDescendants = true): void {
+    this.bumpKnowledgeEpoch()
     this.invalidateTopics(record.id)
     this.db.prepare(`INSERT INTO memories(id, revision, project_id, task_id, branch_id, scope_key, conflict_key, state, fingerprint, data)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,
@@ -829,6 +857,11 @@ export class CodingMemoryStore {
     this.db.prepare('UPDATE topics SET data = NULL WHERE id IN (SELECT topic_id FROM topic_dependencies WHERE memory_id = ?)').run(memoryId)
   }
 
+  /** Separate from capture consent: a batch may publish several records under one learning lease. */
+  private bumpKnowledgeEpoch(): void {
+    this.db.exec("UPDATE memory_meta SET value=CAST(value AS INTEGER)+1 WHERE key='knowledge_epoch'")
+  }
+
   private scopeFilter(access: MemoryAccess, alias = 'm'): { sql: string; params: unknown[] } {
     if (access.projectIds.length > 1_000) throw new MemoryError('scope_too_broad')
     const clauses: string[] = []
@@ -875,20 +908,6 @@ function retainExcerpts(text: string, quotes: string[]): string {
   // A one-character separator never expands the original source size. Each exact evidence span
   // survives; the retention marker makes clear that surrounding conversation text was removed.
   return merged.map(span => text.slice(span.start, span.end)).join('\n')
-}
-
-/** Apply source privacy before LIMIT, so private candidates cannot crowd out usable knowledge. */
-function visibleEvidenceSql(alias = 'm'): string {
-  return `NOT EXISTS (SELECT 1 FROM evidence e LEFT JOIN sources s ON s.id=e.source_id
-    WHERE e.memory_id=${alias}.id AND e.revision=${alias}.revision AND (s.id IS NULL
-      OR (s.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=s.project_id AND p.included=1))
-      OR EXISTS (SELECT 1 FROM memory_session_policy policy WHERE policy.engine=json_extract(s.data,'$.engine')
-        AND policy.session_id=json_extract(s.data,'$.sessionId') AND policy.included=0)
-      OR EXISTS (SELECT 1 FROM json_each(s.data,'$.rootIds') lineage LEFT JOIN sources root ON root.id=lineage.value
-        WHERE root.id IS NULL
-          OR (root.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=root.project_id AND p.included=1))
-          OR EXISTS (SELECT 1 FROM memory_session_policy policy WHERE policy.engine=json_extract(root.data,'$.engine')
-            AND policy.session_id=json_extract(root.data,'$.sessionId') AND policy.included=0))))`
 }
 
 /** Same scalar/array overlap semantics as matches(), applied before the candidate limit. */

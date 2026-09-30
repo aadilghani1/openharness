@@ -28,6 +28,15 @@
     "coldP95Ms": 39.4458, "timeouts": 0, "parentEventLoopP95Ms": 1.2769,
     "largestPacketBytes": 2591
   },
+  "preparedRecallWithReceipts": {
+    "command": "cd cli && node --import tsx scripts/memory-benchmark.ts --receipts",
+    "retainedReceipts": 5000,
+    "warmP50Ms": 21.6253, "warmP95Ms": 39.4962, "warmMaxMs": 58.2062,
+    "coldP95Ms": 50.8899, "timeouts": 0, "parentEventLoopP95Ms": 1.4387,
+    "largestPacketBytes": 2642,
+    "includes": ["Scoped lexical recall", "Prior-revision withdrawal checks", "Durable receipt preparation and bounded retention"],
+    "excludes": ["Native hook process startup and HTTP transport", "Runtime ownership checks", "Model inference"]
+  },
   "queryPlanFinding": "The original plan used the scope index first and repeated MATCH for each project row. Driving the join from FTS once preserves access filtering before LIMIT and avoids those repeated scans.",
   "limitations": [
     "These are synthetic lexical requests, not a retrieval-quality benchmark.",
