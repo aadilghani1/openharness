@@ -46,6 +46,7 @@ One implementation, `pair/control.ts`, behind a local-only `pair` request. Expos
 | `list_harnesses` | owner: registry + stopped + sensor state | `pair_list` | read |
 | `read_harness` (state, question, recaps, asks) | owner: sensor + mirror | `pair_read` | read |
 | `brief` | journal | `pair_journal` (fleet) | read |
+| `recall_memory` | development-gated coding memory; current collection's personal scope and launch token only | – | read |
 | `answer_question` | owner → `answer({ requestId })` | `pair_answer` (allow-class only) | write |
 | `send_prompt`, `stop_turn` | owner → message (deliveryId), cancel | – (`REMOTE_ANSWERS_ONLY`) | write |
 | `start_harness` | owner → create, mode `ask`, never bypass | – (`REMOTE_ANSWERS_ONLY`) | write |
@@ -54,6 +55,23 @@ One implementation, `pair/control.ts`, behind a local-only `pair` request. Expos
 
 Every write, local or remote, runs through the owning machine's `PairOwner` (`pair/owner.ts`), so the
 floor and the journal live where the harness does.
+
+The unshipped coding-memory service requires `HARNESS_CODING_MEMORY=1` in addition to the existing
+experimental and watching controls. `recall_memory { query, conditions? }` is an agent read, bound by
+the host to the current collection, with a byte-bounded historical-context packet and an unverified
+delivery receipt. Its token is required even at `watch`; it cannot select an owner, project, session,
+or avatar. It cannot inspect the owner's whole library, correct records, change privacy, or forget.
+
+The separate `pair { verb: "memory", action: … }` control is for the person. Even reads require a
+verified loopback process outside Harness panes and belonging to the daemon's OS user; a pair token
+is refused. Unix-socket callers whose PID cannot be established are refused, not assumed to be the
+person. `harness pair memory list|status|show <id> --json` exposes the initial read-only CLI.
+The internal owner API also supplies paginated listing, retained evidence, and correction/forget/
+Learn/Recall previews. Applying a change needs a two-minute, one-use capability bound to owner,
+process, connection, exact command, and the unchanged library snapshot. `confirmed: true` never
+counts. The desktop viewer and its verified transport are still pending; do not enable this prototype
+as the production memory path. Like existing lesson approval, process checks do not defend against
+arbitrary malware running as the same OS user with access to the memory files.
 
 **Autonomy dial** (zoo op `zoo.autonomy`, default `watch`): `watch` (read tools only, facts; lines
 carry only `[g]`) · `suggest` (it recommends, every action waits for your key) · `act-on-key` (it may

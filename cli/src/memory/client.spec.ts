@@ -50,7 +50,12 @@ it('captures, learns, recalls, and forgets through the bundled worker across res
   const packet = await reopened.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access)
   expect(packet.items).toHaveLength(1)
   expect((await reopened.recall({ query: 'bug' }, { ...access, profileId: 'someone_else' })).status).toBe('denied')
-  await reopened.request('forget', [packet.items[0].id, packet.items[0].revision, access])
+  const page = await reopened.request('libraryPage', ['owner'])
+  expect(page.items[0].id).toBe(packet.items[0].id)
+  await expect(reopened.request('libraryDetail', ['foreign', packet.items[0].id])).rejects.toThrow('scope_denied')
+  const preview = await reopened.request('libraryPreview', ['owner', { kind: 'forget', id: packet.items[0].id, revision: packet.items[0].revision }])
+  expect((await reopened.request('libraryDetail', ['owner', packet.items[0].id]))?.record.id).toBe(packet.items[0].id)
+  await reopened.request('libraryApply', ['owner', preview.command, preview.version, true])
   expect((await reopened.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access)).items).toEqual([])
 })
 

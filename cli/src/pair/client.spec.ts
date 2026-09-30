@@ -126,6 +126,17 @@ describe('pairRequest: one request, settled once', () => {
 })
 
 describe('parsePairArgs: words to the payload', () => {
+  it('parses owner-library reads separately from token-bound companion recall', () => {
+    expect(parsePairArgs('memory', ['show', 'memory-id', '--json'])).toMatchObject({ json: true, payload: { verb: 'memory', action: 'show', id: 'memory-id' } })
+    expect(parsePairArgs('memory', []).payload).toEqual({ verb: 'memory', action: 'list' })
+    expect(parsePairArgs('memory', ['list', '--scope', 'project', '--project', 'project-a', '--limit', '10', '--cursor', 'next']).payload)
+      .toEqual({ verb: 'memory', action: 'list', query: { scope: 'project', projectId: 'project-a', limit: 10, cursor: 'next' } })
+    expect(() => parsePairArgs('memory', ['list', '--limit', 'NaN'])).toThrow('--limit takes a whole number')
+    expect(() => parsePairArgs('memory', ['show'])).toThrow('memory show needs a memory id')
+    expect(() => parsePairArgs('memory', ['list', '--machine', 'elsewhere'])).toThrow('Unexpected memory arguments')
+    expect(() => parsePairArgs('memory', ['forget', 'id'])).toThrow('memory supports list, status and show')
+    expect(parsePairArgs('recall_memory', ['how', 'I', 'debug']).payload).toEqual({ verb: 'recall_memory', query: 'how I debug' })
+  })
   it('reads with no arguments, and list_harnesses with or without a machine', () => {
     for (const verb of ['status', 'list_machines', 'journal']) expect(parsePairArgs(verb, ['--machine', 'mb']).payload).toEqual({ verb })
     expect(parsePairArgs('list_harnesses', []).payload).toEqual({ verb: 'list_harnesses' })

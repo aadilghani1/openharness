@@ -99,6 +99,8 @@ import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
+import { MemoryControl } from './memory/control.js'
+import { isOwnerProcess } from './memory/ownerProcess.js'
 import { MemorySessionRoster } from './memory/hostSessions.js'
 import { companionMemoryInference } from './memory/companion.js'
 import { CompanionStartupProfile } from './pair/startupProfile.js'
@@ -4759,6 +4761,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     processes: () => processRows(),
     harnessPanePids: async () => { const inventory = await listTmuxPanes(); return inventory.ok ? inventory.panes.map((pane) => pane.rootPid) : null },
   })
+  const memoryControl = new MemoryControl({ runtime: () => codingMemory, verify: async connId => {
+    const verdict = await verifyLessonCaller(connId)
+    if (!verdict.ok) return verdict
+    if (!await isOwnerProcess(verdict.pid)) return { ok: false, error: 'UNVERIFIED', detail: 'The memory library requires a verified process belonging to this computer’s owner.' }
+    return verdict
+  } })
   const pairControl = new PairControl({
     owner: pairOwner,
     fleet: pairFleet,
@@ -4778,6 +4786,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
     lessonReview: async (connId, id) => pairBrain?.reviewLesson(connId, id) ?? { ok: false, error: 'UNSUPPORTED' },
+    memory: (payload, connId) => memoryControl.local(payload, connId),
+    recallMemory: async payload => {
+      const agentId = pairHarness.agentId()
+      if (!codingMemory || !agentId) return { ok: false, error: 'UNSUPPORTED' }
+      return codingMemory.recallCollection(agentId, payload)
+    },
     person: { verify: verifyLessonCaller, nonces: lessonNonces },
     now: Date.now,
     newId: () => randomUUID(),

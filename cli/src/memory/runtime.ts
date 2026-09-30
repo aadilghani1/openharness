@@ -1,5 +1,6 @@
 /** Local host lifecycle. Session authority and coding eligibility must come from the daemon. */
 import { join } from 'node:path'
+import { z } from 'zod'
 import { digest } from './admission.js'
 import { NativeMemoryCapture, type CaptureOutcome } from './capture.js'
 import { MemoryClient } from './client.js'
@@ -7,8 +8,11 @@ import { MemoryLearner, type LearningOutcome, type MemoryInference } from './lea
 import { locateProject, type ProjectContext } from './project.js'
 import type { Arguments, MemoryPort, Operation, Result } from './operations.js'
 import type { MemoryPreferences } from './store.js'
+import type { LibraryQuery, LibraryCommand, LibraryPreview } from './library.js'
 import type { PreparedRecall, RecallReceipt } from './receipts.js'
-import { MemoryError, type RecallPacket, type RecallRequest } from './types.js'
+import { conditionsSchema, MemoryError, parse, type RecallPacket, type RecallRequest } from './types.js'
+
+const toolRecallSchema = z.object({ query: z.string().min(1).max(4_000), conditions: conditionsSchema.optional() }).strict()
 
 export interface MemoryHostContext {
   experimental: boolean
@@ -59,6 +63,8 @@ export interface MemoryRuntimeStatus {
 /** Capture remains active while the selected model is unavailable. Inference waits for quiet. */
 export class CodingMemoryRuntime {
   private active: ActiveProfile | null = null
+  private readonly management = new Map<string, { connection: Connection; leases: number }>()
+  private ownerRequests = 0
   private running: Promise<void> | null = null
   private timer: NodeJS.Timeout | null = null
   private stopped = false
@@ -99,6 +105,81 @@ export class CodingMemoryRuntime {
       preferences: { ...this.active.preferences }, learning: this.active.learningStatus, capture: this.active.captureStatus }
   }
 
+  /** Host identity only. External request bodies never select a memory owner. */
+  ownerKey(): string | null {
+    const context = this.deps.context()
+    return !this.stopped && context.experimental ? context.profileId : null
+  }
+
+  /** Explicit owner controls remain usable with watching/learning/recall off. No capture is started. */
+  async libraryStatus(owner: string) {
+    return this.withOwner(owner, async port => ({ runtime: this.status(),
+      preferences: await port.request('preferences', []), queue: await port.request('status', []) }))
+  }
+
+  async libraryPage(owner: string, query: LibraryQuery = {}) {
+    return this.withOwner(owner, port => port.request('libraryPage', [owner, query]))
+  }
+
+  async libraryDetail(owner: string, id: string) {
+    return this.withOwner(owner, port => port.request('libraryDetail', [owner, id]))
+  }
+
+  async libraryPreview(owner: string, command: LibraryCommand) {
+    return this.withOwner(owner, port => port.request('libraryPreview', [owner, command]))
+  }
+
+  async libraryApply(owner: string, preview: LibraryPreview) {
+    return this.withOwner(owner, async port => {
+      const enabled = !!this.active?.ready && this.authorized(this.active)
+      const result = await port.request('libraryApply', [owner, preview.command, preview.version, enabled])
+      if (this.active?.id === owner) {
+        if (result.preferences) this.active.preferences = result.preferences
+        if (preview.command.kind === 'forget' || !this.active.preferences.learn) this.active.learner.cancel()
+      }
+      return result
+    })
+  }
+
+  private async withOwner<T>(owner: string, work: (port: MemoryPort) => Promise<T>): Promise<T> {
+    const valid = () => owner === this.ownerKey() && /^[A-Za-z0-9_.:-]{1,200}$/.test(owner)
+    if (!valid()) throw new MemoryError('owner_changed')
+    if (this.ownerRequests >= 8) throw new MemoryError('memory_busy')
+    const active = this.active
+    const borrowed = !!active?.ready && active.id === owner
+    let managed = this.management.get(owner)
+    if (!borrowed && !managed) {
+      if (this.management.size >= 2) throw new MemoryError('memory_busy')
+      managed = { connection: this.connect(owner), leases: 0 }
+      this.management.set(owner, managed)
+    }
+    if (!borrowed) managed!.leases++
+    const connection = borrowed ? active.connection : managed!.connection
+    this.ownerRequests++
+    const port: MemoryPort = { request: async (operation, args, timeoutMs) => {
+      if (!valid()) throw new MemoryError('owner_changed')
+      const result = await connection.request(operation, args, timeoutMs)
+      if (!valid()) throw new MemoryError('owner_changed')
+      return result
+    } }
+    try {
+      const result = await work(port)
+      if (!valid()) throw new MemoryError('owner_changed')
+      return result
+    } finally {
+      this.ownerRequests--
+      if (!borrowed && --managed!.leases === 0) {
+        if (this.management.get(owner) === managed) this.management.delete(owner)
+        await connection.close()
+      }
+    }
+  }
+
+  private connect(profileId: string): Connection {
+    return this.deps.create?.(profileId)
+      ?? new MemoryClient({ directory: join(this.deps.directory, digest(['profile', profileId])), profileId })
+  }
+
   /** Only the authenticated host's explicit user settings handler calls this method. */
   async configure(value: MemoryPreferences): Promise<void> {
     if (typeof value.learn !== 'boolean' || typeof value.recall !== 'boolean') throw new MemoryError('invalid_input')
@@ -127,7 +208,16 @@ export class CodingMemoryRuntime {
 
   /** Callers identify their process-owned agent; they never supply profile or project authority. */
   async recall(agentId: string, request: RecallRequest): Promise<RecallPacket> {
-    return (await this.recallBound(agentId, request, false)).packet
+    return (await this.recallBound(agentId, request, null)).packet
+  }
+
+  /** Only the current collection's authenticated launch token reaches this method in the host. */
+  async recallCollection(agentId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const request = parse(toolRecallSchema, input)
+    if (this.session(agentId)?.scope !== 'profile') throw new MemoryError('scope_denied')
+    const result = await this.recallBound(agentId, request, 'mcp')
+    return { ok: true, status: result.packet.status, context: result.packet.text,
+      receipt: result.receipt ? { id: result.receipt.id, delivery: result.receipt.delivery } : null }
   }
 
   async preparePromptRecall(agentId: string, request: RecallRequest): Promise<PreparedRecall> {
@@ -136,7 +226,7 @@ export class CodingMemoryRuntime {
     // An extraction certificate or a successful stdout write does not certify hook delivery.
     // Manual recall remains available; add native releases after the same isolated transport check.
     if (session?.engine !== 'claude' || session.cliVersion !== '2.1.286') return { packet: empty('unavailable'), receipt: null }
-    return this.recallBound(agentId, request, true)
+    return this.recallBound(agentId, request, 'prompt_hook')
   }
 
   /** A host-verified hook acknowledges its stdout write; this is not model-context verification. */
@@ -163,7 +253,7 @@ export class CodingMemoryRuntime {
     return this.sameSession(session) ? receipts : []
   }
 
-  private async recallBound(agentId: string, request: RecallRequest, prepare: boolean): Promise<PreparedRecall> {
+  private async recallBound(agentId: string, request: RecallRequest, route: 'prompt_hook' | 'mcp' | null): Promise<PreparedRecall> {
     const deadline = performance.now() + 200
     const remaining = (): number => Math.max(1, deadline - performance.now())
     const unavailable = (status: RecallPacket['status']): PreparedRecall => ({ packet: empty(status), receipt: null })
@@ -179,9 +269,9 @@ export class CodingMemoryRuntime {
       const policy = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], 50)
       if (!policy.included) return unavailable('denied')
       const access = { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }
-      const result: PreparedRecall = prepare
+      const result: PreparedRecall = route
         ? await active.port.request('prepareRecall', [request,
-          { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route: 'prompt_hook' }, access], remaining())
+          { engine: session.engine, sessionId: session.sessionId, projectId: project.projectId, route }, access], remaining())
         : { packet: await active.port.request('recall', [request, access], remaining()), receipt: null }
       const current = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], remaining())
       if (performance.now() >= deadline) return unavailable('timeout')
@@ -198,6 +288,8 @@ export class CodingMemoryRuntime {
     this.active?.learner.cancel()
     await this.running
     await this.detach()
+    await Promise.all([...this.management.values()].map(entry => entry.connection.close()))
+    this.management.clear()
   }
 
   /** Stops the host timer while the experiment is off; start() may resume this instance later. */
@@ -249,8 +341,7 @@ export class CodingMemoryRuntime {
     if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(context.profileId)) throw new MemoryError('invalid_profile')
     if (!this.active) {
       const profileId = context.profileId
-      const connection = this.deps.create?.(profileId)
-        ?? new MemoryClient({ directory: join(this.deps.directory, digest(['profile', profileId])), profileId })
+      const connection = this.connect(profileId)
       const host = this
       const port: MemoryPort = { async request<K extends Operation>(operation: K, args: Arguments<K>, timeoutMs?: number): Promise<Result<K>> {
         if (host.active !== active || !host.authorized(active)) throw new MemoryError('owner_changed')

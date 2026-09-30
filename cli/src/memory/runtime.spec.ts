@@ -96,6 +96,55 @@ it('opens no store and invokes no model while experimental, watching consent or 
   expect(inference.run).not.toHaveBeenCalled()
 })
 
+it('lets the explicit owner inspect and change saved preferences with watching off without starting capture', async () => {
+  context.watching = false
+  expect(runtime.ownerKey()).toBe('owner_a')
+  expect((await runtime.libraryPage('owner_a')).items).toEqual([])
+  const preview = await runtime.libraryPreview('owner_a', { kind: 'configure', preferences: { learn: false, recall: true }, expected: { learn: true, recall: true } })
+  expect(await runtime.libraryApply('owner_a', preview)).toMatchObject({ preferences: { learn: false, recall: true } })
+  const status = await runtime.libraryStatus('owner_a')
+  expect(status.runtime.state).toBe('off')
+  expect(status.preferences).toEqual({ learn: false, recall: true })
+  expect(locate).not.toHaveBeenCalled()
+  expect(inference.run).not.toHaveBeenCalled()
+  const check = open('owner_a')
+  expect(check.controls()).toMatchObject({ learn: false, recall: false })
+  expect(check.learning.status().capturedStreams).toBe(0)
+})
+
+it('drops an owner-library read when the account changes during the worker request', async () => {
+  await learn()
+  intercept = async operation => { if (operation === 'libraryPage') context.profileId = 'replacement' }
+  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+  expect(create).toHaveBeenCalledTimes(1)
+  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+})
+
+it('shares one inspection worker while watching is off and bounds concurrent owner requests', async () => {
+  context.watching = false
+  const hold = deferred<void>()
+  intercept = async operation => { if (operation === 'libraryPage') await hold.promise }
+  const requests = Array.from({ length: 8 }, () => runtime.libraryPage('owner_a'))
+  expect(create).toHaveBeenCalledTimes(1)
+  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('memory_busy')
+  hold.resolve()
+  expect((await Promise.all(requests)).every(page => page.items.length === 0)).toBe(true)
+  expect(inference.run).not.toHaveBeenCalled()
+})
+
+it('reuses the selected collection across engines for scoped MCP recall, with a receipt and strict arguments', async () => {
+  sessions[0].scope = 'profile'
+  await learn()
+  const reply = await runtime.recallCollection('agent', { query: 'coding changes' })
+  expect(reply).toMatchObject({ ok: true, status: 'ok', context: expect.stringContaining(preference), receipt: { delivery: 'unverified' } })
+  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion: '0.159.0', sessionId: 'codex_collection' }
+  expect(await runtime.recallCollection('agent', { query: 'coding changes' })).toMatchObject({ status: 'ok', context: expect.stringContaining(preference) })
+  await expect(runtime.recallCollection('agent', { query: 'coding', profileId: 'foreign' })).rejects.toThrow('invalid_input')
+  await expect(runtime.recallCollection('agent', { query: 'coding', projectId: 'foreign' })).rejects.toThrow('invalid_input')
+  sessions[0].scope = 'project'
+  await expect(runtime.recallCollection('agent', { query: 'coding' })).rejects.toThrow('scope_denied')
+})
+
 it('captures from the first eligible turn while waiting for the selected model, then learns and recalls across engines', async () => {
   target = { state: 'waiting' }
   await runtime.tick()

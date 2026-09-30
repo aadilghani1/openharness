@@ -13,6 +13,7 @@ import type { Database } from './database.js'
 import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
 import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt } from './receipts.js'
 import { visibleEvidenceSql } from './visibility.js'
+import { correctionSchema, libraryCommandSchema, libraryQuerySchema, summarize, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
   type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
@@ -171,6 +172,18 @@ export class CodingMemoryStore {
 
   preferences(): MemoryPreferences {
     return JSON.parse(String(this.db.prepare("SELECT value FROM memory_meta WHERE key='preferences'").get()!.value)) as MemoryPreferences
+  }
+
+  /** A settings form cannot overwrite a newer window's acknowledged choice. */
+  changePreferences(value: MemoryPreferences, expected: MemoryPreferences, enabled = true): MemoryPreferences {
+    if ([value.learn, value.recall, expected.learn, expected.recall].some(flag => typeof flag !== 'boolean')) throw new MemoryError('invalid_input')
+    return this.transaction(() => {
+      const previous = this.preferences()
+      if (previous.learn !== expected.learn || previous.recall !== expected.recall) throw new MemoryError('revision_conflict')
+      this.setPreferences(value)
+      if (!enabled) this.setControls({ learn: false, recall: false })
+      return this.preferences()
+    })
   }
 
   /** Requested controls survive a temporary experimental/consent/account gate closing. */
@@ -499,6 +512,126 @@ export class CodingMemoryStore {
       .all(...filter.params, bounded(limit, 100, 1, 200)).map(row => this.record(row)).filter(record => this.allowed(record.scope, access) && this.evidenceIncluded(record))
   }
 
+  /** A separately authorized owner view, including task/branch scopes. Never use for an agent read. */
+  libraryPage(owner: string, input: LibraryQuery = {}): LibraryPage {
+    this.requireOwner(owner)
+    const query = parse(libraryQuerySchema, input)
+    if (query.projectId && query.scope === 'personal') throw new MemoryError('invalid_input')
+    const { cursor, limit = 25, ...filters } = query
+    const version = this.libraryVersion()
+    const filterKey = digest(filters)
+    let before = Number.MAX_SAFE_INTEGER
+    if (cursor) {
+      try {
+        const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<string, unknown>
+        if (parsed.owner !== this.profileId || parsed.filter !== filterKey || !Number.isSafeInteger(parsed.before)
+          || Number(parsed.before) <= 0) throw new MemoryError('invalid_cursor')
+        if (parsed.generation !== version.generation || parsed.knowledge !== version.knowledge || parsed.preferences !== version.preferences) throw new MemoryError('page_changed')
+        before = Number(parsed.before)
+      } catch (error) { throw error instanceof MemoryError ? error : new MemoryError('invalid_cursor') }
+    }
+    const where = ['m.rowid < ?', '(m.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id=m.project_id AND p.included=1))', visibleEvidenceSql()]
+    const params: unknown[] = [before]
+    if (query.scope === 'personal') where.push('m.project_id IS NULL')
+    if (query.scope === 'project') where.push('m.project_id IS NOT NULL')
+    if (query.projectId) { where.push('m.project_id=?'); params.push(query.projectId) }
+    if (query.state) { where.push('m.state=?'); params.push(query.state) }
+    const rows = this.db.prepare(`SELECT m.rowid,m.data FROM memories m WHERE ${where.join(' AND ')} ORDER BY m.rowid DESC LIMIT ?`)
+      .all(...params, limit + 1)
+    const page = rows.slice(0, limit)
+    return { items: page.map(row => summarize(this.record(row))), version,
+      nextCursor: rows.length > limit ? Buffer.from(JSON.stringify({ owner: this.profileId, filter: filterKey,
+        before: Number(page.at(-1)!.rowid), ...version })).toString('base64url') : null }
+  }
+
+  /** Exact retained quotations live in record.evidence; never expose unrelated source transcript text. */
+  libraryDetail(owner: string, id: string): LibraryDetail | null {
+    this.requireOwner(owner)
+    const access = this.ownerRecordAccess(id)
+    if (!access) return null
+    const record = this.read(id, access)
+    if (!record) return null
+    const sources = [...new Set(record.evidence.map(evidence => evidence.sourceEventId))].map(id => this.rawSource(id)!)
+      .map(({ id, engine, sessionId, role, observedAt }) => ({ id, engine, sessionId, role, observedAt }))
+    return { record, sources, support: this.support(id, access) }
+  }
+
+  libraryCorrect(owner: string, id: string, revision: number, input: MemoryCorrection,
+    supersede: Array<{ id: string; revision: number }> = []): MemoryRecord {
+    this.requireOwner(owner)
+    const fields = parse(correctionSchema, input)
+    const access = this.ownerRecordAccess(id)
+    if (!access) throw new MemoryError('not_found')
+    const previous = this.requireRecord(id, revision, access)
+    // A form edit is a user statement, not a test/benchmark result. Keep measured findings on the
+    // evidence path; an owner may forget them, but cannot accidentally preserve a verification badge.
+    if (previous.assertionType === 'verified_finding' || previous.details?.experiment?.runs) throw new MemoryError('verification_required')
+    // Only submitted fields become a fresh user statement. In particular, do not silently promote
+    // old inferred detail objects that the correction form did not include in its preview.
+    const { evidence: _evidence, evidenceClass: _class, details: _details, ...draft } = asDraft(previous)
+    return this.correctFromUser(id, revision, { ...draft, ...fields }, access, supersede)
+  }
+
+  libraryForget(owner: string, id: string, revision: number): ReturnType<CodingMemoryStore['forget']> {
+    this.requireOwner(owner)
+    const access = this.ownerRecordAccess(id)
+    if (!access) throw new MemoryError('not_found')
+    return this.forget(id, revision, access)
+  }
+
+  libraryPreview(owner: string, input: LibraryCommand): LibraryPreview {
+    this.requireOwner(owner)
+    const command = parse(libraryCommandSchema, input)
+    const rollback = {}
+    let preview: LibraryPreview | undefined
+    try {
+      this.transaction(() => {
+        const version = this.libraryVersion()
+        const effects = this.runLibraryCommand(owner, command, false)
+        if (Buffer.byteLength(JSON.stringify(effects), 'utf8') > 256_000) throw new MemoryError('preview_too_large')
+        preview = { version, command, effects }
+        throw rollback
+      })
+    } catch (error) { if (error !== rollback) throw error }
+    return preview!
+  }
+
+  /** The transport spends a person-only capability, then commits exactly the previewed snapshot. */
+  libraryApply(owner: string, input: LibraryCommand, expected: LibraryPage['version'], enabled: boolean): LibraryPreview['effects'] {
+    this.requireOwner(owner)
+    const command = parse(libraryCommandSchema, input)
+    return this.transaction(() => {
+      if (canonical(expected) !== canonical(this.libraryVersion())) throw new MemoryError('preview_changed')
+      return this.runLibraryCommand(owner, command, enabled)
+    })
+  }
+
+  private runLibraryCommand(owner: string, command: LibraryCommand, enabled: boolean): LibraryPreview['effects'] {
+    switch (command.kind) {
+      case 'correct': return { record: summarize(this.libraryCorrect(owner, command.id, command.revision, command.fields, command.supersede)) }
+      case 'forget': return this.libraryForget(owner, command.id, command.revision)
+      case 'configure': return { preferences: this.changePreferences(command.preferences, command.expected, enabled) }
+    }
+  }
+
+  private requireOwner(owner: string): void {
+    if (owner !== this.profileId) throw new MemoryError('scope_denied')
+  }
+
+  private libraryVersion(): LibraryPage['version'] {
+    return { generation: this.controls().generation,
+      knowledge: Number(this.db.prepare("SELECT value FROM memory_meta WHERE key='knowledge_epoch'").get()!.value),
+      preferences: digest(this.preferences()) }
+  }
+
+  private ownerRecordAccess(id: string): MemoryAccess | null {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(id)) throw new MemoryError('invalid_input')
+    const row = this.db.prepare('SELECT data FROM memories WHERE id=?').get(id)
+    if (!row) return null
+    const { profileId, projectId, taskId, branchId } = this.record(row).scope
+    return { profileId, projectIds: projectId ? [projectId] : [], includeProfile: true, taskId, branchId }
+  }
+
   recall(request: RecallRequest, access: MemoryAccess): RecallPacket {
     if (access.profileId !== this.profileId) return EMPTY('denied')
     if (!this.controls().recall) return EMPTY('off')
@@ -612,6 +745,7 @@ export class CodingMemoryStore {
         .run(page.id, page.revision, page.scope.projectId ?? null, canonical(page.scope), JSON.stringify(page))
       this.db.prepare('DELETE FROM topic_dependencies WHERE topic_id = ?').run(page.id)
       for (const [memoryId, revision] of dependencies) this.db.prepare('INSERT INTO topic_dependencies(topic_id, memory_id, revision) VALUES(?, ?, ?)').run(page.id, memoryId, revision)
+      this.bumpKnowledgeEpoch()
       return page
     })
   }
@@ -813,6 +947,7 @@ export class CodingMemoryStore {
 
   private recordSupport(record: MemoryRecord, draft: MemoryDraft): void {
     if (['inferred', 'imported'].includes(draft.evidenceClass)) return
+    let changed = false
     for (const evidence of draft.evidence) {
       if (!evidence.paths.includes('/claim')) continue
       const source = this.rawSource(evidence.sourceEventId)!
@@ -820,11 +955,17 @@ export class CodingMemoryStore {
         : source.role === 'tool' && evidence.verification ? 'verified_observation' : null
       // Derived summaries and assistant repetitions never create independent confirmation.
       if (!kind || source.derivedFrom) continue
-      for (const root of source.rootIds) this.db.prepare(`INSERT OR IGNORE INTO memory_support
-        (memory_id, fingerprint, root_id, source_id, quote, kind, session_key, observed_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(record.id, proposalFingerprint(draft), root, source.id, evidence.quote, kind,
-          digest([source.engine, source.sessionId]), source.observedAt)
+      for (const root of source.rootIds) {
+        const result = this.db.prepare(`INSERT OR IGNORE INTO memory_support
+          (memory_id, fingerprint, root_id, source_id, quote, kind, session_key, observed_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, proposalFingerprint(draft), root, source.id, evidence.quote, kind,
+            digest([source.engine, source.sessionId]), source.observedAt) as { changes: number | bigint }
+        if (Number(result.changes) > 0) changed = true
+      }
     }
+    // Independent support can connect overlapping evidence and expand a future forget operation,
+    // without revising the meaning. Replayed roots do not change that dependency snapshot.
+    if (changed) this.bumpKnowledgeEpoch()
   }
 
   private forgetDependencies(id: string): MemoryRecord[] {
