@@ -236,7 +236,7 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
-import { updateTui } from './tui/install.js'
+import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
@@ -1219,7 +1219,7 @@ async function updateCommand(force: boolean): Promise<void> {
   // hn has its own release cadence. An already-current CLI must still refresh an installed hn;
   // a failed optional download must not stop the CLI from updating.
   if (isInstalledCli()) {
-    try { await updateTui((line) => console.log(line)) }
+    try { await updateManagedTui(SCRIPT_PATH, force, (line) => console.log(line)) }
     catch (error) { console.warn(`  hn update failed; continuing with the CLI update: ${error instanceof Error ? error.message : error}`) }
   }
   let entry: UpdateEntry | null = null

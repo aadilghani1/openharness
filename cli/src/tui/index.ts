@@ -16,6 +16,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { installedTuiPath, installTui } from './install.js'
+import { installManagedTui } from './manage.js'
 export { installTui, platformKey, TUI_MANIFEST_URL } from './install.js'
 
 export function findTuiBinary(): string | null {
@@ -102,7 +103,7 @@ async function ensureDaemon(port: number, signedIn: () => boolean): Promise<bool
 
 export async function tuiCommand(argv: string[], opts: { port: number; signedIn?: () => boolean }): Promise<number> {
   if (argv[0] === '--install' || argv[0] === 'install') {
-    try { await installTui((line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
+    try { await installManagedTui(process.argv[1] ?? '', (line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
   if (argv[0] === '--where') { console.log(findTuiBinary() ?? '(not installed)'); return 0 }
   const port = clientPort(argv, opts.port)

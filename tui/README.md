@@ -15,6 +15,13 @@ the CLI is already current. `ADAPTER_UPDATE_DISABLE=true` disables automatic upd
 local CLI builds and `HARNESS_TUI_BIN` overrides stay untouched. The first hn launch downloads
 it if missing; `harness tui --install` explicitly reinstalls the latest published build.
 
+If `hn --version` stays old after an update, run `harness update` to check the launcher too.
+Old manual or development installs can bypass automatic updates. `harness tui --install` or
+`harness update --force` backs up a recognized old Harness launcher and switches it to managed
+updates after verifying the download. Unrelated commands and explicit `HARNESS_TUI_BIN` overrides
+are preserved; the update output explains any PATH conflict. A missing binary behind a managed
+launcher is restored automatically.
+
 hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your harnesses on
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).

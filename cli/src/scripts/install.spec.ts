@@ -1,6 +1,6 @@
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
 
@@ -1030,7 +1030,7 @@ describe("scripts/install.sh: hn", () => {
     return { code, out };
   };
 
-  it("writes `hn` beside `harness` as `harness tui`, pinned to the same Node and cli.js", async () => {
+  it("writes `hn` beside `harness`, following its runtime and update policy", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "harness-hn-launcher-"));
     try {
       const home = join(scratch, "home");
@@ -1039,7 +1039,7 @@ describe("scripts/install.sh: hn", () => {
       expect(code).toBe(0);
       expect(out).toContain("installed harness 9.9.9");
       const cli = join(home, ".harness", "cli", "cli.js");
-      expect(readFileSync(join(home, ".local", "bin", "hn"), "utf8")).toBe(`#!/bin/sh\nexec '/opt/harness node/bin/node' '${cli}' tui "$@"\n`);
+      expect(readFileSync(join(home, ".local", "bin", "hn"), "utf8")).toBe(`#!/bin/sh\nexec '${join(home, ".local", "bin", "harness")}' tui "$@"\n`);
       expect(readFileSync(join(home, ".local", "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec '/opt/harness node/bin/node' '${cli}' "$@"\n`);
       expect(statSync(join(home, ".local", "bin", "hn")).mode & 0o111).not.toBe(0);
     } finally {
@@ -1056,9 +1056,38 @@ describe("scripts/install.sh: hn", () => {
       const { code, out } = await runCliStep(home);
       expect(code).toBe(0);
       expect(readFileSync(join(home, ".local", "bin", "hn"), "utf8")).toBe("#!/bin/sh\necho hacker news\n");
-      expect(out).toContain("is another program; run hn as: harness tui");
+      expect(out).toContain("Kept existing");
+      expect(out).toContain("use harness tui");
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
+  }, 20_000);
+
+  it.each(['native symlink', 'dangling symlink', 'unrelated wrapper'])("preserves an existing %s even when it contains .harness", async kind => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-preserved-"));
+    try {
+      const home = join(scratch, "home");
+      const bin = join(home, ".local", "bin");
+      const hn = join(bin, "hn");
+      const target = join(scratch, "old-hn");
+      mkdirSync(bin, { recursive: true });
+      const bytes = kind === 'unrelated wrapper' ? Buffer.from('#!/bin/sh\necho "$HOME/.harness"\n') : Buffer.from('\x7fELF native .harness bytes');
+      if (kind === 'unrelated wrapper') writeFileSync(hn, bytes);
+      else {
+        if (kind === 'native symlink') writeFileSync(target, bytes, { mode: 0o755 });
+        symlinkSync(target, hn);
+      }
+      const { code, out } = await runCliStep(home);
+      expect(code).toBe(0);
+      expect(out).toContain('harness tui --install');
+      if (kind === 'unrelated wrapper') expect(readFileSync(hn)).toEqual(bytes);
+      else {
+        expect(lstatSync(hn).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(hn)).toBe(target);
+        if (kind === 'native symlink') expect(readFileSync(target)).toEqual(bytes);
+        else expect(existsSync(target)).toBe(false);
+      }
+      expect(readdirSync(bin).sort()).toEqual(['harness', 'hn']);
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
   }, 20_000);
 });

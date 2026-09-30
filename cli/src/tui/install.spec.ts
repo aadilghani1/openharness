@@ -3,7 +3,10 @@ import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, op
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { installedTuiPath, installTui, platformKey, updateTui } from './install.js'
+let installedTuiPath: typeof import('./install.js').installedTuiPath
+let installTui: typeof import('./install.js').installTui
+let platformKey: typeof import('./install.js').platformKey
+let updateTui: typeof import('./install.js').updateTui
 
 // Only disposable executables are run, with --version. Downloads never reach the network.
 const binary = (version: string): Buffer => Buffer.from(`#!/bin/sh\nprintf 'hn ${version} (tmux 3.5a)\\n'\n`)
@@ -29,10 +32,14 @@ function published(version = '0.1.2', bytes = binary(version), overrides: Record
   }))
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'hn-update-test-'))
   vi.stubEnv('HOME', home)
   vi.stubEnv('HARNESS_TUI_BIN', undefined)
+  vi.stubEnv('HARNESS_BIN_DIR', join(home, '.local', 'bin'))
+  vi.stubEnv('ADAPTER_CLI_DIR', join(home, '.harness', 'cli'))
+  vi.resetModules()
+  ;({ installedTuiPath, installTui, platformKey, updateTui } = await import('./install.js'))
   target = installedTuiPath()
   downloads = []
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unexpected network request')))
@@ -76,6 +83,17 @@ describe('managed hn updates', () => {
     vi.stubEnv('HARNESS_TUI_BIN', join(home, 'custom-hn'))
     expect(await updateTui()).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('repairs a missing managed binary when the managed command is already installed', async () => {
+    const bin = join(home, '.local', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'hn'), `#!/bin/sh\nexec '${join(bin, 'harness')}' tui "$@"\n`, { mode: 0o755 })
+    published()
+    expect(await updateTui()).toBe(true)
+    expect(readFileSync(target)).toEqual(binary('0.1.2'))
+    expect(await updateTui()).toBe(false)
+    expect(downloads.filter(url => url === 'https://example.test/hn')).toHaveLength(1)
   })
 
   it('leaves symlinked binaries and development versions alone', async () => {

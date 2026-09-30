@@ -695,13 +695,19 @@ const bin = path.join(os.homedir(), '.local', 'bin')
   const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'"
   fs.writeFileSync(path.join(bin, 'harness'), '#!/bin/sh\nexec ' + shellQuote(NODE) + ' ' + shellQuote(path.join(dir, 'cli.js')) + ' "$@"\n', { mode: 0o755 })
   console.log('  ✓ installed harness ' + entry.version + ' → ' + dir)
-  // `hn` is `harness tui`: it signs in and starts the daemon the first time, then opens hn. An `hn`
-  // that is someone else's (another program by that name) is left alone.
+  // Delegate through harness so runtime repairs and update pins apply to both commands.
+  // Preserve existing entries, including dangling development links. Never write through a link
+  // or infer ownership from `.harness` appearing somewhere in an executable's bytes.
   const hn = path.join(bin, 'hn')
-  let theirs = false
-  try { theirs = !fs.readFileSync(hn, 'utf8').includes('.harness') } catch { /* none yet */ }
-  if (theirs) console.log('  · ' + hn + ' is another program; run hn as: harness tui')
-  else fs.writeFileSync(hn, '#!/bin/sh\nexec ' + shellQuote(NODE) + ' ' + shellQuote(path.join(dir, 'cli.js')) + ' tui "$@"\n', { mode: 0o755 })
+  const staged = fs.mkdtempSync(path.join(bin, '.hn-'))
+  try {
+    const launcher = path.join(staged, 'hn')
+    fs.writeFileSync(launcher, '#!/bin/sh\nexec ' + shellQuote(path.join(bin, 'harness')) + ' tui "$@"\n', { mode: 0o755 })
+    try { fs.linkSync(launcher, hn) } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      console.log('  · Kept existing ' + hn + '; use harness tui, or harness tui --install to migrate an old Harness build.')
+    }
+  } finally { fs.rmSync(staged, { recursive: true, force: true }) }
 })().catch((err) => { console.error('✗ install failed: ' + err.message); process.exit(1) })
 HARNESSJS
 

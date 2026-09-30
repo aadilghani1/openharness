@@ -2,15 +2,16 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { semverGt } from '../lib/selfUpdate.js'
+import { installedTuiPath } from './paths.js'
+import { isManagedHnLauncher } from './launcher.js'
+export { installedTuiPath } from './paths.js'
 
 export const TUI_MANIFEST_URL = process.env.HARNESS_TUI_MANIFEST_URL
   || 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/tui/metadata.json'
-export const installedTuiPath = (): string => join(homedir(), '.harness', 'bin', 'harness-tui')
 const run = promisify(execFile)
 const releaseVersion = /^\d+\.\d+\.\d+$/
 type Log = (line: string) => void
@@ -32,12 +33,12 @@ async function binaryVersion(binary: string, signal?: AbortSignal): Promise<stri
 async function managedVersion(signal?: AbortSignal): Promise<string | null> {
   if (process.env.HARNESS_TUI_BIN) return null
   try {
-    // Never replace someone's symlink or install a binary they haven't used yet.
+    // Never replace a custom binary symlink. A managed launcher with a missing binary is repaired below.
     if (!lstatSync(installedTuiPath()).isFile()) return null
     return await binaryVersion(installedTuiPath(), signal)
   } catch (error) {
     signal?.throwIfAborted()
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return isManagedHnLauncher() ? '0.0.0' : null
     throw error
   }
 }
