@@ -177,7 +177,16 @@ pub fn options_from(row: &Value) -> std::collections::BTreeMap<String, String> {
 /// Where a server name's (-L) sessions are kept between clients.
 pub fn sessions_path(name: Option<&str>) -> std::path::PathBuf {
     let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok()).filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join(format!("sessions-{name}.json"))
+    state_dir().join(format!("sessions-{name}.json"))
+}
+
+/// Where hn keeps its state (~/.harness/tui). Tests never read or write the real one: theirs is
+/// a folder of their own.
+pub fn state_dir() -> std::path::PathBuf {
+    #[cfg(test)]
+    return std::env::temp_dir().join(format!("hn-test-{}", std::process::id())).join("tui");
+    #[allow(unreachable_code)]
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui")
 }
 
 /// The agent a reply is about (`agentId`).
@@ -517,8 +526,8 @@ pub struct App {
     pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
     /// Each harness's selectable models (`models_list`), for ⌥I.
     pub models: HashMap<(String, String), Vec<Value>>,
-    /// Each machine's local models (the grid): downloaded, running, available.
-    pub local_models: HashMap<String, Vec<Value>>,
+    /// ── models: the Models view's replies (local models, grids, APIs) and a Use under way ──
+    pub models_view: crate::models::Models,
     /// Each machine's last measured round trip (the live roster request), for `@`.
     pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
@@ -780,6 +789,13 @@ pub struct App {
     /// `#()` commands in formats: their last output, run again every status-interval.
     pub jobs: std::cell::RefCell<std::collections::HashMap<String, crate::format::Job>>,
     pub fleet_marked: bool,
+    // ── status bar ──
+    /// The status bar down a side: where its entries were drawn (what a click there does), its
+    /// lists' scroll, and whether it is folded to a rail.
+    pub bar: crate::bar::State,
+    // ── machines & devices ──
+    /// The panel's machine and device views: what the CLI and the daemon last said (devices.rs).
+    pub devices: crate::devices::Devices,
 }
 
 impl App {
@@ -960,7 +976,7 @@ impl App {
             dsh: HashMap::new(),
             new_harness_draft: None,
             models: HashMap::new(),
-            local_models: HashMap::new(),
+            models_view: Default::default(),
             rtt: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
@@ -984,6 +1000,8 @@ impl App {
             key_table: None,
             key_table_until: None,
             fleet_marked: false,
+            bar: Default::default(),
+            devices: Default::default(),
         }
     }
 
@@ -1330,6 +1348,8 @@ impl App {
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
         // The dial's frames come from this computer's daemon, to the windows on it.
         if machine_id == self.fleet.local_id && crate::dial::on_frame(self, ty, &payload) { return }
+        // ── models: a message to a resting model starts its pane's "Starting up…" ──
+        crate::models::watch_turn(self, machine_id, ty, &payload);
         match ty {
             "agent_synced" | "agent_created" | "agent_renamed" => {
                 let row = payload.get("agent").cloned().unwrap_or(payload.clone());
@@ -1564,6 +1584,8 @@ impl App {
                     }
                 }
             }
+            // ── models: the daemon's picture of the grids changed — the whole list, pushed ──
+            "grid_models_changed" => crate::models::on_push(self, machine_id, &payload),
             _ => {}
         }
     }
@@ -3587,11 +3609,15 @@ impl App {
             let (w, h) = self.tabs.get(self.active).and_then(|t| t.root.as_ref().map(|r| r.size()).or(t.size)).unwrap_or_else(|| self.default_size());
             return Rect::new(0, 0, w, h);
         }
+        // The bar down a side takes its columns.
+        if let Some(bar) = self.bar_rect() { return Rect::new(if bar.x == 0 { bar.width } else { 0 }, 0, self.size.0.saturating_sub(bar.width), self.size.1) }
         Rect::new(0, if self.status_top { n } else { 0 }, self.size.0, self.size.1.saturating_sub(n))
     }
 
     /// tmux's status option: how many status lines (off, on, 2 … 5).
     pub fn status_lines(&self) -> u16 {
+        // (The bar down a side is the status line: none across the bottom as well.)
+        if self.bar_side().is_some() { return 0 }
         let lines = match self.options.get("status", "", None).as_deref() { Some("off") => 0, Some("2") => 2, Some("3") => 3, Some("4") => 4, Some("5") => 5, _ => 1 };
         // tmux's CLIENT_STATUSOFF: keep a pane row when the terminal cannot fit the status.
         if !self.headless && self.size.1 <= lines { 0 } else { lines }
@@ -3701,8 +3727,8 @@ impl App {
         self.options.get("mode-keys", &tab, self.focused()).as_deref() != Some("vi")
     }
 
-    /// A window's pane-border-status as it shows: hn's default (top) where it has several panes;
-    /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
+    /// A window's pane-border-status: the classic (default) look has none — a plain line
+    /// between panes; the opt-in "panes" look and tmux's own show pane titles instead.
     pub fn pane_status(&self, tab: &Tab) -> layout::Status {
         // (A window one row tall: no room for a title row — the row is the pane's, as tmux shows it.)
         if !self.headless && self.body().height < 2 { return layout::Status::Off }
@@ -3721,7 +3747,8 @@ impl App {
 
     /// The program's actual viewport, shared by drawing, PTY resizing and mouse coordinates.
     pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
-        if self.options.pane_look() { crate::pane_frame::frame(r, self.window_area(tab), self.pane_status(tab)).content }
+        if self.options.pane_look() { crate::pane_frame::frame(r, self.window_area(tab), self.box_inner(tab), self.pane_status(tab)).content }
+        else if self.options.box_panes() { crate::pane_frame::boxed_in(r, self.window_area(tab), self.box_inner(tab), self.pane_status(tab)).content }
         else { self.layout_content_of(tab, r) }
     }
 
@@ -3783,6 +3810,14 @@ impl App {
         self.sync_titles();
         self.fit_panes();
         self.refresh_pane_info(pane);
+        self.take_if_watching(pane);
+    }
+
+    /// A pane you come to (a click, a key, the bar) that another window has the keyboard of is
+    /// yours at once — as typing in it would make it — not "Take control" first.
+    pub fn take_if_watching(&mut self, pane: u64) {
+        let Some(p) = self.panes.get(&pane) else { return };
+        if matches!(p.phase, Phase::Watching(_)) && !p.read_only && !p.opening { self.open_stream(pane, true) }
     }
 
     /// A machine's first roster since hn started, read against when you last looked at each of
@@ -3822,7 +3857,7 @@ impl App {
 
     /// seen.json's path.
     fn seen_path() -> std::path::PathBuf {
-        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("seen.json")
+        state_dir().join("seen.json")
     }
 
     /// When you last looked at each harness, from the run before (the first run starts the clock).
@@ -4271,8 +4306,14 @@ impl App {
         placed
     }
 
-    /// Wide tiles split left|right, tall ones top/bottom — the way a tiling window manager does.
+    /// Wide tiles split left|right, tall ones top/bottom — the way a tiling window manager does —
+    /// unless `@hn-layout` (`[look].layout_orientation`) pins it to vertical or horizontal.
     pub fn smart_dir(&self) -> Dir {
+        match self.options.look_orientation() {
+            "vertical" => return Dir::Vertical,
+            "horizontal" => return Dir::Horizontal,
+            _ => {}
+        }
         let Some(focus) = self.focused() else { return Dir::Horizontal };
         let rect = self.rects.iter().find(|(id, _)| *id == focus).map(|(_, r)| *r).unwrap_or(self.body());
         if rect.width as f32 >= rect.height as f32 * 2.2 { Dir::Horizontal } else { Dir::Vertical }
@@ -4748,6 +4789,7 @@ impl App {
             if changed { self.tabs[index].touch(); self.alert(index, ACTIVITY) }
             if let Some(f) = self.tabs[index].focus { self.seen(f) }
             self.fit_panes();
+            if let Some(f) = self.tabs[index].focus { self.take_if_watching(f) }
         }
     }
 
@@ -5025,6 +5067,112 @@ impl App {
     /// select-layout -t: that window's panes in that shape.
     pub fn apply_preset_at(&mut self, index: usize, preset: Preset) {
         self.arrange_tab(index, layout::Named::of(preset));
+    }
+
+    /// `tui.toml`'s `[look]` table: set each choice as a global option, so `hn show` reflects it
+    /// and the daemon (which reads options, not the file) keeps the running look. The file is a
+    /// startup default; `hn set -g` afterward still wins.
+    pub fn apply_look(&mut self, look: Option<&crate::config::Look>) {
+        let Some(look) = look else { return };
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        for (name, value) in look.assignments() {
+            let _ = self.options.set(&name, Some(value.as_str()), &global, "", 0);
+        }
+        // ── status bar ──
+        if let Some(b) = look.status_bar.as_deref().filter(|b| matches!(*b, "top" | "bottom")) { self.status_top = b == "top" }
+        self.sync_accent();
+    }
+
+    /// Push the `@hn-accent` option (as the look holds it) to the colour layer, so `theme::accent()`
+    /// draws chrome with it — and `@hn-theme`'s colours, so the status bar, the pane surfaces and
+    /// the panes the daemons paint take the theme's. Called whenever the look is applied or a knob
+    /// changes.
+    pub fn sync_accent(&mut self) {
+        crate::term_out::set_accent_override(self.options.get("@hn-accent", "", None));
+        crate::settings::set_fzf_lists(self.options.get("@hn-lists", "", None).as_deref() == Some("fzf"));
+        let hex = |c: [u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+        let theme = self.options.get("@hn-theme", "", None)
+            .and_then(|n| crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == n))
+            .map(|t| (hex(t.background), hex(t.foreground)));
+        if crate::term_out::set_theme_colours(theme) { self.push_theme() }
+    }
+
+    /// `hn theme`: a knob's new value from the picker. Applies it live (so the daemon, which reads
+    /// options, changes the running look) and writes the config file's `[look]` table. Returns the
+    /// confirmation shown in the picker.
+    pub fn set_look(&mut self, knob: &str, value: &str) -> String {
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let (name, message) = match knob {
+            // A preset also sets its focus (line or surface), so choosing one resets any knob
+            // the user set earlier; they can override it again right after.
+            "preset" => {
+                let surface = crate::config::Look::look_preset(value).iter().any(|(_, v)| *v == "surface");
+                let _ = self.options.set("@hn-focus", Some(if surface { "surface" } else { "line" }), &global, "", 0);
+                ("@hn-look", format!("look: {value}"))
+            }
+            "focus" => ("@hn-focus", format!("focus: {value}")),
+            "border_lines" => ("pane-border-lines", format!("border: {value}")),
+            "border_indicators" => ("pane-border-indicators", format!("indicators: {value}")),
+            "border_status" => ("pane-border-status", format!("title row: {value}")),
+            "layout_orientation" => ("@hn-layout", format!("split: {value}")),
+            "layout_preset" => ("@hn-layout-preset", format!("layout: {value}")),
+            // A terminal theme only names the palette; hn keeps the choice recorded so it survives
+            // a restart, and the theme draws on the terminal (OSC 10/11). Its signature colour
+            // becomes the chrome accent so picking one visibly changes hn.
+            "theme" => {
+                // (None chosen: the terminal's own colours again, and hn's own accent.)
+                if value.is_empty() {
+                    let unset = crate::options::SetFlags { global: true, unset: true, ..Default::default() };
+                    let _ = self.options.set("@hn-accent", None, &unset, "", 0);
+                    let _ = self.options.set("@hn-theme", None, &unset, "", 0);
+                    self.sync_accent();
+                    let i = self.active;
+                    self.layout_changed(i);
+                    self.persist_look();
+                    return "theme: the terminal's own".into();
+                }
+                if let Some(a) = crate::theme::theme_accent_hex(value) {
+                    let _ = self.options.set("@hn-accent", Some(a.as_str()), &global, "", 0);
+                }
+                ("@hn-theme", format!("theme: {value}"))
+            }
+            // ── status bar ──
+            // (At the top or the bottom the bar is tmux's status line: status-position places it.)
+            "status_bar" => {
+                if matches!(value, "top" | "bottom") { let _ = self.options.set("status-position", Some(value), &global, "", 0); self.status_top = value == "top" }
+                ("@hn-status-bar", format!("status bar: {value}"))
+            }
+            "border_style" => ("@hn-border", format!("border style: {value}")),
+            "dim" => ("@hn-dim", format!("dim other panes: {value}")),
+            _ => return format!("unknown: {value}"),
+        };
+        let _ = self.options.set(name, Some(value), &global, "", 0);
+        self.sync_accent();
+        // (The bar and the frames change the panes' room: every program is told its size.)
+        if matches!(knob, "status_bar" | "border_style") { self.redraw_all = true; self.fit_panes() }
+        let i = self.active;
+        self.layout_changed(i);
+        self.persist_look();
+        message
+    }
+
+    /// Write the current look (as the options hold it) to tui.toml's `[look]`, best-effort.
+    pub fn persist_look(&mut self) {
+        let mut look = crate::config::Look::default();
+        look.preset = self.options.get("@hn-look", "", None);
+        look.focus = self.options.get("@hn-focus", "", None);
+        look.border_lines = self.options.get("pane-border-lines", "", None);
+        look.border_indicators = self.options.get("pane-border-indicators", "", None);
+        look.border_status = self.options.get("pane-border-status", "", None);
+        look.layout_orientation = self.options.get("@hn-layout", "", None);
+        look.layout_preset = self.options.get("@hn-layout-preset", "", None);
+        look.theme = self.options.get("@hn-theme", "", None);
+        // ── status bar ──
+        look.status_bar = self.options.get("@hn-status-bar", "", None);
+        look.border_style = self.options.get("@hn-border", "", None);
+        look.status_bar_width = self.options.get("@hn-status-bar-width", "", None);
+        look.dim = self.options.get("@hn-dim", "", None);
+        if let Err(e) = crate::config::write_look(&look) { self.say(format!("could not write tui.toml: {e}"), crate::theme::DANGER) }
     }
 
     // ── the desk: tabs shared with every window on the account ─────────────────
@@ -5401,7 +5549,7 @@ impl App {
         true
     }
 
-    fn prs_path() -> std::path::PathBuf { std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("prs.json") }
+    fn prs_path() -> std::path::PathBuf { state_dir().join("prs.json") }
 
     /// prs.json as this computer's clients last wrote it (read again at most every ten seconds).
     fn read_prs(&mut self) {
@@ -5536,6 +5684,8 @@ impl App {
         // Since you were here: once every machine's harnesses are listed, so it counts them all.
         if self.back_from.is_some() && !self.headless && self.fleet_ready() { self.back_again() }
         self.enrich();
+        // ── models: this computer's models read as often as the Models view needs ──
+        crate::models::tick(self);
         self.maybe_start_shell();
         self.release_waiting();
         self.release_cli();

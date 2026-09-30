@@ -7748,7 +7748,12 @@ class AppNotifier extends ChangeNotifier {
     }
   };
 
-  void _raiseAlert(MachineState machine, String agentId, AlertKind kind) {
+  void _raiseAlert(
+    MachineState machine,
+    String agentId,
+    AlertKind kind, {
+    String? message,
+  }) {
     // Nothing at all for the agent on screen in front of you. A sound, a banner
     // and a count are three ways of saying "look over here", and all three are
     // noise about the pane you are already in.
@@ -7766,7 +7771,13 @@ class AppNotifier extends ChangeNotifier {
     final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
     // Before the banner and outside its switch: the mark is what the window can
     // still say when somebody has turned the interrupting halves off.
-    agentUnread.mark(machine.machine.machineId, agentId, kind, fresh: true);
+    agentUnread.mark(
+      machine.machine.machineId,
+      agentId,
+      kind,
+      fresh: true,
+      message: message,
+    );
     alerts.play(kind);
     final alert = AgentAlert(
       machineId: machine.machine.machineId,
@@ -7887,6 +7898,11 @@ class AppNotifier extends ChangeNotifier {
   /// the refusal remains the thing that guarantees no turn is lost.
   bool agentIsProcessing(String machineId, String agentId) =>
       machineStates[machineId]?.processingAgentIds.contains(agentId) ?? false;
+
+  /// Unknown after attaching to a turn already under way; do not invent an
+  /// elapsed time from the last heartbeat or the last time its pane was opened.
+  DateTime? agentWorkingSince(String machineId, String agentId) =>
+      harnessStats.turnStartedAt(_turnActivityKey(machineId, agentId));
 
   // ── blocked agents ────────────────────────────────────────────────────────
 
@@ -13391,9 +13407,9 @@ class AppNotifier extends ChangeNotifier {
           // is a turn already under way, and counting one would report an agent
           // this app merely reconnected to as work somebody just asked for.
           if (type == 'turn_started') {
-            harnessStats.onTurnStarted(
-              _turnActivityKey(machine.machine.machineId, agentId),
-            );
+            final key = _turnActivityKey(machine.machine.machineId, agentId);
+            changed = harnessStats.turnStartedAt(key) == null || changed;
+            harnessStats.onTurnStarted(key);
           }
         } else {
           final sessionId = _eventSessionId(event, payload);
@@ -13402,7 +13418,8 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         // Renew the watchdog on every heartbeat, but redraw only when the
-        // agent first becomes busy. Expiry and turn end publish separately.
+        // agent becomes busy or its start time becomes known. Expiry and turn
+        // end publish separately.
         if (!changed) return;
         break;
       case 'turn_summary':
@@ -13417,7 +13434,14 @@ class AppNotifier extends ChangeNotifier {
         while (_deliveredNotifications.length > 512) {
           _deliveredNotifications.remove(_deliveredNotifications.first);
         }
-        _raiseAlert(machine, agentId, AlertKind.done);
+        _raiseAlert(
+          machine,
+          agentId,
+          AlertKind.done,
+          message:
+              previewText(payload['recap'], limit: 600) ??
+              previewText(payload['text'], limit: 600),
+        );
         break;
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);

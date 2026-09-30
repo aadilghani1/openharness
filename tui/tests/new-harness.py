@@ -84,10 +84,13 @@ def click(x, y):
         raw = f'\x1b[<0;{x+1};{y+1}{suffix}'.encode()
         tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
     settle_ui()
+def field_at(label):
+    # A field's label: after a space, the pointer or an edge (the form is a borderless panel).
+    return r'(?<![^\s│›])(' + label + r') {2,}'
 def field(label):
     def find():
         for y, line in enumerate(screen().splitlines()):
-            m = re.search(r'│[ ›]*(' + re.escape(label) + r') {2,}', line)
+            m = re.search(field_at(re.escape(label)), line)
             if m: return m.start(1), y
     wait(find, f'field {label}')
     click(*find())
@@ -139,9 +142,11 @@ try:
     before = create_count()
     input_before = len(state('reconnect')['inputs'])
     keys('Right'); assert create_count() == before, 'Right on New Harness must not launch'
-    keys('Down'); shows('Search agents and harnesses')
-    assert 'Blender' in screen(), 'the agent chooser appears while moving over Agent'
-    keys('Tab'); snapshot('new-harness-agent')
+    # The chooser opens in the form's place (the panel stays put), once you go into it.
+    keys('Down'); assert 'Search agents and harnesses' not in screen(), 'moving over Agent keeps the form'
+    keys('Tab'); shows('Search agents and harnesses')
+    assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
+    snapshot('new-harness-agent')
     type_text('codex'); keys('Escape')
     shows('Options'); field('Agent'); type_text('codex'); keys('Enter')
     field('Project'); shows('Clone Repository'); snapshot('new-harness-project')
@@ -152,7 +157,7 @@ try:
     field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
     type_text('fail-once'); keys('Enter'); shows('New Folder: fail-once')
     field('Options'); shows('Approvals'); shows('Model'); shows('Profile')
-    assert not re.search(r'│[ ›]*Machine {2,}', screen()), 'Machine belongs in Project, not Options'
+    assert not re.search(field_at('Machine'), screen()), 'Machine belongs in Project, not Options'
     choose_field('Approvals', 'read only'); shows('Read only')
     snapshot('new-harness-options')
     keys('Enter', 'Enter'); shows('Fixture launch failure')
@@ -191,11 +196,12 @@ try:
     assert 'codexHome' not in request, request
     print('PASS New Harness: machine-scoped profiles and explicit model routes', flush=True)
 
-    new_form(); choose_field('Agent', 'Blender'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
+    # (Blender asks for its coding agent next, in the form's place.)
+    new_form(); field('Agent'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
     submit(before + 6)
     assert state()['created'][-1]['dsh'] == 'example/blender'
     new_form(); choose_field('Harness', 'Terminal'); field('Options')
-    assert not re.search(r'│[ ›]*(Model|Approvals|Profile) {2,}', screen()), 'Terminal omits irrelevant settings'
+    assert not re.search(field_at('Model|Approvals|Profile'), screen()), 'Terminal omits irrelevant settings'
     # Return focus to the action without accepting any of the disabled Git rows.
     before_terminal = placement()
     field('New Harness')

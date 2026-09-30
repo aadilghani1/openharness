@@ -15,8 +15,7 @@ use crossterm::event::{
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Widget},
+    style::{Modifier, Style},
 };
 use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
@@ -275,8 +274,7 @@ fn short_path(path: &str, home: &str) -> String {
     }
 }
 fn defaults_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".harness/tui/new-harness.json")
+    crate::app::state_dir().join("new-harness.json")
 }
 fn defaults() -> Value {
     if cfg!(test) {
@@ -1581,6 +1579,23 @@ mod tests {
         app
     }
 
+    /// Opening a chooser beside the form (an agent, here) leaves the form where it was, on a wide
+    /// window and a narrow one.
+    #[tokio::test]
+    async fn the_form_stays_put_when_a_chooser_opens() {
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        for body in [Rect::new(0, 0, 150, 41), Rect::new(0, 0, 90, 30)] {
+            form.child = None;
+            draw(&mut Buffer::empty(body), body, &mut form);
+            let alone = form.area;
+            child(&mut app, &mut form, Choice::Agent, "codex");
+            draw(&mut Buffer::empty(body), body, &mut form);
+            assert_eq!(form.area, alone, "the form moved at {}x{}", body.width, body.height);
+        }
+    }
+
     #[tokio::test]
     async fn local_shell_entry_does_not_override_the_registered_launch_machine() {
         let mut app = app();
@@ -1674,7 +1689,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_form_is_centered_and_stays_anchored_at_every_terminal_size() {
+    async fn the_form_is_the_panel_centered_and_anchored_at_every_terminal_size() {
         let mut app = app();
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
@@ -1704,7 +1719,8 @@ mod tests {
                                 assert_eq!(hit.intersection(area), *hit);
                             }
                             if form.area.width > 0 {
-                                assert!(form.area.width <= 52);
+                                // The menus' panel: one size and place whatever is open.
+                                assert_eq!(form.area, crate::settings::area(area));
                                 let left = form.area.x - area.x;
                                 let right = area.right() - form.area.right();
                                 assert!(left.abs_diff(right) <= 1, "not centered in {area:?}");
@@ -1721,15 +1737,9 @@ mod tests {
                                 );
                                 assert_eq!(form.area.intersection(area), form.area);
                             }
+                            // A chooser opens in the form's place, as a section of Appearance does.
                             if form.child_area.width > 0 {
-                                assert_eq!(form.child_area.intersection(area), form.child_area);
-                                assert_eq!(form.child_area.y, form.area.y);
-                                if form.child_area.x == form.area.x {
-                                    assert!(active && width < 150);
-                                    assert_eq!(form.child_area.width, form.area.width);
-                                } else {
-                                    assert_eq!(form.child_area.x, form.area.right() + 2);
-                                }
+                                assert_eq!(form.child_area, form.area);
                             }
                         }
                     }

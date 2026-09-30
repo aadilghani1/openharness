@@ -259,6 +259,9 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
     // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) { return modal_mouse(app, mouse) }
+    // ── status bar ──
+    // (The bar down a side and the tabs over the panes: theirs, unless a menu is open.)
+    if !matches!(app.modal, Some(Modal::Menu(_))) && crate::bar::mouse(app, &mouse) { return }
     crate::mouse::on_event(app, mouse);
 }
 
@@ -278,11 +281,11 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
-            if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+            if let Some(Modal::Picker { picker, kind }) = &mut app.modal {
                 if in_preview { picker.preview_by(if up { -1 } else { 1 }) }
                 else if inside(list) {
                     if shift && multi { picker.toggle_mark(); }
-                    let r: i64 = if theme::fzf().reverse { -1 } else { 1 };
+                    let r: i64 = if crate::settings::top_down(kind) { -1 } else { 1 };
                     picker.move_by(if up { r } else { -r })
                 }
             }
@@ -372,8 +375,8 @@ pub fn scroll_by(app: &mut App, lines: i32) {
     let up = lines > 0;
     let n = lines.unsigned_abs() as usize;
     match &mut app.modal {
-        Some(Modal::Picker { picker, .. }) => {
-            let r: i64 = if theme::fzf().reverse { -1 } else { 1 };
+        Some(Modal::Picker { picker, kind }) => {
+            let r: i64 = if crate::settings::top_down(kind) { -1 } else { 1 };
             picker.move_by(if up { r } else { -r } * n as i64);
             return;
         }
@@ -577,7 +580,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
-        PickerKind::Models => is_loading(&format!("grid {}", modal::models_machine(app))) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
+        PickerKind::Models => crate::models::loading(app) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
         _ => false,
     };
     picker.busy = busy.then(|| "loading".to_string());
@@ -627,17 +630,23 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "its harnesses"), ("C-t", "a session of them"), ("M-n", "new harness there")];
             picker.empty = "No projects yet.".into();
         }
+        // ── models: the Models view's sections (models.rs), then the engine's own models ──
         PickerKind::Models => {
-            let mut rows = modal::model_rows(app);
-            rows.extend(modal::local_model_rows(app));
+            let mut rows = crate::models::rows(app, crate::models::searched(picker));
+            let in_use = crate::models::in_use_row(&rows);
+            rows.extend(modal::model_rows(app));
+            // (Rebuilt in its sections each time — a model moves to where its state puts it, a
+            // reply come late lands in its section — the cursor staying on its row.)
+            picker.rows.clear();
             picker.set_rows(rows);
-            // Start on the model it runs, so ↑/↓ are "a little more / less" from where it is.
+            // Start on the model it runs — the grid model it is on, else its engine's model — so
+            // ↑/↓ are "a little more / less" from where it is.
             if picker.query.trim() == ":" && picker.selected_id.is_none() {
-                if let Some(current) = focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone())) {
+                if let Some(current) = in_use.or_else(|| focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone()))) {
                     if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
                 }
             }
-            picker.hints = vec![("enter", "use · start · get"), ("C-x", "stop a local model")];
+            picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
             picker.empty = if app.focused().is_none() { "Focus a harness to switch its model.".into() } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
@@ -650,12 +659,28 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
+            let was = picker.current_id();
             picker.set_rows(modal::machine_rows(app));
+            // Come to from another list (`@`): the cursor on the machine you are on — the focused
+            // pane's, else this one — with its preview beside it. A refresh leaves it where it is.
+            if !was.is_some_and(|w| app.fleet.visible_machines().any(|m| m.id == w)) {
+                let here = app.focused().and_then(|p| app.panes.get(&p)).map(|p| p.machine_id.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| app.fleet.local_id.clone());
+                picker.select(&here);
+            }
             let up = app.fleet.visible_machines().filter(|m| m.usable()).count();
             picker.status = format!("{up}/{} connected", app.fleet.visible_machines().count());
             picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("M-l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
+        PickerKind::Theme => {
+            picker.keep_order = true;
+            picker.theme_in = None;
+            picker.set_rows(modal::theme_sections(app));
+            picker.hints = vec![("→/enter", "open"), ("enter", "set"), ("esc", "done")];
+        }
+        // (Typed into, it ranks by match, best first, as fzf does; empty, it keeps its groups. A
+        // query matches a command's name and keywords, not the description shown beside it.)
+        PickerKind::Commands => { picker.live = true; picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty())); picker.hints = vec![("enter", "run")] }
         PickerKind::Help => { picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
@@ -712,6 +737,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.empty = "no buffers".into();
             picker.hints = vec![("enter", "paste")];
         }
+        // ── machines & devices ──
+        PickerKind::Devices(view) => crate::devices::fill(app, *view, picker),
     }
 }
 
@@ -773,19 +800,9 @@ fn prepare(app: &mut App, kind: &PickerKind) {
     }
 }
 
-fn load_local_models(app: &mut App) {
-    let machine = modal::models_machine(app);
-    let Some(link) = app.link(&machine) else { return };
-    let mark = loading(format!("grid {machine}"), true);
-    app.spawn(async move { link.rpc("grid_fleet_models_list", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
-        loading(mark, false);
-        if let Ok(reply) = reply { app.local_models.insert(machine, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
-        refill(app);
-    });
-}
-
 fn load_models(app: &mut App) {
-    load_local_models(app);
+    // ── models: this computer's models, the grids and the saved APIs (models.rs) ──
+    crate::models::open(app);
     let Some((machine, agent)) = focused_agent(app) else { return };
     let Some(link) = app.link(&machine) else { return };
     let mark = loading(format!("models {machine} {agent}"), true);
@@ -821,6 +838,8 @@ pub fn run(app: &mut App, command: &str) {
         "machines" => launch(app, "@", Filter::All),
         "help" => launch(app, "?", Filter::All),
         "layout" => picker(app, PickerKind::Layout, "layout", ""),
+        "theme" | "appearance" => picker(app, PickerKind::Theme, "Appearance", "Search appearance"),
+        "commands" => picker(app, PickerKind::Commands, "Commands", "Type a command — appearance, new, layout, models…"),
         "store" => launch(app, "*", Filter::All),
         "new" => crate::new_harness::open(app, None, None),
         "terminal" => {
@@ -921,6 +940,8 @@ pub fn run(app: &mut App, command: &str) {
         "choose-buffer" => picker(app, PickerKind::Buffers, "buffers", ""),
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { if let Some(n) = c[4..].parse::<usize>().ok().and_then(|n| n.checked_sub(1)) { app.select_tab(n) } }
+        // ── machines & devices ──
+        "connect-machine" | "add-phone" | "devices" => { if let Some(view) = crate::devices::View::of(command) { crate::devices::open(app, view) } }
         _ => {}
     }
 }
@@ -1035,7 +1056,8 @@ pub fn refill(app: &mut App) {
     if !matches!(app.modal, Some(Modal::Picker { .. })) { return }
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take() {
         let was = picker.current_id();
-        if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout) { fill(app, &kind, &mut picker) }
+        // (The settings panel changes only by your keys: a refresh would step out of its section.)
+        if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout | PickerKind::Theme | PickerKind::Commands) { fill(app, &kind, &mut picker) }
         // (The cursor put on another row by the list, not by a key: a moment before it answers.)
         if was.is_some() && picker.current_id() != was { picker.landed = Some(Instant::now()) }
         app.modal = Some(Modal::Picker { kind, picker });
@@ -1356,7 +1378,7 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
     }
 }
 
-fn modal_key(app: &mut App, key: KeyEvent) {
+pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
         Modal::NewHarness(form) => crate::new_harness::key(app, form, key),
@@ -1930,7 +1952,9 @@ fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
 
 /// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
 /// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
-fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
+fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
+    // ── machines & devices ── (a line typed or a y/n answered in the panel; Esc/← a level back)
+    let (kind, mut picker) = match crate::devices::key(app, kind, picker, key) { Ok(()) => return, Err(back) => back };
     // A row a key goes to is one you chose to look at (the list moving it there is not).
     let was = picker.current_id();
     let key_moves = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Tab | KeyCode::BackTab)
@@ -1951,7 +1975,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             }
         }
         let multi = picker.multi_override.map(|n| n > 0).unwrap_or((matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi) && crate::picker::scope_of(&picker.query).is_none());
-        let up = if theme::fzf().reverse { -1 } else { 1 };
+        let up = if crate::settings::top_down(&kind) { -1 } else { 1 };
         if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(key, _)| key == event).map(|(_, actions)| actions.clone()) {
             let previous_query = picker.query.clone();
             let previous_search = picker.search.clone();
@@ -1986,7 +2010,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let multi = picker.multi_override.map(|n| n > 0).unwrap_or(multi);
     // unbind / toggle-bind: that key does nothing in this list now.
     if picker.unbound.contains(&fzf_key_name(&key)) { app.modal = Some(Modal::Picker { kind, picker }); return }
-    let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
+    let up: i64 = if crate::settings::top_down(&kind) { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
     // list's own meaning of it; one with an action hn runs never falls back to it.
@@ -1999,6 +2023,30 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             End::Stay => {}
         }
     } else {
+        // The look/theme picker: right on a section opens it, left/Esc steps out one level (a plain
+        // arrow with an empty query — with a query they edit the query, as fzf's do).
+        if matches!(kind, PickerKind::Theme) {
+            let no_mod = !ctrl && !alt && !shift;
+            if no_mod && key.code == KeyCode::Right && picker.query.is_empty() {
+                if let Some(sec) = picker.current_id().and_then(|id| id.strip_prefix("section:").map(|s| s.to_string())) {
+                    crate::settings::open_section(app, &mut picker, &sec);
+                    app.modal = Some(Modal::Picker { kind, picker });
+                    return;
+                }
+            }
+            let back = (no_mod && key.code == KeyCode::Left && picker.query.is_empty()) || key.code == KeyCode::Esc;
+            if back && picker.theme_in.is_some() {
+                crate::settings::close_section(app, &mut picker);
+                app.modal = Some(Modal::Picker { kind, picker });
+                return;
+            }
+            // Opened from the command list: Esc (or ← on the sections) is a step back to it.
+            if back && picker.from_commands {
+                crate::settings::back_to_commands(app, &mut picker);
+                app.modal = Some(Modal::Picker { kind: PickerKind::Commands, picker });
+                return;
+            }
+        }
         match key.code {
             KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
             KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
@@ -2123,6 +2171,15 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         let (next, changed) = remode(app, kind, &mut picker);
         kind = next;
         if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
+        // ── models: a search lists what "More models" and a folded API hide ──
+        else if matches!(kind, PickerKind::Models) { fill(app, &kind, &mut picker) }
+        // The command list: tmux's commands join it once you search, and leave when you stop.
+        if matches!(kind, PickerKind::Commands) && before.is_empty() != picker.query.is_empty() {
+            picker.rows.clear();
+            picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty()));
+        }
+        // The panel's lists: what you type puts the cursor on the best match.
+        if crate::settings::is_panel(&kind) { picker.to_top() }
         // --bind change:…, fzf's event for a query that changed (change:first puts the cursor back
         // on the best match).
         if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k == "change").map(|(_, a)| a.clone()) {
@@ -2504,7 +2561,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
     // A list of keys, buffers, commands or text: only Enter picks — the harness lists' keys (C-v
     // beside, C-x below, M-p pause …) do nothing here, as keys fzf has no action for.
-    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
+    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Commands | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
     match kind.clone() {
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
@@ -2614,33 +2671,16 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             fill(app, &kind, &mut next);
             app.modal = Some(Modal::Picker { kind, picker: next });
         }
-        PickerKind::Models if id.as_deref().map(|i| i.starts_with("grid:")).unwrap_or(false) => {
-            let id = id.unwrap();
-            let Some((machine, model)) = id.trim_start_matches("grid:").split_once('\t').map(|(m, x)| (m.to_string(), x.to_string())) else { return keep(app, kind, picker) };
-            let state = app.local_models.get(&machine).and_then(|l| l.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model.as_str()))).and_then(|m| m.get("state").and_then(|v| v.as_str())).unwrap_or("available").to_string();
-            let running = state == "running" || state == "serving";
-            let action = match (choice, running, state.as_str()) {
-                (Choice::SplitDown, true, _) => "grid_fleet_model_stop",
-                (Choice::Enter, false, "downloaded") => "grid_fleet_model_start",
-                (Choice::Enter, false, _) => {
-                    // A download is gigabytes: the first Enter asks, the second one means it.
-                    if picker.armed.as_deref() != Some(id.as_str()) { picker.armed = Some(id.clone()); picker.say("Enter again to download it"); return keep(app, kind, picker) }
-                    "grid_fleet_model_download"
-                }
-                (_, true, _) => { picker.say("Running — ^S stops it"); return keep(app, kind, picker) }
-                _ => return keep(app, kind, picker),
-            };
-            picker.armed = None;
-            let Some(link) = app.link(&machine) else { return keep(app, kind, picker) };
-            let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
-            picker.say(match action { "grid_fleet_model_stop" => format!("Stopping {label}…"), "grid_fleet_model_start" => format!("Starting {label}…"), _ => format!("Downloading {label}…") });
-            app.spawn(async move { link.rpc(action, json!({ "modelId": model }), Duration::from_secs(600)).await }, move |app, reply| {
-                match reply { Ok(_) => app.say(format!("{label}: done"), theme::ONLINE), Err(e) => app.say(format!("{label}: {e}"), theme::DANGER) }
-                load_local_models(app);
-            });
+        // ── models: Enter uses a row of the Models view, C-s stops a local model (models.rs) ──
+        PickerKind::Models if id.as_deref().is_some_and(crate::models::is_row) => {
+            if !matches!(choice, Choice::Enter | Choice::SplitDown) { return keep(app, kind, picker) }
+            crate::models::choose(app, &mut picker, id.as_deref().unwrap_or(""), choice == Choice::SplitDown);
+            fill(app, &kind, &mut picker);
             return keep(app, kind, picker);
         }
         PickerKind::Models => {
+            // (The engine's own models: only Enter switches.)
+            if choice != Choice::Enter { return keep(app, kind, picker) }
             let Some(model) = id else { return keep(app, kind, picker) };
             let Some((machine, agent)) = focused_agent(app) else { return };
             let Some(link) = app.link(&machine) else { return };
@@ -2657,15 +2697,53 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         PickerKind::Layout => {
             if let Some(index) = id.and_then(|i| i.parse::<usize>().ok()) { app.apply_preset(Preset::ALL[index].0) }
         }
+        PickerKind::Theme => {
+            if choice == Choice::Enter {
+                let under = picker.theme_in.clone();
+                if let Some(id) = id {
+                    if let Some(section) = under {
+                        // Inside a section: Enter sets that option (and the ● moves to it).
+                        if let Some((knob, value)) = id.split_once(':') {
+                            let msg = app.set_look(knob, value);
+                            picker.say(msg);
+                            picker.set_rows(modal::theme_options(app, &section));
+                            // (A switch — Dim other panes — is the same row turned over.)
+                            let at = if knob == "dim" { format!("dim:{}", if value == "on" { "off" } else { "on" }) } else { id.clone() };
+                            crate::settings::cursor_to(&mut picker, &at);
+                        }
+                    } else if let Some(sec) = id.strip_prefix("section:") {
+                        // The section list: Enter opens the section's options.
+                        crate::settings::open_section(app, &mut picker, sec);
+                    }
+                }
+            }
+            return keep(app, kind, picker);
+        }
+        PickerKind::Commands => {
+            let Some(id) = id else { return keep(app, kind, picker) };
+            if let Some(name) = id.strip_prefix("tmux:") {
+                // A command that needs words goes to the prompt with its name typed; the rest run.
+                if modal::NEEDS_ARGS.contains(&name) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None, more: Vec::new(), answers: Vec::new(), one: false, digits: false, incremental: false, ptype: 0, last: String::new() }, ":", &format!("{name} ")))) }
+                else { commands::execute(app, name) }
+            } else if id == "cmd:theme" {
+                // Settings open in this same panel, where the command list was.
+                crate::settings::into_settings(app, &mut picker);
+                return keep(app, PickerKind::Theme, picker);
+            } else if let Some(view) = id.strip_prefix("cmd:").and_then(crate::devices::View::of) {
+                // ── machines & devices ── (in this same panel too; Esc comes back here)
+                return crate::devices::from_commands(app, picker, view);
+            } else if let Some(cmd) = id.strip_prefix("cmd:") {
+                run(app, cmd)
+            }
+        }
         PickerKind::Machines => {
             let Some(machine) = id else { return keep(app, kind, picker) };
             match choice {
                 Choice::New => { if app.link(&machine).is_some() { new_what(app, machine) } }
                 Choice::Tab => create(app, machine, What { engine: "terminal".into(), dsh: None, label: "Terminal".into() }, None, None),
-                Choice::Link => {
-                    let name = app.fleet.machine_name(&machine);
-                    prompt(app, PromptKind::LinkPassword { machine }, &format!("Link {name}"), "Its remote password (set there with `harness remote-password set`)", "", "", true)
-                }
+                // M-l: Connect a machine in the panel, its password asked for (hidden), the CLI's
+                // stages shown as they come.
+                Choice::Link => crate::devices::connect_to(app, machine),
                 _ => {
                     let kind = PickerKind::Open { filter: Filter::All, machine: Some(machine), project: None };
                     let (title, placeholder) = modal::launcher_title(app, &kind);
@@ -2695,6 +2773,8 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 app.say(format!("Sent to {name}"), theme::ONLINE);
             }
         }
+        // ── machines & devices ──
+        PickerKind::Devices(view) => crate::devices::choose(app, view, picker, choice == Choice::Enter),
     }
 }
 
@@ -2804,35 +2884,6 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             for (machine, agent) in &targets { if let Some(link) = app.link(machine) { link.send("message", json!({ "agentId": agent, "content": value })); } }
             app.say(format!("Sent to {} harness{}", targets.len(), if targets.len() == 1 { "" } else { "es" }), theme::ONLINE);
         }
-        PromptKind::LinkPassword { machine } => {
-            if value.is_empty() { return }
-            // The CLI that started us (node + its script), else `harness` on PATH.
-            let exe = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
-            // Its loader flags and script (tsx in a dev checkout), as the launcher passed them.
-            let script: Vec<String> = std::env::var("HARNESS_CLI_ARGS").ok().and_then(|a| serde_json::from_str(&a).ok()).unwrap_or_default();
-            let id = machine.clone();
-            app.say("Linking…", theme::SOFT);
-            app.spawn(async move {
-                let run = tokio::process::Command::new(exe).args(script.iter()).args(["link", "connect", &id, "--stdin", "--json"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn();
-                match run {
-                    Ok(mut child) => {
-                        use tokio::io::AsyncWriteExt;
-                        if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(format!("{value}\n").as_bytes()).await; }
-                        child.wait_with_output().await.map(|o| (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr))).unwrap_or((false, "failed".into()))
-                    }
-                    Err(e) => (false, e.to_string()),
-                }
-            }, move |app, (ok, out)| {
-                if ok { app.say("Linked", theme::ONLINE); if let Some(m) = app.fleet.machine_mut(&machine) { m.reach = crate::fleet::Reach::Unknown } app.connect(&machine) }
-                else {
-                    // `--json` answers with {ok, message}; anything else, its first error-looking line.
-                    let said = out.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find_map(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(str::to_string))
-                        .or_else(|| out.lines().map(str::trim).find(|l| l.contains('✗') || l.to_lowercase().contains("error")).map(str::to_string))
-                        .unwrap_or_else(|| "the link was refused".into());
-                    app.say(format!("Could not link: {said}"), theme::DANGER)
-                }
-            });
-        }
     }
 }
 
@@ -2848,7 +2899,9 @@ pub fn is_command(id: &str) -> bool {
         | "broadcast" | "clone" | "restart" | "pause" | "take" | "rename" | "tab" | "rename-tab" | "close-tab" | "next-tab" | "prev-tab"
         | "split-right" | "split-down" | "close-pane" | "zoom" | "equalize" | "pane-tab" | "copy-mode" | "find" | "tab-left" | "tab-right"
         | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "info" | "messages" | "keys"
-        | "choose-buffer" | "quit")
+        | "theme" | "appearance" | "commands" | "choose-buffer" | "quit"
+        // ── machines & devices ──
+        | "connect-machine" | "add-phone" | "devices")
 }
 
 
@@ -3200,5 +3253,68 @@ mod tests {
         // At the end, nowhere to go.
         assert_eq!(forward_word_vi(&c, c.len(), ws), c.len());
         assert_eq!(end_word(&c, c.len(), ws), c.len());
+    }
+
+    /// `theme` from the command prompt (`: theme`) or the launcher must open the theme picker —
+    /// the same dispatch `input::run` executes. Guards the `is_command`/`picker` wiring end to end.
+    #[test]
+    fn theme_command_opens_the_theme_picker() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.fleet.local_id = "local".into();
+        app.fleet.machines.push(crate::fleet::Machine {
+            id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
+        });
+        app.homes.insert("local".into(), "/home/dev".into());
+
+        // is_command("theme") is true, so the command-prompt routes it here.
+        assert!(is_command("theme"));
+        run(&mut app, "theme");
+
+        let modal = app.modal.as_ref().expect("`theme` should open a picker modal");
+        let Modal::Picker { kind, picker } = modal else {
+            panic!("`theme` opened a non-picker modal");
+        };
+        assert!(matches!(kind, PickerKind::Theme), "opened {:?}", std::mem::discriminant(kind));
+
+        // Level one: the section list, not the whole flat gallery — sections only, no groups.
+        assert!(picker.theme_in.is_none(), "opens on the sections");
+        assert_eq!(picker.rows.first().map(|r| r.id.as_str()), Some("section:status"));
+        assert!(picker.rows.iter().all(|r| r.id.starts_with("section:")), "level one lists sections only");
+
+        // Each section opens onto its options; the theme section lists every bundled theme.
+        use crate::terminal_themes::TERMINAL_THEMES;
+        let theme_opts = crate::modal::theme_options(&app, "theme");
+        assert_eq!(theme_opts.len(), TERMINAL_THEMES.len() + 1, "the terminal's own, then every bundled theme");
+        let first_id = format!("theme:{}", TERMINAL_THEMES[0].name);
+        assert_eq!(theme_opts.get(1).map(|r| r.id.as_str()), Some(first_id.as_str()));
+        for r in &theme_opts { assert!(!r.lead.is_empty(), "mark missing on {}", r.id); }
+    }
+
+    /// Enter opens a section (level one → level two), and the picker stays open on that section's
+    /// options. Guards the drill-in navigation (the option apply is `set_look`, tested elsewhere).
+    #[test]
+    fn theme_enter_opens_the_section() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.fleet.local_id = "local".into();
+        app.fleet.machines.push(crate::fleet::Machine {
+            id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
+        });
+        app.homes.insert("local".into(), "/home/dev".into());
+
+        picker(&mut app, PickerKind::Theme, "look & theme", "esc done");
+        {
+            let Modal::Picker { kind, picker } = app.modal.take().unwrap() else { panic!() };
+            assert!(matches!(kind, PickerKind::Theme));
+            assert!(picker.theme_in.is_none(), "opens on the sections");
+            assert_eq!(picker.current_id().as_deref(), Some("section:status"));
+            choose(&mut app, kind, picker, Choice::Enter);
+        }
+        let Modal::Picker { kind, picker } = app.modal.as_ref().unwrap() else { panic!() };
+        assert!(matches!(kind, PickerKind::Theme));
+        assert_eq!(picker.theme_in.as_deref(), Some("status"), "Enter opened the section");
+        assert!(picker.rows.iter().all(|r| r.id.starts_with("border_status:")), "the section's options show");
+        assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
     }
 }

@@ -112,6 +112,28 @@ pub struct Agent {
     /// When its transcript last changed, as the daemon last read it (tokenUsage.updatedAt, ms):
     /// what it last did, while no window was watching too.
     pub usage_at: u64,
+    // ── models: the model its engine is pointed at (the frame's `grid`) ──
+    /// A grid's or a saved API's model (`grid.model`; empty on its own login), that endpoint
+    /// (`grid.baseUrl`, which tells one API from another), whether the computers serving it rest
+    /// (`grid.state`: asleep, waking), and why it will not answer now (`grid.note`: its reason —
+    /// offline, not_served — the model, and the computer).
+    pub grid_model: String,
+    pub grid_base_url: String,
+    pub grid_state: String,
+    pub grid_note: Option<(String, String, String)>,
+}
+
+/// `grid.note`, read as the desktop reads it: a reason it does not know, or one missing the names
+/// its sentence needs, is no note.
+fn grid_note(note: &Value) -> Option<(String, String, String)> {
+    let model = s(note, "model");
+    let machine = s(note, "machine");
+    match s(note, "reason").as_str() {
+        _ if model.is_empty() => None,
+        "not_served" => Some(("not_served".into(), model, machine)),
+        "offline" if !machine.is_empty() => Some(("offline".into(), model, machine)),
+        _ => None,
+    }
 }
 
 /// A pull request for an agent's branch: its number, state (Open, Draft, Merged, Closed), link.
@@ -315,6 +337,11 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         usage_at: row.get("tokenUsage").map(|u| time(u, "updatedAt")).filter(|t| *t > 0).or(previous.map(|p| p.usage_at)).unwrap_or(0),
         todos: previous.map(|p| p.todos.clone()).unwrap_or_default(),
         subagents: previous.map(|p| p.subagents.clone()).unwrap_or_default(),
+        // ── models ── (the daemon pushes the row again when its note clears)
+        grid_model: s(&row["grid"], "model"),
+        grid_base_url: s(&row["grid"], "baseUrl"),
+        grid_state: s(&row["grid"], "state"),
+        grid_note: grid_note(&row["grid"]["note"]),
     }
 }
 
@@ -541,7 +568,7 @@ impl Fleet {
 // ── the roster between runs ────────────────────────────────────────────────────
 
 fn cache_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("fleet.json")
+    crate::app::state_dir().join("fleet.json")
 }
 
 impl Fleet {

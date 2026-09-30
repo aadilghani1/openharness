@@ -219,25 +219,38 @@ At zero, only the portrait icon is shown, with no number or badge circle. The ba
 sits slightly outside the mark so both remain legible. The combined template
 adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
 above 99 with the exact count in its tooltip and accessibility
-value. Its native menu lists only harnesses with unread
-notifications, grouped by their open tab's displayed name in tab order. Each
-section lists its newest notifications first. Sessions outside open tabs appear
-under “Other sessions” at the end. A session in multiple tabs appears once,
-preferring the active tab, then the first tab containing it. Machine profiles
-do not hide notification groups. Project and machine context stays in row
-tooltips. Read sessions disappear; an empty inbox says “No unread
-notifications.” Blue dots mark unread rows. Long titles truncate with
-their full text and context in tooltips; unavailable rows are disabled. Rows
-stay in place while the menu is open. New Harness and Open Harness open the
-same creation and existing-session pickers as the workspace commands. Clear All
-Notifications, Show Harness, Settings, and Quit follow. Show Harness only brings
-the app window forward and stays available when workspace actions are disabled.
-The window's titlebar
-has search and Store without a duplicate bell.
+value. The native menu has one Notifications section, with questions first,
+then failures and completed results, newest first within each kind. Each row
+shows a title, status, up to two lines of the actual question or notified recap,
+and tab/machine context. Its age is when this app received the notification.
+The recap stays bound to that unread receipt; later transcript text cannot
+replace it. Show at most five notifications and a View all route to the full
+inbox. A session in multiple tabs appears once, preferring the active tab,
+then the first containing it. Machine profiles do not hide notifications.
+Project context remains in tooltips. Blue dots mark unread rows; unavailable
+rows remain visible and disabled. An empty inbox says “No unread notifications.”
 
-![Native notification menu entries rendered offscreen with synthetic sessions](images/notification-tab-groups.png)
+Working is a collapsed inline disclosure. It shows active, known sessions that
+are not already in Notifications, with elapsed time only when the app observed
+their turn start. Exclude idle shells, paused/offline sessions, and waiting
+questions. Show five compact rows, with additional sessions in a submenu.
+Working never adds to the badge. Both sections keep their snapshot while open;
+opening the disclosure must not insert new notifications under the pointer.
+Keyboard Left/Right and Return/Space toggle the disclosure. Rows use native
+selection, type-select, accessibility, and existing navigation receipts.
 
-Clear All acknowledges only the notifications in the displayed snapshot. Newer
+Mark all read sits beside the Notifications heading. New Harness and Open
+Harness use the existing creation/session pickers and effective shortcut hints.
+Show Harness and Quit finish the menu; Settings stays in the application menu.
+Show Harness stays available while workspace actions are disabled. The window's
+titlebar has Search and Store without a duplicate bell. GitHub merge tracking
+is deferred; this first version does not invent merge events from focused PR state.
+
+![Native notification overview rendered offscreen with synthetic sessions](images/notification-overview-light.png)
+
+![Native notification overview in dark appearance](images/notification-overview-dark.png)
+
+Mark all read acknowledges only the notifications in the opening snapshot. Newer
 results and replacement questions stay unread. Opening a conversation restores
 its existing pane in the displayed tab before bringing the window forward. If
 that view moved or closed, navigation resolves the session's current location.

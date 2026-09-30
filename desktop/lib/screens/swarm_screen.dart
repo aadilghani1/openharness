@@ -1868,6 +1868,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ],
       'attention': _attention,
       if (_native) 'statusMenuEntries': statusMenuEntries(app),
+      if (_native) 'statusMenuWorkingEntries': statusMenuWorkingEntries(app),
       // The fallback bell and the macOS menu use the same unread ledger.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
@@ -5690,12 +5691,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!statusMenuReceiptIsCurrent(app, receipt)) return;
     final machineId = receipt['machineId'] as String;
     final agentId = receipt['agentId'] as String;
-    final row = statusMenuEntries(app)
+    final working = receipt['unread'] == false;
+    final candidates = working
+        ? statusMenuWorkingEntries(app)
+        : statusMenuEntries(app);
+    final row = candidates
         .where(
           (row) => row['machineId'] == machineId && row['agentId'] == agentId,
         )
         .firstOrNull;
     if (row == null || row['unavailable'] != null) return;
+    if (working && row['sessionId'] != receipt['sessionId']) return;
     // Keep the tab shown in the menu even if the active tab changed while it
     // was open. If that view moved or closed, resolve the session's new home.
     final destination =

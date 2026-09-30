@@ -28,7 +28,11 @@ pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
         PickerKind::Keys => id.split_once('\t').map(|(k, c)| vec![Line::from(vec![bold(format!("{} {k}", crate::keys::name(&app.keymap.prefix)))]), Line::raw(""), Line::raw(c.to_string())]).unwrap_or_default(),
         PickerKind::Buffers => app.paste.get(id).map(|b| b.data.lines().map(|l| ansi_line(l, crate::theme::fzf_opts().tabstop)).collect()).unwrap_or_default(),
         PickerKind::Store => store(app, id),
-        PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string())],
+        // ── models: a Models view row's facts and what Enter does (models.rs) ──
+        PickerKind::Models if crate::models::is_row(id) => crate::models::preview(app, id),
+        PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string()), Line::raw(""), Line::raw("Enter switches this harness to it.")],
+        // ── machines & devices ──
+        PickerKind::Devices(view) => crate::devices::preview(app, *view, id),
         _ => vec![],
     }
 }

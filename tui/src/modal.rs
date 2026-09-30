@@ -1,12 +1,13 @@
 //! The overlays and what their rows are: the fzf list's modes (harnesses, > commands, @ machines,
 //! # projects, : models, * store, ? help), needs input, the New Harness form, layouts, and the
-//! one-line prompts (rename, first message, send, link password).
+//! one-line prompts (rename, first message, send).
 
 use ratatui::style::Style;
 use ratatui::text::Span;
 use serde_json::Value;
 
 use crate::app::App;
+use crate::terminal_themes::TERMINAL_THEMES;
 use crate::fleet::{ago, Reach, State};
 use crate::layout::Preset;
 use crate::picker::{Picker, Row};
@@ -44,6 +45,10 @@ pub enum PickerKind {
     Layout,
     Help,
     Store,
+    /// The look & theme of hn: a  `[look]` preset or a knob, applied live and written to tui.toml.
+    Theme,
+    /// C-b Enter: every command by name, in the settings panel — type a few letters, Enter runs it.
+    Commands,
     /// A task routed to a harness; [voice]: the dial's spoken task it answers.
     Route { text: String, voice: Option<String> },
     /// `show-messages`, `list-keys`, `choose-buffer`.
@@ -52,6 +57,9 @@ pub enum PickerKind {
     Buffers,
     /// What `list-windows`, `list-panes`, `show-options`… print, in a view (tmux's view mode).
     Output { title: String, lines: Vec<String> },
+    // ── machines & devices ──
+    /// Connect a machine, Add phone, Machines & devices: the desktop's machine screens in the panel.
+    Devices(crate::devices::View),
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +68,6 @@ pub enum PromptKind {
     RenameHarness { machine: String, agent: String },
     Send,
     Broadcast,
-    LinkPassword { machine: String },
     /// A question's answer, typed: option numbers or your own words.
     /// The question's request id when M-a was pressed: a new one meanwhile is not answered.
     Answer { machine: String, agent: String, request: String },
@@ -165,7 +172,7 @@ pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", 
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
-    ("models", "Models…", "⌥I", "switch this harness's model and effort", "Harness"),
+    ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
     ("new", "New Harness…", "⌥N", "", "Harness"),
     ("terminal", "New Terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
     ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
@@ -195,9 +202,15 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("copy-mode", "Copy Mode", "⌥V", "select and copy with the keyboard", "Panes"),
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness Store", "⌥S", "", "Machines"),
-    ("help", "Keyboard Shortcuts", "⌥/", "", "App"),
-    ("keys", "Every Key…", "", "every binding, searched as you type (C-b ? lists them as tmux does)", "App"),
-    ("quit", "Quit", "⌥Q", "harnesses keep running", "App"),
+    // ── machines & devices ──
+    ("connect-machine", "Connect a machine…", "", "a machine not linked yet, with its remote password", "Machines"),
+    ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
+    ("devices", "Machines & devices…", "", "this computer's password, your machines, links, add a machine", "Machines"),
+    // (hn itself: how it looks, its keys, and closing it.)
+    ("theme", "Appearance…", "", "theme, status bar, borders, focus, layout — settings", "Settings & help"),
+    ("keys", "Keyboard shortcuts…", "", "every key and what it does, searched as you type", "Settings & help"),
+    ("help", "Quick help", "⌥/", "what the search box can do: > @ # : * ?", "Settings & help"),
+    ("quit", "Close hn", "⌥Q", "your harnesses keep running", "Settings & help"),
 ];
 
 
@@ -224,10 +237,8 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let state = app.fleet.state_of(a);
             let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&a.engine);
-            let group = match state {
-                State::NeedsInput => "Needs you", State::Failed => "Failed", State::Done => "Done", State::Working => "Working", State::Starting => "Starting",
-                State::Ready => "Idle", State::Paused => "Paused", State::Offline => "Offline",
-            };
+            // (No headings by state: the list is one, the one active last first — its mark says
+            // what each is doing.)
             let is_open = open.contains(&a.key());
             // Its one line: the question it asks, what it is doing now, what its last turn came to,
             // why it failed — the rest in the finder's dim.
@@ -268,7 +279,6 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 .extra(format!("{} {} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
                 // What it is doing now and how long it has been as it is change as you look.
                 .volatile(matches!(state, State::Working | State::Starting), narrow.chars().count())
-                .group(group)
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(detail)
                 .right(right)
@@ -292,7 +302,7 @@ pub fn external_rows(app: &App) -> Vec<Row> {
         Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
             .extra(format!("{} {} {} {}", x.cwd, x.engine, engine_label(&x.engine), app.fleet.machine_name(&x.machine)))
             .group("Not in Harness")
-            .lead(vec![span("◌", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .lead(vec![span("‖", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
             .detail(vec![span(folder, fg(theme::MUTED))])
             .right(right)
             .right_narrow(ago(x.last_at))
@@ -360,7 +370,7 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
         PickerKind::Palette => ("commands".into(), "Run anything by name".into()),
         PickerKind::Machines => ("machines".into(), "Choose a machine, then one of its harnesses".into()),
         PickerKind::Projects => ("projects".into(), "Choose a project, then one of its harnesses".into()),
-        PickerKind::Models => ("models".into(), "Switch the focused harness's model and effort".into()),
+        PickerKind::Models => ("models".into(), "Search models — Enter uses one on the focused harness".into()),
         PickerKind::Store => ("store".into(), "Find a harness in the Store".into()),
         PickerKind::Help => ("quick access".into(), "What this box can do".into()),
         _ => (String::new(), String::new()),
@@ -397,63 +407,36 @@ pub fn project_rows(app: &App) -> Vec<Row> {
         let counts = state_counts(app, app.fleet.agents.values().filter(|a| a.machine_id == machine && a.project_root == root));
         let right = format!("{}{}{} harness{}{}", if many { format!("{}  ", app.fleet.machine_name(&machine)) } else { String::new() }, if counts.is_empty() { String::new() } else { format!("{counts}  ") }, all, if all == 1 { "" } else { "es" }, if live > 0 { format!(" · {live} live") } else { String::new() });
         (recent, Row::new(format!("proj:{machine}\t{root}"), name).extra(format!("{short} {}", app.fleet.machine_name(&machine)))
-            .lead(vec![span(if live > 0 { "● " } else { "○ " }, fg(if live > 0 { theme::ONLINE } else { theme::MUTED }))])
+            .lead(vec![span(if live > 0 { "✓ " } else { "· " }, fg(if live > 0 { theme::ONLINE } else { theme::MUTED }))])
             .detail(vec![span(short, fg(theme::MUTED))]).right(right).boost(if live > 0 { 30 } else { 0 }))
     }).collect();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     rows.into_iter().map(|(_, r)| r).collect()
 }
 
-/// `:`: the focused harness's models, the one it runs marked.
+/// `:`, after the Models view's sections (models.rs): the focused harness's engine's own models
+/// and efforts (`agent_update selectedModel`), the one it runs marked — headed by the engine, so
+/// they read as its own section.
 pub fn model_rows(app: &App) -> Vec<Row> {
     let Some((machine, agent)) = app.focused().and_then(|f| app.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) else { return vec![] };
-    let current = app.fleet.agent(&machine, &agent).map(|a| a.model.clone()).unwrap_or_default();
+    let (current, engine) = app.fleet.agent(&machine, &agent).map(|a| (a.model.clone(), engine_label(&a.engine).to_string())).unwrap_or_default();
     let list = app.models.get(&(machine, agent)).cloned().unwrap_or_default();
     list.iter().filter_map(|m| {
         let id = m.get("id")?.as_str()?.to_string();
         let name = m.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
         let (family, effort) = name.split_once(" / ").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((name.clone(), String::new()));
         let on = id == current;
-        Some(Row::new(id, name.clone()).group(family).extra(effort)
-            .lead(vec![span(if on { "● " } else { "  " }, fg(theme::ONLINE))])
+        Some(Row::new(id, name.clone()).group(format!("{engine} · {family}")).extra(effort)
+            .lead(vec![span(if on { "✓ " } else { "  " }, fg(theme::ONLINE))])
             .right(if on { "current".to_string() } else { String::new() }))
     }).collect()
-}
-
-/// The machine a `:` list is about: the focused pane's, else this computer.
-pub fn models_machine(app: &App) -> String {
-    app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone())
-}
-
-/// `:`, part two: the machine's local models — start one that is downloaded, get one that is not.
-pub fn local_model_rows(app: &App) -> Vec<Row> {
-    let machine = models_machine(app);
-    let name = app.fleet.machine_name(&machine);
-    let Some(list) = app.local_models.get(&machine) else { return vec![] };
-    let gb = |b: f64| if b >= 1e9 { format!("{:.1} GB", b / 1e9) } else { format!("{:.0} MB", b / 1e6) };
-    let mut rows: Vec<(u8, Row)> = list.iter().filter_map(|m| {
-        let id = m.get("id")?.as_str()?;
-        let state = m.get("state").and_then(Value::as_str).unwrap_or("available");
-        let label = m.get("name").and_then(Value::as_str).unwrap_or(id).to_string();
-        let size = m.get("sizeBytes").and_then(Value::as_f64).map(gb).unwrap_or_default();
-        let (dot, color, rank) = match state { "running" | "serving" => ("●", theme::ONLINE, 0), "downloaded" => ("○", theme::SOFT, 1), s if s.contains("load") || s.contains("start") => ("◌", theme::WARN, 0), _ => ("·", theme::MUTED, 2) };
-        let action = match rank { 0 => "running · ^S stops", 1 => "enter starts", _ => "enter downloads" };
-        let recommended = m.get("recommended").and_then(Value::as_bool).unwrap_or(false);
-        Some((rank, Row::new(format!("grid:{machine}\t{id}"), label).group(format!("Local models · {name}"))
-            .extra(format!("{id} {} {state}", m.get("quant").and_then(Value::as_str).unwrap_or("")))
-            .lead(vec![span(format!("{dot} "), fg(color))])
-            .detail(vec![span(format!("{state}{}", if recommended { " · recommended" } else { "" }), fg(theme::MUTED))])
-            .right(format!("{size}  {action}"))))
-    }).collect();
-    rows.sort_by_key(|(rank, _)| *rank);
-    rows.into_iter().map(|(_, r)| r).collect()
 }
 
 /// `?`: what the box does, one prefix per line, then every key.
 pub fn mode_rows(app: &App) -> Vec<Row> {
     let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
     let modes = [(">", "commands", "every tmux command, by name", hint("command-prompt")), ("@", "machines", "a machine, then its harnesses", hint("choose-tree -m")),
-        ("#", "projects", "a project folder, then its harnesses", String::new()), (":", "models", "this harness's model; local models", hint("choose-tree -i")),
+        ("#", "projects", "a project folder, then its harnesses", String::new()), (":", "models", "local, shared, subscriptions, APIs", hint("choose-tree -i")),
         ("*", "store", "the Harness Store", hint("choose-tree -S"))];
     let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p} {t}")).detail(vec![span(*d, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(k.clone())).collect();
     let prefix = crate::keys::name(&app.keymap.prefix);
@@ -493,6 +476,50 @@ pub fn palette_rows(app: &App) -> Vec<Row> {
     }).collect()
 }
 
+/// C-b Enter: hn's own commands (by the names they have in the menus), then every tmux command —
+/// each with the key that runs it, where one does.
+pub fn command_rows(app: &App) -> Vec<Row> {
+    let own = COMMANDS.iter().map(|(id, title, _, hint, group)| {
+        let key = own_key(app, id).unwrap_or_default();
+        // (Ranked above a tmux command that matches as well: `appe` is Appearance, not a word in
+        // set-buffer's description.)
+        Row::new(format!("cmd:{id}"), *title).extra(format!("{id} {hint} {group}")).detail(vec![span(*hint, fg(theme::MUTED))]).right(key).group(*group).boost(40)
+    });
+    let tmux = crate::commands::COMMANDS.iter().map(|(name, alias, about)| {
+        let key = app.keymap.key_for_name(name).unwrap_or_default();
+        // (Found by its name and alias: its description is shown, not searched — a word in it
+        // would outrank what you meant, `appe` → set-buffer's "appends".)
+        Row::new(format!("tmux:{name}"), *name).extra(alias.to_string()).detail(vec![span(*about, fg(theme::MUTED))]).right(key).group("tmux commands")
+    });
+    own.chain(tmux).collect()
+}
+
+/// The command list as it shows: hn's own commands when it opens, tmux's too once you search —
+/// they are many, and there for the one you type.
+pub fn command_rows_for(app: &App, searching: bool) -> Vec<Row> {
+    command_rows(app).into_iter().filter(|r| searching || !r.id.starts_with("tmux:")).collect()
+}
+
+/// The key (prefix, then the key) that runs one of hn's own commands, as the prefix table has it
+/// now — so a rebinding shows. The command each menu entry is on a key as.
+fn own_key(app: &App, id: &str) -> Option<String> {
+    let runs = match id {
+        "open" => "choose-tree -Zs", "models" => "choose-tree -i", "new" => "new-harness", "terminal" => "new-terminal",
+        "inbox" => "choose-tree -a", "next-waiting" => "next-harness", "send" => "send-task", "broadcast" => "broadcast",
+        "clone" => "clone-harness", "restart" => "restart-harness", "pause" => "pause-harness", "tab" => "new-window",
+        "rename-tab" => "rename-window", "close-tab" => "kill-window", "next-tab" => "next-window", "prev-tab" => "previous-window",
+        "split-right" => "split-window -h", "split-down" => "split-window", "close-pane" => "kill-pane", "zoom" => "resize-pane -Z",
+        "equalize" => "select-layout -E", "find" => "find-window", "copy-mode" => "copy-mode", "machines" => "choose-tree -m",
+        "store" => "choose-tree -S", "help" => "list-keys -N", "theme" | "commands" => "choose-command",
+        _ => return None,
+    };
+    let table = &app.keymap.prefix_table;
+    let hit = table.iter().find(|b| b.command == runs)
+        .or_else(|| table.iter().find(|b| b.command.split(|c: char| c.is_whitespace() || c == '{' || c == '"').any(|w| w == runs)))
+        .or_else(|| table.iter().find(|b| b.command.contains(runs)))?;
+    Some(format!("{} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&hit.chord)))
+}
+
 /// Commands that mean nothing without words after them.
 pub const NEEDS_ARGS: &[&str] = &["select-window", "rename-window", "move-window", "select-pane", "resize-pane", "swap-pane", "select-layout", "send-keys", "command-prompt", "confirm-before", "display-message", "send-message", "rename-harness", "send-task", "broadcast"];
 
@@ -501,14 +528,16 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
         // Its harnesses by what they do: the fleet's counts, for this machine.
         let here: Vec<State> = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
         let n = |s: State| here.iter().filter(|x| **x == s).count();
-        let (dot, color, word) = match &m.reach {
-            _ if m.local && m.reach == Reach::Ready => ("●", theme::ONLINE, "this computer".to_string()),
-            Reach::Ready => ("●", theme::ONLINE, "connected".into()),
-            Reach::Connecting => ("◌", theme::WARN, "connecting…".into()),
-            Reach::NeedsLink => ("●", theme::ATTENTION, "not linked — M-l links it".into()),
-            Reach::Error(e) => ("●", theme::DANGER, e.chars().take(40).collect()),
-            _ if m.online() => ("○", theme::SOFT, "online".into()),
-            _ => ("○", theme::MUTED, "offline".into()),
+        // (The harnesses' marks, no round ones: `✓` connected, a spinner connecting, `?` to link…)
+        let (dot, color) = theme::machine_mark(&m.reach, m.online(), app.tick);
+        let word: String = match &m.reach {
+            _ if m.local && m.reach == Reach::Ready => "this computer".into(),
+            Reach::Ready => "connected".into(),
+            Reach::Connecting => "connecting…".into(),
+            Reach::NeedsLink => "not linked — M-l links it".into(),
+            Reach::Error(e) => e.chars().take(40).collect(),
+            _ if m.online() => "online".into(),
+            _ => "offline".into(),
         };
         let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
         let counts = [(State::NeedsInput, "waiting"), (State::Failed, "failed"), (State::Done, "done"), (State::Working, "working"), (State::Ready, "idle")]
@@ -525,13 +554,99 @@ pub fn layout_rows() -> Vec<Row> {
     Preset::ALL.iter().enumerate().map(|(i, (_, name, detail))| Row::new(i.to_string(), *name).detail(vec![span(*detail, fg(theme::MUTED))])).collect()
 }
 
+/// `hn theme`: every choice in the config file's `[look]` table, one per row, the current value
+/// marked. Picking a row applies it live and writes it back to `tui.toml` — so the file stays the
+/// single place the look is described.
+/// The look/theme picker, level one: the sections. Right/Enter opens one's options in the same
+/// list; the right pane previews the one the cursor is on.
+pub fn theme_sections(app: &App) -> Vec<Row> {
+    let o = &app.options;
+    let status = o.get("pane-border-status", "", None).unwrap_or_else(|| "top".into());
+    // (Named as its options are: the highlighted border, or the rest blurred.)
+    // (And, with either, the other panes dimmed or not.)
+    let focus = format!("{}{}", if o.focus_style() == "surface" { "blurred" } else { "border" }, if o.dim_others() { " · dim" } else { "" });
+    let focus = focus.as_str();
+    let theme = o.get("@hn-theme", "", None).unwrap_or_default();
+
+    let sec = |id: &str, title: &str, detail: &str, cur: &str| Row::new(id, title)
+        .detail(vec![span(detail, fg(theme::MUTED))])
+        .right(if cur.is_empty() { "—".into() } else { cur.to_string() });
+
+    vec![
+        // (The lines' glyphs and tmux's arrow indicators are tmux.conf's to set: with every pane its
+        // own box, coloured when focused, they say nothing more. Nor is the split direction here:
+        // C-b % and C-b " choose it each time, and a harness hn opens splits by the pane's shape —
+        // `layout_orientation` in tui.toml, or @hn-layout, where you want one way always. Nor a
+        // layout: C-b Space, C-b M-1…5 and Commands → Layout… lay the panes out now.)
+        sec("section:status", "Pane titles", "pane-border-status", &status),
+        sec("section:focus", "Focus", "focus_style", focus),
+        sec("section:theme", "Theme", "bundled terminal themes", if theme.is_empty() { "terminal" } else { &theme }),
+        // ── status bar ──
+        sec("section:bar", "Status bar", "status_bar", status_bar_of(app)),
+        sec("section:boxes", "Borders", "every pane its own box", if border_style_of(app) == "box" { "on" } else { "off" }),
+    ]
+}
+
+// ── status bar ──
+
+/// Where the status bar is: `@hn-status-bar`, or (none said) where tmux.conf's status-position put it.
+fn status_bar_of(app: &App) -> &'static str { match app.options.status_bar() { "bottom" if app.status_top => "top", b => b } }
+
+/// How panes are set apart: `box` unless `@hn-border line`.
+fn border_style_of(app: &App) -> &'static str { app.options.border_style() }
+
+/// The look/theme picker, level two: the options of one section. Enter on one applies it (and the
+/// ▼ moves to it); Left/Esc returns to the section list.
+pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
+    let o = &app.options;
+    let mark = |is: bool| if is { "✓ " } else { "  " };
+    let lead = |is: bool| vec![span(mark(is), fg(if is { theme::accent() } else { theme::MUTED }))];
+    let current = |key: &str, default: &str| o.get(key, "", None).unwrap_or_else(|| default.into());
+    let opt = |id: String, label: &str, picked: bool, hint: &str| {
+        Row::new(id, label).lead(lead(picked)).detail(vec![span(if picked { "current" } else { hint }, fg(theme::MUTED))])
+    };
+    match section {
+        "status" => { let cur = current("pane-border-status", "top");
+            ["off", "top", "bottom"].iter().map(|v| opt(format!("border_status:{v}"), *v, cur == *v, "pane-border-status")).collect() }
+        "indicators" => { let cur = current("pane-border-indicators", "colour");
+            ["off", "colour", "arrows", "both"].iter().map(|v| opt(format!("border_indicators:{v}"), *v, cur == *v, "pane-border-indicators")).collect() }
+        "border" => { let cur = current("pane-border-lines", "single");
+            ["single", "double", "heavy", "simple", "number"].iter().map(|v| opt(format!("border_lines:{v}"), *v, cur == *v, "pane-border-lines")).collect() }
+        "focus" => { let cur = o.focus_style().to_string();
+            let styles = ["line", "surface"].iter().map(|v| opt(format!("focus:{v}"), if *v == "line" { "border" } else { "blurred" }, cur == *v, "focus_style"));
+            // With either: the panes you are not in, a little quieter — a switch (Enter turns it
+            // over; the preview shows it turned).
+            let on = o.dim_others();
+            let dim = Row::new(if on { "dim:off" } else { "dim:on" }, "Dim other panes").lead(lead(on))
+                .detail(vec![span(if on { "on" } else { "the panes you are not in, a little quieter" }, fg(theme::MUTED))]);
+            styles.chain(std::iter::once(dim)).collect() }
+        "theme" => {
+            let cur = o.get("@hn-theme", "", None).unwrap_or_default();
+            // First, no theme: the terminal's own colours.
+            let native = Row::new("theme:", "Terminal default").extra("none default terminal").lead(lead(cur.is_empty()));
+            std::iter::once(native).chain(TERMINAL_THEMES.iter().map(|t| {
+                let picked = cur == t.name;
+                Row::new(format!("theme:{}", t.name), t.name).extra(t.name).lead(lead(picked))
+            })).collect()
+        }
+        // ── status bar ──
+        "bar" => { let cur = status_bar_of(app);
+            [("bottom", "tmux's status line, at the bottom"), ("top", "tmux's status line, at the top"), ("left", "a bar down the left: windows and their panes, machines"), ("right", "a bar down the right")]
+                .iter().map(|(v, hint)| opt(format!("status_bar:{v}"), v, cur == *v, hint)).collect() }
+        "boxes" => { let cur = border_style_of(app);
+            [("box", "on", "every pane its own box"), ("line", "off", "tmux's lines between panes")]
+                .iter().map(|(v, label, hint)| opt(format!("border_style:{v}"), label, cur == *v, hint)).collect() }
+        _ => vec![],
+    }
+}
+
 
 pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
     let prefer = app.fleet.launch_machine_id(prefer);
     let mut rows: Vec<Row> = app.fleet.visible_machines().filter(|m| m.usable()).map(|m| {
         let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
         Row::new(m.id.clone(), app.fleet.machine_name(&m.id))
-            .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::accent() } else { theme::ONLINE }))])
+            .lead(vec![span(if m.id == prefer { "✓ " } else { "  " }, fg(theme::accent()))])
             .detail(vec![span(format!("{}{running} running", if m.local { "this computer · " } else { "" }), fg(theme::MUTED))])
     }).collect();
     rows.sort_by_key(|r| r.id != prefer);
@@ -565,7 +680,7 @@ pub fn store_rows(catalog: &[Value]) -> Vec<Row> {
         let description = row.get("description").and_then(Value::as_str).unwrap_or("");
         let category = row.get("category").and_then(Value::as_str).unwrap_or(if installed { "Installed" } else { "Available" });
         Some(Row::new(id, name).extra(format!("{id} {description} {category}")).group(category.to_string())
-            .lead(vec![span(if installed { "● " } else { "○ " }, fg(if installed { theme::ONLINE } else { theme::MUTED }))])
+            .lead(vec![span(if installed { "✓ " } else { "  " }, fg(theme::ONLINE))])
             .detail(vec![span(description.to_string(), fg(theme::MUTED))]))
     }).collect()
 }
@@ -584,4 +699,114 @@ pub fn route_rows(reply: &Value) -> Vec<Row> {
     }).collect();
     rows.sort_by_key(|r| !r.id.ends_with(best) || best.is_empty());
     rows
+}
+
+#[cfg(test)]
+mod theme_row_tests {
+    use super::*;
+    use crate::app::App;
+    use crate::terminal_themes::TERMINAL_THEMES;
+
+    fn app() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        app.fleet.local_id = "local".into();
+        app.fleet.machines.push(crate::fleet::Machine {
+            id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
+        });
+        app.homes.insert("local".into(), "/home/dev".into());
+        app
+    }
+
+    #[test]
+    fn theme_sections_list_the_look_sections() {
+        let app = app();
+        let rows = theme_sections(&app);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["section:status", "section:focus", "section:theme",
+            // ── status bar ──
+            "section:bar", "section:boxes"]);
+        // Each section shows its current value and opens onto a non-empty option list.
+        assert!(rows.iter().all(|r| !r.right.is_empty()), "each section shows a value");
+        for r in &rows {
+            let sec = r.id.strip_prefix("section:").unwrap();
+            assert!(!theme_options(&app, sec).is_empty(), "{sec} has options");
+        }
+    }
+
+    #[test]
+    fn theme_options_list_every_bundled_theme() {
+        let app = app();
+        let rows = theme_options(&app, "theme");
+        // The terminal's own colours first, then every bundled theme.
+        assert_eq!(rows.len(), TERMINAL_THEMES.len() + 1, "every bundled theme listed");
+        assert_eq!(rows.first().map(|r| r.id.as_str()), Some("theme:"));
+        let first_id = format!("theme:{}", TERMINAL_THEMES[0].name);
+        assert_eq!(rows.get(1).map(|r| r.id.as_str()), Some(first_id.as_str()));
+        assert!(rows.iter().all(|r| !r.lead.is_empty()), "mark on every theme row");
+    }
+
+    #[test]
+    fn matching_theme_is_marked() {
+        let a0 = app();
+        let rows = theme_options(&a0, "theme");
+        let idx = rows.iter().position(|r| r.id == "theme:Adwaita").unwrap();
+        assert!(!rows[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+        let mut a1 = app();
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let _ = a1.options.set("@hn-theme", Some("Adwaita"), &global, "", 0);
+        let rows = theme_options(&a1, "theme");
+        let idx = rows.iter().position(|r| r.id == "theme:Adwaita").unwrap();
+        assert!(rows[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+    }
+
+    #[test]
+    fn an_option_section_lists_its_choices() {
+        let app = app();
+        let status_opts = theme_options(&app, "status");
+        let status_ids: Vec<&str> = status_opts.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(status_ids, vec!["border_status:off", "border_status:top", "border_status:bottom"]);
+        // (No split direction section: C-b % and C-b " choose it.)
+        assert!(theme_options(&app, "split").is_empty());
+    }
+
+    // ── status bar ──
+
+    #[test]
+    fn the_status_bar_and_border_style_sections_mark_what_is_in_use() {
+        let _colours = crate::term_out::colours_lock();
+        let mut app = app();
+        let ids = |rows: Vec<Row>| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+        let picked = |rows: Vec<Row>| rows.iter().find(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")).map(|r| r.id.clone());
+        assert_eq!(ids(theme_options(&app, "bar")), ["status_bar:bottom", "status_bar:top", "status_bar:left", "status_bar:right"]);
+        assert_eq!(ids(theme_options(&app, "boxes")), ["border_style:box", "border_style:line"]);
+        // The tabs over the panes are gone: no section, and an old knob sets nothing.
+        assert!(theme_options(&app, "tabs").is_empty());
+        assert!(app.set_look("tabs", "off").starts_with("unknown"));
+        // The defaults: the status line at the bottom, boxes.
+        assert_eq!(picked(theme_options(&app, "bar")).as_deref(), Some("status_bar:bottom"));
+        assert_eq!(picked(theme_options(&app, "boxes")).as_deref(), Some("border_style:box"));
+        // tmux.conf's status-position top is where the bar is, until the section says otherwise.
+        app.status_top = true;
+        assert_eq!(picked(theme_options(&app, "bar")).as_deref(), Some("status_bar:top"));
+        let _ = app.set_look("status_bar", "left");
+        let _ = app.set_look("border_style", "line");
+        assert_eq!(picked(theme_options(&app, "bar")).as_deref(), Some("status_bar:left"));
+        assert_eq!(picked(theme_options(&app, "boxes")).as_deref(), Some("border_style:line"));
+        // Dim other panes, in Focus under border and blurred: off until chosen, a switch its row
+        // turns over.
+        let focus = ids(theme_options(&app, "focus"));
+        assert_eq!(focus, ["focus:line", "focus:surface", "dim:on"]);
+        let _ = app.set_look("dim", "on");
+        assert!(app.options.dim_others());
+        assert_eq!(ids(theme_options(&app, "focus"))[2], "dim:off");
+        assert!(theme_sections(&app).iter().any(|r| r.id == "section:focus" && r.right == "border · dim"));
+        let rows = theme_sections(&app);
+        let right = |id: &str| rows.iter().find(|r| r.id == id).map(|r| r.right.clone()).unwrap_or_default();
+        assert_eq!((right("section:bar"), right("section:boxes")), ("left".into(), "off".into()));
+        // Back to the bottom: tmux's status line, placed there.
+        let _ = app.set_look("status_bar", "bottom");
+        assert!(!app.status_top);
+        assert_eq!(app.options.get("status-position", "", None).as_deref(), Some("bottom"));
+    }
 }
