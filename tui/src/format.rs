@@ -460,12 +460,12 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         v
     } else if f.windows && es.session.is_some() {
         // format_loop_windows in a session not in front (a #{S:} loop's): its own windows.
-        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let (all, active) = match choose(copy) { Some((a, b)) => (a, Some(b)), None => (copy, None) };
         let sid = es.session.unwrap_or_default();
         let current = es.app.stash_value(sid, "window_index");
         let mut v = String::new();
         for (k, (num, _, _)) in es.app.session_windows(sid).into_iter().enumerate() {
-            let use_ = if Some(num.to_string()) == current { active.as_deref().unwrap_or(&all) } else { &all };
+            let use_ = if Some(num.to_string()) == current { active.unwrap_or(all) } else { all };
             let mut next = es.at(es.window, None);
             next.window_of = Some(k);
             next.format_type = Some(crate::tree::FORMAT_WINDOW);
@@ -473,10 +473,10 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         }
         v
     } else if f.windows {
-        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let (all, active) = match choose(copy) { Some((a, b)) => (a, Some(b)), None => (copy, None) };
         let mut v = String::new();
         for w in 0..es.app.tabs.len() {
-            let use_ = if w == es.app.active { active.as_deref().unwrap_or(&all) } else { &all };
+            let use_ = if w == es.app.active { active.unwrap_or(all) } else { all };
             let mut next = es.at(w, None);
             next.format_type = Some(crate::tree::FORMAT_WINDOW);
             v.push_str(&expand1(&mut next, use_));
@@ -484,23 +484,23 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         v
     } else if f.panes && es.session.and_then(|id| es.app.stash_panes(id, es.window_of)).is_some() {
         // format_loop_panes in a session not in front (a #{S:} loop's): its window's own panes.
-        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let (all, active) = match choose(copy) { Some((a, b)) => (a, Some(b)), None => (copy, None) };
         let (panes, focus, _) = es.session.and_then(|id| es.app.stash_panes(id, es.window_of)).unwrap_or_default();
         let mut v = String::new();
         for p in panes {
-            let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
+            let use_ = if Some(p) == focus { active.unwrap_or(all) } else { all };
             let mut next = es.at(es.window, Some(p));
             next.format_type = Some(crate::tree::FORMAT_PANE);
             v.push_str(&expand1(&mut next, use_));
         }
         v
     } else if f.panes {
-        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let (all, active) = match choose(copy) { Some((a, b)) => (a, Some(b)), None => (copy, None) };
         let tab = es.app.tabs.get(es.window);
         let focus = tab.and_then(|t| t.focus);
         let mut v = String::new();
         for p in tab.map(|t| t.panes()).unwrap_or_default() {
-            let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
+            let use_ = if Some(p) == focus { active.unwrap_or(all) } else { all };
             let mut next = es.at(es.window, Some(p));
             next.format_type = Some(crate::tree::FORMAT_PANE);
             v.push_str(&expand1(&mut next, use_));
@@ -516,7 +516,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         let term = expand1(es, copy);
         search_pane(es, fm, &term)
     } else if let Some(fm) = cmp {
-        let (left, right) = choose(es, copy, true)?;
+        let (left, right) = choose_expanded(es, copy)?;
         let t = |b: bool| if b { "1".to_string() } else { "0".to_string() };
         match fm.m.as_str() {
             "||" => t(truthy(&left) || truthy(&right)),
@@ -537,8 +537,8 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
             // Not a name: expanded; if that changes nothing, false.
             None => { let v = expand1(es, condition); if v == condition { String::new() } else { v } }
         };
-        let (left, right) = choose(es, &rest[k + 1..], false)?;
-        if truthy(&found) { expand1(es, &left) } else { expand1(es, &right) }
+        let (left, right) = choose(&rest[k + 1..])?;
+        if truthy(&found) { expand1(es, left) } else { expand1(es, right) }
     } else if let Some(fm) = mexp {
         expression(es, fm, copy).unwrap_or_default()
     } else if copy.contains("#{") {
@@ -569,11 +569,16 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
     Some(value)
 }
 
-/// `a,b`: the two sides at the first comma outside `#{…}`, expanded when asked (format_choose).
-fn choose(es: &mut Es, s: &str, expand: bool) -> Option<(String, String)> {
+/// `a,b`: borrow the two templates at the first comma outside `#{…}`. Conditions
+/// and loops expand only the selected template, without copying either side.
+fn choose(s: &str) -> Option<(&str, &str)> {
     let k = skip(s.as_bytes(), b",")?;
-    let (l, r) = (&s[..k], &s[k + 1..]);
-    Some(if expand { (expand1(es, l), expand1(es, r)) } else { (l.to_string(), r.to_string()) })
+    Some((&s[..k], &s[k + 1..]))
+}
+
+fn choose_expanded(es: &mut Es, s: &str) -> Option<(String, String)> {
+    let (l, r) = choose(s)?;
+    Some((expand1(es, l), expand1(es, r)))
 }
 
 fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
@@ -741,7 +746,7 @@ fn expression(es: &mut Es, fm: &Mod, copy: &str) -> Option<String> {
     let fp = fm.argv.get(1).map(|a| a.contains('f')).unwrap_or(false);
     let mut prec: usize = if fp { 2 } else { 0 };
     if let Some(p) = fm.argv.get(2) { prec = p.trim().parse().ok()? }
-    let (l, r) = choose(es, copy, true)?;
+    let (l, r) = choose_expanded(es, copy)?;
     let num = |s: &str| -> Option<f64> { if s.is_empty() { Some(0.0) } else { s.trim_start().parse::<f64>().ok() } };
     let (mut a, mut b) = (num(&l)?, num(&r)?);
     if !fp { a = (a as i64) as f64; b = (b as i64) as f64 }
@@ -754,10 +759,41 @@ fn expression(es: &mut Es, fm: &Mod, copy: &str) -> Option<String> {
     Some(if fp { format!("{v:.prec$}") } else { format!("{:.prec$}", (v as i64) as f64) })
 }
 
+type Substitutions = std::collections::VecDeque<(String, bool, Option<Rc<regex::Regex>>)>;
+thread_local! {
+    static SUBSTITUTIONS: RefCell<Substitutions> = RefCell::new(Default::default());
+}
+
+/// Status formats reuse their patterns on every frame. Keep a small LRU of
+/// compiled expressions, never their match results. Larger expressions retain
+/// the original compiler limits and run uncached rather than growing the cache.
+fn substitution_regex(pattern: &str, icase: bool) -> Option<Rc<regex::Regex>> {
+    let uncached = || regex::RegexBuilder::new(pattern).case_insensitive(icase).build().ok().map(Rc::new);
+    if pattern.len() > 2048 { return uncached() }
+    SUBSTITUTIONS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(at) = cache.iter().position(|(p, i, _)| p == pattern && *i == icase) {
+            let entry = cache.remove(at).unwrap();
+            let re = entry.2.clone();
+            cache.push_front(entry);
+            return re;
+        }
+        let re = match regex::RegexBuilder::new(pattern).case_insensitive(icase)
+            .size_limit(32 * 1024).dfa_size_limit(32 * 1024).build() {
+            Ok(re) => Some(Rc::new(re)),
+            Err(regex::Error::CompiledTooBig(_)) => return uncached(),
+            Err(_) => None,
+        };
+        if cache.len() == 8 { cache.pop_back(); }
+        cache.push_front((pattern.to_string(), icase, re.clone()));
+        re
+    })
+}
+
 /// tmux's regsub: every match replaced; `\0`–`\9` in the replacement are the groups.
 fn regsub(pattern: &str, with: &str, text: &str, icase: bool) -> Option<String> {
     if text.is_empty() { return Some(String::new()) }
-    let re = regex::RegexBuilder::new(pattern).case_insensitive(icase).build().ok()?;
+    let re = substitution_regex(pattern, icase)?;
     let (mut start, mut last, end) = (0usize, 0usize, text.len());
     let mut empty = false;
     let mut buf = String::new();
@@ -1778,6 +1814,48 @@ mod tests {
             "Project 0=label-0/1/Project 0=label-0/0/1/%0;Project 1=label-1/1/Project 1=label-1/0/1/%1;");
         app.active = 1;
         assert_eq!(super::expand(&app, "#{window_name}/#{window_active}/#{pane_id}", 1, Some(2), false), "Project 1/1/%1");
+    }
+
+    #[test]
+    fn loop_alternatives_keep_nested_commas_and_only_expand_the_selected_branch() {
+        let mut app = status_fixture(2, 2);
+        app.options.global_session.insert("@selected".into(), "live,✓".into());
+        let fmt = "#{W:#{window_name},#{?window_active,#{@selected},#(printf unexpected)}}";
+        assert_eq!(super::expand(&app, fmt, 0, None, false), "live,✓Project 1");
+        app.active = 1;
+        app.options.global_session.insert("@selected".into(), "changed,✓".into());
+        assert_eq!(super::expand(&app, fmt, 0, None, false), "Project 0changed,✓");
+        assert!(app.jobs.borrow().is_empty(), "the untaken branch must not run its shell command");
+    }
+
+    #[test]
+    fn compiled_substitutions_keep_fresh_text_replacements_and_case_flags() {
+        assert_eq!(super::regsub("(foo)", "[\\1]", "foo FOO", false).as_deref(), Some("[foo] FOO"));
+        assert_eq!(super::regsub("(foo)", "new", "FOO foo", false).as_deref(), Some("FOO new"));
+        assert_eq!(super::regsub("(foo)", "new", "FOO foo", true).as_deref(), Some("new new"));
+        assert_eq!(super::regsub("^foo", "✓", "foo foo", false).as_deref(), Some("✓ foo"));
+        assert_eq!(super::regsub("(", "x", "text", false), None);
+        assert_eq!(super::regsub("(", "x", "", false).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn substitution_cache_stays_bounded_without_rejecting_larger_expressions() {
+        super::SUBSTITUTIONS.with(|cache| cache.borrow_mut().clear());
+        for n in 0..32 {
+            let pattern = format!("a{n}");
+            assert_eq!(super::regsub(&pattern, "hit", &pattern, false).as_deref(), Some("hit"));
+        }
+        assert_eq!(super::regsub("a0", "again", "a0", false).as_deref(), Some("again"));
+        super::SUBSTITUTIONS.with(|cache| assert!(cache.borrow().len() <= 8));
+        // Unicode word classes exceed the cache's small compiled-size budget.
+        assert_eq!(super::regsub(r"\w+", "word", "café 東京", false).as_deref(), Some("word word"));
+        let long = "a".repeat(2049);
+        assert_eq!(super::regsub(&long, "long", &long, false).as_deref(), Some("long"));
+        super::SUBSTITUTIONS.with(|cache| {
+            let cache = cache.borrow();
+            assert!(cache.len() <= 8);
+            assert!(!cache.iter().any(|(pattern, _, _)| pattern == r"\w+" || pattern == &long));
+        });
     }
 
     #[test]
