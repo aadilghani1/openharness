@@ -6,7 +6,7 @@ This document owns entry, drafts, and launch behavior; the
 composer and picker interactions. Earlier terminal-cell form styling is retired.
 
 Startup and New Tab embed the same `NewHarnessForm` and controller used by
-Cmd-N, at the same 680-point maximum width. The page has recent sessions below
+Cmd-N, at the same 680-point maximum width. The page has Recent harnesses below
 the composer, without a modal frame or Close button. Opening the page or dialog
 never starts a harness; New Harness submits the reviewed draft.
 

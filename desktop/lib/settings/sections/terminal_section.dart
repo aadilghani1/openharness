@@ -102,6 +102,7 @@ class _SchemeField extends StatelessWidget {
     grid.AppTheme.watch(context);
     return AppSelectField<TerminalThemeChoice>(
       key: const Key('terminal-colour-scheme-dropdown'),
+      semanticLabel: 'Terminal colors',
       width: SettingRow.controlWidth,
       value: scheme,
       options: [
@@ -133,6 +134,7 @@ class _FamilyField extends StatelessWidget {
     grid.AppTheme.watch(context);
     return AppSelectField<TerminalFontChoice>(
       key: const Key('terminal-font-family-dropdown'),
+      semanticLabel: 'Terminal font',
       width: SettingRow.controlWidth,
       value: family,
       // The faces this OS actually has, plus whatever is selected. The second

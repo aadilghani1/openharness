@@ -106,6 +106,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   bool _focusScheduled = false;
   final _fieldsScroll = ScrollController();
   final _choicesScroll = ScrollController();
+  final _desktopNoticesScroll = ScrollController();
   _Row _row = _Row.start;
   final _itemKeys = {for (final row in _Row.values) row: GlobalKey()};
   final _choiceKey = GlobalKey();
@@ -169,6 +170,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     _fieldsScroll.dispose();
     _choicesScroll.dispose();
+    _desktopNoticesScroll.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -1629,16 +1631,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                       const SizedBox(height: 14),
                                       Semantics(
                                         liveRegion: true,
-                                        child: Text(
+                                        child: _desktopRequiredChoice(
+                                          required.field,
                                           required.message,
-                                          style: DesktopChrome.text(
-                                            size: 13,
-                                            color:
-                                                box.needsProject &&
-                                                    box.error == null
-                                                ? DesktopChrome.muted
-                                                : _theme.red,
-                                          ),
                                         ),
                                       ),
                                     ],
@@ -1715,6 +1710,37 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       },
     ),
   );
+
+  Widget _desktopRequiredChoice(NewHarnessField field, String message) {
+    final color = box.needsProject && box.error == null
+        ? DesktopChrome.muted
+        : Theme.of(context).colorScheme.error;
+    final text = Text(
+      field == NewHarnessField.machine
+          ? 'This machine is unavailable.'
+          : message,
+      style: DesktopChrome.text(size: 13, color: color),
+      textAlign: TextAlign.start,
+    );
+    if (field != NewHarnessField.machine) return text;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        text,
+        const SizedBox(height: 8),
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(11),
+          child: TextButton.icon(
+            key: const ValueKey('new-harness-recover-machine'),
+            onPressed: box.locked ? null : _openMachineChooser,
+            icon: const Icon(AppIcons.chevronRight, size: 16),
+            iconAlignment: IconAlignment.end,
+            label: const Text('Choose a machine'),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _desktopHeader() {
     final folder = box.project.folder;
@@ -1835,7 +1861,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 onTapOutside: (_) {},
                 decoration: InputDecoration(
                   hintText: box.takesTask
-                      ? 'What’s next?'
+                      ? 'Harness anything'
                       : 'Open a terminal in this repo',
                   hintStyle: DesktopChrome.text(
                     size: 15,
@@ -2087,12 +2113,23 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     final maximum = (constraints.maxHeight - 24).clamp(0.0, 420.0);
     // Include the search controls, its vertical padding, list padding, and rim.
     // Refresh is taller than one text line, even when only two rows remain.
-    var contentHeight = _desktopSearchHeight + 20 + 12 + 2;
-    if (box.options.isEmpty) contentHeight += 48;
+    var contentHeight = _desktopSearchHeight + 20 + 2;
+    if (!_desktopRepositoryEntry) contentHeight += 12;
+    if (box.options.isEmpty && !_desktopRepositoryEntry) contentHeight += 48;
     for (var i = 0; i < box.options.length && contentHeight < maximum; i++) {
       contentHeight += _desktopChoiceHeight(i);
     }
-    if (box.choicesStatus != null ||
+    if (_desktopRepositoryEntry) {
+      if (box.error ?? box.status case final message?) {
+        final painter = TextPainter(
+          text: TextSpan(text: message, style: _ink()),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout(maxWidth: (width - 26).clamp(1, double.infinity));
+        contentHeight += painter.height.ceilToDouble() + 16;
+        painter.dispose();
+      }
+    } else if (box.choicesStatus != null ||
         box.modelNotice != null && _row == _Row.model ||
         box.error != null ||
         box.status != null) {
@@ -2113,7 +2150,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         (constraints.maxWidth - width - 12).clamp(12.0, double.infinity),
       );
       final below = origin.dy + target.size.height + 8;
-      if (below + height <= constraints.maxHeight - 12) {
+      if (below >= 12 && below + height <= constraints.maxHeight - 12) {
         top = below;
       } else if (origin.dy - height - 8 >= 12) {
         top = origin.dy - height - 8;
@@ -2137,6 +2174,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _ => 'Choose an option',
   };
 
+  bool get _desktopRepositoryEntry =>
+      box.field == NewHarnessField.projectRepository &&
+      box.options.isEmpty &&
+      !box.refreshingChoices;
+
   Widget _desktopChooser() => Semantics(
     key: const ValueKey('new-harness-choices'),
     container: true,
@@ -2152,7 +2194,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
-                  color: _inputFocus.hasFocus
+                  color:
+                      _desktopRepositoryEntry &&
+                          box.error == null &&
+                          box.status == null
+                      ? Colors.transparent
+                      : _inputFocus.hasFocus
                       ? DesktopChrome.foreground.withValues(alpha: .24)
                       : DesktopChrome.rim,
                 ),
@@ -2167,95 +2214,135 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             ),
           ),
         ),
+        Expanded(child: _desktopChooserContent()),
+      ],
+    ),
+  );
+
+  Widget _desktopChooserContent() => LayoutBuilder(
+    builder: (context, constraints) {
+      final notices = <Widget>[
         if (box.choicesStatus case final status?)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                status,
-                style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
-              ),
-            ),
+          Semantics(
+            liveRegion: true,
+            child: Text(status, style: DesktopChrome.metadata()),
           ),
-        if (_row == _Row.model && box.modelNotice != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Text(
-              box.modelNotice!,
-              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
-            ),
+        if (_row == _Row.model)
+          if (box.modelNotice case final notice?)
+            Text(notice, style: DesktopChrome.metadata()),
+        if (box.error != null || box.status != null) _status(),
+      ];
+      final feedback = Scrollbar(
+        controller: _desktopNoticesScroll,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          key: const ValueKey('new-harness-chooser-notices'),
+          controller: _desktopNoticesScroll,
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < notices.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                notices[i],
+              ],
+            ],
           ),
-        Expanded(
-          child: box.options.isEmpty && !box.refreshingChoices
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      switch (box.field) {
-                        NewHarnessField.projectName =>
-                          'Create a folder in ~/harnesses.',
-                        NewHarnessField.projectRepository =>
-                          'github.com/owner/repo or owner/repo',
-                        _ => 'No matches',
-                      },
-                      style: DesktopChrome.text(
-                        size: 13,
-                        color: DesktopChrome.muted,
+        ),
+      );
+      if (_desktopRepositoryEntry) {
+        return notices.isEmpty ? const SizedBox.shrink() : feedback;
+      }
+      final choiceHeight = box.options.isEmpty
+          ? 0.0
+          : _desktopChoiceHeight(box.cursor.clamp(0, box.options.length - 1)) +
+                12;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: box.options.isEmpty && !box.refreshingChoices
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        switch (box.field) {
+                          NewHarnessField.projectName =>
+                            'Create a folder in ~/harnesses.',
+                          _ => 'No matches',
+                        },
+                        style: DesktopChrome.text(
+                          size: 13,
+                          color: DesktopChrome.muted,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
-                      textAlign: TextAlign.center,
                     ),
-                  ),
-                )
-              : Scrollbar(
-                  controller: _choicesScroll,
-                  child: ListView.builder(
+                  )
+                : Scrollbar(
                     controller: _choicesScroll,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 6,
-                    ),
-                    itemCount: box.options.length,
-                    itemExtentBuilder: (i, _) => _desktopChoiceHeight(i),
-                    itemBuilder: (context, i) => Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (_headingBefore(i))
-                          SizedBox(
-                            height: _desktopGroupHeight,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                              ),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  box.options[i].group!,
-                                  style: DesktopChrome.text(
-                                    size: 11,
-                                    color: DesktopChrome.muted,
+                    child: ListView.builder(
+                      controller: _choicesScroll,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 6,
+                      ),
+                      itemCount: box.options.length,
+                      itemExtentBuilder: (i, _) => _desktopChoiceHeight(i),
+                      itemBuilder: (context, i) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_headingBefore(i))
+                            SizedBox(
+                              height: _desktopGroupHeight,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    box.options[i].group!,
+                                    style: DesktopChrome.text(
+                                      size: 11,
+                                      color: DesktopChrome.muted,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ),
-                          ),
-                        if (_desktopRecentDivider(i))
-                          Divider(height: 13, color: DesktopChrome.rim),
-                        Expanded(child: _desktopOption(box.options[i])),
-                      ],
+                          if (_desktopRecentDivider(i))
+                            Divider(height: 13, color: DesktopChrome.rim),
+                          Expanded(child: _desktopOption(box.options[i])),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-        ),
-        if (box.error != null || box.status != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: _status(),
           ),
-      ],
-    ),
+          if (notices.isNotEmpty)
+            ConstrainedBox(
+              // Search stays pinned. Keep the current choice fully visible
+              // when space permits, and every notice readable by scrolling.
+              constraints: BoxConstraints(
+                maxHeight: (constraints.maxHeight - choiceHeight)
+                    .clamp(
+                      constraints.maxHeight * .25,
+                      constraints.maxHeight * .45,
+                    )
+                    .clamp(0.0, _desktopLineHeight('Notice', 14) * 3 + 16),
+              ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: DesktopChrome.rim)),
+                ),
+                child: feedback,
+              ),
+            ),
+        ],
+      );
+    },
   );
 
   double _desktopLineHeight(String text, double size) {
@@ -2899,7 +2986,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: Text(
       box.error ?? box.status!,
       key: const ValueKey('new-harness-status'),
-      style: _ink(box.error != null ? _theme.red : _faint),
+      style: _ink(
+        box.error != null
+            ? widget.desktop
+                  ? Theme.of(context).colorScheme.error
+                  : _theme.red
+            : _faint,
+      ),
     ),
   );
 

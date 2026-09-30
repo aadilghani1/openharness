@@ -246,76 +246,85 @@ class _PaneMenuFocusState extends State<_PaneMenuFocus> {
 }
 
 /// One inset action in the compact menu. Its child owns the row's content.
-Widget paneMenuItem({required VoidCallback onTap, required Widget child}) =>
-    Padding(
-      padding: const EdgeInsets.symmetric(horizontal: kPaneMenuInset),
-      child: PaneMenuAction(onPressed: onTap, child: child),
-    );
+Widget paneMenuItem({
+  required VoidCallback onTap,
+  Widget? child,
+  Widget Function(BuildContext context, bool active)? builder,
+}) => Padding(
+  padding: const EdgeInsets.symmetric(horizontal: kPaneMenuInset),
+  child: PaneMenuAction(onPressed: onTap, builder: builder, child: child),
+);
 
-/// The model and wake rows share one button and one focus target. A saved
-/// selection keeps its fill while keyboard focus draws a separate accent rim.
-class PaneMenuAction extends StatelessWidget {
+/// A blue active row is separate from the stored choice. Content builders use
+/// the active ink; chosen models carry a checkmark without a competing rim.
+class PaneMenuAction extends StatefulWidget {
   const PaneMenuAction({
     super.key,
     required this.onPressed,
-    required this.child,
+    this.child,
+    this.builder,
     this.selected,
-  });
+  }) : assert((child == null) != (builder == null));
 
   final VoidCallback onPressed;
-  final Widget child;
+  final Widget? child;
+  final Widget Function(BuildContext context, bool active)? builder;
   final bool? selected;
+
+  @override
+  State<PaneMenuAction> createState() => _PaneMenuActionState();
+}
+
+class _PaneMenuActionState extends State<PaneMenuAction> {
+  final _states = WidgetStatesController();
+
+  @override
+  void dispose() {
+    _states.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final highContrast = MediaQuery.highContrastOf(context);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: TextButton(
-        onPressed: onPressed,
-        style:
-            TextButton.styleFrom(
-              foregroundColor: DesktopChrome.foreground,
-              backgroundColor: selected == true
-                  ? AppColors.selected
-                  : Colors.transparent,
-              minimumSize: const Size(0, DesktopChrome.controlHeight),
-              padding: EdgeInsets.zero,
-              alignment: Alignment.centerLeft,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(
-                  DesktopChrome.controlRadius,
-                ),
-              ),
-              textStyle: DesktopChrome.control(),
-              enabledMouseCursor: SystemMouseCursors.click,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              splashFactory: NoSplash.splashFactory,
-            ).copyWith(
-              side: WidgetStateProperty.resolveWith(
-                (states) => BorderSide(
-                  // Focus never changes row size or moves its metadata columns.
-                  width: 1.5,
-                  color: states.contains(WidgetState.focused)
-                      ? DesktopChrome.accent
-                      : selected == true
-                      ? highContrast
-                            ? DesktopChrome.foreground.withValues(alpha: .6)
-                            : DesktopChrome.accent.withValues(alpha: .45)
-                      : Colors.transparent,
-                ),
-              ),
-              overlayColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.pressed)
-                    ? DesktopChrome.foreground.withValues(alpha: .12)
-                    : states.contains(WidgetState.hovered)
-                    ? AppColors.rowHover
-                    : Colors.transparent,
-              ),
+    return ValueListenableBuilder(
+      valueListenable: _states,
+      builder: (context, states, _) {
+        final active =
+            states.contains(WidgetState.focused) ||
+            states.contains(WidgetState.hovered) ||
+            states.contains(WidgetState.pressed);
+        return TextButton(
+          statesController: _states,
+          onPressed: widget.onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: active
+                ? grid.AppDesktop.onSelection
+                : DesktopChrome.foreground,
+            backgroundColor: active
+                ? grid.AppDesktop.selection
+                : widget.selected == true
+                ? grid.AppSurface.accentWash
+                : Colors.transparent,
+            minimumSize: const Size(0, DesktopChrome.controlHeight),
+            padding: EdgeInsets.zero,
+            alignment: Alignment.centerLeft,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
             ),
-        child: Semantics(selected: selected, child: child),
-      ),
+            side: const BorderSide(color: Colors.transparent, width: 1.5),
+            textStyle: DesktopChrome.control(),
+            enabledMouseCursor: SystemMouseCursors.click,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            splashFactory: NoSplash.splashFactory,
+            overlayColor: Colors.transparent,
+          ),
+          child: Semantics(
+            selected: widget.selected,
+            child: widget.builder?.call(context, active) ?? widget.child!,
+          ),
+        );
+      },
     );
   }
 }

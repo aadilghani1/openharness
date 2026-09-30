@@ -77,33 +77,6 @@ final agentDrag = ValueNotifier<AgentDragRef?>(null);
 /// a pane drag offers the other tiles to trade places with.
 final paneDragging = ValueNotifier<PaneDragRef?>(null);
 
-/// Hover the whole header to reveal its close action without moving its title.
-class PaneHeaderHoverRegion extends StatefulWidget {
-  const PaneHeaderHoverRegion({super.key, required this.child});
-  final Widget child;
-
-  @override
-  State<PaneHeaderHoverRegion> createState() => _PaneHeaderHoverRegionState();
-}
-
-class _PaneHeaderHoverRegionState extends State<PaneHeaderHoverRegion> {
-  bool _hovered = false;
-  @override
-  Widget build(BuildContext context) => MouseRegion(
-    onEnter: (_) => setState(() => _hovered = true),
-    onExit: (_) => setState(() => _hovered = false),
-    child: _PaneHeaderHover(hovered: _hovered, child: widget.child),
-  );
-}
-
-class _PaneHeaderHover extends InheritedWidget {
-  const _PaneHeaderHover({required this.hovered, required super.child});
-  final bool hovered;
-  @override
-  bool updateShouldNotify(_PaneHeaderHover oldWidget) =>
-      hovered != oldWidget.hovered;
-}
-
 class PaneCloseButton extends StatelessWidget {
   const PaneCloseButton({super.key, required this.onPressed});
 
@@ -117,32 +90,22 @@ class PaneCloseButton extends StatelessWidget {
       terminalThemeStore.value,
     );
     final hint = KeymapTheme.of(context)?.hint('pane.close');
-    return Visibility(
-      visible:
-          context
-              .dependOnInheritedWidgetOfExactType<_PaneHeaderHover>()
-              ?.hovered ??
-          true,
-      maintainState: true,
-      maintainAnimation: true,
-      maintainSize: true,
-      child: WorkspaceBarControl(
-        label: 'Close Pane',
-        tooltip: [
-          'Close Pane',
-          if (hint != null && hint.isNotEmpty) hint,
-        ].join(' · '),
-        foreground: theme.foreground,
-        onPressed: onPressed,
-        builder: (context, emphasized) => SizedBox(
-          width: workspaceBarCellSizeOf(context).width * 3,
-          height: workspaceBarControlHeight(context),
-          child: Center(
-            child: Icon(
-              AppIcons.close,
-              size: AppIcons.inlineSize,
-              color: theme.foreground.withValues(alpha: emphasized ? 1 : .7),
-            ),
+    return WorkspaceBarControl(
+      label: 'Close Pane',
+      tooltip: [
+        'Close Pane',
+        if (hint != null && hint.isNotEmpty) hint,
+      ].join(' · '),
+      foreground: theme.foreground,
+      onPressed: onPressed,
+      builder: (context, emphasized) => SizedBox(
+        width: workspaceBarCellSizeOf(context).width * 3,
+        height: workspaceBarControlHeight(context),
+        child: Center(
+          child: Icon(
+            AppIcons.close,
+            size: AppIcons.inlineSize,
+            color: theme.foreground.withValues(alpha: emphasized ? 1 : .7),
           ),
         ),
       ),

@@ -9,7 +9,7 @@ redesign follows [desktop-design-system.md](desktop-design-system.md).
 ## Historical minimal composer iteration (after a26237c9)
 
 The form is 860 points wide, with Agent, Machine, and Repo across the top and
-the existing agent brand marks. The optional message editor says “What’s next?”
+the existing agent brand marks. The optional message editor says “Harness anything”
 and keeps New harness inside its lower-right corner. The initial focus still
 supports Cmd-N followed by Return. Model, Approvals, and Codex Profile are small,
 text-only controls below. Worktree on/off and Branch stay together on the right,

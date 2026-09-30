@@ -892,7 +892,7 @@ ThemeData buildAppTheme({
           surfaceContainerHighest: AppTheme.palette.value.card,
           outline: const Color(0x14FFFFFF),
           outlineVariant: const Color(0x14FFFFFF),
-          error: const Color(0xFFF2544B),
+          error: const Color(0xFFFF7068),
         )
       : const ColorScheme.light(
           primary: AppPalette.accent,
@@ -1313,10 +1313,16 @@ abstract final class AppControl {
   /// A compact glyph for an inline chip.
   static const double iconSizeChip = 13;
 
-  /// Horizontal breathing room. Apple pads a push button generously sideways and
-  /// barely at all vertically — the height is what sets the touch target.
-  static const EdgeInsets padding = EdgeInsets.symmetric(horizontal: 14);
-  static const EdgeInsets paddingSmall = EdgeInsets.symmetric(horizontal: 10);
+  /// The minimum height keeps normal-size controls compact. Vertical padding
+  /// lets enlarged system text grow the capsule without touching its rim.
+  static const EdgeInsets padding = EdgeInsets.symmetric(
+    horizontal: 14,
+    vertical: 6,
+  );
+  static const EdgeInsets paddingSmall = EdgeInsets.symmetric(
+    horizontal: 10,
+    vertical: 6,
+  );
 
   /// A button that leads with a glyph, at the compact scale.
   ///
@@ -1353,11 +1359,9 @@ abstract final class AppControl {
 
   /// [padding], grown for the current UI size — a wider label needs the
   /// sidebearing to grow with it, or the text crowds the capsule's ends.
-  static EdgeInsets get paddingScaled =>
-      EdgeInsets.symmetric(horizontal: 14 * AppFont.uiScale);
+  static EdgeInsets get paddingScaled => padding * AppFont.uiScale;
 
-  static EdgeInsets get paddingSmallScaled =>
-      EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
+  static EdgeInsets get paddingSmallScaled => paddingSmall * AppFont.uiScale;
 }
 
 /// The desktop's geometry and interaction tokens. Dialogs, menu anchors, search,
@@ -1370,6 +1374,10 @@ abstract final class AppDesktop {
   static const double menuRadius = 16;
   static const double rowRadius = 10;
   static const double fieldRadius = 10;
+  static const double paneRadius = 10;
+  static const double tabRadius = 10;
+  static const double tabShoulder = 8;
+  static const double tabTopInset = 6;
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;

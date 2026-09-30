@@ -16,7 +16,7 @@ Widget _frame(Widget child, {double width = kModelPickerWidth}) => MaterialApp(
 );
 
 void main() {
-  testWidgets('the quota column ends where the meter under it ends', (
+  testWidgets('quota and saved-choice columns share stable right edges', (
     tester,
   ) async {
     // ⚠️ REGRESSION. The column was Flexible beside an Expanded title, which split the row in half
@@ -39,9 +39,10 @@ void main() {
     );
 
     final meter = tester.getRect(find.byType(LinearProgressIndicator));
-    expect(tester.getRect(find.text('43% left')).right, meter.right);
-    expect(tester.getRect(find.text('Healthy')).right, meter.right);
-    expect(find.byIcon(AppIcons.check), findsNothing);
+    final check = tester.getRect(find.byIcon(AppIcons.check));
+    expect(check.right, meter.right);
+    expect(tester.getRect(find.text('43% left')).right, check.left - 8);
+    expect(tester.getRect(find.text('Healthy')).right, check.left - 8);
   });
 
   testWidgets('the footer button ends on the panel edge, not mid-row', (

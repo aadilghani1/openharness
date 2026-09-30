@@ -13,6 +13,7 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
@@ -76,6 +77,7 @@ void main() {
       InlineSpan span,
       TextStyle inherited, {
       bool workspaceBar = false,
+      bool desktopTab = false,
     }) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
@@ -87,7 +89,10 @@ void main() {
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
           checked++;
-          if (workspaceBar) {
+          if (desktopTab) {
+            expect(style.fontSize, 13, reason: text);
+            expect(style.fontFamily, grid.AppType.sansFamily, reason: text);
+          } else if (workspaceBar) {
             expect(style.fontSize, 13, reason: text);
             expect(
               style.fontFamily,
@@ -105,7 +110,12 @@ void main() {
           }
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style, workspaceBar: workspaceBar);
+          check(
+            child,
+            style,
+            workspaceBar: workspaceBar,
+            desktopTab: desktopTab,
+          );
         }
       }
     }
@@ -132,6 +142,10 @@ void main() {
       check(
         (element.widget as RichText).text,
         const TextStyle(),
+        desktopTab:
+            element.findAncestorWidgetOfExactType<DesktopWorkspaceTab>() !=
+                null &&
+            element.findAncestorWidgetOfExactType<ActivityMark>() == null,
         workspaceBar: find
             .descendant(
               of: find.byWidgetPredicate(
@@ -414,7 +428,7 @@ void main() {
   });
 
   testWidgets(
-    'native tabs keep 13 pt platform monospace during terminal font changes',
+    'native footer payload keeps its 13 pt status face during terminal font changes',
     (tester) async {
       final updates = <Map<dynamic, dynamic>>[];
       const channel = MethodChannel('harness/swarm_tabs');

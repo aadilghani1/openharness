@@ -29,7 +29,7 @@ Desktop 1.2.27 and must not be merged without the user's approval.
   Both use system typography and visible focus boundaries without shifting controls.
 - Agent and Repo are compact capsule selectors above the editor, with the
   agent's existing brand mark and Close at the right. The always-visible message
-  editor says “What’s next?”; New Harness sits inside its lower-right corner,
+  editor says “Harness anything”; New Harness sits inside its lower-right corner,
   works without a message, and has no visible Return symbol.
   Model, Approvals, and Codex Profile sit below the composer on the left;
   a checked Worktree control and a branch icon/name sit on the right. Git

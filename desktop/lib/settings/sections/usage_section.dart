@@ -20,7 +20,6 @@
 /// silently excluded most of a team's work would be worse than no total.
 library;
 
-
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -399,6 +398,7 @@ class _AnalyticsHeader extends StatelessWidget {
       title: Text('Usage analytics', style: AppType.heading()),
       controls: [
         AppSelectField<_Lens>(
+          semanticLabel: 'Usage provider',
           value: lens,
           width: usageControlWidth(context, 168),
           options: [

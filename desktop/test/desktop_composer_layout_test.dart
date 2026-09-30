@@ -69,6 +69,10 @@ class _ReviewApp extends AppNotifier {
   Future<void> probeDsh(String machineId, {bool force = false}) async {}
 
   @override
+  Future<GridModels> refreshGridModels(String machineId) async =>
+      const GridModels.unreachable();
+
+  @override
   Future<Map<String, dynamic>> readGitProject(
     String machineId,
     String path, {
@@ -375,7 +379,7 @@ void main() {
         expect(find.text('New Harness'), findsOneWidget);
         expect(
           tester.widget<TextField>(_task).decoration!.hintText,
-          'What’s next?',
+          'Harness anything',
         );
         expect(find.text('Options'), findsNothing);
         expect(find.text('Add task'), findsNothing);
@@ -416,6 +420,7 @@ void main() {
         final focusedShape = focused.shape! as OutlinedBorder;
         expect(focusedShape.runtimeType, restingShape.runtimeType);
         expect(focusedShape.side.width, restingShape.side.width);
+        expect(focusedShape.side.color, Colors.transparent);
         expect(
           focused.color != resting.color ||
               focusedShape.side.color != restingShape.side.color,
@@ -537,6 +542,64 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
+    for (final scale in [1.0, 1.6]) {
+      testWidgets('GitHub entry stays compact at ${brightness.name} $scale', (
+        tester,
+      ) async {
+        final fixture = await _mount(
+          tester,
+          brightness: brightness,
+          scale: scale,
+          size: scale == 1 ? const Size(1200, 800) : const Size(640, 540),
+        );
+        await tester.enterText(_task, 'Keep the task draft');
+        await tester.tap(_field('project'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('GitHub'));
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(_query).decoration!.hintText,
+          'Enter GitHub URL',
+        );
+        expect(find.text('github.com/owner/repo or owner/repo'), findsNothing);
+        expect(find.text('No matches'), findsNothing);
+        expect(tester.getSize(_chooser).height, lessThan(80));
+        final entryHeight = tester.getSize(_chooser).height;
+        expect(_focused(tester, _query), isTrue);
+        await capture(tester, fixture, 'github-${brightness.name}-$scale');
+
+        await tester.enterText(_query, 'not a repository');
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        final error = find.byKey(const ValueKey('new-harness-status'));
+        expect(error.hitTestable(), findsOneWidget);
+        expect(
+          tester.getRect(error).bottom,
+          lessThan(tester.getRect(_chooser).bottom),
+        );
+        expect(
+          tester.getSize(_chooser).height,
+          lessThanOrEqualTo(entryHeight + tester.getSize(error).height + 18),
+          reason:
+              'Validation gets only its text and padding, not an empty list.',
+        );
+        await capture(
+          tester,
+          fixture,
+          'github-error-${brightness.name}-$scale',
+        );
+
+        await tester.enterText(_query, 'autonomous-ai/openharness');
+        await tester.pumpAndSettle();
+        expect(find.text('Clone openharness').hitTestable(), findsOneWidget);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(fixture.box.field, NewHarnessField.projectMenu);
+        expect(fixture.box.task, 'Keep the task draft');
+        expect(fixture.app.launches, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    }
     testWidgets('Repo and side-by-side machine menus fit ${brightness.name}', (
       tester,
     ) async {
@@ -677,6 +740,239 @@ void main() {
     expect(fixture.app.launches, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  for (final brightness in Brightness.values) {
+    for (final field in ['project', 'branch', 'model']) {
+      testWidgets('long $field notices keep search and choices usable at 390x360 '
+          '${brightness.name} scale=2', (tester) async {
+        final fixture = await _mount(
+          tester,
+          size: const Size(390, 360),
+          scale: 2,
+          brightness: brightness,
+          machineName: field == 'model'
+              ? 'Development computer for the design team, frontend platform, '
+                    'and shared test projects in the main office'
+              : 'office',
+        );
+        await tester.enterText(_task, 'Keep my task while I recover');
+        await tester.ensureVisible(_field(field));
+        await tester.tap(_field(field));
+        await tester.pumpAndSettle();
+        const longError =
+            'Could not clone the repository.\n'
+            'fatal: unable to access https://github.com/design-team/frontend-platform: '
+            'The requested URL returned error: 403.\n'
+            'Check that the repository URL is correct and that this computer has access. '
+            'Your project choice and prompt are kept. Try again when access is restored.';
+        if (field == 'project') {
+          await tester.enterText(_query, 'Git');
+          final editor = tester.widget<TextField>(_query).controller!;
+          editor.value = editor.value.copyWith(
+            composing: const TextRange(start: 0, end: 3),
+          );
+          fixture.box.warn(longError);
+        } else if (field == 'branch') {
+          fixture.box.branchRefreshError = longError;
+          fixture.box.warn(
+            'Your project and prompt are kept. Retry the branch refresh.',
+          );
+        } else {
+          expect(fixture.box.modelNotice, contains('Could not load models'));
+        }
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final search = tester.getRect(_query);
+        final notices = find.byKey(
+          const ValueKey('new-harness-chooser-notices'),
+        );
+        final list = find.descendant(
+          of: _chooser,
+          matching: find.byType(ListView),
+        );
+        final noticeController = tester
+            .widget<SingleChildScrollView>(notices)
+            .controller!;
+        final queryController = tester.widget<TextField>(_query).controller!;
+        final query = queryController.value;
+        expect(noticeController.position.maxScrollExtent, greaterThan(0));
+        expect(
+          tester.getSize(list).height,
+          greaterThan(tester.getSize(notices).height),
+        );
+        expect(_query.hitTestable(), findsOneWidget);
+        expect(_focused(tester, _query), isTrue);
+        final selected = fixture.box.options[fixture.box.cursor];
+        final selectedChoice = find.byKey(
+          ValueKey('new-harness-option-${selected.id}'),
+        );
+        expect(selectedChoice.hitTestable(), findsOneWidget);
+        expect(
+          tester.getRect(selectedChoice).bottom,
+          lessThanOrEqualTo(tester.getRect(list).bottom),
+          reason: 'The active choice stays fully visible above long notices.',
+        );
+        await capture(tester, fixture, 'recovery-$field-${brightness.name}-2');
+
+        await tester.drag(notices, const Offset(0, -240));
+        await tester.pumpAndSettle();
+        expect(noticeController.offset, greaterThan(0));
+        expect(tester.getRect(_query), search);
+        expect(queryController.value, query);
+        expect(_focused(tester, _query), isTrue);
+        noticeController.jumpTo(noticeController.position.maxScrollExtent);
+        await tester.pump();
+        final lastNotice = field == 'model'
+            ? find.text(fixture.box.modelNotice!)
+            : find.byKey(const ValueKey('new-harness-status'));
+        expect(
+          tester.getRect(lastNotice).bottom,
+          lessThanOrEqualTo(tester.getRect(notices).bottom),
+          reason: 'The full notice can be read without displacing search or choices.',
+        );
+        if (field == 'project') {
+          await key(tester, LogicalKeyboardKey.enter);
+          expect(
+            fixture.box.field,
+            NewHarnessField.projectMenu,
+            reason: 'IME confirmation must not activate a project choice.',
+          );
+          expect(queryController.value, query);
+          queryController.clearComposing();
+        }
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expect(fixture.box.task, 'Keep my task while I recover');
+        expect(fixture.app.launches, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    for (final removed in [false, true]) {
+      testWidgets(
+        '${removed ? "removed" : "offline"} machine recovery opens the existing chooser '
+        '${brightness.name} at enlarged text',
+        (tester) async {
+          final fixture = await _mount(
+            tester,
+            size: removed ? const Size(390, 360) : const Size(600, 520),
+            scale: removed ? 2 : 1.6,
+            brightness: brightness,
+          );
+          const remote = Machine(
+            machineId: 'remote',
+            name: 'Build server',
+            authMode: MachineAuthMode.remote,
+          );
+          fixture.app.machineStates['remote'] = MachineState(remote)
+            ..connectionStatus = ConnectionStatus.connected
+            ..agentLoadStatus = AgentLoadStatus.loaded
+            ..engines.replace(const [
+              EngineAvailability(engine: 'codex', installed: true),
+            ]);
+          await fixture.app.projectHistory.select(
+            'remote',
+            '/srv/recovery-repo',
+          );
+          final taskDraft = removed
+              ? 'Keep my unsent task\n'
+                    'First review detail\n'
+                    'Second review detail\n'
+                    'Third review detail\n'
+                    'Fourth review detail\n'
+                    'Fifth review detail\n'
+                    'Sixth review detail'
+              : 'Keep my unsent task across machines';
+          await tester.enterText(_task, taskDraft);
+          final editor = tester.widget<TextField>(_task).controller!;
+          editor.value = editor.value.copyWith(
+            composing: const TextRange(start: 0, end: 4),
+          );
+          final draft = editor.value;
+          if (removed) {
+            fixture.app.machineStates.remove('review');
+            fixture.app.machines.removeWhere(
+              (machine) => machine.machineId == 'review',
+            );
+          } else {
+            fixture.app.stateOf('review')!.nodeOnline = false;
+          }
+          fixture.app.notifyListeners();
+          await tester.pumpAndSettle();
+          expect(editor.value, draft);
+          expect(fixture.box.machineId, 'review');
+          expect(
+            tester.widget<FilledButton>(_field('start')).onPressed,
+            isNull,
+          );
+          expect(_machine, findsNothing);
+          final recovery = find.byKey(
+            const ValueKey('new-harness-recover-machine'),
+          );
+          await tester.ensureVisible(recovery);
+          await tester.pumpAndSettle();
+          expect(recovery.hitTestable(), findsOneWidget);
+          expect(find.text('This machine is unavailable.'), findsOneWidget);
+          expect(find.text('Choose a machine'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await capture(
+            tester,
+            fixture,
+            'recovery-machine-${brightness.name}-$removed',
+          );
+
+          // A genuine user activation ends composition; the inventory update
+          // above must leave it intact while the draft editor still owns it.
+          editor.clearComposing();
+          if (brightness == Brightness.dark) {
+            await _focus(tester, recovery);
+            await key(tester, LogicalKeyboardKey.enter);
+          } else {
+            await tester.tap(recovery);
+          }
+          await tester.pumpAndSettle();
+          expect(_chooser, findsOneWidget);
+          expect(_machine, findsOneWidget);
+          expect(tester.getRect(_chooser).top, greaterThanOrEqualTo(24));
+          expect(
+            tester.getRect(_chooser).bottom,
+            lessThanOrEqualTo(tester.view.physicalSize.height - 24),
+          );
+          final remoteChoice = find.byKey(
+            const ValueKey('new-harness-machine-option-remote'),
+          );
+          expect(remoteChoice.hitTestable(), findsOneWidget);
+          await capture(
+            tester,
+            fixture,
+            'recovery-machine-menu-${brightness.name}-$removed',
+          );
+          await tester.tap(remoteChoice);
+          await tester.pumpAndSettle();
+          expect(fixture.box.machineId, 'remote');
+          final project = find.byKey(
+            const ValueKey(
+              'new-harness-option-project:remote:/srv/recovery-repo',
+            ),
+          );
+          await tester.ensureVisible(project);
+          await tester.tap(project);
+          await tester.pumpAndSettle();
+          expect(_chooser, findsNothing);
+          expect(fixture.box.project.folder, '/srv/recovery-repo');
+          expect(fixture.box.task, taskDraft);
+          expect(fixture.box.requiredChoice, isNull);
+          expect(
+            tester.widget<FilledButton>(_field('start')).onPressed,
+            isNotNull,
+          );
+          expect(fixture.app.launches, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
 
   for (final (size, scale, name) in [
     (const Size(1200, 800), 1.0, 'wide'),

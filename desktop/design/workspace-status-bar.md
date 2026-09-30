@@ -1,23 +1,25 @@
 # Workspace status bar
 
-A navigation row above the panes and a 37.5 pt status row below them, using compact
-monospace text and measured character cells.
-Follow the [terminal workspace design system](terminal-workspace.md).
+A navigation row above the panes and a 37.5 pt status row below them. Tabs use
+system type; status fields use the selected workspace monospace face.
+Follow the [desktop design system](desktop-design-system.md) and
+[terminal workspace boundaries](terminal-workspace.md). Historical captures below
+illustrate data and interaction rules, not the current tab geometry.
 
 ```text
-1:api ?  2:web ⠹  3:blender ✓  +                   Search  Bell  (✿ Harness Store)
+api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness Store)
 
                                  panes
 
-GPT-6 Astra · Max                          M2 > openharness > branch-name > #439
+Claude 0% · Codex 50%                     M2 > openharness > branch-name > #439
 ```
 
-The two edge groups follow the focused pane. The branch stays clickable in the
+The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. Empty New Tabs have no footer.
 
 ## Tabs on the left
 
-Each tab shows its number and a compact name. A user-entered name always wins:
+Each tab shows a compact name without a permanent number prefix. A user-entered name always wins:
 once renamed, keep it across pane changes, closing/reopening, and saved layout
 restores. Use automatic naming only when `nameIsCustom` is false. Custom-named
 tabs do not vote in the automatic-name comparison. Count independent
@@ -29,17 +31,17 @@ Ties within one trait use pane order. Focus does not affect the name.
 
 This keeps `blender` useful beside coding tabs, uses project names when all work
 is code, and uses machine names for the same project on different computers.
-Tabs with identical contents can still share a name; their numbers distinguish
-them. Preserve the full name for inspection when its visible label is truncated.
+Tabs with identical contents can still share a name; their positions distinguish
+them, and holding Command reveals their actual shortcut hints. Preserve the full name for inspection when its visible label is truncated.
 
-Center the text with one cell of padding on each side. Size each tab to its label
-and activity mark, capped at 24 cells. Keep the remaining space after `+` empty
-for dragging the window; adding tabs fills that space one by one. Tabs never
-stretch to fill the row. Scroll overflow when needed, revealing the selected
-tab on keyboard navigation. An exceptionally narrow viewport may show a smaller
-tab, preserving activity marks before truncating names.
-There is no close button or reserved close-button space. Cmd-W closes the active
-tab; preserve remapped shortcuts, native menu access, and middle-click closing.
+Align names left in compact, content-sized tabs, capped at 240 points. Use the
+shared 10-point upper corners, 8-point outward lower shoulders and 6-point top
+inset. Keep space after `+` available for dragging the window. Scroll overflow
+and reveal the selected tab on keyboard navigation. Narrow viewports can show
+smaller tabs while preserving their controls.
+The right accessory reveals × on hover and actual shortcut hints while Command
+is held, without moving the title. Cmd-W, remapped shortcuts, native menu access,
+and middle-click closing remain available.
 Preserve reorder, rename, keyboard focus, and terminal sessions. Cmd-T opens a
 tab. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
 on harnesses. Cmd-Shift-P opens commands (`>`). The projects list has
@@ -47,14 +49,12 @@ no New Project/Open Folder row. Projects with an open pane in any tab come first
 each group is alphabetical. Pane focus and navigation history do not change that
 order. Cmd-Q retains its native Quit action.
 
-Tabs, status fields/symbols, PRs, and model labels and pane close actions share `WorkspaceBarControl`
-in Flutter and the same native draw metrics: 28 pt minimum click height and
-bold text on hover, press, and keyboard focus, with a hand cursor. Preserve the
-underlying colors, including Agnoster segment backgrounds and joins. Reserve
-both text weights during layout so labels and ribbon shapes never shift.
-The active tab fills the entire bar height with the workspace background color,
-joining the content below. Its resting text stays regular; do not add a `*`
-marker. Keep text centered, with no ripple or rounded button well.
+Status fields, PRs, model labels and pane close actions share
+`WorkspaceBarControl`: 28-point minimum click height, a hand cursor and emphasis
+on hover, press and keyboard focus. Preserve selected status colors, backgrounds
+and joins; reserve both text weights so labels never shift. Tabs use
+`DesktopWorkspaceTab` and matching AppKit metrics, with a selected shape joining
+the workspace. See the design system for their system type and surface colors.
 
 ![Agnoster PR hover and a selected tab joining the workspace, rendered with synthetic data](images/workspace-bar-hover.png)
 
@@ -69,7 +69,7 @@ focus. Keep its New Tab tooltip and shortcut hint.
 ### Harness activity
 
 Use hn's activity states in two existing places: after the tab name
-(`2:web ⠹`), and after the title in a pane header (`[engine] Session name ⠹`).
+(`web ⠹`), and after the title in a pane header (`[engine] Session name ⠹`).
 Idle has no visible mark. Viewer headers show their owner's state. Shells, unknown agents, and
 utility tabs have no harness activity mark. Keep the existing engine icon.
 The mark replaces the native tab's old orange attention indicator; it adds no
@@ -103,7 +103,7 @@ two ASCII pipes at 65% font size with quarter-cell negative letter spacing:
 short, thin strokes centered in the same cell. Keep native and Flutter metrics
 in sync. The question mark stays plain yellow. Animate only the
 mark, never the label, width, terminal, or method-channel payload. Long tabs
-shorten their names and scroll; preserve room for the number and mark. SF Mono
+shorten their names and scroll; preserve room for the accessory and mark. SF Mono
 does not contain Braille, so Flutter explicitly falls back to the platform's
 symbol font inside that fixed cell. Native text uses CoreText fallback.
 
@@ -120,33 +120,40 @@ acknowledgement, fixed geometry, visibility, and animation. Set
 `HARNESS_ACTIVITY_CAPTURE_DIR` when running the workspace activity test to
 capture synthetic Flutter screenshots and the native tab payload.
 
-Tab labels, status text, pane titles, and model selectors use **13 pt SF Mono,
-regular weight at rest** on macOS. Linux uses its platform monospace stack at the same
+Tab names use the **13-point system face**. Status text, pane titles and model
+selectors use **13 pt SF Mono, regular weight at rest** on macOS. Linux uses its platform monospace stack at the same
 size. Use `workspaceBarTextStyle()` and `workspaceBarCellSizeOf(context)` from
 `lib/shared/theme/workspace_bar_style.dart`; the native bar receives that same
 font through `barStyle`. Keep this size independent of terminal zoom and avoid
 an additional UI text-scale factor. Selection uses background color, not bold.
-Terminal content and dialogs still follow the user's selected terminal font
-and size.
+Terminal content keeps the user's selected terminal font and size. Desktop dialogs
+use the shared system-type scale.
 
 ![13 pt workspace bars with synthetic pane names](images/workspace-bars-13pt.png)
 
 ## Pane controls
 
-The bottom bar shows the focused harness's model selector at the left, with
-machine, project, branch and PR at the right. Pane headers keep the harness title
-and a hover-only outline close icon at their far right. The close control closes that pane view, keeps its harness running, and uses the
-shared icon hover treatment. Its tooltip names Close Pane and the current shortcut.
-Reserve its width so revealing it does not move the title.
+Each pane header shows its model immediately before an always-visible × at the
+right edge. The close control removes that pane view while keeping its harness
+running. Its tooltip names Close Pane and the current shortcut. Long model names
+truncate without moving or covering the close target. Clicking the model focuses
+that pane and opens the same unified Models picker as Cmd-:, preserving the
+existing target and availability guards.
+
+The footer shows remaining subscription usage on the left and the focused
+harness's machine, project, branch and PR at the right. It does not repeat model
+or effort. Read the same deduplicated account rows as Models: each percentage
+uses the limiting window and expires under the same rules. Different accounts
+remain distinct. Unknown usage shows “—”; exhausted usage shows “0%”. Hover
+explains remaining percentages and reset windows; click opens Subscriptions.
+No account or usage reading is invented for this footer.
 
 For the model label, prefer
 its local model ID or the daemon's observed subscription model (`selectedModel`),
 such as `GPT-6 Astra`, `Fable`, or `Opus`. Keep versions when reported; never infer
 a version from a family alias. Older daemons fall back to the provider name.
-Append the reported effort in the same control, for example `GPT-6 Astra · Max`.
-Model and effort come from the same validated runtime profile and follow pane
-focus together. Missing effort stays absent; never infer it from a model or
-carry subscription effort onto a local model. Effort-only updates repaint too.
+Show only the model name in the header. The terminal presents its effort setting;
+never infer effort or append subscription effort to a local model name.
 Keep this label visible without requiring hover, including while disconnected;
 disable switching when the pane is read-only. Use a hand cursor, bold text on hover
 and keyboard focus, and a tooltip explaining subscription/local switching.
@@ -168,7 +175,7 @@ access. Keep the resize gaps available for resizing.
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button
 or space is reserved. [Settings reference](images/share-experimental.png).
-When enabled, Share sits in the bottom bar between the model and focused context, with a
+When enabled, Share sits in the bottom bar before focused context, with a
 flat accent fill, white text, and the same fixed font and control height as the
 other bar actions. Reserve its width before allocating context. Web keeps
 Download app as a secondary text action in the same footer.
@@ -236,13 +243,14 @@ rather than extra padding only above it. Native and Flutter reserve 37.5 pt and
 keep the same pane height, with equal space above and below the footer content.
 
 Show `machine  project`, then `(branch)` and PR when known at the right. Put the
-focused model and effort at the far left. The status row has one-cell outer gutters and no background fill or divider;
-its controls sit directly on the workspace surface. Both sides follow
-the focused pane; changing placement preserves each field's existing action.
+remaining subscription usage at the far left. The status row has one-cell outer gutters and no background fill or divider;
+its controls sit directly on the workspace surface. The right side follows the
+focused pane; usage at the left covers all subscriptions independently of focus.
+Each context field preserves its existing action.
 The optional companion and Share control sit between these groups. At narrow widths,
 truncate labels inside their allocated space rather than overlap controls.
-The model is a separate plain text control so switching themes preserves its
-click target. A focus change closes its picker; stale native actions and delayed
+The model control in each pane header keeps its click target when themes change.
+A focus change invalidates its selection target; stale callbacks and delayed
 model selections cannot retarget a different harness.
 Use the shared `AgentProject.label` rule: at a Git root, prefer the remote repo's
 name, falling back to the local repo name; in a repo subfolder, use that folder's
@@ -397,7 +405,7 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Agnoster](https://github.com/agnoster/agnoster-zsh-theme), and
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
-Pane headers keep task identity and the hover-only close action. The top bar
+Pane headers keep task identity, model selection and an always-visible close action. The top bar
 contains tabs, New Tab, a plain search icon, the bell, and the Harness Store button.
 Search opens the existing unified picker; Store opens the existing Store tab.
 The Store restores its earlier rounded pill, colorful polymath mark, and quiet
@@ -418,7 +426,7 @@ narrow windows. Native menus and commands remain available.
 
 Only while daemons are on (the account's `GET /api/zoo` answered 200, or a
 person enabled Settings → Experimental → Focus-bar creature), the daemon sits
-in the footer after the model and before the optional Share control. Off, or before that is known, nothing is
+at the left of the footer before the optional Share control. Off, or before that is known, nothing is
 reserved for it and the bar is exactly the one described above; when it turns
 on, the slot waits for a quiet moment (no button held, the pointer off the
 footer) so controls never move under a click. On:

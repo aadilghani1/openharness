@@ -173,7 +173,7 @@ class TerminalFindBarState extends State<TerminalFindBar> {
           bool? checked,
         }) => paneMenuItem(
           onTap: () => close(action),
-          child: Semantics(
+          builder: (context, active) => Semantics(
             toggled: checked,
             child: Builder(
               builder: (context) {
@@ -191,13 +191,20 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                             ? Icon(
                                 AppIcons.check,
                                 size: 16,
-                                color: DesktopChrome.foreground,
+                                color: active
+                                    ? grid.AppDesktop.onSelection
+                                    : DesktopChrome.foreground,
                               )
                             : null,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(label, style: DesktopChrome.control()),
+                        child: Text(
+                          label,
+                          style: DesktopChrome.control(
+                            color: active ? grid.AppDesktop.onSelection : null,
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 16),
                       ConstrainedBox(
@@ -206,7 +213,9 @@ class TerminalFindBarState extends State<TerminalFindBar> {
                           hint,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
+                          style: DesktopChrome.metadata(
+                            color: active ? grid.AppDesktop.onSelection : null,
+                          ),
                         ),
                       ),
                     ],

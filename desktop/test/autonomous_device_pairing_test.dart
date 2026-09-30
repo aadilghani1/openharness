@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show SemanticsAction;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -106,6 +107,48 @@ void main() {
     await tester.tap(find.byType(AppIconButton));
     await tester.pumpAndSettle();
   }
+
+  testWidgets(
+    'pairing controls keep separate accessible purposes and actions',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        final cli = FakeAutonomousDeviceCli();
+        await open(tester, cli);
+        final picker = find.bySemanticsLabel('Autonomous robot');
+        final pickerNode = tester.getSemantics(picker);
+        final codeNode = tester.getSemantics(
+          find.bySemanticsLabel('Six-character code'),
+        );
+        final refreshNode = tester.getSemantics(
+          find.byTooltip('Refresh Autonomous robot status'),
+        );
+        expect(pickerNode.getSemanticsData().label, 'Autonomous robot');
+        expect(pickerNode.getSemanticsData().value, 'Select a device');
+        expect(codeNode.id, isNot(pickerNode.id));
+        expect(codeNode.getSemanticsData().flagsCollection.isTextField, isTrue);
+        expect(
+          codeNode.getSemanticsData().hasAction(SemanticsAction.tap),
+          isTrue,
+        );
+        expect(refreshNode.id, isNot(pickerNode.id));
+        expect(
+          refreshNode.getSemanticsData().tooltip,
+          'Refresh Autonomous robot status',
+        );
+        expect(
+          refreshNode.getSemanticsData().hasAction(SemanticsAction.tap),
+          isTrue,
+        );
+        await select(tester, 'device-1');
+        expect(tester.getSemantics(picker).getSemanticsData().value, 'Kitchen');
+        expect(cli.submissions, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
 
   testWidgets(
     'code input and discovery are immediate without address or intent',

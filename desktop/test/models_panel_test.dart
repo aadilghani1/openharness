@@ -733,7 +733,7 @@ void main() {
     final panel = tester.getRect(resourceScope(':'));
     expect(panel.right, lessThanOrEqualTo(1200));
     expect(panel.top, greaterThan(0));
-    expect(panel.width, 880);
+    expect(panel.width, 1120);
     expect(find.byType(Dialog), findsNothing);
     expect(resourceSearch(tester).isModelMode, isTrue);
     // The top-5 catalog model stays visible without pressing "Get models".

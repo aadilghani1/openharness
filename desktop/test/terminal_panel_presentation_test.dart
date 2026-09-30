@@ -268,10 +268,10 @@ void main() {
         );
         expect(
           find.byType(GridModelPicker),
-          findsNothing,
-          reason: 'The focused model is in the workspace status bar.',
+          findsOneWidget,
+          reason: 'The model belongs to its pane header.',
         );
-        expect(find.byTooltip('Close Pane').hitTestable(), findsNothing);
+        expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
         for (final label in ['Zoom Pane', 'Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
@@ -357,7 +357,7 @@ void main() {
         expect(tester.getSize(title).width, greaterThan(64));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        expect(find.byType(GridModelPicker), findsNothing);
+        expect(find.byType(GridModelPicker), findsOneWidget);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: const Offset(1, 100));
         await mouse.moveTo(tester.getCenter(title));

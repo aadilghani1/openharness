@@ -392,6 +392,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                               ignoring: disabled,
                               child: AppSelectField<String?>(
                                 key: const Key('autonomous-device-selection'),
+                                semanticLabel: 'Autonomous robot',
                                 value: _selectedDevice,
                                 options: [
                                   const SelectOption<String?>(

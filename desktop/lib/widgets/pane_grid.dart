@@ -46,11 +46,14 @@ class PaneGrid extends StatelessWidget {
     required this.notifier,
     this.swarmMode = false,
     this.empty,
+    this.onOpenModels,
   });
 
   final AppNotifier notifier;
   final bool swarmMode;
   final Widget? empty;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +66,7 @@ class PaneGrid extends StatelessWidget {
             notifier: notifier,
             dragging: dragging,
             empty: empty,
+            onOpenModels: onOpenModels,
           );
         }
         final panes = notifier.panes;
@@ -77,6 +81,7 @@ class PaneGrid extends StatelessWidget {
           dragging: dragging,
           visible: visible,
           swarmMode: swarmMode,
+          onOpenModels: onOpenModels,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -223,10 +228,13 @@ class _SwarmCanvas extends StatefulWidget {
     required this.notifier,
     required this.dragging,
     this.empty,
+    this.onOpenModels,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -560,6 +568,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     dragging: widget.dragging,
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
+                                    onOpenModels: widget.onOpenModels,
                                   ),
                                 ),
                               ),
@@ -1138,7 +1147,7 @@ class _Gap extends StatelessWidget {
 
 /// How round a card's corners are — a pane, and the rail beside it. Public for the same reason
 /// [kPaneGap] is: the rail is a card now, and two places typing 10 is how they drift apart.
-const double kPaneRadius = kTerminalCornerRadius;
+const double kPaneRadius = grid.AppDesktop.paneRadius;
 
 /// How round a pane's corners are — the shared card radius, so a terminal does not read as a different
 /// KIND of surface from the rail beside it.
@@ -1152,6 +1161,7 @@ class _PaneCell extends StatelessWidget {
     required this.dragging,
     this.visible = true,
     this.swarmMode = false,
+    this.onOpenModels,
   });
 
   final AppNotifier notifier;
@@ -1159,6 +1169,8 @@ class _PaneCell extends StatelessWidget {
   final AgentDragRef? dragging;
   final bool visible;
   final bool swarmMode;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
 
   bool get _single => notifier.panes.length == 1;
 
@@ -1261,6 +1273,7 @@ class _PaneCell extends StatelessWidget {
                       single: _single,
                       visible: visible,
                       swarmMode: swarmMode,
+                      onOpenModels: onOpenModels,
                     ),
                   ),
                 ),
@@ -1280,6 +1293,7 @@ class _PaneContent extends StatelessWidget {
     required this.single,
     required this.visible,
     required this.swarmMode,
+    this.onOpenModels,
   });
 
   final AppNotifier notifier;
@@ -1287,6 +1301,8 @@ class _PaneContent extends StatelessWidget {
   final bool single;
   final bool visible;
   final bool swarmMode;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
 
   @override
   Widget build(BuildContext context) {
@@ -1477,6 +1493,10 @@ class _PaneContent extends StatelessWidget {
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,
+          onOpenModels: onOpenModels == null
+              ? null
+              : () =>
+                    onOpenModels!(pane.id, session.machineId, session.agentId),
           // The same confirmation the rail's row menu opens. Only for an
           // agent the machine still lists — a pane whose agent is already
           // gone has nothing to end.
@@ -2033,34 +2053,32 @@ class _PaneHeader extends StatelessWidget {
     grid.AppTheme.watch(context);
     // The pane's head is a drag handle too: with the title bar hidden it is
     // the top edge of the window.
-    return PaneHeaderHoverRegion(
-      child: WindowDragArea(
-        child: SizedBox(
-          height: 46,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          title,
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.monoLabel(
-                            color: AppColors.text,
-                            fontWeight: FontWeight.w600,
-                          ),
+    return WindowDragArea(
+      child: SizedBox(
+        height: 46,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        overflow: TextOverflow.ellipsis,
+                        style: grid.AppType.monoLabel(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      ?activity,
-                    ],
-                  ),
+                    ),
+                    ?activity,
+                  ],
                 ),
-                if (onClose != null) PaneCloseButton(onPressed: onClose!),
-              ],
-            ),
+              ),
+              if (onClose != null) PaneCloseButton(onPressed: onClose!),
+            ],
           ),
         ),
       ),

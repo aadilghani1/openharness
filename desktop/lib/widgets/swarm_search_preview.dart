@@ -366,7 +366,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                     [
                       'Matched earlier',
                       if (earlier.at case final at?)
-                        '${harnessActivityAge(at, DateTime.now())} ago',
+                        sessionPreviewAge(at, DateTime.now()),
                     ].join(' · '),
                     style: muted,
                   ),
@@ -968,7 +968,7 @@ class _AgentPreview extends StatelessWidget {
                   _ => 'Found in what you asked',
                 },
                 if (found.at case final at?)
-                  '${harnessActivityAge(at, DateTime.now())} ago',
+                  sessionPreviewAge(at, DateTime.now()),
               ].join(' · '),
               style: terminal
                   ? muted

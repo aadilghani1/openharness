@@ -179,3 +179,27 @@ cards, redundant icons, competing selection treatments, inconsistent typography,
 weak text contrast, unstable focus or a lost draft even if each local component
 passes its tests. Any responsive adjustment must retain stable editor geometry
 and the existing controller's query, selection and preview state.
+
+
+## Settings and supporting-surface review
+
+The next primary-source pass focused on small interaction details rather than
+adding decoration. Apple's [VoiceOver evaluation criteria](https://developer.apple.com/help/app-store-connect/manage-app-accessibility/voiceover-evaluation-criteria)
+and [accessibility design session](https://developer.apple.com/videos/play/wwdc2025/229/)
+informed purpose, value and state labels for controls. The implementation now
+exposes those separately and avoids merging multiple actions into one setting.
+Widget semantics tests establish that metadata; a native VoiceOver pass is still
+required to evaluate actual navigation and announcements.
+
+Apple's [writing guidance](https://developer.apple.com/design/human-interface-guidelines/writing)
+encouraged clearer action and recovery language. The review found that “Choose a
+machine” must lead directly to the existing chooser when a selected machine
+vanishes. The creator keeps its prompt and explicit launch choices during that
+recovery. Loading is also separated from settled emptiness in search.
+
+[Nova's documented settings](https://help.nova.app/settings/) and
+[appearance settings](https://help.nova.app/settings/theme/) were examined as
+examples of organizing configuration. Search vocabulary and returning to the last
+settings pane remain possible later improvements; they were not silently added
+as part of this presentation pass. Measured content height, clear grouping and
+consistent control labels were actionable within the current scope.

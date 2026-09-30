@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -87,7 +88,7 @@ TerminalSession terminal(String id, List<TerminalBinaryFrame> input) =>
 
 void main() {
   testWidgets(
-    'tabs omit close buttons and redundant hints; Command-W closes the active tab',
+    'tabs show names, reveal hover close and Command hints, and preserve Command-W',
     (tester) async {
       final app = createApp();
       final first = app.activeSwarm;
@@ -95,18 +96,33 @@ void main() {
       app.newSwarm(name: 'Second tab');
       final second = app.activeSwarm;
       await mount(tester, app);
-      expect(find.byKey(ValueKey('tab-close:${first.id}')), findsNothing);
-      expect(find.byKey(ValueKey('tab-close:${second.id}')), findsNothing);
-      final label = find.text('2:Second tab');
+      final close = find.byKey(ValueKey('tab-close:${second.id}'));
+      expect(close.hitTestable(), findsNothing);
+      final label = find.text('Second tab');
       final tab = find.byKey(ValueKey(second.id));
-      expect(
-        find.descendant(of: tab, matching: find.byType(Tooltip)),
-        findsNothing,
-      );
-      expect(
-        tester.getCenter(label).dx,
-        closeTo(tester.getCenter(tab).dx, .01),
-      );
+      final nameBounds = tester.getRect(label);
+      expect(nameBounds.left, greaterThan(tester.getRect(tab).left));
+      expect(nameBounds.center.dx, lessThan(tester.getCenter(tab).dx));
+      expect(find.text('2:Second tab'), findsNothing);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1200, 700));
+      await mouse.moveTo(tester.getCenter(label));
+      await tester.pumpAndSettle();
+      expect(close.hitTestable(), findsOneWidget);
+      expect(tester.getRect(label), nameBounds);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(find.text('⌘1'), findsOneWidget);
+      expect(find.text('⌘2'), findsOneWidget);
+      expect(close, findsNothing);
+      expect(tester.getRect(label), nameBounds);
+      expect(app.activeSwarm, same(second));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(close.hitTestable(), findsOneWidget);
+      await mouse.removePointer();
+      await tester.pump();
+      expect(close.hitTestable(), findsNothing);
       Focus.of(tester.element(label)).requestFocus();
       await tester.pumpAndSettle();
       await chord(tester, LogicalKeyboardKey.keyW);
@@ -215,7 +231,7 @@ void main() {
           isFalse,
         );
       } else {
-        expect(find.text('1:store'), findsOneWidget);
+        expect(find.text('store'), findsOneWidget);
       }
     });
 
@@ -300,7 +316,7 @@ void main() {
           expect(row['engine'], isNull);
           expect(row['iconAsset'], isNull);
         } else {
-          expect(find.text('2:Leftovers'), findsOneWidget);
+          expect(find.text('Leftovers'), findsOneWidget);
         }
         final session = terminal('gone', []);
         other.session = session;
@@ -311,7 +327,7 @@ void main() {
           expect(row['engine'], 'codex');
           expect(row['iconAsset'], 'assets/engine-icons/codex.png');
         } else {
-          expect(find.text('2:Leftovers again'), findsOneWidget);
+          expect(find.text('Leftovers again'), findsOneWidget);
         }
         tab.panes.removeWhere((pane) => pane.id == 900);
         leftovers.panes.clear();
@@ -373,7 +389,7 @@ void main() {
           final position = tester.state<ScrollableState>(strip).position;
           position.jumpTo(position.maxScrollExtent);
           await tester.pump();
-          expect(find.text('42:store'), findsOneWidget);
+          expect(find.text('store'), findsOneWidget);
         }
         await tester.pumpWidget(const SizedBox());
         app.dispose();

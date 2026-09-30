@@ -105,7 +105,7 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
           : tab.isOrchestrator
           ? 'orchestrator'
           : candidates[tab.id]!.isEmpty
-          ? 'new'
+          ? Swarm.defaultName
           : candidates[tab.id]!.reduce((a, b) {
               if (b.count != a.count) return b.count > a.count ? b : a;
               return repetitions(b) < repetitions(a) ? b : a;

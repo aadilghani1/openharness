@@ -5,7 +5,6 @@
 /// themselves are `resting_model_words.dart`'s.
 library;
 
-
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -117,7 +116,7 @@ class _WakeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => PaneMenuAction(
     onPressed: onTap,
-    child: Padding(
+    builder: (context, active) => Padding(
       padding: EdgeInsets.symmetric(horizontal: inset, vertical: 10),
       child: Row(
         children: [
@@ -126,7 +125,7 @@ class _WakeRow extends StatelessWidget {
             child: Icon(
               AppIcons.eye,
               size: _kWakeIconSize,
-              color: DesktopChrome.muted,
+              color: active ? grid.AppDesktop.onSelection : DesktopChrome.muted,
             ),
           ),
           SizedBox(width: inset),
@@ -135,9 +134,20 @@ class _WakeRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(kShowModels, style: DesktopChrome.control(medium: true)),
+                Text(
+                  kShowModels,
+                  style: DesktopChrome.control(
+                    medium: true,
+                    color: active ? grid.AppDesktop.onSelection : null,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text(kShowModelsWait, style: DesktopChrome.metadata()),
+                Text(
+                  kShowModelsWait,
+                  style: DesktopChrome.metadata(
+                    color: active ? grid.AppDesktop.onSelection : null,
+                  ),
+                ),
               ],
             ),
           ),

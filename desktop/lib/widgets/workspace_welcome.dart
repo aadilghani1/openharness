@@ -363,7 +363,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           padding: const EdgeInsets.only(bottom: 8, left: 10),
           child: Semantics(
             header: true,
-            child: Text('Recent sessions', style: DesktopChrome.metadata()),
+            child: Text('Recent harnesses', style: DesktopChrome.metadata()),
           ),
         ),
         for (final (index, row) in sessions.rows.indexed)
@@ -372,7 +372,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             onPressed: () => _open(index),
             style:
                 TextButton.styleFrom(
-                  foregroundColor: DesktopChrome.foreground,
+                  foregroundColor: DesktopChrome.muted,
                   backgroundColor: Colors.transparent,
                   enabledMouseCursor: SystemMouseCursors.click,
                   alignment: Alignment.centerLeft,
@@ -440,7 +440,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                         row.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.control(),
+                        style: DesktopChrome.control(
+                          color: DesktopChrome.muted,
+                        ),
                       ),
                       if (_recentContext(row) case final context?) ...[
                         const SizedBox(height: 2),
@@ -498,6 +500,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         textAlign: TextAlign.left,
         middleEllipsis: true,
         surfaceBackground: grid.AppPalette.windowBg,
+        monochromeColor: DesktopChrome.muted,
       ),
     );
   }

@@ -103,6 +103,9 @@ class TerminalPanel extends StatefulWidget {
   /// where there is nothing to close it back to.
   final VoidCallback? onClose;
 
+  /// Opens the workspace's shared model picker for this exact pane.
+  final VoidCallback? onOpenModels;
+
   final VoidCallback? onDelete;
 
   final VoidCallback? onToggleZoom;
@@ -175,6 +178,7 @@ class TerminalPanel extends StatefulWidget {
     this.notice,
     this.onToggleComposer,
     this.onClose,
+    this.onOpenModels,
     this.onDelete,
     this.onToggleZoom,
     this.zoomed = false,
@@ -2336,6 +2340,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       project: agent == null ? null : machine?.projectOf(agent),
       compact: widget.compactHeader,
       close: widget.onClose != null,
+      openModels: widget.onOpenModels != null,
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
@@ -2358,6 +2363,9 @@ class _TerminalPanelState extends State<TerminalPanel>
             ? null
             : () => widget.onToggleZoom?.call(),
         onClose: widget.onClose == null ? null : () => widget.onClose?.call(),
+        onOpenModels: widget.onOpenModels == null
+            ? null
+            : () => widget.onOpenModels?.call(),
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
@@ -2434,6 +2442,7 @@ class _TerminalHeader extends StatelessWidget {
   final TerminalNotice? notice;
   final bool readOnly;
   final VoidCallback? onClose;
+  final VoidCallback? onOpenModels;
 
   /// Ends the agent (with a confirmation), as the rail's row menu does. Null
   /// where the pane cannot name a live agent to end.
@@ -2470,6 +2479,7 @@ class _TerminalHeader extends StatelessWidget {
     this.notice,
     this.readOnly = false,
     this.onClose,
+    this.onOpenModels,
     this.onDelete,
     required this.onReconnect,
     this.compact = false,
@@ -2568,7 +2578,7 @@ class _TerminalHeader extends StatelessWidget {
     ].join('\n');
     // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
-    final showModelPicker = !compact && modelPickerSupports(session.engineId);
+    final showModelPicker = modelPickerSupports(session.engineId);
     // The picker: a model id up to 220px and its padding.
     final pickerWidth = showModelPicker ? 250.0 : 0.0;
     final closeWidth = onClose == null
@@ -2633,7 +2643,9 @@ class _TerminalHeader extends StatelessWidget {
                   );
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
-              compact ? closeWidth : desiredRightWidth,
+              compact
+                  ? math.min(actionsWidth, constraints.maxWidth * .38)
+                  : desiredRightWidth,
               math.max(0.0, constraints.maxWidth - 99),
             );
             return Row(
@@ -2804,34 +2816,28 @@ class _TerminalHeader extends StatelessWidget {
                     child: _LinkModeMark(mode: session.linkMode!),
                   ),
                 ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: rightWidth),
+                  constraints: BoxConstraints(
+                    maxWidth: math.max(0, rightWidth - closeWidth),
+                  ),
                   child: PaneHeaderActions(
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (showPr)
-                          Flexible(
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(maxWidth: badgeWidth),
-                              child: PullRequestBadge(
-                                compact: narrow,
-                                identity: (
-                                  session.machineId,
-                                  agent.id,
-                                  project?.cwd,
-                                  project?.shownBranch,
-                                ),
-                                read: () => notifier.readAgentPullRequest(
-                                  session.machineId,
-                                  agent.id,
-                                ),
+                    trailing: showPr
+                        ? ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: badgeWidth),
+                            child: PullRequestBadge(
+                              compact: narrow,
+                              identity: (
+                                session.machineId,
+                                agent.id,
+                                project?.cwd,
+                                project?.shownBranch,
+                              ),
+                              read: () => notifier.readAgentPullRequest(
+                                session.machineId,
+                                agent.id,
                               ),
                             ),
-                          ),
-                        if (onClose != null)
-                          PaneCloseButton(onPressed: onClose!),
-                      ],
-                    ),
+                          )
+                        : null,
                     modelPicker: showModelPicker
                         ? GridModelPicker(
                             key: ValueKey((
@@ -2840,6 +2846,7 @@ class _TerminalHeader extends StatelessWidget {
                               session.agentId,
                             )),
                             paneHeader: true,
+                            onOpen: onOpenModels,
                             enabled: !readOnly && !session.readOnly,
                             compact: narrow,
                             notifier: notifier,
@@ -2903,13 +2910,14 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
+                if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );
           },
         ),
       ),
     );
-    final strip = PaneHeaderHoverRegion(child: header);
+    final strip = header;
     final handle = paneDrag;
     if (handle == null) return strip;
 

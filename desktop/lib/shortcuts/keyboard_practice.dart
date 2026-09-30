@@ -41,7 +41,7 @@ class KeyboardLesson {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
     'agent.open' ||
     'agent.add' => '[agent 1] │ [agent 2]\nBoth agents share this tab.',
-    'agent.new' => 'Codex · This Mac · payments\nWhat’s next? (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
+    'agent.new' => 'Codex · This Mac · payments\nHarness anything (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
     'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
     'pane.close' =>
       '[agent 1]\nThe second view closes. Its agent keeps running.',
@@ -69,7 +69,7 @@ class KeyboardLesson {
     'creation.project_recent_7' ||
     'creation.project_recent_8' ||
     'creation.project_recent_9' => 'Repo selected\nThe composer now uses this folder on the selected machine.',
-    'creation.task' => 'What’s next?\nEnter starts the harness. Shift-Enter adds a line; Escape keeps the draft.',
+    'creation.task' => 'Harness anything\nEnter starts the harness. Shift-Enter adds a line; Escape keeps the draft.',
     'creation.options' =>
       'Model\nChoose a model for this harness. For Terminal, choose a repo.',
     'picker.more_options' => 'New harness\nOpen the composer from search. In the composer, choose a model; Terminal opens the Repo list.',

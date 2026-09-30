@@ -125,6 +125,7 @@ SF system typography on Apple platforms, system fallbacks elsewhere. Monospace
 is explicit for code, copyable technical identifiers and shortcut hints; it is
 not the default for navigation or session context. Terminal zoom never resizes
 app controls. Platform text scaling does, and controls grow rather than clip.
+Buttons keep at least 6 points of padding above and below the rendered label.
 
 Names before context. Buttons state the action: New Harness, Save, Cancel,
 Open Folder, New Folder, GitHub. Use short sentence-case instructions: Enter
@@ -145,6 +146,9 @@ Avoid repeatedly drawing cards inside a dialog.
 - A stored choice also has a checkmark. Focus and stored selection differ.
 - Ordinary controls use a faint neutral fill and one thin rim. Hover increases
   the fill. Press increases it again. Focus has a stable 1.5-point blue boundary.
+- Quiet inline controls beneath the creation prompt stay borderless. A subtle
+  neutral fill identifies focus; Increase Contrast may add the focus boundary.
+  Returning from a chooser must not leave a bright outline around the branch.
 - Destructive actions use the shared danger fill or semantic error ink.
 - Unavailable choices explain why and preserve useful previews. Disabled
   controls do not show a hand cursor. Color is never the only status signal.
@@ -187,7 +191,9 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Spacing scale | 4, 8, 12, 16, 24 |
 | Dialog outer radius | 20 |
 | Popover outer radius | 16 |
-| Field / inset row radius | 10 |
+| Field / inset row / pane radius | 10 |
+| Tab upper corner / outward lower shoulder | 10 / 8 |
+| Tab top inset | 6 |
 | Dialog content inset | 24 |
 | Group / control gap | 16 / 8 |
 | Menu inset | 6 |
@@ -196,6 +202,7 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Inline icon / search identity mark | 16 / 28 |
 | Small form / destination chooser width | 460 |
 | Creation composer maximum width | 680 |
+| Search maximum width / height | 1120 / 680 |
 
 Primary and secondary action buttons and scope selectors are capsules. Text
 fields are rounded rectangles. Icon buttons have 32-point targets. Related
@@ -226,19 +233,27 @@ words when changing scope. Keep result selection stable through live updates.
 Details remain in the existing optional preview. No second search index or
 management implementation. Toolbar controls are secondary to the query. Keep
 the editor and footer stationary while results update; do not resize the panel
-on every keystroke or make short lists stretch their individual rows.
+on every keystroke or make short lists stretch their individual rows. On wide
+windows, results take 44% and the preview 56% of the reading area. The panel
+clamps to the window; narrower layouts retain their existing preview toggle.
+Section headings use their natural text height with 8-point group spacing,
+never a full result-row height. Loading, failed refresh and settled emptiness
+are different states; keep existing results visible while refreshing.
 
 **Cmd-N / New Tab** — one shared form and controller. Agent and project above
-the prompt; model, approvals and profile below; Worktree and branch together.
+the “Harness anything” prompt; model, approvals and profile below; Worktree and
+branch together.
 The dialog is frameless over its veil. New Tab uses the same width on the page.
 Machine stays inside the repo search row.
 
-**Welcome and New Tab hierarchy** — creation is primary. Show at most six recent
-sessions, separated from creation controls by 56 points. Use small desaturated
-agent marks, quiet session names, and “now” for visits under one minute old.
-Session context reuses `StatusLine`, honoring Customize Harness's style, color,
-machine/project/branch visibility and status font. It is never a second renderer
-with a hard-coded dot separator. A new user with no history sees the composer
+**Welcome and New Tab hierarchy** — creation is primary. Show at most six rows
+under “Recent harnesses”, separated from creation controls by 56 points. Use
+small desaturated agent marks and one muted neutral ink for names, context,
+heading and timestamps. Use “now” for visits under one minute old. Context
+reuses `StatusLine`, honoring the selected wording, machine/project/branch
+visibility and status font, but omitting ANSI colors and segment backplates.
+It is never a second renderer with a hard-coded dot separator.
+A new user with no history sees the composer
 without an empty recents section; initial project guidance is neutral. Empty
 tabs hide the workspace footer, which returns when there is work to describe.
 
@@ -248,17 +263,47 @@ draft preserves its selected branch. Enter submits except during composition.
 Escape and outside click dismiss the innermost picker first, then the dialog;
 they preserve its draft. Pending operations retain their existing close guards.
 Opening any form or preview must never start work.
+The GitHub entry starts with only “Enter GitHub URL”; a valid address reveals
+its clone action and an invalid submission reveals inline validation. Do not
+add a duplicate example line or an empty results area beneath an empty field.
 
-**Focused workspace footer** — model and effort on the left; machine, project,
-branch and PR together at the right, following only the focused pane. Each
+**Workspace tabs and pane frames** — tabs use the 13-point system control face,
+independent of the status bar and terminal font. Names align left without permanent
+number prefixes. Navigation ink follows the tab-bar surface, including beside
+light app content. The default label is New Tab. A right-hand close icon appears
+on hover; holding Command shows the actual remapped shortcut in that accessory
+slot. Neither state moves the title or changes the tab width. Long names truncate
+and retain a full-name tooltip. Selection, dragging, middle-click close and the
+existing keyboard commands keep their meaning.
+
+The selected tab has 10-point upper corners and 8-point outward lower shoulders,
+joining the workspace along its bottom edge. It starts 6 points below the top
+of the strip. Pane frames use the related 10-point radius, with a 9-point clipped
+inner edge beneath their 1-point rim. Only their frame changes: terminal content,
+input, selection and status typography remain the terminal's own. AppKit mirrors
+these shared geometry values; Flutter uses AppDesktop directly.
+
+**Pane header** — the current model is a quiet text control immediately before
+an always-visible close icon at the right edge. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. Selection stays bound to that
+harness; a closed or replaced pane cannot receive a stale selection. Long model
+names truncate and retain their full-name tooltip. Keep effort in the terminal,
+and keep the close target clear at narrow widths. Tab-strip close behavior is
+separate and remains hover-revealed.
+
+**Focused workspace footer** — remaining subscription usage at the left,
+with machine, project, branch and PR together at the right following the focused pane. Each
 context field keeps its existing action, including the branch/PR chooser.
 Titles stay quiet when several panes are visible; do not repeat branches in
-pane headers. The close icon retains its established hover interaction and
-right-edge position. Context and model honor Customize Harness's selected
-status face, fields, colors and shell/Powerline treatment. Recent-session
-context uses that same renderer, adapting unbacked ink only when needed for
-readability against a light or dark page. Companion and sharing controls sit
-between model and context without shifting either edge group unnecessarily.
+pane headers. Do not repeat model or effort in the footer. Context honors Customize Harness's selected
+status face, fields, colors and shell/Powerline treatment. Recent-harness
+context uses that same renderer's monochrome presentation to stay secondary.
+Use compact labels such as “Claude 0% · Codex 50%”. These percentages are
+remaining, not used. Use the same deduplicated accounts, limiting window and
+freshness rules as Models. Separate subscriptions remain separate; unknown or
+expired values show “—”, never a fabricated zero. Hover explains reset windows
+and account identity; clicking opens Subscriptions without switching a model.
+Companion and sharing controls sit after usage without shifting the context.
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,
@@ -267,7 +312,11 @@ retain their meaning. Read-only loading/error views use the same hierarchy.
 
 ## Interaction and review
 
-Every clickable element has a hand cursor, every editor a text cursor. Standard
+Every clickable element has a hand cursor, every editor a text cursor.
+Settings controls expose purpose, current value and state to accessibility;
+neighboring explanatory text alone is not an accessible label. Do not merge
+multiple actions into a single settings row. Short popovers use their measured
+content height, including enlarged text, before applying the window height cap. Standard
 editing, IME, keymap remaps, focus traversal and focus return remain intact.
 Opening a modal isolates the workspace and native footer in the accessibility
 tree. A late reply cannot restore a dismissed form or act on a different pane.

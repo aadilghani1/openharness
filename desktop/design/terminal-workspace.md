@@ -19,12 +19,14 @@ relationships, and pane state. Closing a pane removes its view immediately.
 ## Keep the workspace structure
 
 Tabs remain compact and content-sized, adding one at a time until the row fills.
-Preserve numbered navigation and established working/question/done/failure
+Preserve Command-number navigation and established working/question/done/failure
 marks. Idle does not need a mark. Motion represents actual work and respects
 Reduce Motion. Keep the top global actions compact and the Store button familiar.
 
-The bottom context follows the focused pane: machine, project, branch, and PR
-on the left; model and effort on the right. Do not show worktree implementation
+The footer shows remaining subscription usage on the left. Its right-hand context follows the focused pane: machine, project, branch, and PR
+at the right. Each pane header shows its model immediately before an always-visible
+close icon. Clicking the model opens the shared Models picker for that harness;
+the footer does not repeat model or effort. Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.
 

@@ -8,7 +8,6 @@
 /// chosen, and what happens when it is are all the picker's ([GridModelPicker]).
 library;
 
-
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -213,103 +212,137 @@ class ModelPickerRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final row = Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (avatar != null) ...[
-          dimmed
-              ? Opacity(opacity: kUnavailableOpacity, child: avatar)
-              : avatar!,
-          const SizedBox(width: 11),
-        ],
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Tooltip(
-                message: title,
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      DesktopChrome.control(
-                        color: dimmed
-                            ? DesktopChrome.muted
-                            : DesktopChrome.foreground,
-                        medium: true,
-                      ).copyWith(
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w500,
-                      ),
-                ),
-              ),
-              if (subtitle.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
-              if (hint != null) ...[
-                const SizedBox(height: 2),
-                // Two lines: "<computer> seems offline — its models come back when it does" is
-                // longer than a row is wide, and cut short it no longer says when.
-                Text(
-                  hint!,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (trailing != null) ...[
-          const SizedBox(width: 12),
-          // Capped, not flexed — see [kModelPickerTrailingMax]. The cap is also what keeps a quota
-          // column from overflowing the row at a large text size in a small window.
-          ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: kModelPickerTrailingMax,
-            ),
-            child: trailing!,
-          ),
-        ],
-      ],
-    );
-    // Selection stays on the chosen model while focus can move independently.
     return PaneMenuAction(
       onPressed: onTap,
       selected: selected,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: kModelPickerInset,
-          vertical: 8,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      builder: (context, active) {
+        final row = Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            row,
-            if (meter != null) ...[
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: meter!.clamp(0, 1),
-                  minHeight: 5,
-                  backgroundColor: AppColors.border,
-                  valueColor: AlwaysStoppedAnimation(note ?? AppColors.accent),
+            if (avatar != null) ...[
+              dimmed
+                  ? Opacity(opacity: kUnavailableOpacity, child: avatar)
+                  : avatar!,
+              const SizedBox(width: 11),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: title,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          DesktopChrome.control(
+                            color: active
+                                ? grid.AppDesktop.onSelection
+                                : dimmed
+                                ? DesktopChrome.muted
+                                : DesktopChrome.foreground,
+                            medium: true,
+                          ).copyWith(
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(
+                        color: active ? grid.AppDesktop.onSelection : null,
+                      ),
+                    ),
+                  ],
+                  if (hint != null) ...[
+                    const SizedBox(height: 2),
+                    // Two lines: "<computer> seems offline — its models come back when it does" is
+                    // longer than a row is wide, and cut short it no longer says when.
+                    Text(
+                      hint!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(
+                        color: active ? grid.AppDesktop.onSelection : null,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 12),
+              // Capped, not flexed — see [kModelPickerTrailingMax]. The cap is also what keeps a quota
+              // column from overflowing the row at a large text size in a small window.
+              ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: kModelPickerTrailingMax,
                 ),
+                child: active
+                    ? ColorFiltered(
+                        colorFilter: const ColorFilter.mode(
+                          grid.AppDesktop.onSelection,
+                          BlendMode.srcIn,
+                        ),
+                        child: trailing!,
+                      )
+                    : trailing!,
               ),
             ],
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 16,
+              child: selected
+                  ? Icon(
+                      AppIcons.check,
+                      size: 16,
+                      color: active
+                          ? grid.AppDesktop.onSelection
+                          : DesktopChrome.foreground,
+                    )
+                  : null,
+            ),
           ],
-        ),
-      ),
+        );
+        return Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: kModelPickerInset,
+            vertical: 8,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              row,
+              if (meter != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: meter!.clamp(0, 1),
+                    minHeight: 5,
+                    backgroundColor: active
+                        ? grid.AppDesktop.onSelection.withValues(alpha: .2)
+                        : AppColors.border,
+                    valueColor: AlwaysStoppedAnimation(
+                      active
+                          ? grid.AppDesktop.onSelection
+                          : note ?? AppColors.accent,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

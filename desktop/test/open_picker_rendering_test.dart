@@ -274,7 +274,9 @@ void main() {
             )
             .style!
             .color,
-        tester.widget<TerminalView>(find.byType(TerminalView)).theme.red,
+        Theme.of(
+          tester.element(find.byKey(const ValueKey('new-harness-status'))),
+        ).colorScheme.error,
       );
       await tester.pumpWidget(const SizedBox());
       app.dispose();

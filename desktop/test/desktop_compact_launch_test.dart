@@ -313,7 +313,7 @@ void main({bool nativeSmoke = false}) {
     expect(_task, findsOneWidget);
     expect(
       tester.widget<TextField>(_task).decoration?.hintText,
-      'What’s next?',
+      'Harness anything',
     );
     expect(find.byKey(const ValueKey('new-harness-settings')), findsNothing);
     expect(find.byKey(const ValueKey('new-harness-task-toggle')), findsNothing);

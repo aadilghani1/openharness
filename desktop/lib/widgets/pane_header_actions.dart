@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 /// Pane-local model selection and optional standalone terminal context.
-/// Closing, zooming, and stopping remain keyboard/menu commands.
+/// The pane keeps its fixed close target outside this flexible group.
 class PaneHeaderActions extends StatelessWidget {
   const PaneHeaderActions({
     super.key,

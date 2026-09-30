@@ -13,12 +13,14 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_status.dart';
+import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/usage/models_menu_controller.dart';
+import 'package:harness/widgets/workspace_subscription_usage.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 import 'package:harness/widgets/grid_model_picker.dart';
@@ -34,6 +36,31 @@ import 'package:harness/ws/ws_conn.dart';
 import 'swarm_state_test.dart' show createApp, MemoryStore;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'support/real_fonts.dart';
+
+class _FooterSubscriptions extends ModelsMenuController {
+  List<Map<String, Object?>> values = [];
+  @override
+  List<Map<String, Object?>> get rows => values;
+  @override
+  Future<void> refresh() async {}
+  void update(List<Map<String, Object?>> value) {
+    values = value;
+    notifyListeners();
+  }
+}
+
+Map<String, Object?> subscription(
+  String engine,
+  String account,
+  num? remaining, {
+  String? status,
+}) => {
+  'engine': engine,
+  'account': account,
+  'remainingPercent': remaining,
+  'status': status ?? '$remaining% remaining',
+  'details': ['Weekly limit'],
+};
 
 class _PRConnection extends WsConn {
   _PRConnection()
@@ -142,39 +169,16 @@ void main() {
   });
   for (final native in [false, true]) {
     testWidgets(
-      'shared model selector follows focus and rejects stale actions (native=$native)',
+      'pane model opens shared picker for its harness (native=$native)',
       (tester) async {
         final updates = <Map>[];
         const channel = MethodChannel('harness/swarm_tabs');
-        const codec = StandardMethodCodec();
         final messenger = tester.binding.defaultBinaryMessenger;
         messenger.setMockMethodCallHandler(channel, (call) async {
           if (call.method == 'update') updates.add(call.arguments as Map);
           return true;
         });
         addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-        Future<void> activate(int paneId, String agentId) async {
-          final done = Completer<void>();
-          messenger.handlePlatformMessage(
-            channel.name,
-            codec.encodeMethodCall(
-              MethodCall('focusedModel', {
-                'paneId': paneId,
-                'agentId': agentId,
-              }),
-            ),
-            (bytes) {
-              codec.decodeEnvelope(bytes!);
-              done.complete();
-            },
-          );
-          for (var i = 0; i < 8 && !done.isCompleted; i++) {
-            await tester.pump();
-          }
-          expect(done.isCompleted, isTrue);
-          await done.future;
-        }
-
         final connection = _PaneModelConnection();
         final app = createApp(connectionForTest: (_) => connection);
         addTearDown(app.dispose);
@@ -198,43 +202,43 @@ void main() {
         final second = app.adoptSessionForTest(terminal('a1', []));
         await mount(tester, app, nativeTabs: native);
         final selectors = find.byType(GridModelPicker);
-        expect(selectors, findsOneWidget);
+        Finder selector(String agent) =>
+            find.byKey(ValueKey(('pane-model', 'm', agent)));
+        expect(selectors, findsNWidgets(2));
+        expect(find.text('GPT-6 Astra'), findsOneWidget);
+        expect(find.text('Fable'), findsOneWidget);
+        expect(find.textContaining('High'), findsNothing);
         expect(
-          find.descendant(of: find.byType(TerminalPanel), matching: selectors),
+          find.descendant(
+            of: find.byKey(const ValueKey('workspace-status-bar')),
+            matching: selectors,
+          ),
           findsNothing,
         );
-        if (native) {
-          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra · High');
-        } else {
-          expect(find.text('GPT-6 Astra · High'), findsOneWidget);
-          expect(find.text('Fable'), findsNothing);
-          final modelRect = tester.getRect(selectors);
-          final contextRect = tester.getRect(
-            find.byKey(const ValueKey('workspace-pane-context')),
-          );
-          expect(modelRect.right, lessThan(contextRect.left));
-          expect(modelRect.center.dy, closeTo(contextRect.center.dy, .1));
-          await captureControls(tester, 'focused-model');
-          expect(
-            find.descendant(
-              of: find.byKey(const ValueKey('workspace-status-bar')),
-              matching: selectors,
-            ),
-            findsOneWidget,
-          );
+        if (native) expect(updates.last['focusedModel'], isNull);
+        for (final width in [1280.0, 720.0]) {
+          tester.view.physicalSize = Size(width, 800);
+          await tester.pump();
+          for (final pane in [first, second]) {
+            final close = find.descendant(
+              of: find.byKey(pane.cellKey),
+              matching: find.byType(PaneCloseButton),
+            );
+            expect(close.hitTestable(), findsOneWidget);
+            final modelRect = tester.getRect(selector(pane.agentId!));
+            final closeRect = tester.getRect(close);
+            expect(modelRect.right, lessThanOrEqualTo(closeRect.left));
+            expect(modelRect.center.dy, closeTo(closeRect.center.dy, .1));
+          }
+          expect(tester.takeException(), isNull);
+          if (!native) await captureControls(tester, 'pane-model-$width');
         }
-        app.focusPane(first.id);
+        tester.view.physicalSize = const Size(1280, 800);
         await tester.pump();
-        if (native) {
-          expect(updates.last['focusedModel']['text'], 'Fable · High');
-          await activate(second.id, 'a1');
-          expect(find.text('Local-Test-Model'), findsNothing);
-          await activate(first.id, 'a0');
-        } else {
-          expect(find.text('GPT-6 Astra · High'), findsNothing);
-          await tester.tap(selectors);
-        }
+        expect(app.focusedPane, same(second));
+        await tester.tap(selector('a0'));
         await tester.pumpAndSettle();
+        expect(app.focusedPane, same(first));
         final modelSearch = find.byKey(const ValueKey('swarm-search-input'));
         expect(modelSearch, findsOneWidget);
         expect(tester.widget<TextField>(modelSearch).controller!.text, ':');
@@ -245,14 +249,9 @@ void main() {
         expect(connection.retargets.single['agentId'], 'a0');
         expect(connection.retargets.single['gridModel'], 'Local-Test-Model');
         expect(app.panes, containsAll([first, second]));
-        final stale = tester.widget<GridModelPicker>(selectors).onUseOwnLogin!;
-        if (native) {
-          await activate(first.id, 'a0');
-        } else {
-          await tester.tap(selectors);
-        }
+
+        await tester.tap(selector('a0'));
         await tester.pumpAndSettle();
-        expect(modelSearch, findsOneWidget);
         app.focusPane(second.id);
         await tester.pumpAndSettle();
         if (modelSearch.evaluate().isNotEmpty) {
@@ -264,24 +263,17 @@ void main() {
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
         }
-        // Dismissing the picker restores its originating pane. Move again
-        // before checking that a callback captured for that pane is stale.
-        app.focusPane(second.id);
+        final stale = tester.widget<GridModelPicker>(selector('a0')).onOpen!;
+        app.closePane(first.id);
         await tester.pump();
         stale();
         await tester.pump();
+        expect(modelSearch, findsNothing);
         expect(connection.retargets, hasLength(1));
         app.machineStates['m']!.nodeOnline = false;
-        app.focusPane(first.id);
+        app.focusPane(second.id, reveal: true);
         await tester.pump();
-        app.focusPane(second.id);
-        await tester.pump();
-        expect(tester.widget<GridModelPicker>(selectors).enabled, isFalse);
-        if (native) {
-          expect(updates.last['focusedModel']['interactive'], isFalse);
-          await activate(second.id, 'a1');
-        }
-        expect(find.text('Local-Test-Model'), findsNothing);
+        expect(tester.widget<GridModelPicker>(selector('a1')).enabled, isFalse);
         app.newSwarm();
         await tester.pump();
         expect(selectors, findsNothing);
@@ -291,7 +283,132 @@ void main() {
     );
   }
 
-  testWidgets('hover close belongs to its pane and reserves title space', (
+  test(
+    'footer distinguishes exhausted, unknown and separate subscriptions',
+    () {
+      expect(
+        WorkspaceSubscriptionUsage.fromRows([
+          subscription('claude', 'aaaaaa', 0),
+          subscription('codex', 'bbbbbb', 50),
+        ]).text,
+        'Claude 0% · Codex 50%',
+      );
+      final all = WorkspaceSubscriptionUsage.fromRows([
+        subscription('claude', 'aaaaaa', 0),
+        subscription('claude', 'cccccc', .3, status: '<1% remaining'),
+        subscription('codex', 'bbbbbb', null, status: 'Usage unavailable'),
+      ]);
+      expect(all.text, 'Claude aaaaaa 0% · Claude cccccc <1% · Codex —');
+      expect(all.detail, contains('Codex · bbbbbb: Usage unavailable'));
+      expect(all.detail, contains('Weekly limit'));
+      expect(
+        WorkspaceSubscriptionUsage.fromRows([
+          subscription('claude', '', null, status: 'Not signed in'),
+        ]).text,
+        'Subscriptions',
+      );
+    },
+  );
+
+  for (final native in [false, true]) {
+    testWidgets(
+      'footer usage updates and opens subscriptions (native=$native)',
+      (tester) async {
+        final updates = <Map>[];
+        const channel = MethodChannel('harness/swarm_tabs');
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return true;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final subscriptions = _FooterSubscriptions()
+          ..values = [
+            subscription('claude', 'aaaaaa', 0),
+            subscription('codex', 'bbbbbb', 50),
+          ];
+        final app = createApp();
+        final pane = app.adoptSessionForTest(terminal('a0', []));
+        addTearDown(app.dispose);
+        addTearDown(subscriptions.dispose);
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(1280, 800);
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: SwarmScreen(
+              notifier: app,
+              nativeTabs: native,
+              modelsMenu: subscriptions,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        const label = 'Claude 0% · Codex 50%';
+        if (native) {
+          expect(updates.last['subscriptionUsage']['text'], label);
+          expect(
+            updates.last['subscriptionUsage']['detail'],
+            contains('remaining'),
+          );
+        } else {
+          expect(find.text(label), findsOneWidget);
+          final usage = find.byKey(
+            const ValueKey('workspace-subscription-usage'),
+          );
+          final context = find.byKey(const ValueKey('workspace-pane-context'));
+          expect(
+            tester.getRect(usage).right,
+            lessThan(tester.getRect(context).left),
+          );
+          await captureControls(tester, 'subscription-usage-footer');
+          for (final width in [480.0, 640.0]) {
+            tester.view.physicalSize = Size(width, 800);
+            await tester.pump();
+            expect(tester.takeException(), isNull);
+            expect(
+              tester.getRect(usage).right,
+              lessThan(tester.getRect(context).left),
+            );
+          }
+          tester.view.physicalSize = const Size(1280, 800);
+        }
+        subscriptions.update([subscription('codex', 'bbbbbb', 27)]);
+        await tester.pump();
+        if (native) {
+          expect(updates.last['subscriptionUsage']['text'], 'Codex 27%');
+          final done = Completer<void>();
+          messenger.handlePlatformMessage(
+            channel.name,
+            const StandardMethodCodec().encodeMethodCall(
+              const MethodCall('subscriptions'),
+            ),
+            (_) => done.complete(),
+          );
+          await tester.pumpAndSettle();
+          await done.future;
+        } else {
+          expect(find.text('Codex 27%'), findsOneWidget);
+          await tester.tap(
+            find.byKey(const ValueKey('workspace-subscription-usage')),
+          );
+          await tester.pumpAndSettle();
+        }
+        final search = find.byKey(const ValueKey('swarm-search-input'));
+        expect(
+          tester.widget<TextField>(search).controller!.text,
+          ':subscription',
+        );
+        expect(app.focusedPane, same(pane));
+        expect(app.panes, [pane]);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('visible close belongs to its pane without moving the title', (
     tester,
   ) async {
     final app = createApp();
@@ -305,36 +422,33 @@ void main() {
     ];
     final close = find.byType(PaneCloseButton);
     expect(close, findsNWidgets(2));
-    expect(close.hitTestable(), findsNothing);
+    expect(close.hitTestable(), findsNWidgets(2));
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(titles.first));
     await tester.pump();
-    expect(close.hitTestable(), findsOneWidget);
+    expect(close.hitTestable(), findsNWidgets(2));
     for (var i = 0; i < 2; i++) {
       expect(tester.getRect(titles.at(i)), titleRects[i]);
     }
-    await mouse.moveTo(tester.getCenter(close.hitTestable()));
+    await mouse.moveTo(tester.getCenter(close.first));
     await tester.pump();
     final closeIcon = find.descendant(
-      of: close.hitTestable(),
+      of: close.first,
       matching: find.byIcon(AppIcons.close),
     );
     expect(tester.widget<Icon>(closeIcon).color!.a, 1);
     expect(tester.widget<Icon>(closeIcon).size, AppIcons.inlineSize);
     expect(
-      find.descendant(
-        of: close.hitTestable(),
-        matching: find.byType(ColoredBox),
-      ),
+      find.descendant(of: close.first, matching: find.byType(ColoredBox)),
       findsNothing,
     );
     for (var i = 0; i < 2; i++) {
       expect(tester.getRect(titles.at(i)), titleRects[i]);
     }
     await tester.pump(const Duration(milliseconds: 100));
-    await captureControls(tester, 'pane-hover-close');
-    await tester.tap(close.hitTestable());
+    await captureControls(tester, 'pane-visible-close');
+    await tester.tap(close.first);
     await tester.pump();
     expect(find.byKey(first.cellKey), findsNothing);
     expect(app.panes, [second]);
@@ -552,7 +666,7 @@ void main() {
         if (native) {
           expect(
             ((updates.last['tabs'] as List).single as Map)['label'],
-            '1:Release',
+            'Release',
           );
         } else {
           expect(find.text('Release'), findsOneWidget);
@@ -961,8 +1075,8 @@ void main() {
       app.adoptSessionForTest(terminal('a1', []));
       await mount(tester, app);
       expect(find.text('code'), findsNWidgets(2));
-      expect(find.text('1:'), findsOneWidget);
-      expect(find.text('2:'), findsOneWidget);
+      expect(find.text('1:'), findsNothing);
+      expect(find.text('2:'), findsNothing);
       final context = find.byKey(const ValueKey('workspace-pane-context'));
       expect(
         tester.getRect(context).top,
@@ -1002,7 +1116,7 @@ void main() {
       }
       expect(
         tester.getSize(secondTab).width,
-        lessThan(workspaceBarCellSizeOf(tester.element(secondTab)).width * 12),
+        lessThanOrEqualTo(160),
         reason: 'short tab labels keep their compact width in a roomy window',
       );
       expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
@@ -1015,7 +1129,7 @@ void main() {
           of: find.byType(TerminalPanel),
           matching: find.byType(GridModelPicker),
         ),
-        findsNothing,
+        findsWidgets,
       );
       await tester.tap(find.byKey(ValueKey(first.id)));
       await tester.pump(const Duration(milliseconds: 350));
@@ -1065,7 +1179,8 @@ void main() {
       app.adoptSessionForTest(terminal('a1', []));
       await mount(tester, app, nativeTabs: true);
       final tab = (updates.last['tabs'] as List).single as Map;
-      expect(tab['label'], '1:code');
+      expect(tab['label'], 'code');
+      expect(tab['shortcutHint'], '⌘1');
       expect((updates.last['focusedContext'] as Map)['text'], 'Test host');
       expect(updates.last['barStyle'], containsPair('family', isA<String>()));
       final originalPrefs = appearancePrefsStore.value;
@@ -1089,7 +1204,7 @@ void main() {
       app.newSwarm();
       await tester.pump();
       expect(updates.last['focusedContext'], isNull);
-      expect(((updates.last['tabs'] as List).last as Map)['label'], '2:new');
+      expect(((updates.last['tabs'] as List).last as Map)['label'], 'New Tab');
       await tester.pumpWidget(const SizedBox());
     },
   );

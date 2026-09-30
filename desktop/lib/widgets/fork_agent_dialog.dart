@@ -415,6 +415,17 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                     ),
                   ),
                 ],
+                if (uncertain && !_busy) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton(
+                      key: const Key('fork-start-another'),
+                      onPressed: _startAnother,
+                      child: const Text('Start another fork'),
+                    ),
+                  ),
+                ],
                 if (_busy) ...[
                   const SizedBox(height: 12),
                   Text(
@@ -438,12 +449,6 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                   ),
                 ),
           actions: [
-            if (uncertain && !_busy)
-              OutlinedButton(
-                key: const Key('fork-start-another'),
-                onPressed: _startAnother,
-                child: const Text('Start another fork'),
-              ),
             Tooltip(
               message:
                   '$closeLabel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',

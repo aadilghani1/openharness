@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/terminal/terminal_search.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -14,6 +15,7 @@ import 'package:harness/widgets/resting_section.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 import 'package:xterm/xterm.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/real_fonts.dart';
 import 'support/resting_models.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -89,15 +91,7 @@ Future<void> _capture(WidgetTester tester, String name) async {
 void main() {
   setUpAll(() async {
     await loadRealFonts();
-    if (_renderDir == null) return;
-    final root = Platform.environment['FLUTTER_ROOT'];
-    final file = File(
-      '$root/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-    );
-    final bytes = await file.readAsBytes();
-    await (FontLoader(
-      'MaterialIcons',
-    )..addFont(Future.value(ByteData.view(bytes.buffer)))).load();
+    if (_renderDir != null) await loadPreviewFonts();
   });
 
   for (final brightness in Brightness.values) {
@@ -236,26 +230,72 @@ void main() {
         final chosen = find.byWidgetPredicate(
           (widget) => widget is ModelPickerRow && widget.selected,
         );
-        BorderSide chosenRim() =>
-            (tester
-                        .widget<Material>(
-                          find.descendant(
-                            of: chosen,
-                            matching: find.byType(Material),
-                          ),
-                        )
-                        .shape!
-                    as OutlinedBorder)
-                .side;
-        final selectedRim = chosenRim();
+        Material chosenMaterial() => tester.widget<Material>(
+          find.descendant(of: chosen, matching: find.byType(Material)),
+        );
+        tester
+            .widget<EditableText>(
+              find.descendant(of: editor, matching: find.byType(EditableText)),
+            )
+            .focusNode
+            .requestFocus();
+        await tester.ensureVisible(chosen);
+        await tester.pumpAndSettle();
+        final savedShape = chosenMaterial().shape;
+        final savedBounds = tester.getRect(chosen);
+        expect(chosenMaterial().color, grid.AppSurface.accentWash);
+        expect(
+          find.descendant(of: chosen, matching: find.byIcon(AppIcons.check)),
+          findsOneWidget,
+        );
         Focus.of(
           tester.element(
             find.descendant(of: chosen, matching: find.text('Qwen3.5-4B')),
           ),
         ).requestFocus();
         await tester.pumpAndSettle();
-        expect(chosenRim().color, isNot(selectedRim.color));
-        expect(chosenRim().width, selectedRim.width);
+        expect(chosenMaterial().color, grid.AppDesktop.selection);
+        expect(chosenMaterial().shape, savedShape);
+        expect(tester.getRect(chosen), savedBounds);
+        expect(
+          tester
+              .widget<Icon>(
+                find.descendant(
+                  of: chosen,
+                  matching: find.byIcon(AppIcons.check),
+                ),
+              )
+              .color,
+          grid.AppDesktop.onSelection,
+        );
+
+        final wake = find.widgetWithText(TextButton, 'Show models');
+        await tester.ensureVisible(wake);
+        Focus.of(tester.element(find.text('Show models'))).requestFocus();
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<Material>(
+                find.descendant(of: wake, matching: find.byType(Material)),
+              )
+              .color,
+          grid.AppDesktop.selection,
+        );
+        for (final label in ['Show models', 'usually 15–40 s']) {
+          expect(
+            tester.widget<Text>(find.text(label)).style!.color,
+            grid.AppDesktop.onSelection,
+          );
+        }
+        expect(
+          tester
+              .widget<Icon>(
+                find.descendant(of: wake, matching: find.byIcon(AppIcons.eye)),
+              )
+              .color,
+          grid.AppDesktop.onSelection,
+        );
+        await _capture(tester, 'model-menu-wake-focus-$label');
 
         await tester.enterText(editor, 'macbook');
         await tester.pumpAndSettle();
@@ -406,6 +446,44 @@ void main() {
         final menuBounds = tester.getRect(_menu);
         expect(menuBounds.left, greaterThanOrEqualTo(8));
         expect(menuBounds.right, lessThanOrEqualTo(372));
+        final matchCase = find.widgetWithText(TextButton, 'Match case');
+        expect(
+          tester
+              .widget<Material>(
+                find.descendant(of: matchCase, matching: find.byType(Material)),
+              )
+              .color,
+          grid.AppDesktop.selection,
+        );
+        expect(
+          tester.widget<Text>(find.text('Match case')).style!.color,
+          grid.AppDesktop.onSelection,
+        );
+        expect(
+          tester
+              .widget<Text>(
+                find.descendant(
+                  of: matchCase,
+                  matching: find.text(search.caseSensitive ? 'On' : 'Off'),
+                ),
+              )
+              .style!
+              .color,
+          grid.AppDesktop.onSelection,
+        );
+        if (search.caseSensitive) {
+          expect(
+            tester
+                .widget<Icon>(
+                  find.descendant(
+                    of: matchCase,
+                    matching: find.byIcon(AppIcons.check),
+                  ),
+                )
+                .color,
+            grid.AppDesktop.onSelection,
+          );
+        }
         await _capture(tester, 'find-options-${brightness.name}-$scale');
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();

@@ -1158,6 +1158,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
 
     Widget labelValue(String label, String value) {
+      if (desktop) return _desktopDetail(label, value);
       return Padding(
         padding: EdgeInsets.only(bottom: cell.height * .6),
         child: Row(
@@ -1168,17 +1169,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               width: cell.width * 9,
               child: Text(
                 label,
-                style: desktop
-                    ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
-                    : terminalContentStyle(color: theme.muted),
+                style: terminalContentStyle(color: theme.muted),
               ),
             ),
             Expanded(
               child: Text(
                 value,
-                style: desktop
-                    ? DesktopChrome.text(size: 12)
-                    : terminalContentStyle(color: theme.foreground),
+                style: terminalContentStyle(color: theme.foreground),
               ),
             ),
           ],
@@ -1226,10 +1223,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             widget.search.modelUseError != null)
           errorLine(widget.search.modelUseError!),
         SizedBox(height: cell.height),
-        labelValue(
-          'Machine',
-          entry.node ?? (entry.source == 'Local' ? 'This Mac' : entry.source),
-        ),
+        if (!desktop || entry.node != null || entry.source == 'Local')
+          labelValue(
+            'Machine',
+            entry.node ?? (entry.source == 'Local' ? 'This Mac' : entry.source),
+          ),
         if (local != null) ...[
           if (fitsLabel() case final fits?) labelValue('Fits', fits),
           labelValue('Size', bytesLabel(local.sizeBytes)),
@@ -1390,8 +1388,42 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ], controls: true);
   }
 
+  Widget _desktopDetail(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+        final style = DesktopChrome.text(size: 12, color: DesktopChrome.muted);
+        // Keep the shared label column wide enough for its longest label in
+        // the actual system font, including enlarged accessibility text.
+        final measure = TextPainter(
+          text: TextSpan(text: 'Machine', style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final labelWidth = math.max(72 * scale, measure.width + 12);
+        measure.dispose();
+        final labelText = Text(label, style: style);
+        final valueText = Text(value, style: DesktopChrome.text(size: 12));
+        return constraints.maxWidth < 260 * scale
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [labelText, const SizedBox(height: 2), valueText],
+              )
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: labelWidth, child: labelText),
+                  Expanded(child: valueText),
+                ],
+              );
+      },
+    ),
+  );
+
   /// The preview's lines: the first is the title, `''` is a blank row, and a `(label, value)`
-  /// pair is a labelled row — [_kDetailLabelColumns] columns of label, the value wrapping beside it.
+  /// pair is a labelled row — [_kDetailLabelColumns] terminal columns of label.
   Widget _details(List<Object> lines, {bool controls = false}) {
     if (DesktopChrome.of(context)) {
       return ListView(
@@ -1401,35 +1433,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           for (var i = 0; i < lines.length; i++)
             switch (lines[i]) {
               '' => const SizedBox(height: 12),
-              (final String label, final String value) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final labelText = Text(
-                      label,
-                      style: DesktopChrome.text(
-                        size: 12,
-                        color: DesktopChrome.muted,
-                      ),
-                    );
-                    final valueText = Text(
-                      value,
-                      style: DesktopChrome.text(size: 12),
-                    );
-                    return constraints.maxWidth < 260
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [labelText, valueText],
-                          )
-                        : Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(width: 72, child: labelText),
-                              Expanded(child: valueText),
-                            ],
-                          );
-                  },
-                ),
+              (final String label, final String value) => _desktopDetail(
+                label,
+                value,
               ),
               final line => Padding(
                 padding: EdgeInsets.only(bottom: i == 0 ? 5 : 3),

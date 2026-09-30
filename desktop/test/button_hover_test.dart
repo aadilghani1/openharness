@@ -21,7 +21,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/shared/theme/app_theme.dart';
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+
+import 'support/real_fonts.dart';
 
 const _hovered = {WidgetState.hovered};
 
@@ -49,6 +52,8 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  setUpAll(loadRealFonts);
+
   for (final brightness in [Brightness.dark, Brightness.light]) {
     group('on ${brightness.name}', () {
       late ThemeData theme;
@@ -59,6 +64,74 @@ void main() {
       });
 
       tearDown(() => AppTheme.brightness.value = Brightness.light);
+
+      testWidgets('capsules keep space around enlarged system text', (
+        tester,
+      ) async {
+        for (final scale in [1.0, 1.7, 2.0]) {
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: theme,
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: Scaffold(
+                body: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: 16,
+                    children: [
+                      TextButton(
+                        key: const Key('text-button'),
+                        onPressed: () {},
+                        child: const Text('Close', key: Key('text-label')),
+                      ),
+                      OutlinedButton(
+                        key: const Key('outlined-button'),
+                        onPressed: () {},
+                        child: const Text(
+                          'Troubleshooting details',
+                          key: Key('outlined-label'),
+                        ),
+                      ),
+                      FilledButton(
+                        key: const Key('filled-button'),
+                        onPressed: () {},
+                        child: const Text(
+                          'Link machine',
+                          key: Key('filled-label'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+          for (final kind in ['text', 'outlined', 'filled']) {
+            final button = tester.getRect(find.byKey(Key('$kind-button')));
+            final label = tester.getRect(find.byKey(Key('$kind-label')));
+            expect(
+              label.top - button.top,
+              greaterThanOrEqualTo(6),
+              reason: '$kind at $scale needs space above its label',
+            );
+            expect(
+              button.bottom - label.bottom,
+              greaterThanOrEqualTo(6),
+              reason: '$kind at $scale needs space below its label',
+            );
+            if (scale == 1) {
+              expect(button.height, 32);
+            } else {
+              expect(button.height, greaterThan(32));
+            }
+          }
+          expect(tester.takeException(), isNull);
+        }
+      });
 
       test('every button kind declares a hover overlay', () {
         final kinds = {
@@ -89,6 +162,28 @@ void main() {
           overlay.resolve({WidgetState.disabled, WidgetState.hovered})!.a,
           0,
         );
+      });
+
+      test('error text stays readable on ordinary desktop surfaces', () {
+        final originalPalette = AppTheme.palette.value;
+        addTearDown(() => AppTheme.palette.value = originalPalette);
+        for (final palette in HarnessPalette.values) {
+          AppTheme.palette.value = palette;
+          final error = buildAppTheme(brightness: brightness).colorScheme.error;
+          for (final surface in {
+            'page': AppPalette.windowBg,
+            'card': AppPalette.cardBg,
+            'content card': AppCard.base,
+            'menu': AppMenu.fill,
+            'field': AppDesktop.field,
+          }.entries) {
+            expect(
+              _contrast(error, surface.value),
+              greaterThanOrEqualTo(4.5),
+              reason: '${palette.name} ${surface.key} must carry error text',
+            );
+          }
+        }
       });
 
       test('Increase Contrast strengthens neutral controls and focus', () {

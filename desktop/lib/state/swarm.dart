@@ -47,6 +47,7 @@ class Swarm {
   static String normalizeName(String name) =>
       const {
             'New swarm',
+            'New Swarm',
             'New tab',
             'New Tab',
             'New Harness',

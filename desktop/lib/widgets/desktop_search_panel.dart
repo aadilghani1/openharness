@@ -33,8 +33,8 @@ class DesktopSearchPanel extends StatelessWidget {
   final VoidCallback onClose, onRefocus;
   final Widget Function() previewBuilder;
 
-  static const maxWidth = 880.0;
-  static const maxHeight = 520.0;
+  static const maxWidth = 1120.0;
+  static const maxHeight = 680.0;
 
   static const categories = [
     ('Harnesses', ''),

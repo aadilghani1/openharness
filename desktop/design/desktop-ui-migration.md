@@ -10,9 +10,9 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Surface | Current evidence / work remaining |
 | --- | --- |
 | Shared type, controls, fields, menus | System typography, semantic colors, 32-point icon controls, stable focus boundaries, Increase Contrast and platform text scaling implemented; terminal scaling stays independent |
-| Welcome / New Tab | Shared 680-point composer and recent-session context implemented; inspected in rebuilt app |
+| Welcome / New Tab | Shared 680-point composer; six muted Recent harnesses with status-format context and “now”; empty welcome omits history |
 | Cmd-N and child choosers | Purpose icons, approval explanations, visible focus, and coding-agent-first order implemented; shared controller retained |
-| Cmd-P and resource previews | Modern frame and Harnesses scope implemented; inspected search, scopes, and dismissal in rebuilt app |
+| Cmd-P and resource previews | 1120×680 bounded panel, wider preview, natural-height model groups, explicit loading/error/retry states; six scopes rendered in both appearances |
 | Rename and takeover | Desktop prompt anatomy implemented; safety/IME and focus-return tests pass |
 | Stop, delete, restart, fork | Desktop confirmations implemented; long errors scroll independently of fixed actions; synthetic light/dark/narrow renders inspected |
 | Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
@@ -27,7 +27,7 @@ and tests do not override it. Remain on `experiment/friendly-desktop`, unmerged.
 | Teams / ancillary dialogs | Swarm conversation, questions, member controls and Quick Start use desktop typography and controls; polling, answers, learning steps and storage unchanged |
 | Layout / move / pane menus | Graphical layout previews, scrollable move list, shared model menu and compact Find options implemented; keyboard navigation and terminal Find sizing retained |
 | Daemon panels | Companion settings, pairing, proposal controls and consent use desktop controls; artwork, reveal frames, state and approval gates retained |
-| Native tabs / footer / menus | Compact tabs retained; model/effort at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
+| Native tabs / footer / menus | System-font curved tabs with names, hover close and Command-held hints; 10-point pane frames. Model/effort at left and focused machine/project/branch/PR at right. Empty New Tabs hide the footer; modals isolate it, with a passive customization preview |
 | Linux / browser presentation | Shared light/dark, narrow and enlarged-text fixtures cover responsive behavior; physical Linux/browser platform validation is not claimed |
 
 Legacy/test-only paths (including the old NewAgentDialog entry when
@@ -161,3 +161,59 @@ The experimental branch remains unmerged for the user's visual review.
 - Physical IME, VoiceOver and native Linux/browser execution remain outside this
   verification. These results do not claim those platform checks or whole-app
   code coverage. The branch remains experimental and unmerged.
+
+
+### Review refinements and familiar tabs, 2026-09-29
+
+- Creation and New Tab share “Harness anything”. Recent harnesses use one muted
+  neutral ink, retain the chosen status wording/fields/font, and suppress colored
+  backgrounds. Quiet inline creation controls keep a neutral focus fill; normal
+  branch focus no longer leaves a bright outline.
+- GitHub entry begins as a single field. Validation grows only as needed. Long
+  chooser errors and model notices scroll within a bounded area while search and
+  a complete option remain available. A lost-machine message now opens the existing
+  machine chooser directly. Anchors scrolled out of view cannot place its popover
+  above the window; the regression was reproduced with real fonts and a long draft.
+- Cmd-P has a 1120×680 maximum, with 44/56 results/preview proportion on wide
+  windows. A synthetic answer has 591 points of reading width rather than 360.
+  Model section headings and gaps use their own natural height. Loading, retrying,
+  errors and settled emptiness are distinct without discarding available results.
+- AppKit and Flutter tabs use system type, left-aligned names and related curved
+  geometry. Permanent numbering is removed. Hover reveals close; Command reveals
+  actual remapped shortcut hints without shifting titles. Legacy automatic New
+  Swarm names become New Tab; explicitly saved custom names remain exact. Pane
+  frames adopt the shared 10-point radius and clipped 9-point inner edge.
+- Supporting refinements include purpose/value/state accessibility for settings,
+  naturally sized enlarged-text menus, 6-point vertical button padding, consistent
+  model/Find selection and checkmarks, and the Harness manager's shared surface,
+  typography and readable semantic status/error colors.
+- Independent AI reviewers exercised rendered interaction fixtures for search,
+  creation, settings, model/Find menus and the manager. Native tab review includes
+  rest, hover and Command-held states in both appearances.
+- Each pane now shows its model immediately before an always-visible close icon.
+  The model opens the shared Models picker for that exact harness. Narrow panes
+  retain the close target; stale or unavailable targets cannot switch an agent.
+  Tab-strip close still appears on hover and yields to Command-held hints.
+- The footer's left side shows remaining subscription usage, such as
+  “Claude 0% · Codex 50%”, from the same deduplicated accounts and limiting
+  windows as Models. Unknown readings show “—”; distinct accounts remain
+  distinct. Hover explains the reading; click opens Subscriptions. The right
+  side retains the focused machine/project/branch/PR and their actions.
+- Final suite: **4,702 passed, 16 skipped**. New Harness has **3,948/3,948**
+  covered executable lines and the resource picker **1,271/1,271** (both 100%).
+  App, test and integration source analysis is clean. A whole-directory analysis
+  additionally reports 12 pre-existing informational lints in vendored xterm;
+  terminal dependency code was not changed.
+- **19 native macOS journeys** pass across four sequential batches (5, 5, 5, 4),
+  using in-memory workspaces and fake transports. **1,224 AppKit checks** pass,
+  including hidden native-window layout. These do not establish physical
+  AppKit keyboard/IME behavior.
+- The normal macOS debug review build succeeds. Final actual-font renders cover
+  the pane model/close arrangement, subscription footer, muted recents and curved
+  tabs at wide and narrow sizes. Automatic reopening was blocked by the native
+  app-control connection (“Sky Computer Use native pipe startup failed”); this
+  checkpoint does not claim a live-account app review.
+
+Remaining review: physical VoiceOver and AppKit IME, native Linux/browser use,
+and the persistent scrolling cue in enlarged confirmation bodies. These remain
+explicit gaps, not completed checks. This checkpoint remains unmerged.

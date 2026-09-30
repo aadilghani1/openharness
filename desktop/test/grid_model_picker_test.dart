@@ -896,28 +896,18 @@ void main() {
         SystemMouseCursors.click,
         reason: row,
       );
-      // BOTH annotations, because the innermost one under the pointer is what decides: InkWell
-      // installs a MouseRegion of its own, so an ancestor asking for a hand does not settle it.
-      //
-      // ⚠️ Counted, not read off `.first`. The nearest MouseRegion ancestor of a row IS the one
-      // InkWell made, so asserting on it twice looked like two checks and was one — the wrapper
-      // could be set to `basic` and this test still passed. Two carrying it is what proves both.
-      final asking = tester
-          .widgetList<MouseRegion>(
-            find.ancestor(
-              of: find.text(row),
-              matching: find.byType(MouseRegion),
-            ),
-          )
-          .where(
-            (region) =>
-                WidgetStateProperty.resolveAs<MouseCursor>(region.cursor, {
-                  WidgetState.hovered,
-                }) ==
-                SystemMouseCursors.click,
-          )
-          .length;
-      expect(asking, greaterThanOrEqualTo(2), reason: row);
+      // The shared action now owns its cursor through the actual TextButton;
+      // a second, redundant MouseRegion is no longer part of the row contract.
+      final button = tester.widget<TextButton>(
+        find
+            .ancestor(of: find.text(row), matching: find.byType(TextButton))
+            .first,
+      );
+      expect(
+        button.style!.mouseCursor!.resolve({WidgetState.hovered}),
+        SystemMouseCursors.click,
+        reason: row,
+      );
     }
 
     // ⚠️ This asserts the widgets' contract, NOT the cursor the OS draws. Reading that back through
@@ -1173,18 +1163,14 @@ void main() {
 
   // ── which row is the current one ─────────────────────────────────────────────────────────────
   //
-  // The mark is the fill and its accent border, and nothing else: the tick it used to carry sat
-  // beside the quota figure and crowded it, and was taken out on request. Hover paints a fill too,
-  // but never the border, which is what keeps the two apart. What is asked here is which ROW gets
-  // the mark, and that a screen reader is told which one it is.
+  // A reserved check column identifies the saved choice independently of the
+  // blue pointer/keyboard highlight. It must agree with screen-reader selection.
 
   ModelPickerRow rowFor(WidgetTester tester, String title) => tester
       .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
       .firstWhere((r) => r.title == title);
 
-  testWidgets('exactly one row is marked, with no tick beside it', (
-    tester,
-  ) async {
+  testWidgets('exactly one row has the saved-choice checkmark', (tester) async {
     build(
       models: [
         {'id': 'Qwen-Test', 'node': 'macbook'},
@@ -1196,7 +1182,14 @@ void main() {
     expect(rowFor(tester, 'Qwen-Test').selected, isTrue);
     expect(rowFor(tester, 'DeepSeek-Test').selected, isFalse);
     expect(rowFor(tester, 'Anthropic').selected, isFalse);
-    expect(find.byIcon(AppIcons.check), findsNothing);
+    expect(find.byIcon(AppIcons.check), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byWidget(rowFor(tester, 'Qwen-Test')),
+        matching: find.byIcon(AppIcons.check),
+      ),
+      findsOneWidget,
+    );
     expect(
       // `.last`: the header control names the current model too.
       tester.getSemantics(find.text('Qwen-Test').last),
@@ -1220,7 +1213,14 @@ void main() {
 
     expect(rowFor(tester, 'Anthropic').selected, isTrue);
     expect(rowFor(tester, 'Qwen-Test').selected, isFalse);
-    expect(find.byIcon(AppIcons.check), findsNothing);
+    expect(find.byIcon(AppIcons.check), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byWidget(rowFor(tester, 'Anthropic')),
+        matching: find.byIcon(AppIcons.check),
+      ),
+      findsOneWidget,
+    );
   });
 
   // ── the selection has to land before the machine confirms it ──────────────────────────────────

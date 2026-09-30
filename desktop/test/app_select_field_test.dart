@@ -1,3 +1,5 @@
+import 'dart:ui' show SemanticsAction, Tristate;
+
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,6 +50,64 @@ Future<void> _open(WidgetTester tester) async {
 
 void main() {
   tearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+
+  testWidgets('accessible selector announces purpose, value and open state', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      String? chosen;
+      await tester.pumpWidget(
+        _host(
+          StatefulBuilder(
+            builder: (context, setState) => AppSelectField<String?>(
+              semanticLabel: 'Terminal font',
+              value: chosen,
+              options: _options,
+              width: 280,
+              onChanged: (value) => setState(() => chosen = value),
+            ),
+          ),
+          top: true,
+        ),
+      );
+      final trigger = find.bySemanticsLabel('Terminal font');
+      final closed = tester.getSemantics(trigger);
+      expect(closed.getSemanticsData().value, 'System, SF Pro');
+      expect(closed.getSemanticsData().flagsCollection.isButton, isTrue);
+      expect(
+        closed.getSemanticsData().flagsCollection.isExpanded,
+        Tristate.isFalse,
+      );
+      expect(closed.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+      // Activating through assistive technology must open the same working menu.
+      tester
+          .renderObject(trigger)
+          .owner!
+          .semanticsOwner!
+          .performAction(closed.id, SemanticsAction.tap);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getSemantics(trigger)
+            .getSemanticsData()
+            .flagsCollection
+            .isExpanded,
+        Tristate.isTrue,
+      );
+      expect(chosen, isNull, reason: 'opening does not change the setting');
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Menlo'));
+      await tester.pumpAndSettle();
+      expect(chosen, 'Menlo');
+      final updated = tester.getSemantics(trigger).getSemanticsData();
+      expect(updated.label, 'Terminal font');
+      expect(updated.value, 'Menlo');
+      expect(updated.flagsCollection.isExpanded, Tristate.isFalse);
+      expect(updated.flagsCollection.isFocused, Tristate.isTrue);
+    } finally {
+      semantics.dispose();
+    }
+  });
 
   testWidgets('large text fits and focus remains distinct from selection', (
     tester,

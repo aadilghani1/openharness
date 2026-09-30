@@ -201,7 +201,9 @@ class DesktopPill extends StatelessWidget {
               (states) => BorderSide(
                 // Reserve the same rim in every state; focus never moves text.
                 width: grid.AppDesktop.focusWidth,
-                color: states.contains(WidgetState.disabled)
+                color:
+                    states.contains(WidgetState.disabled) ||
+                        (quiet && !highContrast)
                     ? Colors.transparent
                     : states.contains(WidgetState.focused) || highlightFocus
                     ? (highContrast

@@ -340,7 +340,16 @@ void main() {
         );
         await tester.pumpWidget(preview);
         await tester.pumpAndSettle();
-        expect(find.text('Recent sessions'), findsOneWidget);
+        final tabInk = tester.widget<Text>(find.text('New Tab')).style!.color!;
+        final tabContrast =
+            (tabInk.computeLuminance() + .05) /
+            (grid.AppPalette.swarmWelcome.computeLuminance() + .05);
+        expect(
+          tabContrast >= 1 ? tabContrast : 1 / tabContrast,
+          greaterThanOrEqualTo(4.5),
+          reason: 'Tab names remain readable beside either app appearance.',
+        );
+        expect(find.text('Recent harnesses'), findsOneWidget);
         final recent = find.byKey(const ValueKey('welcome-sessions'));
         expect(
           find.descendant(of: recent, matching: find.byType(EngineMark)),
@@ -432,7 +441,7 @@ void main() {
   );
 
   testWidgets(
-    'recent context follows status customization without another renderer',
+    'recent context keeps customized fields and wording in one neutral ink',
     (tester) async {
       await setup(tester, withPane: true);
       final prefs = appearancePrefsStore.value;
@@ -453,6 +462,24 @@ void main() {
         tester.widget<StatusLine>(line).parts.text,
         'M2 in openharness on feature/login-redirect',
       );
+      for (final style in StatusLineStyle.values) {
+        appearancePrefsStore.value = prefs.copyWith(
+          prompt: PromptPrefs(statusStyle: style, color: true),
+        );
+        await tester.pumpAndSettle();
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.descendant(of: line, matching: find.byType(RichText)),
+        );
+        expect(paragraph.text.toPlainText(), contains('openharness'));
+        paragraph.text.visitChildren((span) {
+          if (span is TextSpan && (span.text?.isNotEmpty ?? false)) {
+            expect(span.style?.color, DesktopChrome.muted);
+            expect(span.style?.backgroundColor, isNull);
+          }
+          return true;
+        });
+        expect(tester.takeException(), isNull);
+      }
       appearancePrefsStore.value = prefs.copyWith(
         prompt: const PromptPrefs(
           statusStyle: StatusLineStyle.pastelPowerline,
