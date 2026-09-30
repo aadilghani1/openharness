@@ -199,6 +199,7 @@ void main() {
     int port,
     File identityFile, {
     Future<void> Function()? spawnCommand,
+    Future<void> Function()? stopCommand,
   }) => LocalCliDiscovery(
     config: AppConfig(
       apiBaseUrl: 'https://harness-api.autonomous.ai',
@@ -206,7 +207,63 @@ void main() {
     ),
     identity: LocalMachineIdentity(computerIdFile: identityFile),
     spawnCommand: spawnCommand,
+    stopCommand: stopCommand,
   );
+
+  test('supervision asks checkOwner once per daemon pid, and never for one that is not ready', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    var status = readyStatus(computerId, extra: {'discoveryReady': false});
+    server = await serveStatus(await freePort(), () => status);
+    final checked = <int>[];
+    final discovery = discoveryFor(
+      server!.port,
+      identityFile,
+      spawnCommand: () async =>
+          fail('A running daemon must not be spawned over'),
+    );
+    final timer = discovery.startSupervising(
+      checkInterval: const Duration(milliseconds: 20),
+      checkOwner: (pid) async => checked.add(pid),
+    );
+    addTearDown(timer.cancel);
+    await Future.delayed(const Duration(milliseconds: 150));
+    expect(checked, isEmpty, reason: 'not ready: no owner check');
+    status = readyStatus(computerId);
+    await Future.delayed(const Duration(milliseconds: 200));
+    status = readyStatus(computerId, extra: {'pid': 5353});
+    await Future.delayed(const Duration(milliseconds: 200));
+    expect(checked, [4242, 5353]);
+  });
+
+  test('restart stops the daemon, waits for its port to go quiet, and spawns a new one', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    final port = await freePort();
+    server = await serveStatus(port, () => readyStatus(computerId));
+    final calls = <String>[];
+    final discovery = discoveryFor(
+      port,
+      identityFile,
+      stopCommand: () async {
+        calls.add('stop');
+        await server!.close(force: true);
+      },
+      spawnCommand: () async {
+        calls.add('start');
+        server = await serveStatus(
+          port,
+          () => readyStatus(computerId, extra: {'pid': 7777}),
+        );
+      },
+    );
+    final probe = await discovery.restart();
+    expect(calls, ['stop', 'start']);
+    expect(probe.ready, isTrue);
+    expect(probe.pid, 7777);
+  });
 
   test(
     'reads real working folders from older local status snapshots',

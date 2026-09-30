@@ -7,6 +7,7 @@ import 'package:archive/archive.dart' show ZLibDecoder;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
+import '../core/sleep_aware.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
@@ -275,6 +276,7 @@ class TerminalSession extends ChangeNotifier {
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
   Timer? _heartbeat;
+  int _heartbeatTick = 0;
   DateTime? _lastStreamActivityAt;
   Timer? _ackTimer;
   Timer? _inputTimer;
@@ -469,7 +471,7 @@ class TerminalSession extends ChangeNotifier {
     // Armed unconditionally (not just on reopen attempts): a `terminal_open` sent through a silently
     // stale relay session never gets ANY reply — nothing else would ever notice or recover from that.
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(
+    _resyncTimer = SleepAwareTimer(
       resyncTimeout,
       () => unawaited(_handleOpenTimeout(openPayload, generation)),
     );
@@ -496,7 +498,7 @@ class TerminalSession extends ChangeNotifier {
     }
     if (sent) {
       _resyncTimer?.cancel();
-      _resyncTimer = Timer(
+      _resyncTimer = SleepAwareTimer(
         resyncTimeout,
         () => unawaited(_handleOpenTimeout(openPayload, generation)),
       );
@@ -566,10 +568,12 @@ class TerminalSession extends ChangeNotifier {
         if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
-        _heartbeat = Timer.periodic(
-          const Duration(seconds: 5),
-          (_) => unawaited(_sendHeartbeat()),
-        );
+        _heartbeatTick = 0;
+        _heartbeat = Timer.periodic(const Duration(seconds: 5), (timer) {
+          final slept = sleptSinceTick(timer, _heartbeatTick);
+          _heartbeatTick = timer.tick;
+          unawaited(_sendHeartbeat(afterSleep: slept));
+        });
         _armInitialKeyframeWatchdog();
         return true;
       case 'terminal_keyframe':
@@ -1480,8 +1484,12 @@ class TerminalSession extends ChangeNotifier {
     }
   }
 
-  Future<void> _sendHeartbeat() async {
+  Future<void> _sendHeartbeat({bool afterSleep = false}) async {
     if (status != TerminalSessionStatus.controlling || streamId == null) return;
+    // The first beat after the computer slept: the stream was quiet because nobody here was running,
+    // not because it died. Its silence is measured afresh from now — the daemon carries the lease over
+    // the same gap — instead of declaring TERMINAL_STREAM_TIMEOUT and throwing away typed input.
+    if (afterSleep) _lastStreamActivityAt = _now();
     final generation = _generation;
     final sent = await send('terminal_alive', {'streamId': streamId});
     if (!sent && _isCurrent(generation)) {
@@ -1518,7 +1526,7 @@ class TerminalSession extends ChangeNotifier {
 
   void _armInitialKeyframeWatchdog() {
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(resyncTimeout, () {
+    _resyncTimer = SleepAwareTimer(resyncTimeout, () {
       if (streamId != null && _expectedSeq == null) {
         unawaited(_requestResync('TERMINAL_KEYFRAME_TIMEOUT'));
       }
@@ -1553,7 +1561,7 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     _resyncTimer?.cancel();
-    _resyncTimer = Timer(resyncTimeout, () {
+    _resyncTimer = SleepAwareTimer(resyncTimeout, () {
       if (_resyncRequested && streamId == currentStream) {
         unawaited(_sendResyncAttempt());
       }
