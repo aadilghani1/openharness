@@ -546,7 +546,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          model.isChannel ? 'Harnesses in this swarm' : 'Teammates',
+          model.isChannel ? 'Harnesses in this tab' : 'Teammates',
           style: faint,
         ),
         _gap(),
@@ -967,12 +967,12 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Agents consult relevant peers in this swarm and continue their work.',
+                              'Agents consult relevant peers in this tab and continue their work.',
                               style: style,
                             ),
                             _gap(),
                             Text(
-                              'Add a harness to this swarm to include its agent.',
+                              'Add a harness to this tab to include its agent.',
                               style: faint,
                             ),
                             for (final instruction in teamRows(
@@ -1001,7 +1001,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
           : Align(
               alignment: Alignment.topLeft,
               child: _action(
-                model.isChannel ? 'Retry reading swarm' : 'Retry reading team',
+                model.isChannel ? 'Retry reading tab' : 'Retry reading team',
                 () => unawaited(model.refresh()),
               ),
             );
@@ -1072,7 +1072,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
         final title = _creating
             ? 'Connect a team'
             : model.team?['name'] as String? ??
-                  (model.isChannel ? 'Swarm conversation' : 'Team');
+                  (model.isChannel ? 'Tab conversation' : 'Team');
         return TerminalPromptKeys(
           cancel: widget.onClose,
           refresh: () => unawaited(model.refresh()),
@@ -1119,7 +1119,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                                   : () => unawaited(model.select(null)),
                             ),
                           Text(
-                            '${model.isChannel ? 'Swarm conversation · ' : ''}${model.members.where((m) => m['enabled'] != false).length} harnesses · ${model.isChannel ? 'This swarm only · ' : ''}${model.team?['state'] ?? 'Connecting'}',
+                            '${model.isChannel ? 'Tab conversation · ' : ''}${model.members.where((m) => m['enabled'] != false).length} harnesses · ${model.isChannel ? 'This tab only · ' : ''}${model.team?['state'] ?? 'Connecting'}',
                             style: faint,
                           ),
                           if (model.team?['state'] != 'archived')
@@ -1187,7 +1187,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                     ),
                     _gap(),
                     Text(
-                      '${terminalPromptHint(context, 'picker.complete', 'Tab')} move · ${terminalPromptHint(context, 'picker.cancel', 'Esc')} close · conversations stay with the ${model.isChannel ? 'swarm' : 'team'}',
+                      '${terminalPromptHint(context, 'picker.complete', 'Tab')} move · ${terminalPromptHint(context, 'picker.cancel', 'Esc')} close · conversations stay with the ${model.isChannel ? 'tab' : 'team'}',
                       style: faint,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

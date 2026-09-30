@@ -36,16 +36,16 @@ class KeyboardLesson {
       .map((binding) => boxKeyLabel(describeKeyBinding(binding)))
       .join(' / ');
   String get result => switch (command) {
-    'swarm.new' => '[work]  [new swarm]\nFind a harness, or create one',
+    'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
     'agent.open' || 'agent.add' =>
-      '[harness 1] │ [harness 2]\nBoth harnesses share this swarm.',
+      '[harness 1] │ [harness 2]\nBoth harnesses share this tab.',
     'agent.new' => 'agent    Claude Code\nmachine  dev\nproject  ~/work/payments\ntask     (optional)\nCreate is selected. Up/Down + Enter edits an argument. Permissions and profiles are inside Agent.',
     'pane.zoom' => '[harness 2 — full workspace]\nPress the same key to restore the other panes.',
     'pane.close' =>
       '[harness 1]\nThe second view closes. Its harness keeps running.',
     'swarm.close' =>
-      '[previous swarm]\nThe view closes. Its harnesses keep running.',
-    'navigation.commands' => '>rename\nRename Harness\nRename Swarm',
+      '[previous tab]\nThe view closes. Its harnesses keep running.',
+    'navigation.commands' => '>rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',
     'picker.complete_back' =>

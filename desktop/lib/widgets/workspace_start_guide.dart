@@ -81,8 +81,8 @@ class WorkspaceStartGuide extends StatelessWidget {
                   Flexible(
                     child: callout(
                       'swarm.new',
-                      'New Swarm',
-                      'Group multiple harnesses in one swarm.',
+                      'New Tab',
+                      'Group multiple harnesses in one tab.',
                     ),
                   ),
                   Flexible(

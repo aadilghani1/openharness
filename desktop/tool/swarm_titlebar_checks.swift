@@ -913,7 +913,7 @@ private extension SwarmTabStrip {
   }
 
   func runChecks() throws {
-    let rows = (0..<24).map { ["id": "swarm-\($0)", "name": "Swarm \($0)", "label": "\($0 + 1):code"] }
+    let rows = (0..<24).map { ["id": "swarm-\($0)", "name": "Tab \($0)", "label": "\($0 + 1):code"] }
     var events: [String] = []
     emit = { method, _ in events.append(method) }
     func state(_ rows: [[String: String]], active: String, enabled: Bool = true) -> [String: Any] {
@@ -1067,7 +1067,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
     try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
     try tabs[0].checkDoubleClickIsolation()
-    try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Swarm remain available")
+    try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
@@ -1080,7 +1080,7 @@ private extension SwarmTabStrip {
         "Management controls are plain terminal text without a resting button well")
       try checkTitlebar(control.frame.height >= 28 && control.frame.width > workspaceBarTextWidth(symbol, font: barFont),
         "The new-tab control keeps the shared click height and padding around its text")
-      try checkTitlebar(control.accessibilityLabel() == "New Swarm" && control.toolTip?.contains("New Swarm") == true,
+      try checkTitlebar(control.accessibilityLabel() == "New Tab" && control.toolTip?.contains("New Tab") == true,
         "Every symbol explains its action through a tooltip and accessible name")
       let resting = control.renderedPixels()
       let event = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
@@ -1100,7 +1100,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(contextButton.accessibilityValue() as? String == "OpenAI  M2:~/code/harness  (main)",
       "The full focused context is accessible")
     for (index, tab) in tabs.enumerated() {
-      try tab.checkAccessibility(expectedName: "Swarm \(index)", active: index == 11)
+      try tab.checkAccessibility(expectedName: "Tab \(index)", active: index == 11)
     }
     try checkActiveVisible()
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
@@ -1134,7 +1134,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(tabs[0] === original && original.displayLabel == "1:blender",
       "Type changes update the existing tab without renaming its saved workspace")
     try original.checkAccessibility(expectedName: "Custom name", active: true)
-    try checkTitlebar(newButton.toolTip == "New Swarm", "New Swarm has a label before its keymap arrives")
+    try checkTitlebar(newButton.toolTip == "New Tab", "New Tab has a label before its keymap arrives")
     events.removeAll()
     contextButton.performClick(nil)
     newButton.performClick(nil)
@@ -1168,7 +1168,7 @@ private extension SwarmTabStrip {
       try tab.checkCenteredLabel()
       try checkTitlebar(scroll.documentVisibleRect.contains(tab.frame),
         "Keyboard focus reveals the entire overflowed tab")
-      try checkTitlebar(activeId == "keyboard-23", "Focusing a tab control does not activate its swarm")
+      try checkTitlebar(activeId == "keyboard-23", "Focusing a tab control does not activate its tab")
       let before = messenger.calls.count
       messenger.holdReplies = true
       button.performClick(nil)
@@ -1198,13 +1198,13 @@ private extension SwarmTabStrip {
     stale.clickBothActions()
     try checkTitlebar(messenger.calls.count == beforeStale, "A removed tab's retained controls cannot dispatch actions")
     let unfocusedNew = newButton.renderedPixels()
-    try checkTitlebar(window.makeFirstResponder(newButton), "New swarm accepts keyboard focus")
+    try checkTitlebar(window.makeFirstResponder(newButton), "New tab accepts keyboard focus")
     try checkTitlebar(newButton.hasKeyboardFocus && newButton.renderedPixels() != unfocusedNew,
       "Keyboard focus gives the new-tab symbol the same bold emphasis as hover")
     newButton.performClick(nil)
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "new",
-      "New swarm returns keyboard ownership to the workspace")
+      "New tab returns keyboard ownership to the workspace")
     updateDaemon(["visible": true, "glyph": "\\_O_/"])
     try checkTitlebar(window.makeFirstResponder(daemonButton), "The daemon accepts keyboard focus")
     daemonButton.performClick(nil)
@@ -1322,7 +1322,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(moves.isEmpty, "Rejected drag emits no reorder")
     }
     info.draggingLocation = convert(NSPoint(x: newButton.frame.midX, y: 20), to: nil)
-    try rejected("New Swarm is not a tab drop target")
+    try rejected("New Tab is not a tab drop target")
     info.draggingLocation = document.convert(NSPoint(x: tabs[0].frame.midX, y: 20), to: nil)
     info.draggingSource = SwarmTabButton(id: "drag-3")
     try rejected("A foreign tab with a matching ID cannot reorder this strip")
@@ -1422,12 +1422,12 @@ private extension SwarmTitlebar {
       HarnessNativeKeymap.contexts.map { ($0, [["keys": ["cmd+k", "n"], "command": "swarm.new",
         "hint": "⌘K N", "repeatable": false, "menuAction": "new"]]) })])!
     setKeymap(onlySequence)
-    try checkTitlebar(strip.newButton.toolTip == "New Swarm · ⌘K N",
+    try checkTitlebar(strip.newButton.toolTip == "New Tab · ⌘K N",
       "The plus tooltip teaches the current shortcut sequence")
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Sequences add no hover hints or misleading first-key menu shortcut")
     setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
-    try checkTitlebar(strip.newButton.toolTip == "New Swarm",
+    try checkTitlebar(strip.newButton.toolTip == "New Tab",
       "Unbinding removes the plus tooltip's shortcut without leaving a separator")
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Unbinding clears the old native shortcut and hint")
@@ -1449,10 +1449,10 @@ private extension SwarmTitlebar {
       "The menu yields the remapped search shortcut to Flutter")
     try checkTitlebar(!main.performKeyEquivalent(with: open), "Menu equivalents defer before input dispatch")
     setKeymap(defaults)
-    try checkTitlebar(strip.newButton.toolTip == "New Swarm · ⌘T", "Keymap reload restores the current New Swarm hint")
-    try checkTitlebar(strip.newButton.accessibilityLabel() == "New Swarm", "The plus announces New Swarm")
+    try checkTitlebar(strip.newButton.toolTip == "New Tab · ⌘T", "Keymap reload restores the current New Tab hint")
+    try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
-      "Command-N and Command-T reach creation and New Swarm")
+      "Command-N and Command-T reach creation and New Tab")
     try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Harnesses")
     try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches commands")
     try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches the project picker")
@@ -1580,7 +1580,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(strip.palette == startupPalette && window.titlebarAccessoryViewControllers.count == 1,
       "Repeated configuration preserves the saved palette and one titlebar accessory")
     _ = try messenger.receive("update", arguments: [
-      "tabs": [["id": "startup-check", "name": "Synthetic swarm"]],
+      "tabs": [["id": "startup-check", "name": "Synthetic tab"]],
       "activeId": "startup-check", "enabled": true, "palette": startupColors,
     ])
     window.contentView?.layoutSubtreeIfNeeded()
@@ -1647,19 +1647,19 @@ private extension SwarmTitlebar {
     }
     try checkTitlebar(agent.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.image != nil && $0.toolTip == nil },
       "Every File action has a native icon and no hover hint")
-    try checkTitlebar(agent.items.contains { $0.title == "Rename Swarm" && $0.representedObject as? String == "renameActive" }, "Rename Swarm preserves its command")
+    try checkTitlebar(agent.items.contains { $0.title == "Rename Tab" && $0.representedObject as? String == "renameActive" }, "Rename Tab preserves its command")
     let movePane = agent.items.first(where: { $0.representedObject as? String == "movePaneToTab" })!
-    try checkTitlebar(movePane.title == "Move Pane to Swarm" && movePane.keyEquivalent == "m" && movePane.keyEquivalentModifierMask == [.command, .shift],
-      "Move Pane to Swarm advertises Command-Shift-M")
+    try checkTitlebar(movePane.title == "Move Pane to Tab" && movePane.keyEquivalent == "m" && movePane.keyEquivalentModifierMask == [.command, .shift],
+      "Move Pane to Tab advertises Command-Shift-M")
     actionsEnabled = true
     canFind = false
-    try checkTitlebar(!validateMenuItem(movePane), "Move Pane to Swarm needs a focused pane")
+    try checkTitlebar(!validateMenuItem(movePane), "Move Pane to Tab needs a focused pane")
     canFind = true
-    try checkTitlebar(validateMenuItem(movePane), "Move Pane to Swarm is available with a focused pane")
-    try checkTitlebar(agent.items.contains { $0.title == "Close Swarm" && $0.representedObject as? String == "closeActive" }, "Close Swarm preserves its command")
+    try checkTitlebar(validateMenuItem(movePane), "Move Pane to Tab is available with a focused pane")
+    try checkTitlebar(agent.items.contains { $0.title == "Close Tab" && $0.representedObject as? String == "closeActive" }, "Close Tab preserves its command")
     let closeTabShortcut = agent.items.first { $0.representedObject as? String == "closeActive" }!
     let closePaneShortcut = agent.items.first { $0.representedObject as? String == "closePane" }!
-    try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command], "Close Swarm defaults to Command-W")
+    try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command], "Close Tab defaults to Command-W")
     try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Pane defaults to Command-Shift-W")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
     try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command, .shift], "Command search keeps its native menu owner")
@@ -1667,20 +1667,20 @@ private extension SwarmTitlebar {
     try checkTitlebar(harnesses.keyEquivalent == "p" && harnesses.keyEquivalentModifierMask == [.command],
       "Command-P keeps harness search; commands use Command-Shift-P")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")
-    try checkTitlebar(agent.items.contains { $0.title == "New Swarm" && $0.keyEquivalent == "t" && $0.representedObject as? String == "new" }, "New Swarm opens the chooser with Command-T")
+    try checkTitlebar(agent.items.contains { $0.title == "New Tab" && $0.keyEquivalent == "t" && $0.representedObject as? String == "new" }, "New Tab opens the chooser with Command-T")
     let reopen = historyMenu.items.first(where: { $0.representedObject as? String == "reopen" })!
     actionsEnabled = true
     canReopen = false
-    try checkTitlebar(!validateMenuItem(reopen), "Closed-Swarm recovery is disabled with an empty history")
+    try checkTitlebar(!validateMenuItem(reopen), "Closed-Tab recovery is disabled with an empty history")
     canReopen = true
-    try checkTitlebar(validateMenuItem(reopen), "Closed-Swarm recovery becomes available")
+    try checkTitlebar(validateMenuItem(reopen), "Closed-Tab recovery becomes available")
     let closePane = agent.items.first(where: { $0.representedObject as? String == "closePane" })!
     canClosePane = false
-    try checkTitlebar(!validateMenuItem(closePane), "Remove Agent is disabled in New swarm")
+    try checkTitlebar(!validateMenuItem(closePane), "Remove Agent is disabled in New tab")
     canClosePane = true
     try checkTitlebar(validateMenuItem(closePane), "Remove Agent is enabled for a focused pane")
     let create = agent.items.first(where: { $0.representedObject as? String == "new" })!
-    try checkTitlebar(validateMenuItem(create), "Native New Swarm remains available without the retired tab capacity")
+    try checkTitlebar(validateMenuItem(create), "Native New Tab remains available without the retired tab capacity")
     let machineRows: [[String: Any]] = [
       ["id": "office", "name": "iMac – Office", "status": "Online", "presence": "Online", "local": true, "agentCount": 2,
        "agents": [["id": "one", "title": "App work", "engine": "codex", "canOpen": true],
@@ -1704,9 +1704,9 @@ private extension SwarmTitlebar {
        "detail": "Project \(index)", "machineName": "M2", "current": index == 0,
        "engine": index == 0 ? "claude" : "codex"]
     }
-    recentRows.append(["id": "swarm:recent", "title": "Recent Swarm", "swarm": true])
+    recentRows.append(["id": "swarm:recent", "title": "Recent Tab", "swarm": true])
     let closedRows: [[String: Any]] = (0..<14).map {
-      ["id": "closed-\($0)", "title": "Closed Swarm \($0)", "detail": "3 agents", "swarm": true, "canReopen": true]
+      ["id": "closed-\($0)", "title": "Closed Tab \($0)", "detail": "3 agents", "swarm": true, "canReopen": true]
     }
     updateHistory(recentRows, closed: closedRows)
     menuWillOpen(historyMenu)
@@ -1739,7 +1739,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(recent.state == .on && recent.toolTip == nil, "History adds no hover hints")
     updateHistory(recentRows, closed: closedRows)
     try checkTitlebar(historyMenu.items.contains(where: { $0 === recent }), "Unchanged history retains native menu items")
-    try checkTitlebar(validateMenuItem(closed), "A specific closed Swarm can be restored")
+    try checkTitlebar(validateMenuItem(closed), "A specific closed Tab can be restored")
     canReopen = false
     try checkTitlebar(validateMenuItem(closed), "A chosen closure uses its own capacity, independently of the latest closure")
     var unavailableRows = closedRows
@@ -1777,7 +1777,7 @@ private extension SwarmTitlebar {
     }, "Multiple-agent agents retain the group icon")
     updateHistory([])
     try checkTitlebar(!validateMenuItem(recent), "A stale recent menu item cannot dispatch after its view disappears")
-    try checkTitlebar(!validateMenuItem(closed), "A stale closed entry cannot restore another Swarm")
+    try checkTitlebar(!validateMenuItem(closed), "A stale closed entry cannot restore another Tab")
     try checkTitlebar(historyMenu.items.first(where: { $0.title == "No Recent Visits" })?.isEnabled == false, "An empty history is an inert placeholder")
     guard let menu = main.items.first(where: { $0.title == "View" })?.submenu,
           let attention = menu.items.first(where: { $0.representedObject as? String == "notifications" }) else {
@@ -1791,8 +1791,8 @@ private extension SwarmTitlebar {
     actionsEnabled = true
     try checkTitlebar(validateMenuItem(attention), "Native attention shortcut returns when the modal closes")
     try checkTitlebar(main.items.compactMap(\.submenu).flatMap(\.items).allSatisfy {
-      !["Next Swarm", "Previous Swarm"].contains($0.title)
-    }, "Next and Previous Swarm have no redundant menu rows")
+      !["Next Tab", "Previous Tab"].contains($0.title)
+    }, "Next and Previous Tab have no redundant menu rows")
     try checkTitlebar(main.item(withTitle: "Models") == nil,
       "Models has no duplicate top-level menu")
     let openModels = menu.items.first(where: { $0.representedObject as? String == "models" })!
@@ -1839,7 +1839,7 @@ private extension SwarmTitlebar {
     }
     strip.update([
       "enabled": true, "activeId": "swarm-11",
-      "tabs": (0..<12).map { ["id": "swarm-\($0)", "name": "Swarm \($0)"] },
+      "tabs": (0..<12).map { ["id": "swarm-\($0)", "name": "Tab \($0)"] },
     ])
     for width in [880.0, 1280.0, 1920.0] {
       window.setContentSize(NSSize(width: width, height: 700))
@@ -1935,10 +1935,10 @@ do {
   let longRow = SwarmHistoryEntry(["id": "long", "title": String(repeating: "Long title ", count: 100), "machineName": "Mac"])!
   try checkTitlebar(longRow.menuTitle().string.contains("…\tMac") && longRow.menuTitle().size().width < 380,
     "Long titles truncate before the machine column without widening the menu")
-  let swarmRow = SwarmHistoryEntry(["id": "swarm", "title": "My swarm", "swarm": true])!
-  try checkTitlebar(swarmRow.menuTitle().string == "My swarm", "Empty swarm rows have no invented machine label")
+  let swarmRow = SwarmHistoryEntry(["id": "swarm", "title": "My tab", "swarm": true])!
+  try checkTitlebar(swarmRow.menuTitle().string == "My tab", "Empty tab rows have no invented machine label")
   let sharedSwarm = SwarmHistoryEntry(["id": "shared", "title": "Workshop", "swarm": true, "machineName": "2 machines"])!
-  try checkTitlebar(sharedSwarm.menuTitle().string == "Workshop\t2 machines", "Swarm machine counts use the same trailing column as agent machines")
+  try checkTitlebar(sharedSwarm.menuTitle().string == "Workshop\t2 machines", "Tab machine counts use the same trailing column as agent machines")
   for button in [SwarmIconButton()] {
     button.frame = NSRect(x: 0, y: 0, width: 28, height: 28)
     button.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
@@ -2014,12 +2014,12 @@ do {
       try titlebar.checkKeymapRuntime(fixture, messenger: messenger)
     }
     window.close()
-    print("AppKit Swarm titlebar: \(titlebarCheckCount) checks passed, including native window layout; no windows displayed.")
+    print("AppKit Tab titlebar: \(titlebarCheckCount) checks passed, including native window layout; no windows displayed.")
   } else {
-    print("AppKit Swarm titlebar: \(titlebarCheckCount) checks passed; no windows opened.")
+    print("AppKit Tab titlebar: \(titlebarCheckCount) checks passed; no windows opened.")
   }
 } catch {
   let message = (error as? TitlebarCheckFailure)?.message ?? String(describing: error)
-  FileHandle.standardError.write(Data("AppKit Swarm titlebar failed: \(message)\n".utf8))
+  FileHandle.standardError.write(Data("AppKit Tab titlebar failed: \(message)\n".utf8))
   exit(1)
 }

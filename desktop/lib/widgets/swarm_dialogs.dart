@@ -25,10 +25,10 @@ Future<String?> showSwarmRenameDialog(
   context,
   keymap: keymap,
   builder: (_) => TerminalNamePrompt(
-    title: 'Rename Swarm',
+    title: 'Rename Tab',
     name: name,
     fieldKey: const Key('tab-rename-input'),
-    fieldLabel: 'Swarm name',
+    fieldLabel: 'Tab name',
     maxLength: 80,
   ),
 );

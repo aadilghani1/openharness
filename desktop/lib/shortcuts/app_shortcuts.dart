@@ -232,7 +232,7 @@ const List<AppShortcut> kAppShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Move this pane to another swarm',
+    label: 'Move this pane to another tab',
     group: ShortcutGroup.panes,
   ),
 
@@ -446,7 +446,7 @@ const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.newSwarm,
     activator: SingleActivator(LogicalKeyboardKey.keyT, meta: true),
-    label: 'New Swarm',
+    label: 'New Tab',
     group: ShortcutGroup.navigate,
   ),
   // ⌘⇧T is New Terminal, as it is in a terminal app. "Reopen last closed
@@ -489,7 +489,7 @@ const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.closeSwarm,
     activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
-    label: 'Close Swarm',
+    label: 'Close Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -499,7 +499,7 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Rename Swarm',
+    label: 'Rename Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -509,7 +509,7 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Next Swarm',
+    label: 'Next Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -519,13 +519,13 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Previous Swarm',
+    label: 'Previous Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
     action: ShortcutAction.nextSwarm,
     activator: SingleActivator(LogicalKeyboardKey.tab, control: true),
-    label: 'Next Swarm',
+    label: 'Next Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -535,7 +535,7 @@ const kSwarmShortcuts = [
       control: true,
       shift: true,
     ),
-    label: 'Previous Swarm',
+    label: 'Previous Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -636,7 +636,7 @@ List<ShortcutRow> shortcutRows() {
   // The digits are not in [kAppShortcuts] — nine near-identical rows would bury
   // everything around them — so they join here, at the end of their group.
   final digits = ShortcutRow(
-    label: 'Select swarms 1–9',
+    label: 'Select tabs 1–9',
     chords: const [
       [kIsWeb ? 'Alt' : '⌘', '1 – $kTabDigitCount'],
     ],

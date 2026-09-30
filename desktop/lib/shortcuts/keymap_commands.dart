@@ -113,7 +113,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.new',
-    'New Swarm',
+    'New Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.newSwarm,
     nativeAction: 'new',
@@ -121,7 +121,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.close',
-    'Close Swarm',
+    'Close Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.closeSwarm,
     nativeAction: 'closeActive',
@@ -132,7 +132,7 @@ final harnessCommands = <HarnessCommand>[
   // key of their own in keybindings.jsonc.
   const HarnessCommand(
     'swarm.reopen',
-    'Reopen closed swarm or pane',
+    'Reopen closed tab or pane',
     ShortcutGroup.navigate,
     action: ShortcutAction.reopenClosedSwarm,
     nativeAction: 'reopen',
@@ -140,7 +140,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.next',
-    'Next Swarm',
+    'Next Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.nextSwarm,
     nativeAction: 'next',
@@ -149,7 +149,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.previous',
-    'Previous Swarm',
+    'Previous Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.previousSwarm,
     nativeAction: 'previous',
@@ -158,7 +158,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.rename',
-    'Rename Swarm',
+    'Rename Tab',
     ShortcutGroup.actions,
     action: ShortcutAction.renameSwarm,
     nativeAction: 'renameActive',
@@ -197,7 +197,7 @@ final harnessCommands = <HarnessCommand>[
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
       'swarm.select_$i',
-      'Select swarm $i',
+      'Select tab $i',
       ShortcutGroup.navigate,
       keywords: const ['tab'],
       extraKeys: ['cmd+$i'],
@@ -262,7 +262,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'pane.move_to_tab',
-    'Move the pane to another swarm',
+    'Move the pane to another tab',
     ShortcutGroup.panes,
     action: ShortcutAction.movePaneToTab,
     nativeAction: 'movePaneToTab',
@@ -501,7 +501,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'team.open',
-    'Swarm conversation: view this swarm’s collaboration',
+    'Tab conversation: view this tab’s collaboration',
     ShortcutGroup.actions,
     action: ShortcutAction.team,
     keywords: [
@@ -511,6 +511,7 @@ final harnessCommands = <HarnessCommand>[
       'question',
       'reply',
       'inbox',
+      'tab',
       'swarm',
       'channel',
     ],

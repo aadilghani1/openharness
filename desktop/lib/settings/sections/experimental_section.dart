@@ -133,12 +133,12 @@ class _SwarmCollaborationSetting extends StatelessWidget {
         ? 'Loading…'
         : null;
     return SettingRow(
-      title: 'Swarm collaboration',
+      title: 'Tab collaboration',
       detail:
-          'Let agents automatically consult only peers in the same swarm. '
+          'Let agents automatically consult only peers in the same tab. '
           'Off by default.',
       control: Semantics(
-        label: 'Swarm collaboration',
+        label: 'Tab collaboration',
         child: Align(
           alignment: Alignment.centerLeft,
           child: Switch(
@@ -156,7 +156,7 @@ class _SwarmCollaborationSetting extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Use “Swarm conversation” in the command palette to inspect '
+              'Use “Tab conversation” in the command palette to inspect '
               'their questions and replies.',
             ),
             if (status != null) ...[

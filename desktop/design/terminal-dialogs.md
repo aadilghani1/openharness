@@ -1,6 +1,6 @@
 # Terminal dialog design system
 
-Use the [product terminology](../../docs/terminology.md): a swarm groups harnesses;
+Use the [product terminology](../../docs/terminology.md): a tab groups harnesses;
 a harness is one running agent session.
 
 **Fixed cells. Plain text. One-line selection.**
@@ -77,7 +77,7 @@ when using custom row widgets.
 - Menu actions use concise text, such as `New Harness`, with the same row
   highlight as other choices and no surrounding brackets. Shortcut hints,
   when needed, are text beside the action, resolved from the live keymap.
-- Omit redundant heading rows such as “New Swarm” or “New Pane.” Add a label or
+- Omit redundant heading rows such as “New Tab” or “New Pane.” Add a label or
   explanation only when it helps someone understand a choice or state.
 - Preserve user content, including Unicode. The restriction on decorative
   graphics applies to our controls, not to the text someone supplied.

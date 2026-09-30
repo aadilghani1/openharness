@@ -92,7 +92,7 @@ class _WorkspaceBarControlState extends State<WorkspaceBarControl> {
         : Tooltip(
             message: hint,
             excludeFromSemantics: true,
-            waitDuration: const Duration(milliseconds: 700),
+            waitDuration: const Duration(milliseconds: 500),
             child: control,
           );
   }

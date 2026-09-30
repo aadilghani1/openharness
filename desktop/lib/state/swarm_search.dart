@@ -2064,7 +2064,7 @@ class SwarmSearchController extends ChangeNotifier {
       : row.closedId != null
       ? 'Reopen'
       : row.isSwarm && !row.isStore && row.members.length != 1
-      ? 'Go to Swarm'
+      ? 'Go to Tab'
       : 'Open Harness';
 
   @override

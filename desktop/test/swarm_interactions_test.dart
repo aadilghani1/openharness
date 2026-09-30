@@ -121,7 +121,7 @@ void main() {
             await chord(tester, LogicalKeyboardKey.keyP, shift: true);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
-              '> New Swarm',
+              '> New Tab',
             );
             await tester.pump();
             await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -398,7 +398,7 @@ void main() {
       expect(input.single.streamId, 'stream-a1');
       expect(String.fromCharCodes(input.single.bytes), 'x');
       await activate('rename', {'id': second});
-      expect(find.text('Rename Swarm'), findsOneWidget);
+      expect(find.text('Rename Tab'), findsOneWidget);
       final name = tester.widget<TextField>(find.byType(TextField));
       expect(name.focusNode!.hasPrimaryFocus, isTrue);
       tester.testTextInput.enterText('Keyboard work');
@@ -445,7 +445,7 @@ void main() {
     },
   );
 
-  testWidgets('native Swarm commands cannot mutate the view behind Settings', (
+  testWidgets('native Tab commands cannot mutate the view behind Settings', (
     tester,
   ) async {
     const channel = MethodChannel('harness/swarm_tabs');

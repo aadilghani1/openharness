@@ -25,7 +25,7 @@ class WorkspaceQuickStart extends StatelessWidget {
       WorkspaceLesson.agent => ('swarm.new', 'Open your first harness'),
       WorkspaceLesson.pane => (
         'agent.open',
-        'Add a second harness to this swarm',
+        'Add a second harness to this tab',
       ),
       WorkspaceLesson.zoom => ('pane.zoom', 'Zoom the focused pane'),
       WorkspaceLesson.commands => (

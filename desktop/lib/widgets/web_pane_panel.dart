@@ -287,7 +287,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
             Expanded(
               child: Tooltip(
                 message: [widget.ownerName, ?widget.pane.url].join('\n'),
-                waitDuration: const Duration(milliseconds: 700),
+                waitDuration: const Duration(milliseconds: 500),
                 child: Row(
                   children: [
                     Flexible(

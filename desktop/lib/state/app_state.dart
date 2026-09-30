@@ -1037,7 +1037,7 @@ class AppNotifier extends ChangeNotifier {
           final gateway = channelGateway(localMachineState?.machine.machineId);
           if (gateway == null) {
             throw const TeamRequestError(
-              'Connect one of your machines to configure swarm collaboration.',
+              'Connect one of your machines to configure tab collaboration.',
             );
           }
           return teamRequest(gateway, payload);
@@ -1074,7 +1074,7 @@ class AppNotifier extends ChangeNotifier {
                 channelGateway(gatewayMachineId);
             if (machineId == null) {
               throw const TeamRequestError(
-                'Connect one of your machines to use swarm collaboration.',
+                'Connect one of your machines to use tab collaboration.',
               );
             }
             return teamRequest(machineId, payload);
@@ -8223,12 +8223,12 @@ class AppNotifier extends ChangeNotifier {
       return 'The layout changed. Close this dialog and split the pane again.';
     }
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This swarm was closed';
+    if (target == null) return 'This tab was closed';
     if (placement != null && (target.isStore || target.isOrchestrator)) {
-      return 'Open a new swarm to add a harness.';
+      return 'Open a new tab to add a harness.';
     }
     if (target.panes.length >= maxPanes) {
-      return 'This swarm is full. Open a new swarm to start a harness.';
+      return 'This tab is full. Open a new tab to start a harness.';
     }
     return null;
   }
@@ -8593,7 +8593,7 @@ class AppNotifier extends ChangeNotifier {
     if (_creationPlacementError(targetId, split, placement: placement) !=
         null) {
       _lastError =
-          'The harness started, but its original swarm or layout changed. '
+          'The harness started, but its original tab or layout changed. '
           'Use New Pane to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -9761,10 +9761,10 @@ class AppNotifier extends ChangeNotifier {
     String? notice;
     if (target == null || !swarms.contains(target)) {
       notice =
-          'Fork created. Its original swarm closed; use New Pane to open it.';
+          'Fork created. Its original tab closed; use New Pane to open it.';
     } else if (target.panes.length >= maxPanes && !keepFocus) {
       notice =
-          'Fork created. Its original swarm is full; use New Swarm to open it.';
+          'Fork created. Its original tab is full; use New Tab to open it.';
     } else {
       if (target.panes.length >= maxPanes) {
         newSwarm(name: fork.name);
@@ -10409,7 +10409,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
+          'This tab holds $maxPanes harnesses. Open another tab to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
@@ -11002,7 +11002,7 @@ class AppNotifier extends ChangeNotifier {
               .firstOrNull;
     if (twin == null && target.panes.length >= maxPanes) {
       _lastError =
-          'That swarm holds $maxPanes harnesses. Close one there to move this in.';
+          'That tab holds $maxPanes harnesses. Close one there to move this in.';
       _lastErrorRetryable = false;
       notifyListeners();
       return false;

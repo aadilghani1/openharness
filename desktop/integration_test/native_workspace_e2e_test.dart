@@ -1110,7 +1110,7 @@ void main() {
   );
 
   testWidgets(
-    'native JEV navigation returns to the original pane and hands off to New Swarm',
+    'native JEV navigation returns to the original pane and hands off to New Tab',
     (tester) async {
       final app = createApp();
       final input = <TerminalBinaryFrame>[];
@@ -1238,11 +1238,11 @@ void main() {
       await command('Keyboard practice');
       expect(learning.finished, isTrue);
       final filter = find.byKey(const ValueKey('practice-filter'));
-      await tester.enterText(filter, 'New Swarm');
+      await tester.enterText(filter, 'New Tab');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      expect(find.text('[x] New Swarm'), findsOneWidget);
+      expect(find.text('[x] New Tab'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyW, cmd: true);
       expect(app.swarms, [original]);
       expect(original.panes, panes);
@@ -1471,7 +1471,7 @@ void main() {
   );
 
   for (final (label, shortcut) in [
-    ('New Swarm', LogicalKeyboardKey.keyT),
+    ('New Tab', LogicalKeyboardKey.keyT),
     ('Open Harness', LogicalKeyboardKey.keyP),
   ]) {
     testWidgets('native created $label gets terminal input without a click', (

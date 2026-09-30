@@ -250,7 +250,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   final _offsets = <String, Offset>{};
   final _inputLayers = <int, GlobalKey<_PaneLayerState>>{};
   final _idleFocus = FocusNode(
-    debugLabel: 'Swarm navigation',
+    debugLabel: 'Tab navigation',
     skipTraversal: true,
   );
   late Object _lastInputDestination;

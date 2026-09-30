@@ -1,6 +1,6 @@
 # Terminal workspace design system
 
-Use the [product terminology](../../docs/terminology.md): a swarm groups harnesses;
+Use the [product terminology](../../docs/terminology.md): a tab groups harnesses;
 a harness is one running agent session.
 
 Harness should feel like a terminal workspace, from its tab bar to its welcome
@@ -20,7 +20,7 @@ Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
 of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
-inside the same picker. The top row keeps swarms, `+`, a plain search icon, and the
+inside the same picker. The top row keeps tabs, `+`, a plain search icon, and the
 rounded Harness Store button. On macOS, notifications live in the system menu
 bar; Flutter's Linux and browser bars keep the notification bell. The bottom row
 holds focused machine/repo/branch/PR links on the left and the model selector on
@@ -50,7 +50,7 @@ typing Shift is unnecessary. From a live harness pane, Enter uses a served or
 downloaded model for that pane, starting installed weights when necessary; Tab
 switches between the list and controls. In Cmd-N, Tab switches between fields
 and their choices. Up/Down navigates the active pane and Enter activates.
-Cmd-P's model scope uses the same behavior. Cmd-T opens a swarm, Cmd-W closes a swarm, and
+Cmd-P's model scope uses the same behavior. Cmd-T opens a tab, Cmd-W closes a tab, and
 Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates,
 Space toggles, and Escape backs out or dismisses.
 
@@ -91,13 +91,13 @@ actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet
 
-First launch uses the same New Swarm page as every later visit: “Harness like a
+First launch uses the same New Tab page as every later visit: “Harness like a
 boss.” followed by five clickable shortcuts: Start a harness, Manage all your
 harnesses, Deploy a local model, Manage all your machines, and Build beyond code.
 Resolve the shortcut hints from the live keymap; unbound actions remain clickable.
 Keep this page independent of onboarding progress; no checklist or automatic dialog.
 
-![Shared first-launch and New Swarm welcome](images/workspace-welcome.png)
+![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
 
 Use terminal foreground, background, muted text, and selection colors. Workspace
 dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,

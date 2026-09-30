@@ -466,7 +466,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                       ),
                                       onPressed: widget.onNewTab ?? _open,
                                       icon: const Icon(Icons.add, size: 18),
-                                      label: const Text('New Swarm'),
+                                      label: const Text('New Tab'),
                                     ),
                                     OutlinedButton.icon(
                                       key: const ValueKey(

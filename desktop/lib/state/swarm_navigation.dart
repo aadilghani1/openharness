@@ -1312,7 +1312,7 @@ List<SwarmDestination> swarmDestinations(
         detail: [
           // Project and machine rows name their kind; a tab beside them
           // without one read as some fourth, unnamed thing.
-          if (!swarm.isStore) 'Swarm',
+          if (!swarm.isStore) 'Tab',
           _countLabel(members.length, 'harness'),
           if (projects.isNotEmpty) _countLabel(projects.length, 'project'),
           if (machines.isNotEmpty) _countLabel(machines.length, 'machine'),

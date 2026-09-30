@@ -1003,7 +1003,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               : search.adding &&
                                     search.query.isEmpty &&
                                     search.capacity <= 0
-                              ? 'This swarm is full (${AppNotifier.maxPanes} panes). Open a new swarm to add more.'
+                              ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
                               : search.adding && search.query.isEmpty
                               ? 'No harnesses yet. Start a harness or choose @ machines to connect a machine.'
                               : search.adding

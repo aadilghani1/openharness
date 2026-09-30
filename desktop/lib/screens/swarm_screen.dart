@@ -246,7 +246,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
   StreamSubscription<void>? _modelsRequests;
-  final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
+  final _shellFocus = FocusNode(debugLabel: 'Tab shell');
 
   /// Where the keyboard waits after the active tab closes
   /// ([AppNotifier.tabStripFocused]): the strip drawn here, or the native one
@@ -375,7 +375,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             app.resolveCommandBar(request, cancelToken: cancel),
   )..addListener(_commandChanged);
   final _canvasFocus = FocusNode(
-    debugLabel: 'Swarm canvas',
+    debugLabel: 'Tab canvas',
     canRequestFocus: false,
     skipTraversal: true,
   );
@@ -5279,7 +5279,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (_newHarness case final box?) {
       if (box.busy || box.checking) {
-        box.warn('Check the pending creation before opening another swarm.');
+        box.warn('Check the pending creation before opening another tab.');
         return false;
       }
       if (!box.requestDismiss()) return false;
@@ -6812,12 +6812,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ),
               _statusToolSymbol(
                 'new-tab',
-                'New Swarm',
+                'New Tab',
                 _newTab,
                 '+',
                 Size(cell.width * 3, toolHeight),
                 theme,
-                tooltip: _commandTooltip('New Swarm', 'swarm.new'),
+                tooltip: _commandTooltip('New Tab', 'swarm.new'),
               ),
               const Spacer(),
               _searchButton(theme),

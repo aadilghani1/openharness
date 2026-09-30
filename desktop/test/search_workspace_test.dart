@@ -44,6 +44,7 @@ void main() {
         final focus = FocusManager.instance.primaryFocus;
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: Offset.zero);
+        var firstHover = true;
 
         Future<void> checkHints(String search, String store) async {
           if (native) {
@@ -60,7 +61,12 @@ void main() {
               await mouse.moveTo(Offset.zero);
               await tester.pump(const Duration(milliseconds: 300));
               await mouse.moveTo(tester.getCenter(find.byKey(ValueKey(key))));
-              await tester.pump(const Duration(milliseconds: 750));
+              await tester.pump(const Duration(milliseconds: 499));
+              // The first hint waits half a second; adjacent hints may use
+              // Flutter's immediate follow-on behavior while exploring controls.
+              if (firstHover) expect(find.text(text), findsNothing);
+              firstHover = false;
+              await tester.pump(const Duration(milliseconds: 1));
               await tester.pump(const Duration(milliseconds: 200));
               expect(find.text(text), findsOneWidget);
             }

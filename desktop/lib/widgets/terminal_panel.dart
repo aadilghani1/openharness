@@ -2759,7 +2759,7 @@ class _TerminalHeader extends StatelessWidget {
                       Flexible(
                         child: Tooltip(
                           message: identityDetail,
-                          waitDuration: const Duration(milliseconds: 700),
+                          waitDuration: const Duration(milliseconds: 500),
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onDoubleTap: () => unawaited(

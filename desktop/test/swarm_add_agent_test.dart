@@ -97,7 +97,7 @@ void main() {
   }
 
   test(
-    'adding a group uses this swarm, skips duplicates and keeps the source',
+    'adding a group uses this tab, skips duplicates and keeps the source',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
