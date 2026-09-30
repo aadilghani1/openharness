@@ -15,6 +15,8 @@
 # A bare `idf.py build` here still means the dial, so older muscle memory keeps working.
 cmake_minimum_required(VERSION 3.16)
 
+include("${CMAKE_CURRENT_LIST_DIR}/../development/channel.cmake")
+
 # ── Keep sdkconfig honest about sdkconfig.defaults ───────────────────────────────────────────────────
 # ESP-IDF reads sdkconfig.defaults ONLY when creating sdkconfig. After that sdkconfig is authoritative and
 # defaults are ignored outright — no merge, no warning. That is deliberate (so `idf.py menuconfig` edits
