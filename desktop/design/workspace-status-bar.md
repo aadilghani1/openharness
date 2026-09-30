@@ -217,18 +217,26 @@ sits slightly outside the mark so both remain legible. The combined template
 adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
 above 99 with the exact count in its tooltip and accessibility
 value. Its native menu lists only harnesses with unread
-notifications, grouped by project, adding machine names when more than one
-machine is represented. Read sessions disappear; an empty inbox says “No unread
+notifications, grouped by their open tab's displayed name in tab order. Each
+section lists its newest notifications first. Sessions outside open tabs appear
+under “Other sessions” at the end. A session in multiple tabs appears once,
+preferring the active tab, then the first tab containing it. Machine profiles
+do not hide notification groups. Project and machine context stays in row
+tooltips. Read sessions disappear; an empty inbox says “No unread
 notifications.” Blue dots mark unread rows. Long titles truncate with
 their full text and context in tooltips; unavailable rows are disabled. Rows
 stay in place while the menu is open. New Harness, Clear All Notifications,
 Open Harness, Settings, and Quit follow the conversations. The window's titlebar
 has search and Store without a duplicate bell.
 
+![Native notification menu grouped by tabs, rendered with synthetic sessions](images/notification-tab-groups.png)
+
 Clear All acknowledges only the notifications in the displayed snapshot. Newer
 results and replacement questions stay unread. Opening a conversation restores
-its existing pane before bringing the window forward. Reading a question clears
-its notification, while the question itself remains pending until answered.
+its existing pane in the displayed tab before bringing the window forward. If
+that view moved or closed, navigation resolves the session's current location.
+Reading a question clears its notification, while the question itself remains
+pending until answered.
 The menu uses AppKit's standard keyboard navigation and accessibility.
 
 On Linux and the web, a small bell sits in the top row between the search icon

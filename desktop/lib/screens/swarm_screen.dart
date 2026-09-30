@@ -5670,9 +5670,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
         )
         .firstOrNull;
     if (row == null || row['unavailable'] != null) return;
-    final destination = swarmDestinations(app)
-        .where((item) => item.machineId == machineId && item.agentId == agentId)
-        .firstOrNull;
+    // Keep the tab shown in the menu even if the active tab changed while it
+    // was open. If that view moved or closed, resolve the session's new home.
+    final destination =
+        SwarmLocationCatalog()
+            .read(app, const [])
+            .where(
+              (item) =>
+                  item.swarmId == receipt['tabId'] &&
+                  item.machineId == machineId &&
+                  item.agentId == agentId,
+            )
+            .firstOrNull ??
+        swarmDestinations(app)
+            .where(
+              (item) => item.machineId == machineId && item.agentId == agentId,
+            )
+            .firstOrNull;
     if (destination == null || _newHarness?.requestDismiss() == false) return;
     _closeNewHarness(restoreFocus: false);
     _closeSearch(restoreFocus: false);

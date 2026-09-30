@@ -20,10 +20,12 @@ private func renderedStatusPixels(_ image: NSImage) -> Data {
 }
 
 private func fixture(_ agent: String, project: String = "autonomous-harness",
+                     tabId: String? = "tab-build", tabName: String = "Build", machine: String = "office",
                      unread: Bool = true, token: String = "first", offline: Bool = false) -> [String: Any] {
-  var row: [String: Any] = ["machineId": "office", "machineName": "Office Mac",
-    "agentId": agent, "title": agent, "project": project, "unread": unread,
+  var row: [String: Any] = ["machineId": machine,
+    "agentId": agent, "title": agent, "tabName": tabId == nil ? "Other sessions" : tabName, "unread": unread,
     "detail": "Office Mac · \(project)"]
+  row["tabId"] = tabId
   if unread { row["readToken"] = token; row["label"] = "Finished" }
   if offline { row["unavailable"] = "Offline" }
   return row
@@ -47,11 +49,12 @@ let status = HarnessStatusMenu(installStatusItem: false, showWindow: { reveals +
 do {
   var rows = [fixture("General chat conversation"),
               fixture("DeepSeek model", project: "No Project", unread: false),
-              fixture("Math addition inquiry", project: "No Project", offline: true)]
+              fixture("Math addition inquiry", project: "No Project", tabId: nil, offline: true)]
   status.update(["enabled": true, "statusMenuEntries": rows])
   try check(status.menu.items.filter { $0.state == .on }.count == 2, "Unread rows have dots")
   try check(status.row("General chat conversation").onStateImage != nil, "A blue dot replaces the checkmark")
-  try check(status.menu.items.contains { $0.title == "No Project" && !$0.isEnabled }, "Projects use native section headings")
+  try check(status.menu.items.contains { $0.title == "Build" && !$0.isEnabled } &&
+            status.menu.items.contains { $0.title == "Other sessions" && !$0.isEnabled }, "Tabs and other sessions use native section headings")
   try check(!status.row("Math addition inquiry").isEnabled, "Offline conversations stay visible but disabled")
   try check(status.row("Math addition inquiry").toolTip?.contains("Offline") == true, "Unavailable state is explained")
   try check(!status.menu.items.contains { $0.title == "DeepSeek model" }, "Read conversations are absent from the notification menu")
@@ -66,10 +69,10 @@ do {
   let selected = status.row("General chat conversation")
   let before = emitted.count
   rows[0] = fixture("General chat conversation", token: "newer")
-  rows.append(fixture("New result", project: "website"))
+  rows.append(fixture("New result", project: "website", tabId: "tab-website", tabName: "Website"))
   status.update(["enabled": true, "statusMenuEntries": rows])
   try check(status.row("General chat conversation") === selected &&
-            !status.menu.items.contains { $0.title == "website" }, "Arrivals do not move open-menu rows")
+            !status.menu.items.contains { $0.title == "Website" }, "Arrivals do not move open-menu rows")
   status.click(selected)
   try check(emitted.count == before, "A replaced notification cannot dispatch an old click")
   status.click(status.item("clearStatusNotifications"))
@@ -79,7 +82,21 @@ do {
             cleared?.first?["readToken"] as? String == "first", "Clear sends only displayed receipts, never new arrivals")
   status.menuDidClose(status.menu)
   status.menuNeedsUpdate(status.menu)
-  try check(status.menu.items.contains { $0.title == "website" }, "The next opening shows new arrivals")
+  try check(status.menu.items.contains { $0.title == "Website" }, "The next opening shows new arrivals")
+
+  status.menuWillOpen(status.menu)
+  let originalLocation = status.row("General chat conversation")
+  rows[0]["tabId"] = "tab-review"
+  rows[0]["tabName"] = "Review"
+  status.update(["enabled": true, "statusMenuEntries": rows])
+  status.click(originalLocation)
+  let originalReceipt = emitted.last?.1 as? [String: Any]
+  try check(emitted.last?.0 == "openStatusHarness" && originalReceipt?["tabId"] as? String == "tab-build",
+            "A current notification retains its displayed destination when tabs change")
+  try check(!status.menu.items.contains { $0.title == "Review" }, "Tab changes do not move open-menu rows")
+  status.menuDidClose(status.menu)
+  status.menuNeedsUpdate(status.menu)
+  try check(status.menu.items.contains { $0.title == "Review" }, "The next opening reflects the new tab group")
 
   status.update(["enabled": false, "statusMenuEntries": rows])
   try check(!status.item("newAgent").isEnabled && !status.item("settings").isEnabled &&
@@ -130,6 +147,20 @@ do {
               "Unread notifications add a visible badge to the icon")
   }
   try checkCounter()
+  status.update(["enabled": true, "statusMenuEntries": [
+    fixture("API result", tabId: "tab-one", tabName: "Work"),
+    fixture("Website result", project: "website", tabId: "tab-one", tabName: "Work", machine: "laptop"),
+    fixture("Review result", tabId: "tab-two", tabName: "Work"),
+    fixture("Background result", tabId: nil),
+  ]])
+  let headings = status.menu.items.filter { !$0.isEnabled && !$0.isSeparatorItem && $0.representedObject == nil }
+  try check(headings.map { $0.title } == ["Work", "Work", "Other sessions"],
+            "Tab IDs keep equal names separate, combine projects and machines, and preserve section order")
+  try check(status.menu.index(of: status.row("Website result")) < status.menu.index(of: headings[1]) &&
+            status.menu.index(of: status.row("Review result")) > status.menu.index(of: headings[1]),
+            "Each row stays inside its tab's section")
+  try check(status.row("Website result").toolTip?.contains("website") == true,
+            "Project context remains available in the row tooltip")
   print("Harness status menu passed \(checks) checks")
 } catch {
   fputs("Harness status menu failed: \(error)\n", stderr)

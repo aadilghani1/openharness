@@ -81,14 +81,12 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
       empty.isEnabled = false
       menu.addItem(empty)
     } else {
-      // First occurrence preserves newest-first ordering across project groups.
-      var groups: [String] = []
-      var grouped: [String: [[String: Any]]] = [:]
-      let machines = Set(entries.compactMap { $0["machineId"] as? String })
+      // Dart supplies tab order and newest-first rows within each tab. IDs keep
+      // identically named tabs separate; nil holds sessions outside open tabs.
+      var groups: [String?] = []
+      var grouped: [String?: [[String: Any]]] = [:]
       for entry in entries {
-        let project = entry["project"] as? String ?? "No Project"
-        let machine = entry["machineId"] as? String ?? ""
-        let group = machine + "\u{0}" + project
+        let group = entry["tabId"] as? String
         if grouped[group] == nil { groups.append(group) }
         grouped[group, default: []].append(entry)
       }
@@ -96,8 +94,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
         if index > 0 { menu.addItem(.separator()) }
         let rows = grouped[group]!
         let first = rows[0]
-        var title = first["project"] as? String ?? "No Project"
-        if machines.count > 1 { title += " · " + (first["machineName"] as? String ?? "") }
+        let title = first["tabName"] as? String ?? "Other sessions"
         let heading = NSMenuItem(title: compact(title), action: nil, keyEquivalent: "")
         heading.isEnabled = false
         heading.toolTip = title
