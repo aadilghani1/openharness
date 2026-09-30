@@ -3,6 +3,7 @@ import '../sharing/shared_harness_panel.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
@@ -35,7 +36,8 @@ import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
-import 'box_chrome.dart';
+import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder, PaneOpacity;
+import 'desktop_chrome.dart';
 
 /// The view drawn alone when only one fits (a phone): the real zoom, else the
 /// focused view, else the first before anything has focus.
@@ -50,17 +52,24 @@ class PaneGrid extends StatelessWidget {
     required this.notifier,
     this.swarmMode = false,
     this.empty,
+    this.onOpenModels,
     this.soloFocused = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
   final bool swarmMode;
   final Widget? empty;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
 
   /// Draw only the focused view, full size, as if zoomed — without zooming:
   /// the tab's saved layout and zoom stay as they are (a phone shows one
   /// harness at a time; the same desk on a computer keeps its grid).
   final bool soloFocused;
+
+  /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
+  final WidgetBuilder? companionViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +82,9 @@ class PaneGrid extends StatelessWidget {
             notifier: notifier,
             dragging: dragging,
             empty: empty,
+            onOpenModels: onOpenModels,
             soloFocused: soloFocused,
+            companionViewer: companionViewer,
           );
         }
         final panes = notifier.panes;
@@ -88,6 +99,8 @@ class PaneGrid extends StatelessWidget {
           dragging: dragging,
           visible: visible,
           swarmMode: swarmMode,
+          onOpenModels: onOpenModels,
+          companionViewer: companionViewer,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -234,12 +247,17 @@ class _SwarmCanvas extends StatefulWidget {
     required this.notifier,
     required this.dragging,
     this.empty,
+    this.onOpenModels,
     this.soloFocused = false,
+    this.companionViewer,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
   final bool soloFocused;
+  final WidgetBuilder? companionViewer;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -462,6 +480,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       link: session.linkMode,
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
+      emphasized: app.isPaneEmphasized(pane),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
       focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
@@ -574,7 +593,9 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     dragging: widget.dragging,
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
+                                    onOpenModels: widget.onOpenModels,
                                     solo: widget.soloFocused,
+                                    companionViewer: widget.companionViewer,
                                   ),
                                 ),
                               ),
@@ -618,40 +639,45 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         right: 24,
         child: IgnorePointer(
           child: Center(
-            child: TerminalBox(
-              key: const ValueKey('pane-resize-hint'),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Wrap(
-                  spacing: 18,
-                  runSpacing: 6,
-                  children: [
-                    Text(
-                      'resize >',
-                      style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
-                    ),
-                    for (final (key, action) in const [
-                      ('arrows', 'resize'),
-                      ('shift', 'larger steps'),
-                      ('tab', 'next divider'),
-                      ('esc', 'done'),
-                    ])
-                      Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: '$key  ',
-                              style: TextStyle(color: boxText(.70)),
-                            ),
-                            TextSpan(text: action),
-                          ],
-                        ),
-                        style: kBoxFaintStyle,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: DesktopDialogSurface(
+                key: const ValueKey('pane-resize-hint'),
+                radius: DesktopChrome.menuRadius,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        'Resize panes',
+                        style: DesktopChrome.control(medium: true),
                       ),
-                  ],
+                      for (final (key, action) in const [
+                        ('Arrow keys', 'Adjust'),
+                        ('Shift', 'Larger steps'),
+                        ('Tab', 'Next divider'),
+                        ('Esc', 'Done'),
+                      ])
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '$key  ',
+                                style: DesktopChrome.control(medium: true),
+                              ),
+                              TextSpan(text: action),
+                            ],
+                          ),
+                          style: DesktopChrome.metadata(),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1153,7 +1179,7 @@ class _Gap extends StatelessWidget {
 
 /// How round a card's corners are — a pane, and the rail beside it. Public for the same reason
 /// [kPaneGap] is: the rail is a card now, and two places typing 10 is how they drift apart.
-const double kPaneRadius = kTerminalCornerRadius;
+const double kPaneRadius = grid.AppDesktop.paneRadius;
 
 /// How round a pane's corners are — the shared card radius, so a terminal does not read as a different
 /// KIND of surface from the rail beside it.
@@ -1167,7 +1193,9 @@ class _PaneCell extends StatelessWidget {
     required this.dragging,
     this.visible = true,
     this.swarmMode = false,
+    this.onOpenModels,
     this.solo = false,
+    this.companionViewer,
   });
 
   final AppNotifier notifier;
@@ -1175,6 +1203,9 @@ class _PaneCell extends StatelessWidget {
   final AgentDragRef? dragging;
   final bool visible;
   final bool swarmMode;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
+  final WidgetBuilder? companionViewer;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
   /// dimming or focus ring, and no zoom, since it already fills the screen.
@@ -1198,9 +1229,9 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
-    // Keep the selected pane clear while a menu or the tab strip owns keyboard
-    // focus. This is paint only: inactive terminals stay mounted and clickable.
-    final dimmed = !_single && notifier.focusedPaneId != pane.id;
+    // Keep the selected harness's terminal and viewers clear, including while
+    // a menu owns input. This changes paint, never the keyboard's destination.
+    final dimmed = !_single && !notifier.isPaneEmphasized(pane);
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
@@ -1217,7 +1248,12 @@ class _PaneCell extends StatelessWidget {
           // shows a seam between the header strip and the terminal under it.
           // What changes to make the gaps visible is the field BEHIND the grid
           // (see _GridField), which is the part the gaps actually show.
-          color: grid.AppPalette.windowBg,
+          //
+          // Behind harnesses: a terminal paints its own translucent fills, so
+          // the frame adds none (two would stack); a status pane has only this.
+          color: PaneOpacity.of(context) < 1 && pane.session != null
+              ? null
+              : PaneOpacity.fill(context, grid.AppPalette.windowBg),
           borderRadius: BorderRadius.circular(_paneRadius),
           // The rim is always drawn — it is what gives an unfocused card its
           // edge, now that no shared line does. It only CHANGES COLOUR on
@@ -1275,13 +1311,17 @@ class _PaneCell extends StatelessWidget {
                       opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
                       child: child,
                     ),
-                    child: _PaneContent(
-                      notifier: notifier,
-                      pane: pane,
-                      single: _single,
-                      visible: visible,
-                      swarmMode: swarmMode,
-                    ),
+                    child: pane.isCompanion
+                        ? companionViewer?.call(context) ??
+                              const SizedBox.shrink()
+                        : _PaneContent(
+                            notifier: notifier,
+                            pane: pane,
+                            single: _single,
+                            visible: visible,
+                            swarmMode: swarmMode,
+                            onOpenModels: onOpenModels,
+                          ),
                   ),
                 ),
               ),
@@ -1300,6 +1340,7 @@ class _PaneContent extends StatelessWidget {
     required this.single,
     required this.visible,
     required this.swarmMode,
+    this.onOpenModels,
   });
 
   final AppNotifier notifier;
@@ -1307,6 +1348,8 @@ class _PaneContent extends StatelessWidget {
   final bool single;
   final bool visible;
   final bool swarmMode;
+  final void Function(int paneId, String machineId, String agentId)?
+  onOpenModels;
 
   @override
   Widget build(BuildContext context) {
@@ -1406,7 +1449,7 @@ class _PaneContent extends StatelessWidget {
       if (machine == null) {
         notice = terminalNotice(
           label: 'Unavailable',
-          icon: Icons.cloud_off,
+          icon: AppIcons.cloudOff,
           detail: notifier.machineInventoryLoaded
               ? 'This machine isn’t available. Retained output is read only.'
               : 'Waiting for this machine. Retained output is read only.',
@@ -1414,7 +1457,7 @@ class _PaneContent extends StatelessWidget {
       } else if (needsLink) {
         notice = terminalNotice(
           label: 'Link required',
-          icon: Icons.link_off,
+          icon: AppIcons.unlink,
           detail:
               '${machine.machine.displayName} needs linking. Retained output is read only.',
           // A tile still showing its last screen gets the same way out as an
@@ -1429,14 +1472,14 @@ class _PaneContent extends StatelessWidget {
       } else if (offline) {
         notice = terminalNotice(
           label: 'Offline',
-          icon: Icons.cloud_off,
+          icon: AppIcons.cloudOff,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = terminalNotice(
           label: 'Unavailable',
-          icon: Icons.terminal,
+          icon: AppIcons.terminal,
           detail:
               agent?.terminalUnavailableReason ??
               'This harness is unavailable on ${machine.machine.displayName}. Retained output is read only.',
@@ -1452,7 +1495,7 @@ class _PaneContent extends StatelessWidget {
         final unconfirmed = agent.launchError == 'RESUME_UNCONFIRMED';
         notice = terminalNotice(
           label: unconfirmed ? 'Not confirmed' : 'Start failed',
-          icon: unconfirmed ? Icons.help_outline : Icons.error_outline,
+          icon: unconfirmed ? AppIcons.circleHelp : AppIcons.circleAlert,
           detail: unconfirmed
               ? 'The engine is still running here; the daemon has not confirmed '
                     'which conversation it reopened.'
@@ -1497,6 +1540,10 @@ class _PaneContent extends StatelessWidget {
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,
+          onOpenModels: onOpenModels == null
+              ? null
+              : () =>
+                    onOpenModels!(pane.id, session.machineId, session.agentId),
           // The same confirmation the rail's row menu opens. Only for an
           // agent the machine still lists — a pane whose agent is already
           // gone has nothing to end.
@@ -1541,7 +1588,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: wantedAgentId == null ? 'Machine' : kUntitledPane,
-        icon: listFailed || stale ? Icons.cloud_off : Icons.link_off,
+        icon: listFailed || stale ? AppIcons.cloudOff : AppIcons.unlink,
         message: listFailed
             ? 'Could not load machines. Retry to reconnect.'
             : waiting
@@ -1559,7 +1606,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName ?? machine.machine.displayName,
-        icon: Icons.link_off,
+        icon: AppIcons.unlink,
         message:
             '${machine.machine.displayName} is not linked to this computer yet. '
             'Link it with the remote password set on that machine.',
@@ -1585,7 +1632,7 @@ class _PaneContent extends StatelessWidget {
         compactMessage: machine.isLocalMachine
             ? 'Harness is not running on this computer.'
             : 'Harness is not running on ${machine.machine.displayName}.',
-        compactIcon: Icons.cloud_off,
+        compactIcon: AppIcons.cloudOff,
         full: HarnessJoinGuideScreen(
           notifier: notifier,
           machineState: machine,
@@ -1597,7 +1644,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: machine.machine.displayName,
-        icon: Icons.check_circle_outline,
+        icon: AppIcons.circleCheck,
         message: 'This machine is ready. Drag a harness here to open it.',
         onClose: close,
       );
@@ -1606,7 +1653,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: wantedAgentId,
-        icon: Icons.help_outline,
+        icon: AppIcons.circleHelp,
         message: 'This harness is no longer on ${machine.machine.displayName}.',
         onClose: close,
       );
@@ -1615,7 +1662,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName,
-        icon: Icons.terminal,
+        icon: AppIcons.terminal,
         message:
             agent.terminalUnavailableReason ??
             'This harness has no available terminal.',
@@ -1630,7 +1677,7 @@ class _PaneContent extends StatelessWidget {
       return _PaneStatus(
         activity: activityMark,
         title: agentName,
-        icon: Icons.terminal,
+        icon: AppIcons.terminal,
         message:
             'Open this harness here. Another screen may be using its terminal; '
             'opening takes it, because ${machine.machine.displayName} runs an '
@@ -1645,7 +1692,7 @@ class _PaneContent extends StatelessWidget {
     return _PaneStatus(
       activity: activityMark,
       title: agentName,
-      icon: Icons.hourglass_empty,
+      icon: AppIcons.hourglass,
       message: 'Attaching…',
       onClose: single && !swarmMode ? null : close,
       busy: true,
@@ -1730,7 +1777,10 @@ class _FileDropZoneState extends State<_FileDropZone> {
                       ),
                       child: Text(
                         'Drop to attach',
-                        style: grid.AppType.label(color: AppColors.text),
+                        style: grid.AppType.mono(
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.text,
+                        ),
                       ),
                     ),
                   ),
@@ -1942,7 +1992,10 @@ class _SwapZone extends StatelessWidget {
               child: IgnorePointer(
                 // Off entirely unless a pane is in flight, so the terminal
                 // underneath keeps every click the rest of the time.
-                ignoring: dragging == null || dragging.paneId == paneId,
+                ignoring:
+                    notifier.activeSwarm.isCompanions ||
+                    dragging == null ||
+                    dragging.paneId == paneId,
                 child: DragTarget<PaneDragRef>(
                   onAcceptWithDetails: (details) =>
                       notifier.reorderPane(details.data.paneId, paneId),
@@ -1963,7 +2016,8 @@ class _SwapZone extends StatelessWidget {
                               ),
                               child: Text(
                                 'Swap with this pane',
-                                style: grid.AppType.label(
+                                style: grid.AppType.mono(
+                                  fontWeight: FontWeight.w500,
                                   color: AppColors.text,
                                 ),
                               ),
@@ -2049,34 +2103,32 @@ class _PaneHeader extends StatelessWidget {
     grid.AppTheme.watch(context);
     // The pane's head is a drag handle too: with the title bar hidden it is
     // the top edge of the window.
-    return PaneHeaderHoverRegion(
-      child: WindowDragArea(
-        child: SizedBox(
-          height: 46,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          title,
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.monoLabel(
-                            color: AppColors.text,
-                            fontWeight: FontWeight.w600,
-                          ),
+    return WindowDragArea(
+      child: SizedBox(
+        height: 46,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        overflow: TextOverflow.ellipsis,
+                        style: grid.AppType.monoLabel(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      ?activity,
-                    ],
-                  ),
+                    ),
+                    ?activity,
+                  ],
                 ),
-                if (onClose != null) PaneCloseButton(onPressed: onClose!),
-              ],
-            ),
+              ),
+              if (onClose != null) PaneCloseButton(onPressed: onClose!),
+            ],
           ),
         ),
       ),
@@ -2186,7 +2238,7 @@ class _DropZone extends StatelessWidget {
         child,
         Positioned.fill(
           child: IgnorePointer(
-            ignoring: dragging == null,
+            ignoring: notifier.activeSwarm.isCompanions || dragging == null,
             child: DragTarget<AgentDragRef>(
               onAcceptWithDetails: (details) => notifier.assignAgentToPane(
                 paneId,
@@ -2212,7 +2264,10 @@ class _DropZone extends StatelessWidget {
                             paneId == null
                                 ? 'Open ${candidate.first?.name ?? 'harness'} here'
                                 : 'Show ${candidate.first?.name ?? 'harness'} in this pane',
-                            style: grid.AppType.label(color: AppColors.text),
+                            style: grid.AppType.mono(
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.text,
+                            ),
                           ),
                         ),
                       ),
@@ -2240,7 +2295,7 @@ class _AddSlot extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.add, size: 24, color: AppColors.mutedStrong),
+            Icon(AppIcons.plus, size: 24, color: AppColors.mutedStrong),
             const SizedBox(height: 8),
             Text(
               'Drop here for a new pane',
@@ -2312,7 +2367,7 @@ class _EmptyGrid extends StatelessWidget {
                 const SizedBox(height: 16),
                 FilledButton.icon(
                   key: const ValueKey('empty-grid-new-agent'),
-                  icon: const Icon(Icons.add, size: 16),
+                  icon: const Icon(AppIcons.plus, size: 16),
                   label: const Text('New Harness'),
                   onPressed: () => showNewAgentDialog(
                     context,

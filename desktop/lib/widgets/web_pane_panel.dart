@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
@@ -353,7 +353,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
     if (widget.pane.viewerError case final error?) {
       return _Notice(
         key: const ValueKey('web-pane-error'),
-        icon: LucideIcons.unplug,
+        icon: AppIcons.unplug,
         title: 'Viewer unavailable',
         detail: error,
       );
@@ -368,7 +368,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
       final page = url == null ? null : Uri.tryParse(url);
       return _Notice(
         key: const ValueKey('web-pane-placeholder'),
-        icon: LucideIcons.globe,
+        icon: AppIcons.globe,
         title: 'Viewer',
         detail: page == null
             ? 'No viewer yet.'
@@ -390,7 +390,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ColoredBox(
             color: grid.AppPalette.windowBg,
             child: _Notice(
-              icon: LucideIcons.unplug,
+              icon: AppIcons.unplug,
               title: 'Waiting for the viewer',
               detail: _failure!,
               action: TextButton(
@@ -448,15 +448,15 @@ class _ViewerActions extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        action('Reload viewer', LucideIcons.refreshCw, onReload),
+        action('Reload viewer', AppIcons.refreshCw, onReload),
         const SizedBox(width: 2),
         action(
           zoomed ? 'Restore harnesses' : 'Zoom viewer',
-          zoomed ? LucideIcons.minimize : LucideIcons.maximize,
+          zoomed ? AppIcons.minimize : AppIcons.maximize,
           onZoom,
         ),
         const SizedBox(width: 2),
-        action('Close viewer', LucideIcons.x, onClose),
+        action('Close viewer', AppIcons.close, onClose),
       ],
     );
   }
@@ -479,7 +479,7 @@ class _Notice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,

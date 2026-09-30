@@ -185,7 +185,10 @@ void main() {
         await tester.pumpAndSettle();
         expect(app.stateOf('m')!.agents.first.isStopped, isTrue);
         expect(resourceSearch(tester).selected?.agentId, 'a0');
-        expect(find.text('Resume & open'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.accept')),
+          findsOneWidget,
+        );
         final panes = app.panes.map((pane) => pane.id).toList();
         expect(
           tester.widget<TextField>(resourceField).focusNode!.hasFocus,

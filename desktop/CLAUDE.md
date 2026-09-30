@@ -244,9 +244,10 @@ from `node_status` pushes — distinct from our own socket status, pending offli
 
 ### Command dock
 
-For workspace presentation, follow the [terminal workspace design system](design/terminal-workspace.md).
-For dialog presentation, follow the [terminal dialog design system](design/terminal-dialogs.md):
-fixed cells, plain text, one-line selection. Cmd-N and Cmd-O are the reference implementations.
+For app UI outside terminal panes, follow the [desktop design system](design/desktop-design-system.md).
+The terminal-only presentation rules are retired for desktop forms, pickers, and menus.
+Preserve [workspace boundaries](design/terminal-workspace.md) and
+[dialog behavior](design/terminal-dialogs.md). Cmd-N and New Tab share their composer.
 
 `SwarmSearchController` owns search and selection; `SwarmSearchResults` keeps a bounded cache of
 visible/recent row controls. Query-dependent match text listens separately, so typing does not
@@ -298,8 +299,13 @@ its headless debug timings do not establish native display or network latency.
   `grid.AppTheme.brightness`, which `_GridTokenScope` in `main.dart` sets from `Theme.of(context)`.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
-- The [workspace status bar](design/workspace-status-bar.md) places compact numbered tabs and global actions at the top,
-  with focused machine/repo/branch/PR at the bottom left and the model at the bottom right. Automatic names use the strongest shared harness type,
+- The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
+  with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  Tabs center their name/status group without permanent number prefixes; Command replaces
+  the status with the resolved shortcut beside the name. Tab and pane close marks are small
+  and quiet, with larger click targets. Each pane places its model control before its
+  always-visible close icon. Usage has no dot separators and colors only low/exhausted
+  percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
   The context follows a viewer's owner and uses the compact project label, never a worktree path
   or marker. User-renamed tabs always retain their saved name. Customize Harness → Status
@@ -308,17 +314,13 @@ its headless debug timings do not establish native display or network latency.
 - `lib/theme/app_theme.dart` (`AppColors`, `AppTheme.terminalLight/terminalDark`) is a set of
   adapters over those tokens. Nothing here is `const` on purpose — freezing a colour is how light mode
   silently breaks. Do not add a parallel palette.
-- **Type** is `AppType` (`lib/shared/theme/app_type.dart`): one size scale (display 28, title 20,
-  heading 15, label/mono 13, monoLabel 12, caption/monoMeta 11) across two faces. The terminal's
-  face leads — headings, labels, buttons, rows, fields, tabs, shortcuts and anything copied are
-  mono — and the system sans is kept for prose alone (`body`, `caption`), which is what stops a
-  screen reading as a wall of mono. Ordinary UI stays on the `AppType` scale and uses
-  `appTextScaleOf` for geometry. The terminal grid, composer, find field, empty tab's welcome
-  page, and terminal-workspace dialogs follow the selected terminal size (⌘+/⌘−). Dialogs use
-  `terminalContentStyle()` and `terminalCellSizeOf(context)` for the exact font and character grid;
-  see [the dialog guide](design/terminal-dialogs.md). Workspace tabs, status text, pane
-  titles, and model selectors use `workspaceBarTextStyle()`: fixed 13 pt SF Mono regular
-  on macOS, platform monospace elsewhere. Native menus keep the system menu font.
+- **Type** is `AppType` (`lib/shared/theme/app_type.dart`): system sans for app
+  headings, labels, fields, navigation, and prose; explicit mono for code, paths,
+  logs, and identifiers. Ordinary UI is independent of terminal zoom and respects
+  accessibility text scaling. The terminal grid, in-pane composer, and in-pane
+  find keep the selected terminal font and size. Compact pane/status bars retain
+  their established `workspaceBarTextStyle()` and user-selected status themes.
+  Native menus use the system menu font. Do not measure desktop UI in terminal cells.
 - `ThemeModeStore` and `TerminalFontStore` are `ValueNotifier` singletons (they must resolve above the
   provider scope and before sign-in).
 
@@ -338,8 +340,10 @@ its headless debug timings do not establish native display or network latency.
 - **Agent-account usage is what the native Models menu reads** (`lib/usage/`,
   `usage/models_menu_controller.dart`, `SwarmSubscriptionView` in `SwarmTitlebar.swift`): what the
   Claude and Codex accounts on this machine — and on the remote machines that answer `usage_read` —
-  have spent. Each account shows its `tightest` window, the limit that stops the work first. Opening
-  the menu reads the cached snapshot and refreshes at most once a minute; nothing polls on startup.
+  have spent. Each account shows its `tightest` window, the limit that stops the work first.
+  The shared controller reads ahead at startup and every five minutes; opening a menu requests
+  a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
+  and freshness rules, displaying the remaining percentage rather than the amount spent.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read
@@ -534,8 +538,9 @@ its headless debug timings do not establish native display or network latency.
   `shortcuts/shortcuts_browser.dart` shares searchable, grouped rows between the ⌘/ dialog and
   Settings ▸ Keyboard shortcuts. It reads resolved bindings through `keyboardLessons()`, so remaps
   appear immediately; clicking a row or pressing Enter opens keyboard practice without dispatching
-  that action. Labels and keycaps use the selected terminal font and size. ⇧⌘P opens commands with
-  the query `>`; ⌘P opens the unified picker. On Linux these use Ctrl+Shift+P and Ctrl+P. `shortcuts/key_cap.dart` uses the app type scale elsewhere.
+  that action. Labels and keycaps use system UI typography and accessibility text scaling,
+  independent of terminal font and zoom. The practice scratch preview retains terminal typography.
+  ⇧⌘P opens commands with the query `>`; ⌘P opens the unified picker. On Linux these use Ctrl+Shift+P and Ctrl+P.
   Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the

@@ -156,6 +156,7 @@ if (layoutTest && !(port >= 19800 && port <= 19809)) throw new Error('unsafe lay
 const layoutFaults = { delays: [], failures: [], writes: [] }
 const reconnect = process.env.MOCK_RECONNECT === '1'
 if (reconnect && !(port >= 19780 && port <= 19789)) throw new Error('unsafe reconnect test port')
+const creationReceipts = new Map()
 const connections = new Map()
 const opens = []
 const inputs = []
@@ -366,7 +367,16 @@ wss.on('connection', (ws) => {
     switch (type) {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
-      case 'dsh_list': return reply({ dsh: [] })
+      case 'git_project_info': return reply(process.env.MOCK_NEW_UI ? { isGit: !String(payload.path).includes('plain'), branch: 'main', branches: [
+        { ref: 'refs/heads/main', name: 'main', remote: false },
+        { ref: 'refs/heads/feature', name: 'feature', remote: false },
+        { ref: 'refs/heads/already-open', name: 'already-open', remote: false, worktree: '/home/demo/worktrees/already-open' },
+      ] } : { isGit: false })
+      case 'grid_models_list': return reply({ supportsModelLaunch: true, localModelEngines: ['codex', 'claude'], grids: [
+        { name: 'studio', own: true, models: [{ id: 'demo-model', node: 'studio' }] },
+      ] })
+      case 'codex_profiles_list': return reply({ profiles: [{ path: '/home/demo/.codex-work', label: 'Work' }] })
+      case 'dsh_list': return reply({ dsh: process.env.MOCK_NEW_UI ? [{ id: 'example/blender', name: 'Blender', engine: 'codex', engines: ['codex', 'claude'], installed: true }] : [] })
       // The agent accounts' limits, as the vendors answer (MOCK_USAGE: Claude's 5-hour window, %).
       case 'usage_read': return reply({ providers: [
         { provider: 'claude', account: 'acct-claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: Number(process.env.MOCK_USAGE || 42), resets_at: '2026-09-26T21:00:00Z' }, seven_day: { utilization: 18, resets_at: '2026-10-01T00:00:00Z' } } },
@@ -382,7 +392,7 @@ wss.on('connection', (ws) => {
         const r = a && RECAPS[a.name]
         return reply({ agentId: payload.agentId, events: r ? [{ kind: 'summary', recap: r[0], text: r[0] }] : [], asks: r ? [r[1]] : [] })
       }
-      case 'fs_list_dir': return reply({ path: '/home/demo', entries: [] })
+      case 'fs_list_dir': return reply({ path: process.env.MOCK_NEW_UI ? (payload.path || '/home/demo') : '/home/demo', entries: process.env.MOCK_NEW_UI && !String(payload.path).endsWith('/projects') ? [{ name: 'projects', isDir: true }] : [] })
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
@@ -397,8 +407,38 @@ wss.on('connection', (ws) => {
         const rows = turns.map(([ask, answer], turn) => ({ turn, at: Date.now() - (turns.length - turn) * HOUR, ask, answer, tools: turn === 0 ? 'Read src/main.ts\nBash npm test' : '' }))
         return reply({ sessionId: payload.sessionId, rows, hasMore: false, total: rows.length, lastAt: x ? x.lastAt : Date.now(), lastAsk: rows[rows.length - 1], ...(x ? { external: { title: x.title, cwd: x.cwd, origin: x.origin, open: x.open } } : {}) })
       }
+      case 'agent_create_status': {
+        dial.creationChecks = [...(dial.creationChecks || []), payload]
+        const receipt = creationReceipts.get(`${machine}:${payload.creationId}`)
+        if (receipt?.pendingChecks) { receipt.pendingChecks--; return reply({ creationId: payload.creationId, state: 'pending' }) }
+        return reply({ creationId: payload.creationId, ...(receipt?.outcome || { state: 'missing' }) })
+      }
       case 'agent_create': {
         dial.created = [...(dial.created || []), payload]
+        const receiptKey = `${machine}:${payload.creationId}`
+        const { requestId: _requestId, creationId: _creationId, ...choices } = payload
+        const fingerprint = JSON.stringify(choices)
+        const previous = creationReceipts.get(receiptKey)
+        if (process.env.MOCK_NEW_UI && previous) {
+          if (previous.fingerprint !== fingerprint) return reply({ error: 'CREATION_CONFLICT' })
+          return reply({ creationId: payload.creationId, ...previous.outcome })
+        }
+        // The daemon's wire contract uses branchMode, not its internal existingBranch flag.
+        if (process.env.MOCK_NEW_UI && payload.branchName === 'feature' && payload.branchMode !== 'existing') {
+          return reply({ error: 'BRANCH_EXISTS', detail: 'Select the existing branch using branchMode.' })
+        }
+        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'fail-once') {
+          // The real daemon persists known failures, including a prepared folder.
+          // Reusing this receipt can NEVER make this request succeed.
+          const outcome = { state: 'failed', failure: { code: 'ENGINE_UNAVAILABLE', detail: 'Fixture launch failure' }, preparedFolder: '/home/demo/fail-once' }
+          creationReceipts.set(receiptKey, { fingerprint, outcome })
+          return setTimeout(() => reply({ creationId: payload.creationId, ...outcome }), 150)
+        }
+        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'unknown-launch') {
+          const outcome = { state: 'unconfirmed' }
+          creationReceipts.set(receiptKey, { fingerprint, outcome })
+          return reply({ creationId: payload.creationId, ...outcome })
+        }
         // Resuming a conversation Harness did not start: refused while it is open elsewhere.
         if (payload.resumeSessionId) {
           const x = EXTERNAL.find((e) => e.sessionId === payload.resumeSessionId)
@@ -411,6 +451,12 @@ wss.on('connection', (ws) => {
         }
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
         agents[machine].push(created)
+        if (process.env.MOCK_NEW_UI === '1') {
+          const outcome = { state: 'created', agent: created }
+          creationReceipts.set(receiptKey, { fingerprint, outcome, pendingChecks: payload.projectName === 'lose-reply' ? 1 : 0 })
+          if (payload.projectName === 'lose-reply') return ws.terminate()
+          return reply({ creationId: payload.creationId, ...outcome })
+        }
         return reply({ agent: created })
       }
       case 'route_task': {

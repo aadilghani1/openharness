@@ -127,6 +127,21 @@ The bucket must be public-read — that is bucket policy, not something the scri
 older code — never by deleting the new one, which just leaves every daemon pointed at a 404. Disable
 self-update on one machine with `ADAPTER_UPDATE_DISABLE=true`.
 
+## hn updates
+
+The installed daemon checks the separate `harness/tui/metadata.json` manifest on startup and
+on the same update schedule. An installed hn moves only to a newer published version, after
+checksum, size and executable-version checks. Replacing the binary is atomic; open clients
+keep running and the next launch uses the update. Failures retry without blocking CLI updates.
+`harness update` also checks hn even if the CLI is already current.
+
+An hn release still uses `release-tui.yml`; publishing a CLI does not rebuild or republish hn.
+The CLI updater discovers whichever hn release is latest, so an hn-only release reaches
+existing installations too. `ADAPTER_UPDATE_DISABLE=true` covers both automatic updaters.
+Checkout/local CLI builds, `HARNESS_TUI_BIN` overrides, symlinked hn binaries and hn development
+version labels are left alone. A missing hn is installed on first use or by the installer.
+`harness tui --install` remains the explicit reinstall command.
+
 ## Rolling out safely
 
 Publish to a scratch manifest before touching the real one, then point a local build at it:

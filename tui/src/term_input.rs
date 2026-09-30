@@ -11,7 +11,7 @@ mod parse;
 enum InternalEvent { Event(Event), CursorPosition(u16, u16), KeyboardEnhancementFlags(KeyboardEnhancementFlags), PrimaryDeviceAttributes }
 
 #[derive(Debug, PartialEq)]
-enum Item { Input(Event), Terminal(Option<String>), Background(Option<String>) }
+enum Item { Input(Event), Terminal(Option<String>), Foreground(Option<String>), Background(Option<String>) }
 
 #[derive(Default)]
 struct Decoder { pending: Vec<u8> }
@@ -26,6 +26,15 @@ impl Decoder {
             if p.starts_with(b"\x1bP>|") && p.len() < 4096 {
                 let end = if p.ends_with(b"\x1b\\") { Some(p.len() - 2) } else if p.ends_with(b"\x07") { Some(p.len() - 1) } else { None };
                 if let Some(end) = end { out.push(Item::Terminal(Some(String::from_utf8_lossy(&p[4..end]).into_owned()))); self.pending.clear(); }
+                continue;
+            }
+            // OSC 10 default-foreground answer from `ask_terminal`, `\x1b]10;rgb:…\x07` (or
+            // `#rrggbb`). Same hold-till-terminator rule, so a colour reply is never a key and
+            // interleaved typeahead stays typeahead. The colour body is the one OSC 11 uses.
+            if b"\x1b]10;".starts_with(p) { continue }
+            if p.starts_with(b"\x1b]10;") && p.len() < 4096 {
+                let end = if p.ends_with(b"\x1b\\") { Some(p.len() - 2) } else if p.ends_with(b"\x07") { Some(p.len() - 1) } else { None };
+                if let Some(end) = end { out.push(Item::Foreground(parse_osc11(&String::from_utf8_lossy(&p[5..end])))); self.pending.clear(); }
                 continue;
             }
             // OSC 11 default-background answer from `ask_terminal`, `\x1b]11;rgb:…\x07`
@@ -131,6 +140,10 @@ pub fn read(keys: tokio::sync::mpsc::UnboundedSender<crate::event::Event>) {
                     if !crate::term_out::terminal_answer(name) { continue }
                     crate::event::Event::Apply(Box::new(|app| app.redraw_all = true))
                 }
+                Item::Foreground(fg) => {
+                    crate::term_out::set_terminal_colours(None, fg);
+                    crate::event::Event::Apply(Box::new(|app| { app.push_theme(); app.redraw_all = true; }))
+                }
                 Item::Background(bg) => {
                     crate::term_out::set_terminal_colours(bg, None);
                     crate::event::Event::Apply(Box::new(|app| { app.push_theme(); app.redraw_all = true; }))
@@ -179,6 +192,16 @@ mod tests {
         assert_eq!(decoder.escape(), vec![Item::Input(Event::Key(KeyCode::Esc.into()))]);
         assert!(decoder.push(b"\x1bP", true).is_empty());
         assert_eq!(decoder.escape(), vec![Item::Input(Event::Key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT | KeyModifiers::ALT)))]);
+    }
+    #[test]
+    fn osc10_foreground_answer_becomes_theme_and_spares_typeahead() {
+        let mut decoder = Decoder::default();
+        let mut items = Vec::new();
+        for b in b"ls\r\x1b]10;rgb:ffff/0000/0000\x07echo done" { items.extend(decoder.push(&[*b], true)); }
+        let fgs: Vec<_> = items.iter().filter_map(|i| if let Item::Foreground(n) = i { Some(n.clone()) } else { None }).collect();
+        assert_eq!(fgs, vec![Some("#ff0000".into())]);
+        let text: String = items.iter().filter_map(|i| match i { Item::Input(Event::Key(k)) => match k.code { KeyCode::Char(c) => Some(c), KeyCode::Enter => Some('\r'), _ => None }, _ => None }).collect();
+        assert_eq!(text, "ls\recho done");
     }
     #[test]
     fn osc11_background_answers_become_theme_and_spare_typeahead() {

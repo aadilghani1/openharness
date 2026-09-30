@@ -118,15 +118,21 @@ describe('the model (opt-in)', () => {
     expect(await distiller('nothing worth saving').d.distill(steps)).toMatchObject({ lesson: null, why: 'nothing' })
     expect(await distiller('Sure! Here is a lesson: {not json').d.distill(steps)).toMatchObject({ source: 'template', lesson: { kind: 'skill' } })
     expect(await distiller(() => new Promise(() => {})).d.distill(steps)).toMatchObject({ source: 'template' })
-    expect(await distiller(async () => { throw new Error('boom') }).d.distill(failure)).toEqual({ lesson: null, why: 'no-template' })
-    expect(await distiller('garbage').d.distill(correction)).toEqual({ lesson: null, why: 'no-template' })
+    expect(await distiller(async () => { throw new Error('boom') }).d.distill(failure)).toEqual({ lesson: null, why: 'failed' })
+    expect(await distiller('garbage').d.distill(correction)).toEqual({ lesson: null, why: 'bad-json' })
   })
 
-  it('is capped per hour: past the cap, only templates', async () => {
+  it('reports the hourly cap so the learner keeps evidence for the next review', async () => {
     const { d, oneshot } = distiller('{"lesson": null}')
     for (let i = 0; i < 6; i++) await d.distill(steps)
-    expect(await d.distill(steps)).toMatchObject({ source: 'template' })
+    expect(await d.distill(steps)).toEqual({ lesson: null, why: 'cap' })
     expect(oneshot).toHaveBeenCalledTimes(6)
+  })
+
+  it('keeps provider usage-limit notices out of lessons and preserves the observation for retry', async () => {
+    const { d } = distiller("You've hit your weekly limit · resets Oct 3 at 12am (America/New_York)")
+    expect(await d.review('review recent conversations')).toEqual({ text: null, failure: 'usage-limit' })
+    expect(await d.distill(steps)).toEqual({ lesson: null, why: 'usage-limit' })
   })
 })
 

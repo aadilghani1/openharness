@@ -259,10 +259,14 @@ static void focus_face(void)
          "L\u01b0\u1ee3ng b\u1ed9 nh\u1edb \u0111\u00e3 gi\u1ea3m v\u00e0 ki\u1ec3m tra l\u1ea1i.", HT_CHARACTER_IDLE, 0, 0},
     };
     int expected = -1;
-    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    // Every case twice: with the ⌄ doors and without. Same runs either way, and the longest names
+    // with a ⌄ after them are the ones that would reach the bezel if its cell were not budgeted.
+    for (unsigned k = 0; k < 2 * (sizeof cases / sizeof cases[0]); k++) {
+        unsigned i = k / 2;
         ht_character_face_t f = {.recipient = cases[i].name, .tab = cases[i].tab,
             .engine = cases[i].engine, .activity = cases[i].activity, .elapsed = cases[i].elapsed,
             .status = "", .hint = "", .detail = "", .mood = cases[i].mood,
+            .more_tabs = k & 1, .more_panes = k & 1,
             .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
         f.pose.level = cases[i].level;
         ht_scene_t scene; ht_scene_clear(&scene, 0);
@@ -274,6 +278,31 @@ static void focus_face(void)
             if (full[y * HT_WIDTH + x])
                 assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);   // property 2
     }
+    /*
+     * A NAME TOO LONG FOR ITS ROW ends in "...", within its budget: the pill holds 20 glyphs (18
+     * beside its ⌄), the agent's row 20 beside the badge (18 beside the badge and the ⌄). Cut by
+     * the raster instead, it reads as a typo — "Deploy latest firmwa" — and the eye stops on it.
+     */
+    for (int more = 0; more < 2; more++) {
+        ht_character_face_t f = {.recipient = long_name, .tab = long_tab, .engine = "claude",
+            .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
+            .more_tabs = more, .more_panes = more, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        int found = 0;
+        for (int i = 0; i < scene.count; i++) {
+            const ht_run_t *r = &scene.runs[i];
+            size_t n = strlen(r->text);
+            if (n < 3 || strcmp(r->text + n - 3, "...")) continue;
+            int glyphs = 0;
+            for (const char *p = r->text; *p; glyphs++) ht_utf8_next(&p);
+            if (r->font == &ht_mono_20) { assert(glyphs == (more ? 18 : 20)); found |= 1; }
+            if (r->font == &ht_mono_28) { assert(glyphs == (more ? 18 : 20)); found |= 2; }
+            assert(r->w >= glyphs * r->font->width);   // the raster never cuts it
+        }
+        assert(found == 3);
+    }
+
     /*
      * THE VOICE FACE, both halves of it, every frame.
      *
@@ -334,10 +363,11 @@ static void focus_face(void)
         assert(above == below);
     }
 
-    // Stated as its parts rather than as a number: the tab pill and the two rows of padding under it,
-    // the agent name, the engine mark on its own run so it can be coloured without a per-cell
-    // palette, the live status, and the four recap rows the octopus reads its summary in.
-    assert(expected == 1 + 1 + 1 + 1 + 1 + 4);
+    // Stated as its parts rather than as a number: the tab pill (its outline, its name and the ⌄
+    // after it), the agent's row (the engine mark on its own run so it can be coloured without a
+    // per-cell palette, the name, and its ⌄), the live status, and the four recap rows the octopus
+    // reads its summary in. The two ⌄ runs are emitted empty when there is nothing else to choose.
+    assert(expected == 3 + 3 + 1 + 4);
 }
 
 static void footer_layout(void)

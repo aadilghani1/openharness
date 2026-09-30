@@ -871,9 +871,11 @@ class DaemonBrain extends ChangeNotifier {
   List<DaemonTalkEntry> get talk => List.unmodifiable(_talk);
   bool get talkNeedsSetup => _talkNeedsSetup;
 
-  /// A different account or individual never inherits the previous chat.
+  /// Legacy compact replies stay archived by individual. The real agent terminal
+  /// belongs to the collection and stays attached while changing characters.
   void bindConversation(String? scope, String? uid) {
     if (scope == _conversationScope && uid == _companionUid) return;
+    final sameCollection = scope != null && scope == _conversationScope;
     _conversationScope = scope;
     _companionUid = uid;
     final generation = ++_conversationGeneration;
@@ -883,7 +885,7 @@ class DaemonBrain extends ChangeNotifier {
     _talkPhase = DaemonTalkPhase.idle;
     _talkNeedsSetup = false;
     _talkError = null;
-    _pairAgentId = null;
+    if (!sameCollection || uid == null) _pairAgentId = null;
     _talk.clear();
     _heardReplies.clear();
     notifyListeners();
@@ -1014,6 +1016,7 @@ class DaemonBrain extends ChangeNotifier {
     'daemon_act_result',
     'daemon_confirm_result',
     'daemon_talk_result',
+    'daemon_open_result',
     'pair_result',
   };
 
@@ -1034,6 +1037,8 @@ class DaemonBrain extends ChangeNotifier {
     switch (type) {
       case 'daemon_state':
         _state = DaemonBrainState.fromJson(payload);
+        final harness = payload['companionHarness'];
+        if (harness is Map) _pairAgentId = _opt(harness['agentId']);
         notifyListeners();
       case 'daemon_say':
         final say = DaemonSay.fromJson(payload);
@@ -1108,6 +1113,7 @@ class DaemonBrain extends ChangeNotifier {
         }
         if (error == 'NOT_SHOWN' || error == 'TOO_SOON') _showAgain(id);
         _errors.add(actError(error, _opt(payload['detail'])));
+      case 'daemon_open_result':
       case 'pair_result':
         final requestId = payload['requestId'];
         if (requestId is! String) return;
@@ -1254,16 +1260,34 @@ class DaemonBrain extends ChangeNotifier {
   Future<Map<String, dynamic>> request(
     String verb, [
     Map<String, dynamic> payload = const {},
-  ]) async {
+  ]) => _requestFrame('pair', {...payload, 'verb': verb});
+
+  /// Opening a DSH starts/resumes its terminal without sending any words or
+  /// Enter key. Trust, login and permissions remain in the engine's own UI.
+  Future<Map<String, dynamic>> openConversation() async {
+    final generation = _conversationGeneration;
+    final uid = _companionUid;
+    if (uid == null) return {'ok': false, 'error': 'PAIR_OFF'};
+    final result = await _requestFrame('daemon_open', {'companionUid': uid});
+    if (_disposed || generation != _conversationGeneration) {
+      return {'ok': false, 'error': 'STALE_COMPANION'};
+    }
+    if (result['ok'] == true) {
+      _pairAgentId = _opt(result['agentId']);
+      notifyListeners();
+    }
+    return result;
+  }
+
+  Future<Map<String, dynamic>> _requestFrame(
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
     if (_disposed) return {'ok': false, 'error': 'CLOSED'};
     final requestId = _id(12);
     final done = Completer<Map<String, dynamic>>();
     _requests[requestId] = done;
-    final sent = send('pair', {
-      ...payload,
-      'verb': verb,
-      'requestId': requestId,
-    });
+    final sent = send(type, {...payload, 'requestId': requestId});
     if (!sent) {
       _requests.remove(requestId);
       return {'ok': false, 'error': 'UNREACHABLE'};

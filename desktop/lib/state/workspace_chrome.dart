@@ -44,6 +44,8 @@ class WorkspaceChrome {
     this.newHarnessMachine,
     this.pickerBar,
     this.showsKeyHints = true,
+    this.viewMachineCloses = false,
+    this.closesTabs = false,
     this.compactTabs,
     this.compactBelow = 0,
   });
@@ -62,6 +64,14 @@ class WorkspaceChrome {
 
   /// False hides keyboard hints inside the workspace's pickers ([KeyHints]).
   final bool showsKeyHints;
+
+  /// True makes a machine's View pick it for New Harness and close the
+  /// picker; false keeps View scoping the picker to its harnesses.
+  final bool viewMachineCloses;
+
+  /// True puts a close mark on the selected and hovered tab, for a host with
+  /// no ⌘W menu to close one — an empty New Tab included.
+  final bool closesTabs;
 
   /// Below [compactBelow] of window width the workspace goes compact: this
   /// replaces the tab list (the Store button steps aside), and only the focused

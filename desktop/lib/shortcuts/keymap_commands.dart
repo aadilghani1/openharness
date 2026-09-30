@@ -113,7 +113,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.new',
-    'New Swarm',
+    'New Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.newSwarm,
     nativeAction: 'new',
@@ -121,7 +121,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.close',
-    'Close Swarm',
+    'Close Tab',
     ShortcutGroup.navigate,
     action: ShortcutAction.closeSwarm,
     nativeAction: 'closeActive',
@@ -158,7 +158,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'swarm.rename',
-    'Rename Swarm',
+    'Rename Tab',
     ShortcutGroup.actions,
     action: ShortcutAction.renameSwarm,
     nativeAction: 'renameActive',
@@ -738,7 +738,7 @@ final harnessCommands = <HarnessCommand>[
     ),
   const HarnessCommand(
     'picker.add_here',
-    'Add the selected harness',
+    'Start or add the selected harness',
     ShortcutGroup.actions,
     extraKeys: ['cmd+enter'],
     context: KeymapContext.picker,
@@ -773,10 +773,10 @@ final harnessCommands = <HarnessCommand>[
   // Launch and Project use arrows/Enter. Keep stable command identities for
   // explicit user bindings without reserving plain letters in these prompts.
   for (final (name, key, label) in [
-    ('agent', null, 'Choose an agent or harness'),
-    ('project', null, 'Choose the new harness’s project'),
-    ('task', null, 'Edit the new harness’s first task'),
-    ('options', null, 'Edit the new harness’s advanced options'),
+    ('agent', null, 'Choose the new agent'),
+    ('project', null, 'Choose the new agent’s project'),
+    ('task', null, 'Edit the new agent’s first message'),
+    ('options', null, 'Choose the new agent’s model'),
     // Project is a text filter. Keep these command identities available for
     // explicit user remaps, without taking ordinary letters from the editor.
     ('project_new', null, 'Name a new project'),

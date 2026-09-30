@@ -1,10 +1,9 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -95,7 +94,8 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
 
   @override
   Widget build(BuildContext context) {
-    final visible = widget.visible ?? (Platform.isLinux && !kUnderTest);
+    // RuntimePlatform: false in a browser, where `dart:io` Platform throws.
+    final visible = widget.visible ?? (RuntimePlatform.isLinux && !kUnderTest);
     if (!visible) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
     return Container(

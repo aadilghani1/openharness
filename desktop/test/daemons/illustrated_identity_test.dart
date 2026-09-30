@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
@@ -32,10 +31,15 @@ Future<ui.Image> decoded(ImageProvider provider) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  test('native palette metadata is bundled with the same ten species', () async {
-    final styles = jsonDecode(await rootBundle.loadString('assets/daemon-art/styles.json')) as Map;
-    expect(styles.keys.toSet(), IllustratedArt.species.toSet());
-  });
+  test(
+    'native palette metadata is bundled with the same ten species',
+    () async {
+      final styles = jsonDecode(
+        await rootBundle.loadString('assets/daemon-art/styles.json'),
+      ) as Map;
+      expect(styles.keys.toSet(), IllustratedArt.species.toSet());
+    },
+  );
   test('the integer shader preserves eyes and alpha while colouring and marking the coat', () {
     final pixels = Uint8List.fromList([
       100,

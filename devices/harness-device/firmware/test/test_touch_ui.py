@@ -243,6 +243,7 @@ static void dispatch(action_t a) {
     else if (a.kind == A_VOICE_ABORT) { recording = s.voice_open = false; view(HOME); }
     else if (a.kind == A_RETURN || a.kind == A_LATEST) { if(a.kind==A_RETURN)returns++; visit_action(a); }
     else if (a.kind == A_PET) boops++;
+    else if (a.kind == A_TAB_LIST) tabs_open();                   // mirrors ui_habitat.c's dispatch
     else if (a.kind == A_PANE_PREV || a.kind == A_PANE_NEXT) {   // mirrors ui_habitat.c's dispatch
         int i = s.active < 0 ? 0 : (s.active + (a.kind == A_PANE_NEXT ? 1 : s.count - 1)) % s.count;
         action_t pane = {.kind = A_AGENT}; COPY(pane.id, s.agents[i].id); dispatch(pane);
@@ -1016,19 +1017,19 @@ static void notification_read_checks(const char *dir) {
     // Exact occurrence receipts: no focus, no answering, idempotent retries.
     cable_notif_t synced={.agent_id="a",.name="Build",.summary="The build passed. All checks are green.",.read_token="turn-1"};
     reset(); ui_notif_replace(&synced,1); ui_notif_open(); scene_take();
-    assert(notice_reads_sent==1 && !notice_unread() && !strcmp(notice_read_queued.text,"turn-1"));
+    assert(notice_reads_sent==1 && !notice_unread(NULL) && !strcmp(notice_read_queued.text,"turn-1"));
     assert(!desktop_opens && !starts && !question_sends);
     notice_flush_reads(ms()); assert(notice_reads_sent==1);
     fake_ms=10000; notice_flush_reads(ms()); assert(notice_reads_sent==2);
-    ui_notif_replace(NULL,0); assert(s.view==INBOX && s.notice_count==1 && !notice_unread());
+    ui_notif_replace(NULL,0); assert(s.view==INBOX && s.notice_count==1 && !notice_unread(NULL));
     fake_ms+=3000; notice_flush_reads(ms()); assert(notice_reads_sent==2); // app acknowledged, keep reading
     view(HOME); ui_notif_replace(NULL,0); assert(!s.notice_count);
-    strcpy(synced.read_token,"turn-2"); ui_notif_replace(&synced,1); assert(notice_unread()==1);
-    ui_notif_read("a","turn-1"); assert(notice_unread()==1); // stale, identical text
+    strcpy(synced.read_token,"turn-2"); ui_notif_replace(&synced,1); assert(notice_unread(NULL)==1);
+    ui_notif_read("a","turn-1"); assert(notice_unread(NULL)==1); // stale, identical text
     ui_notif_read("a","turn-2"); assert(!s.notice_count); // desktop clear
     synced.question=true; strcpy(synced.read_token,"question-1");
     ui_notif_replace(&synced,1); ui_notif_open(); congestion=true; scene_take();
-    assert(!notice_unread() && s.view==INBOX && !question_sends);
+    assert(!notice_unread(NULL) && s.view==INBOX && !question_sends);
     unsigned before=notice_reads_sent; congestion=false; fake_ms+=3000; notice_flush_reads(ms());
     assert(notice_reads_sent==before+1 && !strcmp(notice_read_queued.text,"question-1"));
     ui_notif_read("a","question-1"); ui_notif_replace(NULL,0);
@@ -1036,62 +1037,65 @@ static void notification_read_checks(const char *dir) {
     reset(); ui_notif_replace(&synced,1); ui_notif_open(); present_scene=false; scene_take();
     uint32_t old_frame=habitat_scene_receipt(); strcpy(synced.read_token,"question-2");
     ui_notif_replace(&synced,1); habitat_scene_presented(old_frame);
-    assert(notice_unread()==1 && !notice_reads_sent); // late DMA cannot read a new occurrence
+    assert(notice_unread(NULL)==1 && !notice_reads_sent); // late DMA cannot read a new occurrence
 
     cable_notif_t rows[2]={
         {.agent_id="a",.name="Build",.summary="The build passed. All checks are green."},
         {.agent_id="b",.name="Release",.summary="May I publish this release?",.question=true}};
     reset(); ui_notif_replace(rows,2); scene_take();
-    assert(notice_unread()==2 && status_is(HT_BELL " 2"));
+    // Two unread, but the bell counts one: "a" is the agent on the face, and its news is already
+    // on the glass. Counting it too read as something happening elsewhere.
+    assert(notice_unread(NULL)==2 && notice_unread("a")==1 && status_is(HT_BELL " 1"));
     ui_notif_open(); assert(s.notice[s.offset].question);
     present_scene=false; scene_take(); uint32_t frame=habitat_scene_receipt();
-    assert(frame && notice_unread()==2); // Constructing a frame is not reading it.
-    fake_asleep=true; habitat_scene_presented(frame); assert(notice_unread()==2);
+    assert(frame && notice_unread(NULL)==2); // Constructing a frame is not reading it.
+    fake_asleep=true; habitat_scene_presented(frame); assert(notice_unread(NULL)==2);
     fake_asleep=false; habitat_scene_presented(frame); habitat_scene_presented(frame);
-    assert(notice_unread()==1 && s.view==INBOX && s.notice_count==2 && s.notice[s.offset].question);
+    assert(notice_unread(NULL)==1 && s.view==INBOX && s.notice_count==2 && s.notice[s.offset].question);
     assert(!question_sends && !desktop_opens && !starts);
-    present_scene=true; view(HOME); scene_take(); assert(status_is(HT_BELL " 1"));
+    // The one left unread is "a"'s own, and "a" is on the face: no bell at all.
+    present_scene=true; view(HOME); scene_take(); assert(!status_is(HT_BELL " 1") && !notice_unread("a"));
     ui_notif_open(); assert(!strcmp(s.notice[s.offset].agent_id,"a")); scene_take();
-    assert(!notice_unread() && s.notice_count==2 && s.view==INBOX);
+    assert(!notice_unread(NULL) && s.notice_count==2 && s.view==INBOX);
     portrait(dir,"inbox-read-stays");
     tap(1000,233,430); assert(s.view==HOME && status_is("") && !action_enabled(A_INBOX));
     for(int i=0;i<scene.count;i++) assert(scene.runs[i].font!=&ht_bell_footer);
     portrait(dir,"bell-all-read");
     ui_notif_replace(NULL,0); ui_notif_replace(rows,2); scene_take();
-    assert(!notice_unread() && status_is("")); // Late/reconnect snapshot stays read.
+    assert(!notice_unread(NULL) && status_is("")); // Late/reconnect snapshot stays read.
     strcpy(rows[0].summary,"The next build is ready.");
-    ui_notif_replace(rows,2); assert(notice_unread()==1);
-    ui_notif_open(); scene_take(); assert(!notice_unread());
+    ui_notif_replace(rows,2); assert(notice_unread(NULL)==1);
+    ui_notif_open(); scene_take(); assert(!notice_unread(NULL));
     // A new live result, even with identical words, is a new unread message.
     ui_notify_task_done("a","Build","M2",rows[0].summary);
-    assert(notice_unread()==1);
+    assert(notice_unread(NULL)==1);
     present_scene=false; scene_take(); frame=habitat_scene_receipt();
     ui_notify_task_done("a","Build","M2",rows[0].summary);
-    habitat_scene_presented(frame); assert(notice_unread()==1); // Old DMA, new same-text result.
+    habitat_scene_presented(frame); assert(notice_unread(NULL)==1); // Old DMA, new same-text result.
     scene_take(); frame=habitat_scene_receipt();
-    view(HOME); habitat_scene_presented(frame); assert(notice_unread()==1);
+    view(HOME); habitat_scene_presented(frame); assert(notice_unread(NULL)==1);
     ui_notif_open(); scene_take(); frame=habitat_scene_receipt();
     cable_notif_t newer={.agent_id="a",.name="Build",.summary="This message replaced the old frame."};
-    ui_notif_replace(&newer,1); habitat_scene_presented(frame); assert(notice_unread()==1);
+    ui_notif_replace(&newer,1); habitat_scene_presented(frame); assert(notice_unread(NULL)==1);
     scene_take(); frame=habitat_scene_receipt();
-    ui_notif_seen("a"); habitat_scene_presented(frame); assert(!notice_unread() && s.view==HOME);
-    ui_notif_replace(&newer,1); assert(!notice_unread());
-    newer.failed=true; ui_notif_replace(&newer,1); assert(notice_unread()==1);
+    ui_notif_seen("a"); habitat_scene_presented(frame); assert(!notice_unread(NULL) && s.view==HOME);
+    ui_notif_replace(&newer,1); assert(!notice_unread(NULL));
+    newer.failed=true; ui_notif_replace(&newer,1); assert(notice_unread(NULL)==1);
     s.notice_revision=UINT32_MAX; ui_notif_replace(&newer,1);
     ui_notif_open(); scene_take(); assert(habitat_scene_receipt()!=0);
     // Open clears the bell even before a display receipt and even if the local
     // focus queue refuses it. A queue failure must never pretend to open a pane.
     congestion=true; dispatch((action_t){.kind=A_NOTICE,.id="a"});
-    assert(!notice_unread() && !desktop_opens && !question_sends && !starts);
+    assert(!notice_unread(NULL) && !desktop_opens && !question_sends && !starts);
     congestion=false; present_scene=true; view(HOME); ui_notif_open(); scene_take();
-    tap(2000,233,250); assert(!notice_unread() && desktop_opens==1 && !strcmp(opened_agent,"a"));
+    tap(2000,233,250); assert(!notice_unread(NULL) && desktop_opens==1 && !strcmp(opened_agent,"a"));
     // Bounded read history reuses a slot for the same pane and remains safe as
     // more than a full inbox's distinct identities are read.
     reset();
     for(int i=0;i<NOTICES*3;i++) {
         char id[ID_MAX]; snprintf(id,sizeof id,"read-%d",i);
         ui_notify_task_done(id,"Build","M2","Finished.");
-        ui_notif_open(); scene_take(); assert(!notice_unread());
+        ui_notif_open(); scene_take(); assert(!notice_unread(NULL));
         assert(s.notice_read_next<NOTICES && s.notice_count<=NOTICES);
     }
     assert(!starts && !question_sends && !desktop_opens);
@@ -1744,6 +1748,28 @@ int main(int argc, char **argv) {
     // The Focus SKIN's home face, footer and all — the "focus" portrait above is the legacy
     // focus-face option on the default character, which draws no microphone.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait(dir, "focus-skin");
+    // THE TWO DOORS on Focus: the tab pill opens the tab list, the agent's name the pane list —
+    // pressed and released like the microphone, so a thumb that drifts or lingers still opens them.
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    tap(1000, 233, 80); assert(s.view == TABS);
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    tap(1000, 233, 142); assert(s.view == AGENTS && !starts);
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    habitat_touch(true, 233, 80, 1000); habitat_touch(true, 247, 90, 1400); habitat_touch(false, 247, 90, 1900);
+    assert(s.view == TABS);
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    habitat_touch(true, 233, 142, 1000); habitat_touch(true, 247, 152, 1400); habitat_touch(false, 247, 152, 1900);
+    assert(s.view == AGENTS);
+    // ⌄ marks each door only when there is another to choose.
+    {
+        workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+        int downs = 0;
+        for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, HT_DOWN)) downs++;
+        assert(downs == 2);   // four tabs, two panes
+        s.tab_count = 1; s.count = 1; scene_take(); downs = 0;
+        for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, HT_DOWN)) downs++;
+        assert(downs == 0);
+    }
     // THE PANE ARROWS either side of the Focus microphone: a sideways swipe, as buttons, and only when
     // the tab has another agent to go to.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait(dir, "focus-arrows");
@@ -1755,13 +1781,29 @@ int main(int argc, char **argv) {
     assert(switches == 1 && !starts);
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count = 1; scene_take();
     tap(1000, 98, 388); tap(1200, 368, 388); assert(!switches && !starts);   // one agent: no arrows at all
+    /*
+     * THE BELL DOES NOT COUNT THE AGENT ON THE FACE. Standing on "a", its question arrives: it shows in
+     * the recap's place and the bell stays dark — a +1 there read as another agent asking. Move to
+     * "b" without answering and the bell says 1, until the question is answered.
+     */
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS);
+    {
+        cable_notif_t asked={.agent_id="a",.name="Research",.question=true,.summary="Which colour do you like?"};
+        ui_notif_replace(&asked,1); scene_take();
+        assert(s.view==HOME && s.active==0 && !action_enabled(A_INBOX));
+        s.active=1; scene_take(); assert(action_enabled(A_INBOX));   // the bell, drawn at the top on Focus
+        bool one = false;   // bell and count are separate runs there, so the count is read on its own
+        for (int i = 0; i < scene.count; i++) if (scene.runs[i].y == 8 && !strcmp(scene.runs[i].text, "1")) one = true;
+        assert(one);
+        s.active=0; scene_take(); assert(!action_enabled(A_INBOX));
+    }
     // An open question on Focus: shown on the home face, in the recap's place, and nowhere else.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     {
         cable_notif_t asked={.question=true,.summary="Which database should the retry queue use?"};
         COPY(asked.agent_id, s.agents[0].id); COPY(asked.name, s.agents[0].name);
         // A pill under the bell, as on glass: the two must not touch.
-        s.tab_count=1; COPY(s.tabs[0].id,"tab-0"); COPY(s.tabs[0].name,"Doi song"); COPY(s.selected_tab,"tab-0");
+        s.tab_count=1; COPY(s.tabs[0].id,"tab-0"); COPY(s.tabs[0].name,"Daily life"); COPY(s.selected_tab,"tab-0");
         ui_notif_replace(&asked,1); scene_take(); portrait(dir, "focus-question");
         assert(s.view == HOME);
         uint16_t gap[HT_WIDTH];

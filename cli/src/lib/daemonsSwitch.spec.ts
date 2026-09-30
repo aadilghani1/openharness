@@ -458,7 +458,7 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
   })
 
   it('gates the reporters, turns, lessons, the pair harness, the pair request and every daemon_* frame', () => {
-    expect(source.match(/enabled: \(\) => daemons\.on\(\)/g)).toHaveLength(2)
+    expect(source.match(/enabled: \(\) => daemons\.on\(\)/g)).toHaveLength(3)
     expect(source).toContain('if (daemons.on()) zooTurnCounter.started(')
     expect(source).toContain('if (learnFrom && daemons.on() && !isTerminalEngine(learnFrom.engine)) {')
     expect(source).toContain('if (!daemons.on()) return null')                                  // lessons in launches
@@ -470,7 +470,7 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
     }
     expect(source).toContain('onDaemonShown: (connId, payload) => { if (daemons.on()) pairBrain?.onShown(connId, payload) }')
     expect(source).toContain('if (daemons.on()) pairBrain?.onPresence(connId, payload, meta)')
-    expect(source).toContain('onBackendConnected = () => { gridAttach.run(); daemons.connected() }')
+    expect(source).toContain('onBackendConnected = () => { daemons.connected() }')
     expect(source).toContain('backend.onZooChanged = () => daemons.zooChanged()')
   })
 })

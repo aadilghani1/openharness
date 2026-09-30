@@ -4,7 +4,7 @@
  * idle check that races a harness which changed under it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PairHarness, pairInstructions, pairPackage, type PairHarnessDeps, type PairHarnessRow } from './pairHarness.js'
@@ -64,24 +64,24 @@ describe('the instructions and the package', () => {
     await w.harness.off()
   })
 
-  it('keeps each individual conversation and workspace separate and resumes the same friend', async () => {
+  it('keeps one conversation and workspace for the collection, including after a restart', async () => {
     let uid = 'tim-one'
-    const w = world({ pairedUid: () => uid })
+    const w = world({ pairedUid: () => uid, collectionUids: () => ['tim-one', 'tim-two'] })
     const first = await w.harness.talk('hello')
     expect(first).toMatchObject({ started: true, agentId: 'pair-1' })
-    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: join(w.deps.workspace, 'tim-one') }))
+    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: join(w.deps.workspace, 'collection-tim-one') }))
     uid = 'tim-two'
-    expect(await w.harness.talk('a different little Tim')).toMatchObject({ started: true, agentId: 'pair-2' })
-    expect(w.rows.find(r => r.agentId === 'pair-1')?.status).toBe('stopped')
+    expect(await w.harness.talk('a different little Tim')).toMatchObject({ sent: true, agentId: 'pair-1' })
+    expect(w.rows.find(r => r.agentId === 'pair-1')?.status).toBe('live')
     uid = 'tim-one'
-    expect(await w.harness.talk('remember me?')).toMatchObject({ resumed: true, agentId: 'pair-1' })
-    expect(w.deps.create).toHaveBeenCalledTimes(2)
+    expect(await w.harness.talk('remember me?')).toMatchObject({ sent: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
     expect(w.deps.send).toHaveBeenLastCalledWith('pair-1', 'remember me?')
     expect(w.harness.agentId()).toBe('pair-1')
     await w.harness.off()
     const restarted = new PairHarness(w.deps)
     expect(await restarted.talk('and after a restart?')).toMatchObject({ resumed: true, agentId: 'pair-1' })
-    expect(w.deps.create).toHaveBeenCalledTimes(2)
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
     await restarted.off()
   })
 
@@ -100,10 +100,46 @@ describe('the instructions and the package', () => {
     expect(w.deps.send).not.toHaveBeenCalled()
   })
 
+  it('DSH opening preserves live and paused history across character and package changes', async () => {
+    let uid = 'tim-one'
+    let name = 'Tim'
+    const w = world({ pairedUid: () => uid, pairedName: () => name, collectionUids: () => ['tim-one', 'tim-two'] })
+    await w.harness.open(uid)
+    w.rows[0]!.hasConversation = true
+    name = 'Little Tim'
+    expect(await w.harness.open(uid)).toMatchObject({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    uid = 'tim-two'
+    expect(await w.harness.open(uid)).toMatchObject({ ok: true, agentId: 'pair-1' })
+    w.rows[0]!.status = 'stopped'
+    uid = 'tim-one'
+    expect(await w.harness.open(uid)).toMatchObject({ resumed: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(await w.harness.open('tim-two')).toMatchObject({ error: 'STALE_COMPANION' })
+  })
+
+  it('disabling companions during startup pauses the late launch and never binds it', async () => {
+    let finish!: (result: { ok: true; agentId: string }) => void
+    const started = new Promise<{ ok: true; agentId: string }>(resolve => { finish = resolve })
+    const create = vi.fn(async () => started)
+    const stop = vi.fn(async () => {})
+    const w = world({ pairedUid: () => 'tim-one', create, stop })
+    const pending = w.harness.open('tim-one')
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await w.harness.off()
+    finish({ ok: true, agentId: 'late-pair' })
+    expect(await pending).toMatchObject({ error: 'STALE_COMPANION' })
+    expect(stop).toHaveBeenCalledWith('late-pair')
+    expect(w.harness.agentId()).toBeNull()
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
   it('pins the reply identity in the generated DSH and keeps memory claims grounded', () => {
     const text = pairPackage({ daemonId: 'tim', uid: 'tim-one', engine: 'claude', mcpCommand: ['h'], tokenFile: '/t' })['AGENTS.md']!.content
     expect(text).toContain('companionUid for the say tool is "tim-one"')
-    expect(text).toContain('Deliver EVERY conversational answer')
+    expect(text).toContain('Answer them directly in this conversation')
+    expect(text).not.toContain('Deliver EVERY conversational answer')
     expect(text).toContain('harness pair lessons list --json')
     expect(text).toContain('chatting never grants wider autonomy')
   })
@@ -117,7 +153,7 @@ describe('the instructions and the package', () => {
 
   it('keeps the package name within 40 characters', () => {
     const manifest = JSON.parse(pairPackage({ daemonId: 'x'.repeat(60), engine: 'codex', mcpCommand: ['h'], tokenFile: '/t' })['harness.json']!.content)
-    expect(manifest.name).toHaveLength(40)
+    expect(manifest.name).toBe('Companions')
     expect(manifest.agent.env.DSH_PERMISSION_MODE).toBe('ask')
   })
 })
@@ -154,37 +190,86 @@ describe('talk, when something fails', () => {
     expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'two' }))
   })
 
-  it('starts a new conversation when a paused one cannot come back, rather than leave the person unheard', async () => {
+  it('keeps the saved conversation on resume failure instead of silently replacing its history', async () => {
     const w = world()
     await w.harness.talk('hi')
     w.rows[0].status = 'stopped'
     ;(w.deps.resume as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: 'RESUME_FAILED' })
-    expect(await w.harness.talk('are you there?')).toEqual({ ok: true, agentId: 'pair-2', started: true })
-    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'are you there?' }))
-    expect(w.harness.agentId()).toBe('pair-2')
+    expect(await w.harness.talk('are you there?')).toEqual({ ok: false, error: 'RESUME_FAILED' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.harness.agentId()).toBe('pair-1')
   })
 
-  it('a new revision over a PAUSED pair starts a new one without stopping anything', async () => {
+  it('discovering another engine does not replace a paused collection', async () => {
     let engine: 'claude' | 'codex' = 'claude'
     const w = world({ engine: async () => engine })
     await w.harness.talk('hi')
     w.rows[0].status = 'stopped'
     engine = 'codex'
-    expect(await w.harness.talk('hi on codex')).toEqual({ ok: true, agentId: 'pair-2', started: true })
+    expect(await w.harness.talk('hi on codex')).toEqual({ ok: true, agentId: 'pair-1', resumed: true })
     expect(w.deps.stop).not.toHaveBeenCalled()
-    expect(w.deps.resume).not.toHaveBeenCalled()
+    expect(w.deps.resume).toHaveBeenCalledWith('pair-1')
   })
 
-  it('a new revision over a live pair that refuses to stop still starts the new one', async () => {
+  it('a package revision does not attempt to stop or replace a live collection', async () => {
     let engine: 'claude' | 'codex' = 'claude'
     const w = world({ engine: async () => engine, stop: vi.fn(async () => { throw new Error('busy') }) })
     await w.harness.talk('hi')
     engine = 'codex'
-    expect(await w.harness.talk('hi on codex')).toMatchObject({ ok: true, started: true, agentId: 'pair-2' })
+    expect(await w.harness.talk('hi on codex')).toMatchObject({ ok: true, sent: true, agentId: 'pair-1' })
+    expect(w.deps.stop).not.toHaveBeenCalled()
   })
 })
 
 describe('the saved state', () => {
+  it('adopts the selected legacy chat, preserves both archives, and changes persona without a new turn', async () => {
+    let uid = 'tim-one'
+    let daemon = 'tim'
+    const w = world({ pairedUid: () => uid, pairedDaemon: () => daemon,
+      collectionUids: () => ['tim-one', 'gnu-one'], engine: vi.fn(async () => null) })
+    const tim = { agentId: 'old-tim', revision: 'old', uid: 'tim-one' }
+    const gnu = { agentId: 'old-gnu', revision: 'old', uid: 'gnu-one' }
+    mkdirSync(join(dir, 'pair'), { recursive: true })
+    writeFileSync(w.deps.stateFile, JSON.stringify({ ...tim, conversations: { 'tim-one': tim, 'gnu-one': gnu } }))
+    w.rows.push({ agentId: 'old-tim', engine: 'claude', status: 'live' }, { agentId: 'old-gnu', engine: 'codex', status: 'stopped' })
+    expect(await w.harness.open(uid)).toEqual({ ok: true, agentId: 'old-tim' })
+    uid = 'gnu-one'; daemon = 'gnu'
+    expect(await w.harness.open(uid)).toEqual({ ok: true, agentId: 'old-tim' })
+    expect(w.harness.context('old-tim')).toContain('selected gnu (gnu)')
+    expect(w.harness.context('old-tim')).toContain('"gnu-one"')
+    expect(w.harness.context('old-gnu')).toBeNull()
+    expect(w.deps.create).not.toHaveBeenCalled()
+    expect(w.deps.engine).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    expect(JSON.parse(readFileSync(w.deps.stateFile, 'utf8')).conversations).toEqual({ 'tim-one': tim, 'gnu-one': gnu })
+    expect(new PairHarness(w.deps).agentId()).toBe('old-tim')
+  })
+
+  it('never adopts a chat from another collection or signed-out guest', async () => {
+    let uid = 'alice-tim'
+    let members = ['alice-tim', 'alice-gnu']
+    const w = world({ pairedUid: () => uid, collectionUids: () => members })
+    await w.harness.open()
+    uid = 'bob-tim'; members = ['bob-tim']
+    expect(w.harness.agentId()).toBeNull()
+    expect(w.harness.context('pair-1')).toBeNull()
+    expect(await w.harness.open()).toMatchObject({ started: true, agentId: 'pair-2' })
+    uid = 'alice-gnu'; members = ['alice-tim', 'alice-gnu']
+    expect(w.harness.agentId()).toBe('pair-1')
+    expect(await w.harness.open()).toEqual({ ok: true, agentId: 'pair-1', resumed: true })
+    members = []
+    expect(w.harness.agentId()).toBeNull()
+  })
+
+  it('does not replace a saved conversation whose registry row is temporarily missing', async () => {
+    const w = world()
+    await w.harness.open()
+    w.rows.length = 0
+    expect(await w.harness.open()).toMatchObject({ error: 'CONVERSATION_UNAVAILABLE' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+  })
+
   it('is not ours when it is not JSON, or its fields are the wrong type', () => {
     const w = world()
     mkdirSync(join(dir, 'pair'), { recursive: true })

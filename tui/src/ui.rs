@@ -124,6 +124,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
+    if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
@@ -188,7 +189,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
     // The keys a tmux user reaches for every day first (what fits of a small window is those),
     // then the rest in the table's order.
-    const FIRST: &[&str] = &["c", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+    const FIRST: &[&str] = &["c", "N", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
     items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
     let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };

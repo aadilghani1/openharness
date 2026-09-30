@@ -109,7 +109,7 @@ void main() {
       app.newSwarm(name: 'Other work');
       app.openStore();
       final storeTab = app.activeSwarm;
-      app.newSwarm(); // an empty New Swarm of the person's own, left open behind the store
+      app.newSwarm(); // an empty New Tab of the person's own, left open behind the store
       final emptyTab = app.activeSwarm;
       expect(emptyTab.isEmptyStarter, isTrue);
       app.selectSwarm(storeTab.id);
@@ -147,7 +147,7 @@ void main() {
       expect(
         app.activeSwarm,
         same(emptyTab),
-        reason: 'in the empty New Swarm the window already had',
+        reason: 'in the empty New Tab the window already had',
       );
       expect(app.swarms.length, tabsBefore, reason: 'no second empty tab');
 
@@ -166,7 +166,7 @@ void main() {
       expect(
         app.swarms,
         contains(emptyTab),
-        reason: 'the person\'s own New Swarm stays',
+        reason: 'the person\'s own New Tab stays',
       );
       expect(
         find.byKey(const ValueKey('store-page:autonomous/marp')),

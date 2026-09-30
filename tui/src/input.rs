@@ -44,7 +44,7 @@ pub fn handle(app: &mut App, event: CEvent) {
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
 fn typing(app: &App) -> bool {
-    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }))
+    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
@@ -129,7 +129,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
     // at the status line keeps it.
-    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }));
+    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)));
     if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.status_redraws += 1;
         app.prefix = true;
@@ -240,6 +240,7 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
 }
 
 fn on_paste(app: &mut App, text: String) {
+    if let Some(Modal::NewHarness(form)) = &mut app.modal { crate::new_harness::paste(form, &text); return }
     if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in text.chars().filter(|c| !c.is_control()) { picker.type_char(c) } return }
     if let Some(Modal::Prompt(prompt)) = &mut app.modal { prompt.value.push_str(&text.replace(['\r', '\n'], " ")); return }
     app.tab_mut().home = false;
@@ -263,6 +264,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 /// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
 /// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::mouse(app, mouse) }
     // --no-mouse: a list the mouse does nothing to.
     if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
     let inside = |r: ratatui::layout::Rect| mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row >= r.y && mouse.row < r.y + r.height;
@@ -573,7 +575,6 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
-        PickerKind::NewWhat { machine, .. } | PickerKind::NewFolder { machine, .. } => is_loading(&format!("dsh {machine}")),
         PickerKind::Models => is_loading(&format!("grid {}", modal::models_machine(app))) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
         _ => false,
     };
@@ -662,22 +663,6 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "start one"), ("M-i", "install")];
             // (While it loads the spinner turns and the list is blank, as fzf's is while it reads.)
             if catalog.is_empty() { picker.empty = "Nothing in the Store yet.".into() }
-        }
-        PickerKind::NewMachine => {
-            let prefer = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or(app.fleet.local_id.clone());
-            picker.set_rows(modal::new_machine_rows(app, &prefer));
-            picker.hints = vec![("enter", "choose")];
-        }
-        PickerKind::NewWhat { machine, .. } => {
-            let catalog = app.dsh.get(machine).cloned().unwrap_or_default();
-            picker.set_rows(modal::new_what_rows(&catalog));
-            picker.status = app.fleet.machine_name(machine);
-            picker.hints = vec![("enter", "choose")];
-        }
-        PickerKind::NewFolder { machine, .. } => {
-            picker.set_rows(modal::new_folder_rows(app, machine));
-            picker.status = app.fleet.machine_name(machine);
-            picker.hints = vec![("enter", "choose"), ("M-w", "in a new worktree")];
         }
         PickerKind::Route { .. } => {}
         PickerKind::Output { title, lines } => {
@@ -835,12 +820,7 @@ pub fn run(app: &mut App, command: &str) {
         "help" => launch(app, "?", Filter::All),
         "layout" => picker(app, PickerKind::Layout, "layout", ""),
         "store" => launch(app, "*", Filter::All),
-        "new" => {
-            let usable: Vec<String> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
-            if usable.len() > 1 { picker(app, PickerKind::NewMachine, "New Harness · where", "Machine…") }
-            else if let Some(machine) = usable.first().cloned() { new_what(app, machine) }
-            else { app.say("No machine is connected yet", theme::DANGER) }
-        }
+        "new" => crate::new_harness::open(app, None, None),
         "terminal" => {
             let machine = focused_agent(app).map(|(m, _)| m).unwrap_or(app.fleet.local_id.clone());
             create(app, machine, What { engine: "terminal".into(), dsh: None, label: "Terminal".into() }, None, None);
@@ -1012,7 +992,7 @@ fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str,
     });
 }
 
-fn load_dsh(app: &mut App, machine: String) {
+pub(crate) fn load_dsh(app: &mut App, machine: String) {
     let Some(link) = app.link(&machine) else { return };
     let id = machine.clone();
     let mark = loading(format!("dsh {machine}"), true);
@@ -1047,6 +1027,7 @@ fn harness_preview(picker: &mut Picker) {
 
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).
 pub fn refill(app: &mut App) {
+    if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::refresh(app) }
     // A delayed search/catalog reply may arrive after the picker has closed. It must not
     // consume a command prompt, confirmation or copy mode that replaced that picker.
     if !matches!(app.modal, Some(Modal::Picker { .. })) { return }
@@ -1059,11 +1040,7 @@ pub fn refill(app: &mut App) {
     }
 }
 
-fn new_what(app: &mut App, machine: String) {
-    load_dsh(app, machine.clone());
-    let name = app.fleet.machine_name(&machine);
-    picker(app, PickerKind::NewWhat { machine, cwd: None }, &format!("new harness · {name}"), "Claude Code, Codex, a Store harness…");
-}
+fn new_what(app: &mut App, machine: String) { crate::new_harness::open(app, Some(machine), None) }
 
 /// `agent_create`, then open it. [cwd] None with an agent = a new project folder.
 /// tmux's split-window / new-window: a shell, now, on this pane's machine and in its folder
@@ -1284,7 +1261,7 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 /// @hn-permission-mode says (auto unless you set it: acceptEdits, plan, ask, full …).
 fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) { create_opts(app, machine, what, cwd, message, worktree, NewOpts::default()) }
 
-fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
+pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
     let Some(link) = app.link(&machine) else { return app.error("That machine is not connected") };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
@@ -1298,15 +1275,47 @@ fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, 
     if !terminal { payload["permissionMode"] = json!(app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into())) }
     if let Some(message) = message.filter(|m| !m.trim().is_empty()) { payload["prompt"] = json!(message.trim()) }
     if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) { payload["name"] = json!(name) }
+    if let Some(extra) = opts.extra.as_ref().and_then(|v| v.as_object()) { for (key, value) in extra { payload[key] = value.clone(); } }
+    if let Some(form_id) = &opts.form_id {
+        let Some(Modal::NewHarness(form)) = &mut app.modal else { return };
+        if &form.id != form_id || form.attempt.is_some() { return }
+        form.attempt = Some(crate::new_harness::Creation {
+            id: payload["creationId"].as_str().unwrap().into(), machine: machine.clone(), session: app.session_id,
+        });
+        form.starting = true; form.error.clear();
+    }
     // (From a shell: nothing said on the way — a message there is the command's error.)
     if app.capture.is_none() { app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT) }
-    app.modal = None;
+    if opts.form_id.is_none() { app.modal = None; }
     // -P: the shell that asked waits for it, and is told where it is (as new-window -P).
     if opts.print.is_some() { app.print_new = opts.print.clone() }
     let session = app.session_id;
-    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
+    let timeout = Duration::from_secs(if opts.form_id.is_some() { 20 } else { 180 });
+    app.spawn(async move { link.rpc("agent_create", payload, timeout).await }, move |app, reply| {
+        creation_finished(app, machine, session, opts, reply, false);
+    });
+}
+
+pub(crate) fn check_creation(app: &mut App, form_id: String, attempt: crate::new_harness::Creation) {
+    let opts = NewOpts { form_id: Some(form_id), ..Default::default() };
+    let Some(link) = app.link(&attempt.machine) else {
+        return creation_finished(app, attempt.machine, attempt.session, opts, Err(crate::daemon::RpcError::new("DISCONNECTED", "")), true);
+    };
+    app.spawn(async move {
+        link.rpc("agent_create_status", json!({"creationId":attempt.id}), Duration::from_secs(10)).await
+    }, move |app, reply| {
+        creation_finished(app, attempt.machine, attempt.session, opts, reply, true);
+    });
+}
+
+fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts, reply: Result<serde_json::Value, crate::daemon::RpcError>, checking: bool) {
+    if let Some(id) = &opts.form_id {
+        if !crate::new_harness::creation_reply(app, id, &reply, checking) { return }
+    }
+    match reply {
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+                if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
                 // A new harness is a new window (as C-b c's shell is), or the empty one here —
                 // in the session it was asked for; -d: not gone to.
@@ -1324,19 +1333,22 @@ fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, 
                 app.toast = None;
             } else {
                 if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec!["the machine created no harness".into()], 1)); return }
+                if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some("The machine created no harness — try again".into())); }
                 app.say("The machine created no harness", theme::DANGER)
             }
         }
         Err(e) => {
             if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec![format!("create harness failed: {e}")], 1)); return }
+            if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some(format!("Could not start it: {e}"))); }
             app.say(format!("Could not start it: {e}"), theme::DANGER)
         }
-    });
+    }
 }
 
 fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
+        Modal::NewHarness(form) => crate::new_harness::key(app, form, key),
         Modal::Confirm { command, key: yes, enter_yes, .. } => {
             // tmux: the confirm key (y, or -c's) runs it, Enter too with -y; any other says no.
             if key.code == KeyCode::Char(yes) || (enter_yes && key.code == KeyCode::Enter) { commands::execute(app, &command) }
@@ -2087,8 +2099,6 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
             KeyCode::Char('l') if alt => { choose(app, kind, picker, Choice::Link); return }
             KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
-            // A new harness's folder: M-w starts it in a new worktree of that repository instead.
-            KeyCode::Char('w') if alt && matches!(kind, PickerKind::NewFolder { .. }) => { choose(app, kind, picker, Choice::Worktree); return }
             KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
             KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
             _ => {}
@@ -2391,7 +2401,7 @@ fn fzf_key_name(key: &KeyEvent) -> String {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Choice { Enter, Tab, SplitRight, SplitDown, Here, Open, Pause, New, Link, Worktree }
+enum Choice { Enter, Tab, SplitRight, SplitDown, Here, Open, Pause, New, Link }
 
 fn split_key(id: &str) -> Option<(String, String)> {
     let (m, a) = id.split_once(':')?;
@@ -2581,12 +2591,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             if choice == Choice::Tab { return project_session(app, &machine, &root) }
             if choice == Choice::New {
                 if app.link(&machine).is_none() { picker.say("That machine is not connected"); return keep(app, kind, picker) }
-                load_dsh(app, machine.clone());
-                let name = root.rsplit('/').next().unwrap_or(&root).to_string();
-                let mut next = Picker::new(format!("new harness · #{name}"), "Claude Code, Codex, a Store harness…");
-                let kind = PickerKind::NewWhat { machine, cwd: Some(root) };
-                fill(app, &kind, &mut next);
-                app.modal = Some(Modal::Picker { kind, picker: next });
+                crate::new_harness::open(app, Some(machine), Some(root));
                 return;
             }
             let kind = PickerKind::Open { filter: Filter::All, machine: Some(machine), project: Some(root) };
@@ -2668,48 +2673,6 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let label = row.get("name").and_then(|v| v.as_str()).unwrap_or(&dsh).to_string();
             create(app, local, What { engine, dsh: Some(dsh), label }, None, None);
         }
-        PickerKind::NewMachine => { if let Some(machine) = id { new_what(app, machine) } }
-        PickerKind::NewWhat { machine, cwd: preset } => {
-            let Some(id) = id else { return keep(app, kind, picker) };
-            let what = if let Some(engine) = id.strip_prefix("engine:") {
-                What { engine: engine.into(), dsh: None, label: theme::engine_label(engine).into() }
-            } else {
-                let rest = id.trim_start_matches("dsh:");
-                let (dsh, engine) = rest.rsplit_once(':').unwrap_or((rest, "claude"));
-                let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
-                What { engine: engine.into(), dsh: Some(dsh.into()), label }
-            };
-            if what.engine == "terminal" { return create(app, machine, what, preset, None) }
-            let name = app.fleet.machine_name(&machine);
-            // The folder is already known (chosen from `#`): straight to the first message.
-            if let Some(cwd) = preset {
-                let label = what.label.clone();
-                let hint = format!("on {name} in {cwd}");
-                return prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd), worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
-            }
-            let mut next = Picker::new(format!("New {} · folder", what.label), "Search folders…");
-            let kind = PickerKind::NewFolder { machine: machine.clone(), what };
-            fill(app, &kind, &mut next);
-            next.status = name;
-            app.modal = Some(Modal::Picker { kind, picker: next });
-        }
-        PickerKind::NewFolder { machine, what } => {
-            let Some(id) = id else { return keep(app, kind, picker) };
-            let name = app.fleet.machine_name(&machine);
-            match id.as_str() {
-                "__path" => prompt(app, PromptKind::NewPath { machine, what }, "Folder", &format!("A folder on {name}"), "~ is that machine's home", "~/", false),
-                "__new" => {
-                    let label = what.label.clone();
-                    prompt(app, PromptKind::NewMessage { machine, what, cwd: None, worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &format!("on {name}, in a new project"), "", false)
-                }
-                cwd => {
-                    let label = what.label.clone();
-                    let worktree = choice == Choice::Worktree;
-                    let hint = if worktree { format!("on {name}: a new worktree of {cwd}, on a branch of its own") } else { format!("on {name} in {cwd}") };
-                    prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd.to_string()), worktree }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false)
-                }
-            }
-        }
         PickerKind::Route { text, voice } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
             if let Some(voice) = voice { return crate::dial::send_spoken(app, &voice, &machine, &agent, &text) }
@@ -2788,16 +2751,6 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                 });
             }
         }
-        PromptKind::NewPath { machine, what } => {
-            if value.is_empty() { return }
-            let home = app.homes.get(&machine).cloned().unwrap_or_default();
-            let cwd = if value == "~" { home } else if let Some(rest) = value.strip_prefix("~/") { format!("{home}/{rest}") } else { value };
-            let label = what.label.clone();
-            let name = app.fleet.machine_name(&machine);
-            let hint = format!("on {name} in {cwd}");
-            prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd), worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
-        }
-        PromptKind::NewMessage { machine, what, cwd, worktree } => create_in(app, machine, what, cwd, Some(value), worktree),
         PromptKind::Send => {
             if value.is_empty() { return }
             let local = app.fleet.local_id.clone();
@@ -3008,7 +2961,11 @@ fn for_pane(app: &App, pane: u64, key: KeyEvent) -> KeyEvent {
 /// What new-harness asks beyond which and where (a script's): made in the background (-d), its
 /// name (-n), and what to print once it is there (-P, -F: new-window's).
 #[derive(Default, Clone)]
-pub struct NewOpts { pub detached: bool, pub name: Option<String>, pub print: Option<String> }
+pub struct NewOpts {
+    pub detached: bool, pub name: Option<String>, pub print: Option<String>,
+    /// Additional project/permission choices from the interactive draft.
+    pub extra: Option<serde_json::Value>, pub form_id: Option<String>,
+}
 
 /// `new-harness [-dP] [-e engine] [-c folder] [-n name] [-F format] [engine] [@machine] [folder]
 /// [task …]`: the engine a known one (else -e's, else Claude Code), the folder a path, and the

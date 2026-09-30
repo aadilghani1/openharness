@@ -71,7 +71,7 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
 
 /** `talk` is not one: the person talks to their daemon from a window (`daemon_talk`), never from a tool. */
 export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'status', 'journal', 'mcp', 'lessons'])
-export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert', 'restore', 'export'] as const
+export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert', 'restore', 'export', 'review_recent', 'cancel_review'] as const
 /** Lesson actions that need the person: a challenge, the daemon's one-time nonce, a yes at the terminal. */
 const PERSON_LESSON_ACTIONS = new Set(['approve', 'restore', 'export'])
 
@@ -105,6 +105,8 @@ export const PAIR_USAGE = [
   '  Lessons (daemons/LEARNING.md; the lessons folder, ~/.harness/lessons):',
   '    lessons [list]                         every lesson: pending, approved, reverted, skipped',
   '    lessons show <id>                      its SKILL.md or note, with where it came from',
+  '    lessons review-recent [--hours 24]    propose lessons from the last 1–24 hours on this computer',
+  '    lessons cancel-review                 stop the current conversation review',
   '    lessons approve <id> [--create]        teach it (asks you at a terminal outside Harness; --create writes a new',
   '                                           AGENTS.md for a note, in a project opted in with learn.agentsMd)',
   '    lessons skip <id>                      drop a pending lesson; it is never proposed again',
@@ -130,7 +132,7 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
     if (word === '--json') { json = true; continue }
     if (word === '--create' && verb === 'lessons') { options.create = 'true'; continue }
     if (word === '--dry-run' && verb === 'lessons') { options.dryRun = 'true'; continue }
-    const flag = /^--(machine|since|name|prompt|token-file)(?:=(.*))?$/.exec(word)
+    const flag = /^--(machine|since|name|prompt|token-file|hours)(?:=(.*))?$/.exec(word)
     if (flag) {
       const value = flag[2] ?? argv[++i]
       if (value === undefined) throw new PairUsageError(`--${flag[1]} needs a value.`)
@@ -169,13 +171,16 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
       if (rest(2) || options.prompt) payload.prompt = options.prompt ?? rest(2)
       break
     case 'lessons': {
-      const action = words[0] ?? 'list'
+      const action = (words[0] ?? 'list').replace(/-/g, '_')
       if (!(LESSON_ACTIONS as readonly string[]).includes(action)) throw new PairUsageError(`lessons has no "${action}" (${LESSON_ACTIONS.join(', ')}).`)
-      if (action !== 'list' && action !== 'export' && !words[1]) throw new PairUsageError(`lessons ${action} needs a lesson id (harness pair lessons list).`)
+      if (!['list', 'export', 'review_recent', 'cancel_review'].includes(action) && !words[1]) throw new PairUsageError(`lessons ${action} needs a lesson id (harness pair lessons list).`)
+      const hours = Number(options.hours ?? 24)
+      if (action === 'review_recent' && (!Number.isInteger(hours) || hours < 1 || hours > 24)) throw new PairUsageError('--hours takes a whole number from 1 to 24.')
       payload = {
         verb, action, ...(words[1] && action !== 'export' ? { id: words[1] } : {}),
         ...(options.create && action === 'approve' ? { create: true } : {}),
         ...(options.dryRun && action === 'export' ? { dryRun: true } : {}),
+        ...(action === 'review_recent' ? { hours } : {}),
       }
       break
     }

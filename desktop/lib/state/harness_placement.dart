@@ -4,7 +4,7 @@ enum HarnessPlacement {
   currentTab,
   newTab;
 
-  String get title => this == newTab ? 'New Swarm' : 'New Pane';
+  String get title => this == newTab ? 'New Tab' : 'New Pane';
   String get action =>
       this == newTab ? 'Open in new swarm' : 'Add to this swarm';
   String get createAction =>

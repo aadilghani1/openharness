@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,6 +13,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart' show ReadlineKeys;
+import 'desktop_chrome.dart';
 import 'terminal_text_action.dart';
 
 /// API setup uses the same preview, keymap, and controller as the model list.
@@ -45,6 +47,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
   ApiConnection? _editing;
   bool _advanced = false, _visible = false;
   String? _error;
+  bool _desktop = false;
 
   /// The field [_error] is about, drawn under it; null for an error about the whole form.
   String? _errorField;
@@ -71,6 +74,12 @@ class ApiPickerFormState extends State<ApiPickerForm> {
       });
     }
     focus();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _desktop = DesktopChrome.of(context);
   }
 
   void _setConnection(ApiConnection connection) {
@@ -195,9 +204,24 @@ class ApiPickerFormState extends State<ApiPickerForm> {
 
   List<FocusNode> get _nodes => [
     for (final id in _visibleFields) _inputs[id]!,
-    for (final action in _actions)
+    for (final action in [
+      for (final action in _actions)
+        if (!_fixedAction(action.id)) action,
+      ..._fixedActions,
+    ])
       if (action.run != null && _buttons[action.id] != null)
         _buttons[action.id]!,
+  ];
+
+  bool _fixedAction(String id) =>
+      _desktop &&
+      _editing != null &&
+      const {'save', 'delete', 'cancel'}.contains(id);
+
+  List<({String id, String label, VoidCallback? run})> get _fixedActions => [
+    for (final id in ['cancel', 'save', 'delete'])
+      for (final action in _actions)
+        if (_fixedAction(action.id) && action.id == id) action,
   ];
 
   FocusNode get _focusTarget =>
@@ -233,6 +257,23 @@ class ApiPickerFormState extends State<ApiPickerForm> {
   /// other pane; Shift-Tab walks back, leaving from the first field. With no fields (the provider
   /// choices), Tab leaves at once — the picker's usual pane switch.
   void _tab(bool forward) {
+    if (_composing) return;
+    if (DesktopChrome.of(context)) {
+      final nodes = _nodes;
+      final current = nodes.indexWhere((node) => node.hasFocus);
+      final next = current + (forward ? 1 : -1);
+      if (next >= 0 && next < nodes.length) {
+        nodes[next].requestFocus();
+        if (nodes[next].context case final context?) {
+          Scrollable.ensureVisible(context);
+        }
+      } else if (widget.onSwitchPane != null) {
+        widget.onSwitchPane!();
+      } else {
+        _move(forward);
+      }
+      return;
+    }
     final fields = [for (final id in _visibleFields) _inputs[id]!];
     final at = fields.indexWhere((node) => node.hasFocus);
     final onButtons = _buttons.values.any((node) => node.hasFocus);
@@ -419,19 +460,112 @@ class ApiPickerFormState extends State<ApiPickerForm> {
     );
   }
 
+  Widget _actionButton(({String id, String label, VoidCallback? run}) action) {
+    final node = _buttons.putIfAbsent(
+      action.id,
+      () => FocusNode(debugLabel: action.label),
+    );
+    if (!DesktopChrome.of(context)) {
+      return TerminalTextAction(
+        key: ValueKey('api-form:${action.id}'),
+        label: action.label,
+        padding: EdgeInsets.zero,
+        focusNode: node,
+        onPressed: action.run,
+      );
+    }
+    if (action.id == 'save' || action.id == 'delete') {
+      return FilledButton(
+        key: ValueKey('api-form:${action.id}'),
+        focusNode: node,
+        onPressed: action.run,
+        style: action.id == 'delete'
+            ? FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              )
+            : null,
+        child: Text(action.label),
+      );
+    }
+    if (action.id.startsWith('provider:')) {
+      return TextButton(
+        key: ValueKey('api-form:${action.id}'),
+        focusNode: node,
+        onPressed: action.run,
+        style:
+            TextButton.styleFrom(
+              foregroundColor: DesktopChrome.foreground,
+              backgroundColor: DesktopChrome.field,
+              textStyle: DesktopChrome.text(size: 13),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
+              ),
+              splashFactory: NoSplash.splashFactory,
+            ).copyWith(
+              side: WidgetStateProperty.resolveWith(
+                (states) => BorderSide(
+                  color: states.contains(WidgetState.focused)
+                      ? DesktopChrome.focusRing
+                      : DesktopChrome.rim,
+                  width: grid.AppDesktop.focusWidth,
+                ),
+              ),
+            ),
+        child: Row(
+          children: [
+            Icon(AppIcons.cloud, size: 16, color: DesktopChrome.muted),
+            const SizedBox(width: 10),
+            Expanded(child: Text(action.label)),
+            Icon(AppIcons.chevronRight, size: 17, color: DesktopChrome.muted),
+          ],
+        ),
+      );
+    }
+    return DesktopPill(
+      key: ValueKey('api-form:${action.id}'),
+      label: action.id == 'visibility'
+          ? _visible
+                ? 'Hide key'
+                : 'Show key'
+          : action.id == 'options'
+          ? _advanced
+                ? 'Hide options'
+                : 'More options'
+          : action.label,
+      selected: action.id == 'options' ? _advanced : null,
+      compact: true,
+      focusNode: node,
+      foregroundColor: action.id == 'delete'
+          ? Theme.of(context).colorScheme.error
+          : null,
+      onPressed: action.run,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     grid.AppTheme.watch(context);
-    final cell = terminalCellSizeOf(context);
+    final desktop = DesktopChrome.of(context);
+    final cell = desktop ? const Size(9, 14) : terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
-    final style = terminalContentStyle(color: theme.foreground);
-    final muted = terminalContentStyle(
-      color: theme.muted,
-    );
+    final style = desktop
+        ? DesktopChrome.text(size: 13)
+        : terminalContentStyle(color: theme.foreground);
+    final muted = desktop
+        ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+        : terminalContentStyle(color: theme.muted);
+    final errorStyle = desktop
+        ? DesktopChrome.text(
+            size: 12,
+            color: Theme.of(context).colorScheme.error,
+          )
+        : terminalContentStyle(color: theme.yellow);
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) => _keys(
@@ -464,8 +598,8 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                       Text(
                         widget.removing
                             ? 'Delete ${_editing?.name ?? 'API'}?'
-                            : _editing?.name ?? 'Add API',
-                        style: style,
+                            : _editing?.name ?? 'Add API connection',
+                        style: desktop ? DesktopChrome.heading() : style,
                       ),
                       if (controller.app.viewer != null)
                         Text('Saved on ${controller.hostLabel}', style: muted),
@@ -498,6 +632,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                 'prefix' => 'Key prefix',
                                 _ => 'Name',
                               }, style: muted),
+                              if (desktop) const SizedBox(height: 6),
                               ReadlineKeys(
                                 controller: _fields[id]!,
                                 enabled: !controller.saving,
@@ -516,18 +651,56 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                   autocorrect: false,
                                   enableSuggestions: false,
                                   style: style,
-                                  cursorColor: theme.foreground,
+                                  cursorColor: desktop
+                                      ? DesktopChrome.accent
+                                      : theme.foreground,
                                   cursorWidth: 2,
-                                  decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    filled: false,
-                                    isDense: true,
-                                    isCollapsed: true,
-                                    constraints: BoxConstraints(),
-                                    contentPadding: EdgeInsets.zero,
-                                  ),
+                                  decoration: desktop
+                                      ? InputDecoration(
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              grid.AppDesktop.fieldRadius,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: DesktopChrome.rim,
+                                            ),
+                                          ),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              grid.AppDesktop.fieldRadius,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: DesktopChrome.rim,
+                                            ),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              grid.AppDesktop.fieldRadius,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: DesktopChrome.focusRing,
+                                              width: grid.AppDesktop.focusWidth,
+                                            ),
+                                          ),
+                                          filled: true,
+                                          fillColor: DesktopChrome.field,
+                                          isDense: true,
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                horizontal: 10,
+                                                vertical: 10,
+                                              ),
+                                        )
+                                      : const InputDecoration(
+                                          border: InputBorder.none,
+                                          enabledBorder: InputBorder.none,
+                                          focusedBorder: InputBorder.none,
+                                          filled: false,
+                                          isDense: true,
+                                          isCollapsed: true,
+                                          constraints: BoxConstraints(),
+                                          contentPadding: EdgeInsets.zero,
+                                        ),
                                   onEditingComplete: () {},
                                   onChanged: (_) {
                                     if (_error != null) {
@@ -542,9 +715,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                 Text(
                                   _error!,
                                   key: ValueKey('api-form-error:$id'),
-                                  style: terminalContentStyle(
-                                    color: theme.yellow,
-                                  ),
+                                  style: errorStyle,
                                 ),
                             ],
                           ),
@@ -559,10 +730,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                       if ((_errorField == null ? _error : null) ??
                               controller.error
                           case final error?) ...[
-                        Text(
-                          error,
-                          style: terminalContentStyle(color: theme.yellow),
-                        ),
+                        Text(error, style: errorStyle),
                         SizedBox(height: cell.height),
                       ],
                       if (controller.saving) ...[
@@ -570,32 +738,53 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                         SizedBox(height: cell.height),
                       ],
                       _keys(
-                        Wrap(
-                          direction: _editing == null
-                              ? Axis.vertical
-                              : Axis.horizontal,
-                          spacing: cell.width * 2,
-                          runSpacing: cell.height,
-                          children: [
-                            for (final action in _actions)
-                              TerminalTextAction(
-                                key: ValueKey('api-form:${action.id}'),
-                                label: action.label,
-                                padding: EdgeInsets.zero,
-                                focusNode: _buttons.putIfAbsent(
-                                  action.id,
-                                  () => FocusNode(debugLabel: action.label),
-                                ),
-                                onPressed: action.run,
+                        desktop && _editing == null
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final action in _actions)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: _actionButton(action),
+                                    ),
+                                ],
+                              )
+                            : Wrap(
+                                direction: _editing == null
+                                    ? Axis.vertical
+                                    : Axis.horizontal,
+                                spacing: desktop ? 8 : cell.width * 2,
+                                runSpacing: desktop ? 8 : cell.height,
+                                children: [
+                                  for (final action in _actions)
+                                    if (!_fixedAction(action.id))
+                                      _actionButton(action),
+                                ],
                               ),
-                          ],
-                        ),
                         buttons: true,
                       ),
                     ],
                   ),
                 ),
               ),
+              if (_fixedActions.isNotEmpty) ...[
+                Divider(height: 1, color: DesktopChrome.rim),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: _keys(
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final action in _fixedActions)
+                          _actionButton(action),
+                      ],
+                    ),
+                    buttons: true,
+                  ),
+                ),
+              ],
               Padding(
                 padding: EdgeInsets.symmetric(
                   horizontal: cell.width * 2,
@@ -610,7 +799,9 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                       ),
                       (
                         'picker.complete',
-                        widget.onSwitchPane == null || _visibleFields.isNotEmpty
+                        desktop ||
+                                widget.onSwitchPane == null ||
+                                _visibleFields.isNotEmpty
                             ? 'next'
                             : 'pane',
                       ),
@@ -624,7 +815,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                           case final hint?)
                         '${hint.replaceAll('⇥', 'Tab').replaceAll('↵', 'Enter')} $label',
                   ].join('  ·  '),
-                  style: muted,
+                  style: desktop ? DesktopChrome.metadata() : muted,
                 ),
               ),
             ],

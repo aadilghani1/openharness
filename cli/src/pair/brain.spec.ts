@@ -67,7 +67,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame>; proposals?: ConstructorParameters<typeof PairBrain>[0]['proposals']; lessonKey?: ConstructorParameters<typeof PairBrain>[0]['lessonKey'] } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame>; open?: (uid?: string) => Promise<Frame>; proposals?: ConstructorParameters<typeof PairBrain>[0]['proposals']; lessonKey?: ConstructorParameters<typeof PairBrain>[0]['lessonKey']; lessonReview?: ConstructorParameters<typeof PairBrain>[0]['lessonReview'] } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -96,8 +96,10 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     relayed: (fields) => { local.relayed(fields) },
     ...(opts.relayLimits ? { relayLimits: opts.relayLimits } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
+    ...(opts.open ? { open: opts.open } : {}),
     ...(opts.proposals ? { proposals: opts.proposals } : {}),
     ...(opts.lessonKey ? { lessonKey: opts.lessonKey } : {}),
+    ...(opts.lessonReview ? { lessonReview: opts.lessonReview } : {}),
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
@@ -317,6 +319,22 @@ describe('the brain', () => {
     await settle(60_000)
     expect(await talk('local:window', 'later')).toMatchObject({ ok: true })
     expect(talked).toHaveLength(7)
+  })
+
+  it('only an attached window can open its companion terminal, without a talk or cost', async () => {
+    const open = vi.fn(async () => ({ ok: true, agentId: 'pair-tim' }))
+    const w = world({ open })
+    const replies: Frame[] = []
+    const send = (f: Frame) => { replies.push(f) }
+    await w.brain.onOpen('tool', { requestId: 'o1', companionUid: 'tim-one' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ ok: false, error: 'UI_ONLY' })
+    expect(open).not.toHaveBeenCalled()
+    w.brain.clientAttached('window')
+    await w.brain.onOpen('window', { requestId: 'o2' }, send)
+    expect(replies.pop()?.payload).toMatchObject({ ok: false, error: 'STALE_COMPANION' })
+    await w.brain.onOpen('window', { requestId: 'o3', companionUid: 'tim-one' }, send)
+    expect(open).toHaveBeenCalledWith('tim-one')
+    expect(replies.pop()).toEqual({ type: 'daemon_open_result', payload: { requestId: 'o3', ok: true, agentId: 'pair-tim' } })
   })
 
   it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {
@@ -734,5 +752,29 @@ describe('the relay opener', () => {
     link.close()
     expect(sent.at(-1)).toMatchObject({ type: 'pair_watch', payload: { off: true } })
     expect(detached).toBe(true)
+  })
+})
+
+describe('memory inbox review receipts', () => {
+  it('issues a review only to its verified window, then requires its display receipt and reading delay', async () => {
+    const id = 'lesson:beef:review-capability'
+    const act = vi.fn(async () => ({ ok: true, learned: 'viewer-layout' }))
+    const review = vi.fn(() => ({ ok: true, reviewId: id, text: 'Viewer left, agent terminal right.' }))
+    const w = world({ lessonKey: async conn => conn === 'local:window' ? { ok: true } : { ok: false, error: 'PERSON_ONLY', detail: 'not a person' },
+      lessonReview: review, proposals: { owns: value => value.startsWith('lesson:'), act, pending: () => [] } })
+    expect(await w.brain.reviewLesson('tool', 'beef')).toMatchObject({ error: 'UI_ONLY' })
+    w.brain.clientAttached('local:window'); w.brain.clientAttached('local:other')
+    expect(await w.brain.reviewLesson('local:other', 'beef')).toMatchObject({ error: 'PERSON_ONLY' })
+    expect(await w.brain.reviewLesson('local:window', 'beef')).toMatchObject({ ok: true, reviewId: id })
+    const payload = { requestId: 'review-approval', id, choice: 'y' }
+    expect(await w.act(payload, { shown: false })).toMatchObject({ error: 'NOT_SHOWN' })
+    expect(await w.act(payload, { conn: 'local:other' })).toMatchObject({ error: 'NOT_SHOWN' })
+    w.brain.onShown('local:window', { id })
+    expect(await w.act(payload, { shown: false })).toMatchObject({ error: 'TOO_SOON' })
+    expect(act).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(ARM_MS)
+    expect(await w.act(payload, { shown: false })).toMatchObject({ ok: true, learned: 'viewer-layout' })
+    expect(act).toHaveBeenCalledTimes(1)
+    w.brain.clientDetached('local:window'); w.brain.clientDetached('local:other')
   })
 })

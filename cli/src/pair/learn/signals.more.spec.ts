@@ -271,7 +271,7 @@ describe('repeat-steps, the edges', () => {
     // The one this turn completes, seen twice before: the oldest of all by its last turn, yet touched now.
     const routineKey = `steps:${project}:npm run db:reset > npm run migrate > npm test`
     windows[routineKey] = [{ from: { ...from(clock - 2 * DAY), turn: 1 }, commands: [] }, { from: { ...from(clock - 2 * DAY), turn: 2 }, commands: [] }]
-    writeFileSync(file, JSON.stringify({ v: 1, failures: [], windows, signaled: {} }))
+    writeFileSync(file, JSON.stringify({ v: 2, failures: [], windows, signaled: {} }))
     const { d, signals } = detector({ file })
     d.ingest(ctx('a1'), turn('t', routine()))
     expect(signals.map((s) => s.steps)).toEqual([['npm run db:reset', 'npm run migrate', 'npm test']])
@@ -287,6 +287,24 @@ describe('repeat-steps, the edges', () => {
 })
 
 describe('the file kept across restarts', () => {
+  it('rebuilds v1 script-derived step observations without replaying them as lessons', () => {
+    const file = join(dir, 'signals.json')
+    const project = projectHash(API)!
+    const key = `steps:${project}:PY > from > p.write_text()`
+    writeFileSync(file, JSON.stringify({ v: 1, failures: [], windows: { [key]: [] }, signaled: { [key]: clock } }))
+    const { d, signals } = detector({ file })
+    d.ingest(ctx('a1'), turn('one', routine()))
+    expect(signals).toEqual([])
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    expect(saved.v).toBe(2)
+    expect(saved.windows[key]).toBeUndefined()
+    expect(saved.signaled[key]).toBeUndefined()
+    d.ingest(ctx('a1'), turn('two', routine()))
+    d.ingest(ctx('a1'), turn('three', routine()))
+    expect(signals).toHaveLength(1)
+    expect(signals[0]?.steps).toEqual(['npm run db:reset', 'npm run migrate', 'npm test'])
+  })
+
   it('keeps at most 500 failures, the oldest dropped', () => {
     const file = join(dir, 'signals.json')
     const project = projectHash(API)!
@@ -307,19 +325,19 @@ describe('the file kept across restarts', () => {
 
   it('a file from another version, or with the wrong shapes, starts empty and is rewritten sound', () => {
     const file = join(dir, 'signals.json')
-    writeFileSync(file, JSON.stringify({ v: 2, failures: [{ key: 'x' }] }))
+    writeFileSync(file, JSON.stringify({ v: 3, failures: [{ key: 'x' }] }))
     let { d } = detector({ file })
     d.ingest(ctx('a1'), turn('t', bash('npm run build', 'error', true)))
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 1, windows: {}, signaled: {}, failures: [{ name: 'npm run build' }] })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 2, windows: {}, signaled: {}, failures: [{ name: 'npm run build' }] })
     writeFileSync(file, JSON.stringify({ v: 1, failures: 'nope', windows: 3, signaled: null }))
     ;({ d } = detector({ file }))
     d.ingest(ctx('a1'), turn('t', bash('npm run build', 'error', true)))
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 1, windows: {}, signaled: {}, failures: [{ name: 'npm run build' }] })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 2, windows: {}, signaled: {}, failures: [{ name: 'npm run build' }] })
     writeFileSync(file, '{ torn')
     ;({ d } = detector({ file }))
     d.ingest(ctx('a1'), turn('t', routine()))
     const saved = JSON.parse(readFileSync(file, 'utf8')) as { v: number; failures: unknown[]; windows: Record<string, unknown[]>; signaled: object }
-    expect(saved).toMatchObject({ v: 1, failures: [], signaled: {} })
+    expect(saved).toMatchObject({ v: 2, failures: [], signaled: {} })
     expect(Object.values(saved.windows).map((turns) => turns.length)).toEqual([1])
   })
 

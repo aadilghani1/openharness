@@ -513,6 +513,8 @@ pub struct App {
     pub started: Instant,
     pub daemon_down: bool,
     pub dsh: HashMap<String, Vec<Value>>,
+    /// A dismissed New Harness draft, including any pending creation receipt.
+    pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
     /// Each harness's selectable models (`models_list`), for ⌥I.
     pub models: HashMap<(String, String), Vec<Value>>,
     /// Each machine's local models (the grid): downloaded, running, available.
@@ -956,6 +958,7 @@ impl App {
             started: Instant::now(),
             daemon_down: false,
             dsh: HashMap::new(),
+            new_harness_draft: None,
             models: HashMap::new(),
             local_models: HashMap::new(),
             rtt: HashMap::new(),
@@ -2178,7 +2181,7 @@ impl App {
         self.fit_panes();
     }
 
-    /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
+    /// tmux's #S: the session alias, or this computer's name by default.
     pub fn session_name(&self) -> String {
         if let Some(a) = &self.session_alias { return a.clone() }
         self.machine_session_name()
@@ -3644,12 +3647,13 @@ impl App {
             if let Some(c) = c { own = true; s = if fg { s.fg(c) } else { s.bg(c) } }
         }
         // No status colours of its own and the terminal has told us what it looks like: the bar
-        // takes the theme's own colours — its background the terminal's background, its text the
-        // readable opposite — so it is a visible bar in the theme (a dark bar, light text on a
-        // dark terminal), not a transparent one, and not tmux's stock green.
+        // swaps the theme's own colours — its background the terminal's foreground, its text the
+        // terminal's background — so the bar is the theme's text colour with the theme's
+        // background as its lettering (an ivory bar with dark text on a dark terminal), not a
+        // transparent one, and not tmux's stock green.
         if !own && !self.options.pane_look() && !self.options.tmux_look() {
             let (bg, fg, _) = crate::theme::palette();
-            s = s.bg(bg).fg(fg);
+            s = s.bg(fg).fg(bg);
         }
         s
     }
@@ -4539,7 +4543,7 @@ impl App {
     /// before break-pane goes to its new window is looked at while the old one still is).
     fn update_focus_in(&mut self, pane: u64, focused: &mut Vec<u64>, notify: bool, current: usize) {
         let Some(w) = self.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
-        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }));
+        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }) | Some(crate::modal::Modal::NewHarness(_)));
         let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
         let client = !focus_events || self.terminal_focused;
         let is = w == current && self.tabs[w].focus == Some(pane) && client && !overlay;

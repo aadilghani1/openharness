@@ -72,14 +72,18 @@ static const character_definition_t *definition(ht_character_id_t id)
 {
     return &characters[(unsigned)id < HT_CHARACTER_COUNT ? id : HT_CHARACTER_TIM];
 }
+// What a dial shows before anybody has chosen: Focus. The owner's decision (2026-09-30), and the
+// reason a freshly flashed dial — or one coming from a firmware that never saved `habitat_char` —
+// opens on the work rather than on the octopus. A choice made since is kept; this is only the
+// fallback for none. Tim or Tux as the default is a build flag (DEVICE_DEFAULT_CHARACTER).
 ht_character_id_t ht_character_default(void)
 {
-#if defined(DEVICE_DEFAULT_CHARACTER_FOCUS)
-    return HT_CHARACTER_FOCUS;
+#if defined(DEVICE_DEFAULT_CHARACTER_TIM)
+    return HT_CHARACTER_TIM;
 #elif defined(DEVICE_DEFAULT_CHARACTER_TUX)
     return HT_CHARACTER_TUX;
 #else
-    return HT_CHARACTER_TIM;
+    return HT_CHARACTER_FOCUS;
 #endif
 }
 const char *ht_character_name(ht_character_id_t id) { return definition(id)->name; }

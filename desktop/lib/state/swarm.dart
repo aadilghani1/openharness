@@ -44,7 +44,7 @@ class Swarm {
   static const storeName = 'Harness Store';
   static const companionsName = 'Companions';
 
-  static const defaultName = 'New Swarm';
+  static const defaultName = 'New Tab';
   // 'New Harness' was the default until 2026-09-15, 'New Agent' for a day
   // after, and 'Untitled Tab' until 2026-09-24; a layout saved then still
   // carries one, and it must read as the same fresh swarm. Explicit custom
@@ -52,6 +52,7 @@ class Swarm {
   static String normalizeName(String name) =>
       const {
             'New swarm',
+            'New Swarm',
             'New tab',
             'New Tab',
             'New Harness',
@@ -142,7 +143,7 @@ class Swarm {
 
   Map<String, Object?> toJson() {
     final agents = panes
-        .where((p) => p.agentId != null)
+        .where((p) => !isCompanions && p.agentId != null)
         .toList(growable: false);
     return {
       'id': id,

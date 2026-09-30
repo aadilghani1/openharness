@@ -195,11 +195,13 @@ static TERMINAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static TERMINAL_ANSWERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Query without waiting: the normal input reader separates replies from typeahead.
-/// OSC 11 (default background) is asked too: hn reports it to each machine's daemon
-/// (`theme_set`) so agent panes are painted to match, exactly as the desktop app does.
+/// OSC 11 (default background) is asked, and now OSC 10 (default foreground) too: hn reports
+/// them to each machine's daemon (`theme_set`) so agent panes are painted to match, exactly as
+/// the desktop app does. Asking OSC 10 is what keeps hn's chrome on the terminal's own
+/// foreground (an ivory/cream), not a white computed from the background.
 pub fn ask_terminal() {
     let mut out = io::stdout();
-    let _ = out.write_all(b"\x1b[>q\x1b[c\x1b]11;?\x07");
+    let _ = out.write_all(b"\x1b[>q\x1b[c\x1b]11;?\x07\x1b]10;?\x07");
     let _ = out.flush();
 }
 

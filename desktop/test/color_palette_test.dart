@@ -58,9 +58,12 @@ void main() {
   });
 
   test('palette text is readable and terminal themes are cached', () {
-    double contrast(Color foreground, Color background) =>
-        (foreground.computeLuminance() + .05) /
-        (background.computeLuminance() + .05);
+    double contrast(Color foreground, Color background) {
+      final a = foreground.computeLuminance() + .05;
+      final b = background.computeLuminance() + .05;
+      return a > b ? a / b : b / a;
+    }
+
     for (final palette in HarnessPalette.values) {
       expect(
         contrast(palette.foreground, palette.background),
@@ -148,10 +151,7 @@ void main() {
     for (final palette in [HarnessPalette.paper, HarnessPalette.mist]) {
       expect(palette.isDark, isFalse, reason: palette.name);
       expect(palette.nativeColors['dark'], 0, reason: palette.name);
-      final terminal = terminalThemeFor(
-        palette,
-        TerminalThemeChoice.matchApp,
-      );
+      final terminal = terminalThemeFor(palette, TerminalThemeChoice.matchApp);
       expect(terminal.foreground, palette.foreground);
       // The light ramp, not the dark one's pale yellow and white.
       expect(terminal.yellow, lightTerminalTheme.yellow);
@@ -164,11 +164,22 @@ void main() {
 
       // Every ANSI slot is somebody's output text on this ground.
       for (final slot in [
-        terminal.black, terminal.red, terminal.green, terminal.yellow,
-        terminal.blue, terminal.magenta, terminal.cyan, terminal.white,
-        terminal.brightBlack, terminal.brightRed, terminal.brightGreen,
-        terminal.brightYellow, terminal.brightBlue, terminal.brightMagenta,
-        terminal.brightCyan, terminal.brightWhite,
+        terminal.black,
+        terminal.red,
+        terminal.green,
+        terminal.yellow,
+        terminal.blue,
+        terminal.magenta,
+        terminal.cyan,
+        terminal.white,
+        terminal.brightBlack,
+        terminal.brightRed,
+        terminal.brightGreen,
+        terminal.brightYellow,
+        terminal.brightBlue,
+        terminal.brightMagenta,
+        terminal.brightCyan,
+        terminal.brightWhite,
       ]) {
         expect(
           contrast(slot, palette.background),
@@ -202,8 +213,10 @@ void main() {
     grid.AppTheme.brightness.value = Brightness.dark;
     expect(HarnessPalette.graphite.nativeColors['dark'], 1);
     expect(
-      terminalThemeFor(HarnessPalette.graphite, TerminalThemeChoice.matchApp)
-          .yellow,
+      terminalThemeFor(
+        HarnessPalette.graphite,
+        TerminalThemeChoice.matchApp,
+      ).yellow,
       darkTerminalTheme.yellow,
     );
   });
@@ -234,9 +247,7 @@ void main() {
       await tester.ensureVisible(find.byKey(const ValueKey('palette-forest')));
       expect(
         tester
-            .getSemantics(
-              find.bySemanticsLabel('Forest palette'),
-            )
+            .getSemantics(find.bySemanticsLabel('Forest palette'))
             .getSemanticsData()
             .hasAction(SemanticsAction.tap),
         isTrue,

@@ -286,6 +286,35 @@ static const char *meter(unsigned level)
 }
 
 /*
+ * A NAME THAT FITS ITS ROW, or as much of it as fits and "...".
+ *
+ * `cells` is the row's budget in glyphs. A name within it is copied whole; a longer one keeps its
+ * first `cells - 3` glyphs, drops the spaces it would end on, and says so with "..." — so it is never
+ * cut mid-letter by the raster, and never wraps onto a row that is not there. Returns the glyphs used.
+ */
+static int fit(const char *text, int cells, char *out, size_t cap)
+{
+    const char *p = text ? text : "";
+    int glyphs = 0;
+    for (const char *q = p; *q; glyphs++) ht_utf8_next(&q);
+    if (glyphs <= cells) {
+        snprintf(out, cap, "%s", p);
+        return glyphs;
+    }
+    int keep = cells > 3 ? cells - 3 : 0;
+    const char *end = p;
+    for (int i = 0; i < keep && *end; i++) ht_utf8_next(&end);
+    while (end > p && end[-1] == ' ') end--;
+    size_t n = (size_t)(end - p);
+    if (n + 4 > cap) n = cap > 4 ? cap - 4 : 0;
+    memcpy(out, p, n);
+    memcpy(out + n, "...", 4);
+    int used = 0;
+    for (const char *q = out; *q; used++) ht_utf8_next(&q);
+    return used;
+}
+
+/*
  * THE TAB PILL, as the design draws it: a rounded box with a thin lighter rim.
  *
  * Habitat fills rectangles and nothing else, so the outline is a run of ht_pill glyphs — two cells of
@@ -301,32 +330,32 @@ static const char *meter(unsigned level)
 static void pill(ht_scene_t *s, const ht_character_face_t *f, const char *tab)
 {
     const ht_font_t *font = ROWS[0].font;
-    int cells = ROWS[0].width / font->width;
-    char line[HT_TEXT_BYTES] = "";
-    if (*tab) {
-        const char *rest = tab, *end = ht_take_display_line(&rest, cells, font);
-        size_t n = (size_t)(end - tab);
-        if (n >= sizeof line) n = sizeof line - 1;
-        memcpy(line, tab, n);
-        line[n] = 0;
-    }
-    int glyphs = 0;
-    for (const char *p = line; *p; glyphs++) ht_utf8_next(&p);
+    // The ⌄ takes two of the name's cells: it is the pill's own width, not an extra on top of it.
+    bool more = f->more_tabs;
+    int down = more ? ht_down_20.width / ht_pill.width : 0;
+    int cells = ROWS[0].width / font->width - down;
+    // 20 glyphs, or 18 beside the ⌄; longer names end in "...".
+    char line[HT_TEXT_BYTES];
+    int glyphs = fit(tab, cells, line, sizeof line);
     if (!glyphs) {
         ht_text(s, 0, ROWS[0].y, ht_pill.width, &ht_pill, s->background, s->background, "");
         ht_text(s, 0, ROWS[0].y, font->width, font, f->foreground, s->background, "");
+        ht_text(s, 0, ROWS[0].y, ht_down_20.width, &ht_down_20, f->dim, s->background, "");
         return;
     }
     char outline[HT_TEXT_BYTES];
     int used = snprintf(outline, sizeof outline, "%s", HT_PILL_LEFT);
-    for (int i = 0; i < glyphs && used + 4 < (int)sizeof outline - 7; i++)
+    for (int i = 0; i < glyphs + down && used + 4 < (int)sizeof outline - 7; i++)
         used += snprintf(outline + used, sizeof outline - (size_t)used, "%s", HT_PILL_BODY);
     snprintf(outline + used, sizeof outline - (size_t)used, "%s", HT_PILL_RIGHT);
-    int width = (glyphs + 4) * ht_pill.width, x = (HT_WIDTH - width) / 2;
-    uint16_t ink = ht_rgb(HT_THEME_PILL);
+    int width = (glyphs + down + 4) * ht_pill.width, x = (HT_WIDTH - width) / 2;
+    uint16_t ink = ht_rgb(HT_THEME_PILL), fill = ht_blend(ink, s->background, 1);
+    int text_x = x + 2 * ht_pill.width;
     ht_text(s, x, ROWS[0].y, width, &ht_pill, ink, s->background, outline);
-    ht_text(s, x + 2 * ht_pill.width, ROWS[0].y + 4, glyphs * font->width, font, f->foreground,
-            ht_blend(ink, s->background, 1), line);
+    ht_text(s, text_x, ROWS[0].y + 4, glyphs * font->width, font, f->foreground, fill, line);
+    // Always emitted — empty, on the pill's own fill, when there is no other tab to choose.
+    ht_text(s, text_x + glyphs * font->width, ROWS[0].y + 4, ht_down_20.width, &ht_down_20,
+            f->dim, fill, more ? HT_DOWN : "");
 }
 
 void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
@@ -352,21 +381,27 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     uint32_t mark_ink = 0;
     bool badged = ht_focus_engine_mark(f->engine, mark, &mark_ink);
     const char *who = f->recipient ? f->recipient : "";
-    int cells = 0;
-    for (const char *p = who; *p; cells++) ht_utf8_next(&p);
     // The badge spends part of the row's chord, so the name gets what is left of it — not the whole
     // width it would have had alone. Getting this wrong puts the pair's ends outside the bezel.
-    int room = ROWS[1].width - (badged ? ht_engine.width + 8 : 0);
-    if (cells * ht_mono_28.width > room) cells = room / ht_mono_28.width;
+    // The ⌄ after the name — "choose another pane" — spends its cell the same way.
+    bool more = f->more_panes && *who;
+    int down = more ? ht_down_28.width : 0;
+    int room = ROWS[1].width - (badged ? ht_engine.width + 8 : 0) - down;
+    // 22 glyphs alone, 20 beside the badge, 18 beside the badge and the ⌄; longer ends in "...".
+    char name[HT_TEXT_BYTES];
+    int cells = fit(who, room / ht_mono_28.width, name, sizeof name);
     int name_w = cells * ht_mono_28.width;
-    int total = name_w + (badged ? ht_engine.width + 8 : 0);
+    int total = name_w + (badged ? ht_engine.width + 8 : 0) + down;
     if (total > ROWS[1].width) total = ROWS[1].width;
     int x = (HT_WIDTH - total) / 2;
+    int name_x = x + (badged ? ht_engine.width + 8 : 0);
     // Always emitted, badge or not, so the run count and order never move — see the note at the top.
     ht_text(s, badged ? x : 0, ROWS[1].y, badged ? ht_engine.width : 1, &ht_engine,
             mark_ink ? ht_rgb(mark_ink) : f->foreground, s->background, badged ? mark : "");
-    ht_text(s, x + (badged ? ht_engine.width + 8 : 0), ROWS[1].y, name_w ? name_w : 1, &ht_mono_28,
-            f->foreground, s->background, who);
+    ht_text(s, name_x, ROWS[1].y, name_w ? name_w : 1, &ht_mono_28,
+            f->foreground, s->background, name);
+    ht_text(s, more ? name_x + name_w : 0, ROWS[1].y, ht_down_28.width, &ht_down_28,
+            f->dim, s->background, more ? HT_DOWN : "");
 
     /*
      * The live line.

@@ -51,6 +51,9 @@ extern const ht_font_t ht_pill;
 extern const ht_font_t ht_chevron;
 #define HT_CHEVRON_LEFT  "\xee\x81\x90"
 #define HT_CHEVRON_RIGHT "\xee\x81\x91"
+// "Choose one" — the ⌄ after the Focus tab pill's name (ht_down_20) and after the agent's (ht_down_28).
+extern const ht_font_t ht_down_20, ht_down_28;
+#define HT_DOWN "\xee\x81\xa0"
 // The colour a glyph pixel at coverage `alpha` (0..3) takes between `fg` and `bg`, exactly as the
 // rasteriser computes it. For a run that has to sit seamlessly on another run's coverage level.
 uint16_t ht_blend(uint16_t fg, uint16_t bg, unsigned alpha);

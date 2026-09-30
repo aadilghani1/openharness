@@ -446,7 +446,7 @@ const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.newSwarm,
     activator: SingleActivator(LogicalKeyboardKey.keyT, meta: true),
-    label: 'New Swarm',
+    label: 'New Tab',
     group: ShortcutGroup.navigate,
   ),
   // ⌘⇧T is New Terminal, as it is in a terminal app. "Reopen last closed
@@ -489,7 +489,7 @@ const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.closeSwarm,
     activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
-    label: 'Close Swarm',
+    label: 'Close Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(
@@ -499,7 +499,7 @@ const kSwarmShortcuts = [
       meta: true,
       shift: true,
     ),
-    label: 'Rename Swarm',
+    label: 'Rename Tab',
     group: ShortcutGroup.navigate,
   ),
   AppShortcut(

@@ -68,6 +68,12 @@ describe('commands and steps', () => {
 
   it('names a step by its program and what it was asked to do, never a read or a cd', () => {
     expect(segments('cd api && npm ci; npm test || true')).toEqual(['cd api', 'npm ci', 'npm test', 'true'])
+    expect(segments('echo "a; npm deploy && x" && npm test')).toEqual(['echo "a; npm deploy && x"', 'npm test'])
+    expect(segments("printf 'one\ntwo; three'\nnpm test")).toEqual(["printf 'one\ntwo; three'", 'npm test'])
+    expect(segments("python3 <<'PY'\nfrom pathlib import Path\np.write_text('x')\nPY\nnpm test")).toEqual([])
+    expect(segments('node <<-JS\nconsole.log("hi")\nJS')).toEqual([])
+    expect(segments('echo $(printf "npm deploy; npm test")')).toEqual([])
+    expect(segments("echo 'unfinished\nnpm test")).toEqual([])
     expect(stepOf('npm run db:reset -- --force')).toBe('npm run db:reset')
     expect(stepOf('NODE_ENV=test pnpm -C cli test --run')).toBe('pnpm test')
     expect(stepOf('python -m pytest tests/ -k slow')).toBe('python pytest')

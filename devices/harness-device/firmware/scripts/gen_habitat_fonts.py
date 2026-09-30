@@ -52,6 +52,7 @@ fonts = [('ht_mono_16',mono,16,10,22,17),('ht_mono_20',mono,20,12,28,22),
          ('ht_wave',mono,40,6,124,40),
          ('ht_pill',mono,20,12,38,30),
          ('ht_chevron',mono,20,12,24,20),
+         ('ht_down_20',mono,20,24,28,22),('ht_down_28',mono,28,34,38,31),
          ('ht_viet_16',viet,16,10,22,17),('ht_viet_20',viet,20,12,28,22),
          ('ht_viet_24',viet,24,15,32,26),('ht_viet_28',viet,28,17,38,31)]
 with dest.open('w') as out:
@@ -62,7 +63,7 @@ with dest.open('w') as out:
         data=[]
         bounds=[]
         # Latin-1 keeps common names readable; unknown Unicode renders ?, never changes wire text.
-        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe040,0xe044) if name=='ht_pill' else (0xe050,0xe051) if name=='ht_chevron' else (0xe002,0xe002) if name=='ht_spark' else (0xe001,0xe001) if name=='ht_mic_footer' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name.startswith('ht_viet_') else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
+        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe040,0xe044) if name=='ht_pill' else (0xe050,0xe051) if name=='ht_chevron' else (0xe060,0xe060) if name.startswith('ht_down_') else (0xe002,0xe002) if name=='ht_spark' else (0xe001,0xe001) if name=='ht_mic_footer' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name.startswith('ht_viet_') else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
         for cp in range(first,last+1):
             # The tail of the Vietnamese atlas is the eight scattered letters, in VIET_TAIL order.
             glyph = VIET_TAIL[cp-0x1efa] if name.startswith('ht_viet_') and cp >= 0x1efa else chr(cp)
@@ -165,6 +166,19 @@ with dest.open('w') as out:
                                     radius=height*S//2 - S, fill=85)
                 x = piece * width * S
                 im = big.crop((x, 0, x + width*S, height*S)).resize((width, height), Image.Resampling.BOX)
+            elif name.startswith('ht_down_'):
+                # "CHOOSE ONE": the ⌄ after the Focus tab pill's name and after the agent's name, each
+                # opening its own list — tabs and panes. One sign for both, so it is learnt once.
+                # Drawn, at 4x and reduced; sized to sit on the cap line of the text it follows.
+                S = 4
+                big = Image.new('L', (width*S, height*S))
+                d = ImageDraw.Draw(big)
+                if name == 'ht_down_20':
+                    pts, stroke = [(9, 11.5), (15, 17.5), (21, 11.5)], 2.0
+                else:
+                    pts, stroke = [(10, 17), (17, 24), (24, 17)], 2.2
+                d.line([(x*S, y*S) for x, y in pts], fill=255, width=round(stroke*S), joint='curve')
+                im = big.resize((width, height), Image.Resampling.BOX)
             elif name=='ht_chevron':
                 # The Focus pane arrows, the design's own at 1:1 like the microphone: 11 x 20 of
                 # #8a8a99 on black, from "Agent — recap". See assets/README.md.

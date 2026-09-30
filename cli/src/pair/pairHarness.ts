@@ -80,10 +80,14 @@ the person asks. Keep status-bar summaries short. Never invent a work fact or a 
 
 ## Your companion home
 
-The person is chatting with you beside your illustrated world. Deliver EVERY conversational answer
-through the \`say\` tool: \`line\` is a short status-bar summary; \`reply\` is your complete answer,
-including paragraphs (at most 8000 characters). A normal engine response alone does not reach that
-chat pane. Also keep your answer in the engine conversation so it can be resumed.
+You are the one Companions harness for this person's collection. The selected character can change
+without starting a new conversation. A companion context supplied with each user turn gives the
+current character; it supersedes the initial character below. Keep the shared conversation and
+approved work lessons when the person switches characters. Each character keeps its own story and growth.
+
+The person is talking with you in the normal agent terminal, to the right of your illustrated viewer.
+Answer them directly in this conversation, which preserves your shared history when resumed.
+Use the \`say\` tool only when a short status-bar update is useful; it is not required to deliver an answer.
 ${uid ? `Your companionUid for the say tool is ${JSON.stringify(uid)}. Never use another companion's identity.\n` : ''}
 You may tell imaginative character stories when invited, clearly as stories. Your real memories are
 this conversation and approved shared lessons. Read \`harness pair lessons list --json\` and
@@ -143,7 +147,7 @@ export function pairPackage(input: PairPackageInput): BundledFiles {
   const manifest = {
     spec: 1,
     id: PAIR_HARNESS_ID,
-    name: `Pair: ${personaName(input.daemonId, input.name ?? null)}`.slice(0, 40),
+    name: 'Companions',
     description: 'Your paired daemon, as a conversation: it watches every harness and drives them within the autonomy you set.',
     category: 'Pair',
     author: 'Autonomous',
@@ -171,6 +175,7 @@ export function packageRevision(files: BundledFiles): string {
 export interface PairHarnessRow {
   agentId: string
   status: 'live' | 'stopped'
+  engine?: PairEngine
   /** False while the engine is still at first-run setup, before any session exists. */
   hasConversation?: boolean
 }
@@ -181,6 +186,8 @@ export interface PairHarnessDeps {
   /** What the person calls it, `pip the tim`; null or absent: its species. */
   pairedName?: () => string | null
   pairedUid?: () => string | null
+  /** All individuals in this collection. Membership isolates signed-in and guest histories. */
+  collectionUids?: () => readonly string[]
   /** An installed engine to run it on, Claude first; null when neither is here. */
   engine: () => Promise<PairEngine | null>
   /** How this machine runs `harness` (the launcher, else this process's node and cli.js). */
@@ -207,33 +214,54 @@ export interface PairHarnessDeps {
   idleMs?: number
 }
 
-interface Saved { agentId: string; revision: string; uid?: string }
+interface Saved { agentId: string; revision: string; uid?: string; members?: string[] }
 
 export class PairHarness {
   private lastActivity = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private talking: Promise<Record<string, unknown>> = Promise.resolve({})
+  private generation = 0
+  private activeAgentId: string | null = null
 
   constructor(private readonly deps: PairHarnessDeps) {}
 
   /** `talk` / `daemon_talk`: one at a time, in order — two quick talks never start two harnesses. */
   talk(text: string, expectedUid?: string): Promise<Record<string, unknown>> {
-    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.() }
+    if (!text.trim()) return Promise.resolve({ ok: false, error: 'EMPTY' })
+    return this.enqueue(text, expectedUid)
+  }
+
+  /** Open the real terminal, including first-run setup, without sending a model turn. */
+  open(expectedUid?: string): Promise<Record<string, unknown>> {
+    return this.enqueue(null, expectedUid)
+  }
+
+  private enqueue(text: string | null, expectedUid?: string): Promise<Record<string, unknown>> {
+    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.(), generation: this.generation }
     const next = this.talking.then(() => this.talkNow(text, requested), () => this.talkNow(text, requested))
     this.talking = next.catch(() => ({}))
     return next
   }
 
-  private async talkNow(text: string, requested: { daemonId: string | null; uid: string | null | undefined }): Promise<Record<string, unknown>> {
-    const words = text.trim()
-    if (!words) return { ok: false, error: 'EMPTY' }
+  private async talkNow(text: string | null, requested: { daemonId: string | null; uid: string | null | undefined; generation: number }): Promise<Record<string, unknown>> {
+    const words = text?.trim() ?? ''
     const daemonId = this.deps.pairedDaemon()
     if (!daemonId) return { ok: false, error: 'PAIR_OFF', detail: 'Nothing is paired: hatch or pair a daemon first.' }
-    const current = (): boolean => this.deps.pairedDaemon() === requested.daemonId &&
+    const current = (): boolean => this.generation === requested.generation && this.deps.pairedDaemon() === requested.daemonId &&
       (requested.uid == null || this.deps.pairedUid?.() === requested.uid)
     const stale = { ok: false, error: 'STALE_COMPANION', detail: 'Your companion changed before the message was sent. Send it again to the companion shown.' }
     if (!current()) return stale
-    const engine = await this.deps.engine()
+    const saved = this.saved()
+    const conversation = this.deps.find().find((row) => row.agentId === saved?.agentId) ?? null
+    if (this.activeAgentId && this.activeAgentId !== saved?.agentId && this.deps.find().some(row => row.agentId === this.activeAgentId && row.status === 'live')) {
+      await this.deps.stop(this.activeAgentId)
+      if (!current()) return stale
+    }
+    // Engine discovery is for a new collection only. Installing another engine, changing a
+    // character, or updating its artwork must never replace the person's conversation.
+    if (saved && !conversation) return { ok: false, error: 'CONVERSATION_UNAVAILABLE',
+      detail: 'The collection’s saved conversation is unavailable. Its history has been kept.' }
+    const engine = conversation?.engine ?? await this.deps.engine()
     if (!engine) return { ok: false, error: 'NO_ENGINE', detail: 'The pair runs on Claude Code or Codex; neither is installed here.' }
     if (!current()) return stale
     const identity = this.deps.pairedUid?.()
@@ -241,24 +269,13 @@ export class PairHarness {
     const files = pairPackage({ daemonId, name: this.deps.pairedName?.() ?? null, uid, engine, mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file })
     if (!this.deps.install(files)) return { ok: false, error: 'INSTALL_FAILED', detail: 'The pair harness could not be installed. Try again.' }
     const revision = packageRevision(files)
-    const last = this.saved()
-    const saved = uid ? this.savedFor(uid) : last
-    const rows = this.deps.find()
-    const conversation = rows.find((row) => row.agentId === saved?.agentId) ?? null
-    // Each individual keeps its own conversation. Switching back resumes that
-    // friend's history instead of lending it another companion's memories.
-    if (last && last.agentId !== conversation?.agentId && rows.some((r) => r.agentId === last.agentId && r.status === 'live')) {
-      await this.deps.stop(last.agentId).catch(() => {})
-    }
     if (!current()) return stale
     this.touch()
-    // Another daemon (or its new name), another engine, a newer CLI: another harness. The old one is paused, never deleted.
-    if (conversation && saved?.revision !== revision) {
-      if (conversation.status === 'live') await this.deps.stop(conversation.agentId).catch(() => {})
-    } else if (conversation?.status === 'live') {
-      if (last?.agentId !== conversation.agentId) this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
+    if (conversation?.status === 'live') {
+      this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
       // Never paste words (or an automatic Enter) into an engine's trust/setup
       // screen. The first prompt was passed at launch and waits for that screen.
+      if (text === null) { this.watchIdle(); return { ok: true, agentId: conversation.agentId } }
       if (conversation.hasConversation === false) return { ok: false, error: 'SETUP_REQUIRED', agentId: conversation.agentId,
         detail: 'Open the full conversation to finish the model’s first-time setup, then send your message again.' }
       this.deps.send(conversation.agentId, words)
@@ -269,18 +286,19 @@ export class PairHarness {
       if (resumed.ok) {
         if (!current()) { await this.deps.stop(conversation.agentId).catch(() => {}); return stale }
         this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
-        this.deps.send(conversation.agentId, words)
+        if (text !== null) this.deps.send(conversation.agentId, words)
         this.watchIdle()
         return { ok: true, agentId: conversation.agentId, resumed: true }
       }
-      // A conversation that cannot come back: start a new one rather than leave the person unheard.
+      return resumed
     }
     if (!current()) return stale
     this.deps.token.rotate()
-    const workspace = uid ? join(this.deps.workspace, uid) : this.deps.workspace
+    const workspace = uid ? join(this.deps.workspace, `collection-${uid}`) : this.deps.workspace
     mkdirSync(workspace, { recursive: true, mode: 0o700 })
-    const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: daemonId })
+    const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: 'companions' })
     if (!created.ok) return created
+    if (!current()) { await this.deps.stop(created.agentId).catch(() => {}); return stale }
     this.save({ agentId: created.agentId, revision, ...(uid ? { uid } : {}) })
     this.watchIdle()
     const setupRequired = this.deps.find().some(row => row.agentId === created.agentId && row.hasConversation === false)
@@ -288,7 +306,31 @@ export class PairHarness {
   }
 
   /** The pair harness itself: its agent id, if one is known. */
-  agentId(): string | null { return this.saved()?.agentId ?? null }
+  agentId(): string | null {
+    const saved = this.saved()
+    // Existing DSHs were already opened by the person. Adopt their metadata as soon
+    // as this collection is observed, including when restoring a running terminal.
+    if (saved && !saved.members) this.save(saved)
+    return saved?.agentId ?? null
+  }
+
+  /** Fresh context for the verified collection agent's next real user turn. Never a synthetic turn. */
+  context(agentId: string): string | null {
+    const daemonId = this.deps.pairedDaemon()
+    if (!daemonId || agentId !== this.agentId()) return null
+    const daemon = rosterDaemon(daemonId)
+    const name = personaName(daemonId, this.deps.pairedName?.() ?? null)
+    return [
+      'Companions collection context for this turn:',
+      `The person has selected ${name} (${daemonId}). Speak as this character now, even if the conversation began with another companion.`,
+      `Current companionUid: ${JSON.stringify(this.deps.pairedUid?.() ?? null)}. Use this identity for status updates.`,
+      daemon?.lore ?? '',
+      'This is the same collection, conversation, and shared work lessons. Switching characters keeps that history.',
+      'Answer directly in this agent terminal. The viewer presents the collection; it is not a separate chat.',
+      'Real memories must be supported by this conversation or approved lessons. Read harness pair lessons list --json for learning status and lessons before making claims about them.',
+      'Learning uses this harness’s selected model. Lessons still need the person’s approval. The existing autonomy and permission rules still apply.',
+    ].filter(Boolean).join('\n')
+  }
 
   /** A turn started or ended on the pair harness: it is in use. */
   activity(agentId: string): void {
@@ -297,7 +339,7 @@ export class PairHarness {
 
   /** Pause it when it has been idle long enough: its conversation is kept, the next talk resumes it. */
   async idleCheck(): Promise<boolean> {
-    const agentId = this.saved()?.agentId
+    const agentId = this.activeAgentId ?? this.saved()?.agentId
     const row = agentId ? this.deps.find().find((r) => r.agentId === agentId) : null
     if (!agentId || row?.status !== 'live') { this.unwatch(); return false }
     if (this.deps.working(agentId) || this.deps.now() - this.lastActivity < (this.deps.idleMs ?? PAIR_IDLE_MS)) return false
@@ -317,8 +359,9 @@ export class PairHarness {
    * through the same guarded stop as an idle pause, its conversation kept for when they are back on.
    */
   async off(): Promise<void> {
+    this.generation++
     this.unwatch()
-    const agentId = this.saved()?.agentId
+    const agentId = this.activeAgentId ?? this.saved()?.agentId
     if (!agentId || this.deps.find().find((r) => r.agentId === agentId)?.status !== 'live') return
     await this.deps.stop(agentId)
   }
@@ -337,8 +380,22 @@ export class PairHarness {
 
   private saved(): Saved | null {
     try {
-      const value = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as Partial<Saved>
-      return this.readSaved(value)
+      const value = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as Record<string, unknown>
+      const members = this.members()
+      const collections = Array.isArray(value.collections) ? value.collections : []
+      for (const item of collections.toReversed()) {
+        const row = this.readSaved(item)
+        if (row?.members?.some(uid => members.includes(uid))) return row
+      }
+      // Adopt the selected individual's existing chat on the first open. Keep every other
+      // legacy pointer (and all engine transcripts) as an archive, never combine transcripts.
+      const legacy = this.conversations()
+      const selected = this.deps.pairedUid?.()
+      if (selected && members.includes(selected) && legacy[selected]) return legacy[selected]
+      const current = this.readSaved(value)
+      if (current?.uid && members.includes(current.uid)) return current
+      if (!this.deps.collectionUids && !selected && !current?.members) return current
+      return Object.values(legacy).reverse().find(row => row.uid && members.includes(row.uid)) ?? null
     } catch {
       return null
     }
@@ -347,8 +404,10 @@ export class PairHarness {
   private readSaved(value: unknown): Saved | null {
     if (!value || typeof value !== 'object') return null
     const row = value as Partial<Saved>
-    return typeof row.agentId === 'string' && typeof row.revision === 'string'
-      ? { agentId: row.agentId, revision: row.revision, ...(typeof row.uid === 'string' ? { uid: row.uid } : {}) } : null
+    return typeof row.agentId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.agentId) && typeof row.revision === 'string'
+      ? { agentId: row.agentId, revision: row.revision, ...(typeof row.uid === 'string' ? { uid: row.uid } : {}),
+        ...(Array.isArray(row.members) ? { members: row.members.filter(uid => typeof uid === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(uid)) } : {}),
+      } : null
   }
 
   private conversations(): Record<string, Saved> {
@@ -362,19 +421,31 @@ export class PairHarness {
         }
       }
       const current = this.readSaved(raw)
-      if (current?.uid && /^[A-Za-z0-9_-]{1,64}$/.test(current.uid)) entries[current.uid] = current
+      if (!current?.members && current?.uid && /^[A-Za-z0-9_-]{1,64}$/.test(current.uid)) entries[current.uid] = current
     } catch { /* First conversation, or unreadable old state. */ }
     return entries
   }
 
-  private savedFor(uid: string): Saved | null { return this.conversations()[uid] ?? null }
+  private members(): string[] {
+    const uid = this.deps.pairedUid?.()
+    return [...new Set(this.deps.collectionUids?.() ?? (uid ? [uid] : ['local']))]
+      .filter(id => /^[A-Za-z0-9_-]{1,64}$/.test(id))
+  }
 
   private save(state: Saved): void {
+    this.activeAgentId = state.agentId
     const conversations = this.conversations()
-    if (state.uid) { delete conversations[state.uid]; conversations[state.uid] = state }
+    let collections: Saved[] = []
+    try {
+      const raw = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as { collections?: unknown }
+      if (Array.isArray(raw.collections)) collections = raw.collections.map(row => this.readSaved(row)).filter((row): row is Saved => !!row?.members)
+    } catch { /* First collection. */ }
+    const prior = collections.find(row => row.agentId === state.agentId)
+    state.members = [...new Set([...(prior?.members ?? []), ...this.members()])]
+    collections = [...collections.filter(row => row.agentId !== state.agentId), state]
     mkdirSync(dirname(this.deps.stateFile), { recursive: true, mode: 0o700 })
     const tmp = `${this.deps.stateFile}.tmp`
-    writeFileSync(tmp, JSON.stringify({ ...state,
+    writeFileSync(tmp, JSON.stringify({ ...state, collections,
       ...(Object.keys(conversations).length ? { conversations: Object.fromEntries(Object.entries(conversations).slice(-100)) } : {}),
     }), { mode: 0o600 })
     renameSync(tmp, this.deps.stateFile)

@@ -101,8 +101,8 @@ class WebTabSwitcher extends StatelessWidget {
     TerminalTheme theme,
   ) => WorkspaceBarControl(
     key: const ValueKey('web-new-tab-button'),
-    label: 'New Swarm',
-    tooltip: 'New Swarm',
+    label: 'New Tab',
+    tooltip: 'New Tab',
     foreground: theme.foreground,
     onPressed: enabled && commands.canRun('swarm.new')
         ? () => commands.run('swarm.new')

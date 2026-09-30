@@ -42,8 +42,14 @@ static int nvs_open(const char *ns, int mode, nvs_handle_t *h) {
     if (fail_open) return -1;
     opens++; *h = 123; writable = mode == NVS_READWRITE; staged = stored; return ESP_OK;
 }
+static bool bright_present; static uint8_t bright_stored;
 static int nvs_get_u8(nvs_handle_t h, const char *key, uint8_t *value) {
-    assert(h == 123 && !strcmp(key, "habitat_char"));
+    assert(h == 123);
+    if (!strcmp(key, "bright")) {
+        if (!bright_present) return -1;
+        *value = bright_stored; return ESP_OK;
+    }
+    assert(!strcmp(key, "habitat_char"));
     if (!present || fail_get) return -1;
     *value = stored; return ESP_OK;
 }
@@ -65,6 +71,7 @@ static void ui_cable_toast(const char *message) {
     assert(!strcmp(message, "Character changed; saving failed.")); errors++;
 }
 '''
+code += function('config_load_brightness', config) + '\n'
 code += function('config_load_habitat_character', config) + '\n'
 code += function('config_save_habitat_character', config) + '\n'
 code += 'static void boot(void) {\n' + load + '}\n'
@@ -77,8 +84,13 @@ int main(void) {
 #ifdef DEVICE_DEFAULT_CHARACTER_TUX
     assert(ht_character_default() == HT_CHARACTER_TUX);
 #else
-    assert(ht_character_default() == HT_CHARACTER_TIM);
+    // Focus is what a dial shows before anybody has chosen (owner's decision, 2026-09-30).
+    assert(ht_character_default() == HT_CHARACTER_FOCUS);
 #endif
+    // And at full brightness: no "bright" key is 255, a saved one is kept exactly.
+    bright_present = false; assert(config_load_brightness() == 255);
+    bright_present = true; bright_stored = 102; assert(config_load_brightness() == 102);
+    bright_present = false;
     home_caption.initialized=true;
     boot(); assert(character.id == ht_character_default() && !home_caption.initialized);
     assert(!writes && !commits); // Boot cannot overwrite a previous preference.

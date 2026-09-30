@@ -105,6 +105,29 @@ class SwarmSearchController extends ChangeNotifier {
   bool isModelDownloadsRow(SwarmDestination? row) =>
       isModelMode && row?.id == 'model:downloads';
 
+  /// Grid is not set up on this machine, so local and shared models are one row offering to set it
+  /// up — Grid is an add-on, set up the first time a person asks for it, never by opening a picker.
+  bool get gridSetupOffered {
+    final manager = models?.manager;
+    return manager != null &&
+        (manager.gridSetupNeeded || manager.settingUpGrid);
+  }
+
+  /// The row that sets Grid up ([gridSetupOffered]).
+  bool isGridSetupRow(SwarmDestination? row) =>
+      isModelMode && row?.id == gridSetupRowId;
+
+  static const gridSetupRowId = 'model:grid-setup';
+
+  late final _gridSetupRow = SwarmDestination(
+    id: gridSetupRowId,
+    modelId: gridSetupRowId,
+    title: '[ Set up local & shared models ]',
+    detail: '',
+    swarmId: null,
+    current: false,
+  );
+
   /// Saved APIs whose models are shown under them. An API such as OpenRouter lists hundreds, so
   /// they stay folded until Enter on the API's row — or a search that matches them.
   final expandedApis = <String>{};
@@ -195,9 +218,26 @@ class SwarmSearchController extends ChangeNotifier {
 
   ModelSearchSection modelSection(SwarmDestination row) => row.isCreate
       ? ModelSearchSection.apis
+      : isGridSetupRow(row)
+      ? ModelSearchSection.local
       : isModelDownloadsRow(row)
       ? ModelSearchSection.catalog
       : models?.entries[row.modelId]?.section ?? ModelSearchSection.local;
+
+  /// Whether a search should still show the Set up row: always with nothing typed, and for words that
+  /// ask for what it unlocks.
+  bool _offersGridSetupFor(String query) {
+    final words = query.trim().toLowerCase();
+    if (words.isEmpty) return true;
+    return const [
+      'set up',
+      'setup',
+      'local',
+      'shared',
+      'grid',
+      'download',
+    ].any((word) => word.contains(words) || words.contains(word));
+  }
 
   /// A section's heading in the list. The downloads name the machine they are for.
   String modelSectionLabel(ModelSearchSection section) =>
@@ -220,6 +260,14 @@ class SwarmSearchController extends ChangeNotifier {
   /// (In use); only a row with no action says its state. Operation words come from the catalogue's
   /// [ModelSearchCatalog.localStatusWord], which the preview's status also reads.
   String? modelRowStatus(SwarmDestination row) {
+    if (isGridSetupRow(row)) {
+      final manager = models!.manager;
+      return manager.settingUpGrid
+          ? 'Setting up…'
+          : manager.setUpWaitsForSignIn
+          ? 'Signing in…'
+          : null;
+    }
     final catalog = models;
     final entry = catalog?.entries[row.modelId];
     if (entry == null || catalog == null) return null;
@@ -266,6 +314,10 @@ class SwarmSearchController extends ChangeNotifier {
   /// Whether the model row is live right now: running, in use, or a download, start or stop under
   /// way. Only a live row's word is green.
   bool modelRowLive(SwarmDestination row) {
+    if (isGridSetupRow(row)) {
+      final manager = models!.manager;
+      return manager.settingUpGrid || manager.setUpWaitsForSignIn;
+    }
     final catalog = models;
     final entry = catalog?.entries[row.modelId];
     if (entry == null || catalog == null) return false;
@@ -1193,6 +1245,14 @@ class SwarmSearchController extends ChangeNotifier {
       ? isModelMode
             ? 'Add'
             : row!.title
+      : isGridSetupRow(row)
+      ? models!.manager.settingUpGrid
+            ? 'Setting up…'
+            : app.signingIn
+            ? 'Signing in…'
+            : app.isGuest
+            ? 'Sign in'
+            : 'Set up'
       : isModelDownloadsRow(row)
       ? modelDownloadsVisible
             ? 'Show fewer'
@@ -1690,6 +1750,17 @@ class SwarmSearchController extends ChangeNotifier {
       if (matchQuery.trim().isEmpty && _downloadCount > shownDownloads) {
         rows = [...rows, _downloadsRow];
       }
+      if (gridSetupOffered) {
+        // Local and shared models are this one row until Grid is set up: a downloaded file, a
+        // download or a model shared on a grid cannot be used before then, and a list of them
+        // beside "Set up" read as if they could.
+        rows = rows.where((row) {
+          final section = modelSection(row);
+          return section == ModelSearchSection.subscriptions ||
+              section == ModelSearchSection.apis;
+        }).toList();
+        if (_offersGridSetupFor(matchQuery)) rows = [...rows, _gridSetupRow];
+      }
       // An API's models are listed under its row, as a group: a search that matches a model and not
       // its API still shows the API above it, and the models of two APIs never interleave.
       final shown = {for (final row in rows) row.modelId};
@@ -1791,7 +1862,11 @@ class SwarmSearchController extends ChangeNotifier {
     _selectedId = selected?.id;
     matchCount = rows
         .where(
-          (row) => !row.isCreate && !row.isNote && !isModelDownloadsRow(row),
+          (row) =>
+              !row.isCreate &&
+              !row.isNote &&
+              !isModelDownloadsRow(row) &&
+              !isGridSetupRow(row),
         )
         .length;
   }
@@ -1872,6 +1947,14 @@ class SwarmSearchController extends ChangeNotifier {
       if (index >= 0) {
         cursor = index;
         _selectedId = selected!.id;
+      }
+      notifyListeners();
+      return null;
+    }
+    if (isGridSetupRow(destination)) {
+      final manager = models!.manager;
+      if (!manager.settingUpGrid && !app.signingIn) {
+        unawaited(manager.setUpGrid());
       }
       notifyListeners();
       return null;
@@ -1978,6 +2061,8 @@ class SwarmSearchController extends ChangeNotifier {
       ? false
       : isModelDownloadsRow(row)
       ? true
+      : isGridSetupRow(row)
+      ? !models!.manager.settingUpGrid && !app.signingIn
       : row?.pickerQuery != null
       ? isHelpMode && _commandIds.contains(row!.id)
       : row?.isModel == true

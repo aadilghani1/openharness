@@ -70,15 +70,15 @@ import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from
 import { ZooLessonReporter } from './lib/zooLessons.js'
 import { DAEMONS_OFF, DAEMONS_OFF_DETAIL, DaemonsSwitch, localKillSwitch, zooPassthrough, type ZooRead } from './lib/daemonsSwitch.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
-import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
+import { ensureGridInstalled } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAttachRunner } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
-import { gridAvailable } from './lib/gridExec.js'
+import { gridAvailable, managedGridPath } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { PairJournal } from './pair/journal.js'
@@ -93,6 +93,8 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { CompanionIntelligence } from './pair/intelligence.js'
+import { ConversationReview } from './pair/learn/conversationReview.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
 import { PlateService } from './pair/plateService.js'
 import { inProjects, PairConfigFile, pairConfigPath, ruleRunner, type PairConfig } from './pair/rules.js'
@@ -217,7 +219,7 @@ import {
   syncSummaryPoolSessions,
 } from './lib/summarize.js'
 import type { CableAgent } from './cable/cableSession.js'
-import { routeVoiceTask, runPairOneShot, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
+import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { E2eeStore } from './lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -233,6 +235,8 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
+import { updateTui } from './tui/install.js'
+import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
@@ -367,22 +371,9 @@ const ATTACH_CONCURRENCY = 4
 // reported by the daemon in words rather than by the app as a timeout.
 const PROXY_BACKEND_TIMEOUT_MS = 20_000
 
-/** Bounds the `POST /api/grid/name` inside the daemon-start grid reconcile, so a stalled control-plane
- *  connection cannot hold it open. */
+/** Bounds the `POST /api/grid/name` a grid set-up makes (`ensureGrid`, `harness grid login`), so a
+ *  stalled control-plane connection cannot hold it open. */
 const GRID_MINT_TIMEOUT_MS = 10_000
-/** How long the grid RPCs will gate on a grid-attach attempt before answering without it, whether or
- *  not it has settled — the ceiling that keeps a stuck attempt from degrading every grid RPC for the
- *  daemon's whole life (`gridReadyProbe`). */
-const GRID_ATTACH_CEILING_MS = 30_000
-/** How many grid-attach attempts one daemon makes before giving up until its next start. A machine
- *  still unattached after this many reachable moments has a problem that retrying will not fix, and
- *  each attempt past that is a grid sign-in — and a token rotation — bought for nothing. */
-const GRID_ATTACH_MAX_ATTEMPTS = 5
-/** The soonest one attempt may follow another. Retries are driven by backend reconnects, and waking
- *  a laptop, changing network or toggling a VPN produces several within seconds; without this floor
- *  one moment of ordinary churn spent the whole allowance above and the feature went quiet for the
- *  daemon's life. Requests inside the window are deferred to its end, not dropped. */
-const GRID_ATTACH_MIN_INTERVAL_MS = 60_000
 
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
@@ -534,6 +525,7 @@ function spawnDaemonChild(extraEnv: Record<string, string>): ReturnType<typeof s
  */
 const daemonBoot: {
   updater: Poller | null
+  tuiUpdater: Poller | null
   /** The hook server, once bound — the only thing a mid-boot handoff has to release. */
   hookServer: Server | null
   /** Its Unix-socket twin (lib/localSocket.ts), when one could be opened. Read by `/api/status`. */
@@ -544,7 +536,7 @@ const daemonBoot: {
   safeMode: string | null
   handingOff: boolean
   applyStagedUpdate: (version: string) => void | Promise<void>
-} = { updater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
+} = { updater: null, tuiUpdater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
 
 /**
  * Hand the machine to a newer build without finishing start-up.
@@ -562,6 +554,7 @@ const daemonBoot: {
 function bootHandoff(version: string): void {
   if (daemonBoot.handingOff) return
   daemonBoot.handingOff = true
+  daemonBoot.tuiUpdater?.stop()
   runBootHandoff(VERSION, version, {
     // The hook port has no fallback: a successor that cannot bind it is a daemon that does not come up.
     closeServer: () => {
@@ -725,42 +718,6 @@ type SignInOutcome =
   | { signedIn: false }
 
 /**
- * Sign this computer in to its grid too, and make sure the account's private harness grid exists.
- *
- * ⚠️ **Best-effort, always.** A machine with no `grid`, one too old for `--harness`, a grid sign-in
- * that fails, a backend that predates `POST /api/grid/name` — every one of them is a sentence on
- * stderr and a harness sign-in that still succeeds. The harness is what the person asked for; the
- * grid is what it can usually also arrange. `harness grid login` stays the explicit path, where the
- * same failure IS the command's failure and exits non-zero.
- *
- * Returns what happened, so `--json` callers can carry it on their own result line.
- */
-async function attachGridToSignIn(
-  token: string,
-  json: boolean,
-  installing: Promise<GridInstallResult> = ensureGridInstalled(),
-): Promise<Record<string, unknown>> {
-  const note = (line: string): void => { if (!json) console.error(`  · ${line}`) }
-  // A machine with no `grid` gets one first, from grid's own installer — the sign-in that follows
-  // is what makes it useful, and "install the grid CLI yourself" was the sentence every fresh
-  // machine used to stop at. Best-effort: a failed install is a note, and the hand-off below then
-  // reports the missing binary exactly as before. A forced sign-in starts the install before it
-  // takes the daemon spawn lock and hands the promise in (see loginCommand): the installer is
-  // account-agnostic and can run for minutes, and neither the browser wait nor a start queued on
-  // that lock should be spent on it.
-  const install = await installing
-  if (install.status === 'installed') note(install.message)
-  else if (install.status !== 'present') note(install.message)
-  const handoff = await handOffToGrid(token, { json: true })
-  if (handoff.code !== 'OK') {
-    note(handoff.message)
-    return { grid: { signedIn: false, code: handoff.code } }
-  }
-  const { status, name } = await ensureAccountGrid(note)
-  return { grid: { signedIn: true, ensured: status, ...(name ? { name } : {}) } }
-}
-
-/**
  * The account's private grid exists — its name minted or read, then the grid itself created if it is
  * not there yet.
  *
@@ -804,21 +761,12 @@ async function loginCommand(
   // command and says so with `--entry-point=desktop`. Analytics only — it names no privilege.
   const entryPoint = opts.entryPoint ?? 'cli'
   const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
-  const succeed = async (alreadySignedIn: boolean, installing?: Promise<GridInstallResult>): Promise<SignInOutcome> => {
-    // `chained` is `harness grid login`, which runs the hand-off itself and reports it as its own
-    // result — doing it here too would sign in to the grid twice and print two answers for one act.
-    let grid: Record<string, unknown> = {}
-    if (!opts.chained) {
-      try {
-        grid = await attachGridToSignIn(await new AuthSessionManager(backendHttpBase()).accessToken(), json, installing)
-      } catch {
-        // The harness session is already saved and valid; a grid step that throws is still only a
-        // grid step. Never let it turn a completed sign-in into a failure.
-        grid = {}
-      }
-    }
+  // Harness only. Grid is an add-on: this computer is signed in to it the first time a grid feature is
+  // used (`ensureGrid` in the daemon, `lib/gridAttach.ts`) — with this session's token, no second
+  // browser — and never as a side effect of signing in to Harness.
+  const succeed = async (alreadySignedIn: boolean): Promise<SignInOutcome> => {
     if (opts.chained) return { signedIn: true, alreadySignedIn }
-    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true, ...grid } : { type: 'result', status: 'success', ...grid })
+    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true } : { type: 'result', status: 'success' })
     else if (alreadySignedIn) console.log('\n  ✓ Already signed in. Run `harness start` to connect this computer.\n')
     else console.log('\n  ✓ Signed in. Run `harness start` to connect this computer.\n')
     return { signedIn: true, alreadySignedIn }
@@ -851,15 +799,8 @@ async function loginCommand(
   // reads whatever session is on disk: for as long as the browser is open, the old account's. The
   // daemon it spawned came up on the old account and stayed — the `harness start` this command
   // recommends afterwards found it "already running" — so the whole switch, from the stop until the
-  // new session (and its grid hand-off) is on disk, holds the daemon spawn lock: a start that lands
+  // new session is on disk, holds the daemon spawn lock: a start that lands
   // meanwhile waits its turn and then reads the new session.
-  //
-  // The grid CLI install is the one long thing in there that needs no account, so it starts NOW —
-  // before the lock, before the old daemon is stopped — and runs under the browser wait; `succeed`
-  // awaits only what is left of it. The handler keeps a failed download from being an unhandled
-  // rejection while nobody is waiting on it: the sign-in reads the outcome later, as a note.
-  const installing = opts.chained ? undefined : ensureGridInstalled()
-  installing?.catch(() => { /* reported where it is awaited */ })
   try {
     return await withSpawnLock('login', async () => {
       // ⚠️ A daemon running WITHOUT a session holds no account to switch away from, and stopping it
@@ -867,7 +808,7 @@ async function loginCommand(
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
       if (readAuthSession()) await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false, installing), entryPoint)
+      return await browserSignIn(json, emit, () => succeed(false), entryPoint)
     }, {
       onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
     })
@@ -1243,6 +1184,16 @@ async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: str
   return true
 }
 
+/** An explicit hn update manages only the installed bundle, never a checkout or a canary. */
+function isInstalledCli(): boolean {
+  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
+  try {
+    const running = statSync(SCRIPT_PATH)
+    const installed = statSync(installedCli)
+    return running.dev === installed.dev && running.ino === installed.ino
+  } catch { return SCRIPT_PATH === installedCli }
+}
+
 /** `harness update` — force the self-update NOW instead of waiting for the daemon's
  *  background poll. Checks the manifest; if a newer build exists it stops any running daemon first (so
  *  its poller can't race our staging), swaps in the new bytes, then relaunches on them. No-op on a
@@ -1264,6 +1215,12 @@ async function updateCommand(force: boolean): Promise<void> {
     process.exit(0)
   }
   console.log(`▸ Checking for updates…  (current v${VERSION})`)
+  // hn has its own release cadence. An already-current CLI must still refresh an installed hn;
+  // a failed optional download must not stop the CLI from updating.
+  if (isInstalledCli()) {
+    try { await updateTui((line) => console.log(line)) }
+    catch (error) { console.warn(`  hn update failed; continuing with the CLI update: ${error instanceof Error ? error.message : error}`) }
+  }
   let entry: UpdateEntry | null = null
   try { entry = await fetchManifest(env.ADAPTER_UPDATE_URL, env.ADAPTER_UPDATE_KEY) }
   catch (e) { console.error(`✗ Could not reach the update manifest: ${e instanceof Error ? e.message : e}`); process.exit(1) }
@@ -1492,6 +1449,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.log(`[update] self-update off · running a dev/repo build (v${VERSION}), not the installed copy`)
   }
 
+  // Keep the CLI's recovery updater armed first. hn is an independent, optional download.
+  daemonBoot.tuiUpdater = startTuiUpdater({
+    currentVersion: VERSION,
+    isInstalledCopy,
+    disabled: env.ADAPTER_UPDATE_DISABLE,
+    intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
+    slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+  })
+
   const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
   // Before any agent is probed: one already running on a saved API's model reports that model.
   rememberSavedApis(savedApis)
@@ -1501,18 +1467,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
 
-  // The managed grid follows its pin on EVERY daemon start — this one, and the restart a self-update
-  // ends in — not only on `--repair`: the pin is expected to move, and a machine installed last month
-  // has to notice. Not awaited here: a download must never hold the control port back, and every grid
-  // call resolves the binary afresh (`gridBinaryPath`), so whatever lands is picked up as it lands.
-  // Best-effort by construction — it returns rather than throws — and the fatal guard above is the
-  // net under the promise itself. The promise is kept so the grid reconcile below can wait for the
-  // pinned binary before it hands a token over.
-  const managedGridReady = ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
-  void managedGridReady
+  // A managed grid already here follows its pin on EVERY daemon start — this one, and the restart a
+  // self-update ends in — not only on `--repair`: the pin is expected to move, and a machine installed
+  // last month has to notice. A machine with none gets none from a start: grid is an add-on, installed
+  // the first time a grid feature is used (`ensureGrid`, below). Not awaited: a download must never
+  // hold the control port back, and every grid call resolves the binary afresh (`gridBinaryPath`), so
+  // whatever lands is picked up as it lands. Best-effort by construction — it returns, never throws.
+  const followGridPin = (): Promise<unknown> => managedGridPath()
+    ? ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
+    : Promise.resolve(null)
+  void followGridPin()
   // …and keeps following it while this daemon runs: a pin moved after the start reaches it within ten
   // minutes rather than at the next restart (`startGridPinRecheck`).
-  startGridPinRecheck()
+  startGridPinRecheck({ ensure: followGridPin })
 
   registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
@@ -1745,6 +1712,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairTalk: (text: string, companionUid?: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
+  let companionPromptContext: (agentId: string) => string | null = () => null
+  let companionProfileChanged: () => void = () => {}
+  let isCollectionAgent: (agentId: string) => boolean = () => false
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
   const pairConfig = new PairConfigFile(pairConfigPath())
   /** pair.jsonc as the person confirmed it (pair/gate.ts): a new or changed file waits for their yes. */
@@ -1989,36 +1959,26 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backendRef = backend
   backend.viewerTargetProvider = (agentId) => dshViewers.forwardingUrl(agentId)
 
-  // Bring this machine's grid sign-in into line with its harness sign-in, in the background.
-  // This is what makes a machine that signed in to the harness BEFORE grid existed usable after an
-  // update: it has the `grid` binary now (above), but no grid credentials and no grid to point at
-  // until something signs it in — and the login *event* that used to do that never fires again for
-  // an already-signed-in account. Reconciling on daemon start (the path every update takes) removes
-  // the `harness logout` / `harness login` a person would otherwise have to run by hand.
-  //
-  // Best-effort and non-blocking: it awaits the managed grid, mints/reads the account's name, and
-  // signs in + creates the grid only when the machine is not already there. The RPCs that need the
-  // name wait briefly for it through `gridReadyProbe`.
-  //
-  // ⚠️ Retried on backend RECONNECT, not just at start, and this is not belt-and-braces: the daemon
-  // OUTLIVES the desktop app (it must keep running after the window closes), and `harness start`
-  // against a live daemon returns without starting a new one. So "start" can be days ago, and a
-  // single attempt that lost to a control plane which was not reachable yet — the ordinary shape of
-  // a daemon coming up with the network — would leave the account with no grid until the next real
-  // restart. A connect is the evidence the control plane is reachable, so it is when to try again.
-  // How long the RPCs gate on an attempt, and how many attempts there are, live in the runner —
-  // `lib/gridAttach.ts`, beside the reconcile itself, so the coordination has a unit test rather
-  // than only a comment. Everything below is the daemon-shaped half: what one attempt actually does.
   try { ensureBundledModelManager() }
   catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
 
-  const gridAttach = createGridAttachRunner({
-    maxAttempts: GRID_ATTACH_MAX_ATTEMPTS,
-    minIntervalMs: GRID_ATTACH_MIN_INTERVAL_MS,
-    ceilingMs: GRID_ATTACH_CEILING_MS,
-    log: (line) => console.log(`[grid-attach] ${line}`),
-    attempt: () => reconcileGridAttach({
-      managedGridReady,
+  // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
+  // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
+  // model's Get or Use, an agent moved onto a grid model, the Model Manager — asks `backend.ensureGrid`,
+  // which does it then, with this machine's harness token (no second browser) and, only for what needs
+  // one, the account's own grid. It used to run here on every start and every reconnect.
+  const gridLog = (line: string): void => console.log(`[grid-attach] ${line}`)
+  const gridAccess = createGridAccess({
+    signedIn: () => signedInGridEmail() !== null,
+    log: gridLog,
+    attempt: ({ ownGrid, signedInThisRun }) => reconcileGridAttach({
+      // The pinned managed runtime first; grid's own installer when there is none to follow.
+      installCli: async () => {
+        await ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
+        if (gridAvailable()) return
+        const installed = await ensureGridInstalled()
+        if (installed.status !== 'present') gridLog(installed.message)
+      },
       gridAvailable: () => gridAvailable(),
       // The backend mints and remembers the name; this CLI holds neither the account's email nor its
       // id. An older backend (no route) answers nothing, which the reconcile treats as "no grid yet".
@@ -2040,17 +2000,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         resetGridDeriveMemo()
         clearGridMcpUrlCache()
       },
-      log: (line) => console.log(`[grid-attach] ${line}`),
-    }),
+      log: gridLog,
+    }, { ownGrid, signedInThisRun }),
   })
-
-  // While an attempt is running AND within its ceiling, the RPCs that need the grid name wait
-  // briefly on it; otherwise they read the name directly.
-  backend.gridReadyProbe = () => gridAttach.probe()
+  backend.ensureGrid = (request) => gridAccess.ensure(request)
+  // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
+  // picker offers local and shared models or a Set up row.
+  backend.gridSetUp = () => gridAvailable() && signedInGridEmail() !== null
   // Re-read the zoo on every reconnect as well, while daemons are on: a `zoo_changed` sent while the link
   // was down is lost. Off, a reconnect asks nothing (lib/daemonsSwitch.ts).
-  onBackendConnected = () => { gridAttach.run(); daemons.connected() }
-  gridAttach.run()
+  onBackendConnected = () => { daemons.connected() }
 
   /**
    * Is ANY device surface watching this machine?
@@ -2965,6 +2924,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   runtimeProfiles.onChanged = (sessionId) => {
     const session = registry.resolve(sessionId)
     if (session) syncSession(session)
+    companionProfileChanged()
   }
 
   // Turn heartbeat (5s): pushes `turn_heartbeat` to the web while the turn is open (keeps its 10s
@@ -3127,9 +3087,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // to the device and self-cancels once mirror.heartbeat() reports idle (summary done).
       }
     }
-    // Learning notices only what the sensor would: pairing on, never a sub-agent, a terminal or the pair itself.
+    // Real work and the person's collection conversation can teach lessons. Archived
+    // pair chats, sub-agents and replay stay excluded. Tool-free background reviews
+    // never register as agents, so they cannot feed their own results back in here.
     const learnFrom = registry.bySession(sessionId)
-    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) && !isPairHarnessSession(sessionId)) {
+    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
+      (!isPairHarnessSession(sessionId) || isCollectionAgent(learnFrom.agentId))) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
     }
@@ -3908,6 +3871,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(env.PORT, {
+    onPromptContext: (agentId) => companionPromptContext(agentId),
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4477,6 +4441,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
+    lessonReview: async (connId, id) => pairBrain?.reviewLesson(connId, id) ?? { ok: false, error: 'UNSUPPORTED' },
     person: { verify: verifyLessonCaller, nonces: lessonNonces },
     now: Date.now,
     newId: () => randomUUID(),
@@ -4488,6 +4453,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
+    collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4505,8 +4471,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, hasConversation: !!s.sessionId })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, hasConversation: !!s.sessionId })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
@@ -4531,14 +4497,48 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
   })
   pairTalk = (text, uid) => pairHarness.talk(text, uid)
+  isCollectionAgent = (agentId) => agentId === pairHarness.agentId()
+  companionPromptContext = (agentId) => daemons.on() ? pairHarness.context(agentId) : null
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
-  // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
-  // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
+  const companionIntelligence = new CompanionIntelligence({
+    enabled: () => daemons.on() && !!pairSensor.pairedDaemon(),
+    current: () => {
+      const agentId = pairHarness.agentId()
+      if (!agentId) return null
+      const live = registry.advertised().find(s => s.agentId === agentId)
+      const session = live ?? stoppedAgents.get(agentId)
+      if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
+      return { agentId, sessionId: session.sessionId, engine: session.engine,
+        profile: runtimeProfiles.selectedModel(session), stopped: !live,
+        codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
+    },
+    directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
+    stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
+  })
+  companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
+  // The collection's DSH supplies learning and triage with its observed model. The
+  // experiment and watching consent still gate everything; there is no second model switch.
   const lessonProjects = (): string[] =>
     [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))]
+  const lessonDistiller = new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() })
+  const conversationReview = new ConversationReview({
+    directory: join(env.ADAPTER_DATA_DIR, 'pair', 'learn'),
+    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.agentId() : null,
+    pairedDaemon: () => pairSensor.pairedDaemon(), intelligence: () => companionIntelligence.status(),
+    turns: (from, to) => sessionSearch?.recentConversations(from, to) ?? null,
+    cwd: (id) => registry.resolve(id)?.cwd ?? stoppedAgents.get(id)?.cwd ?? null,
+    machine: () => terminalHintMachineName(), distiller: lessonDistiller, store: lessonStore, now: Date.now,
+    home: homedir(), changed: () => pairBrain?.stateChanged(),
+  })
   pairLearner = new PairLearner({
     store: lessonStore,
-    distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now, home: homedir() }),
+    distiller: lessonDistiller,
+    history: conversationReview,
+    intelligence: () => companionIntelligence.status(),
+    queueFile: () => {
+      const id = pairHarness.agentId()
+      return id ? join(env.ADAPTER_DATA_DIR, 'pair', 'learn', `queue-${id}.json`) : null
+    },
     pairedDaemon: () => pairSensor.pairedDaemon(),
     autonomy: () => pairAutonomy(),
     voice: pairVoice,
@@ -4586,8 +4586,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
-    // A model's words only when the person opted in (pair.jsonc "model": true).
-    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now }),
+    // Template first, then this collection's selected model when it is ready.
+    triage: new PairTriage({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, budgetMs: 30_000 }),
+    companionHarness: () => ({ agentId: pairHarness.agentId(), ...companionIntelligence.status() }),
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
@@ -4599,6 +4600,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relayed: (fields) => { pairSensor.relayed(fields) },
     // A lesson's key (pair/learn/approval.ts): never a tool client, never a process inside a harness pane.
     lessonKey: (connId) => lessonKeyVerdict(connId, { isTool: (conn) => backend.isToolClient(conn), verify: verifyLessonCaller }),
+    lessonReview: (id) => pairLearner!.review(id),
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
@@ -4612,6 +4614,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     talk: (text, uid) => pairTalk(text, uid),
+    open: (uid) => pairHarness.open(uid),
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -4622,7 +4625,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   onDaemonsChanged = (on) => {
     plates.setOn(on)
-    if (!on) { companionZoo.reset(); guestCompanion = null }
     if (on) {
       // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
       // everything off within the tick (before the rest of the file is read), and any other change asks for
@@ -4639,6 +4641,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       zooTurnReporter.clear()
       zooLessonReporter.clear()
       void pairHarness.off().catch(() => {})
+      conversationReview.stop()
+      pairLearner?.cancelReviews()
+      companionIntelligence.cancel()
+      companionZoo.reset(); guestCompanion = null
     }
     applyPair()
     pairBrain?.refresh()
@@ -4943,6 +4949,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (off) { reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
       void pairBrain!.onTalk(connId, payload, (frame) => { reply(frame) })
     },
+    onDaemonOpen: (connId, payload, reply) => {
+      const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
+      if (off) { reply({ type: 'daemon_open_result', payload: { requestId: payload.requestId, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
+      void pairBrain!.onOpen(connId, payload, (frame) => { reply(frame) })
+    },
     // Presence: whether the person is here (the zoo's away turns) always; the rest only while daemons are
     // on. Signed out, a window bound to this machine saying its guest zoo has the person's consent is what
     // turns them on (guests keep working as before, but only when a window asks).
@@ -4979,12 +4990,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hookStep('codex', () => installCodexHooks(hookPort))
     hookStep('cursor', () => installCursorHooks(hookPort))
     hookStep('opencode', () => installOpencodePlugin(hookPort))
-    // The `grid` CLI the Grid harness shells out to, for a machine that signed in before this
-    // existed or whose sign-in could not fetch it. In the background: a download must not hold
-    // the daemon's own start, and nothing here waits on it.
-    void ensureGridInstalled().then((result) => {
-      if (result.status !== 'present') console.log(`[grid] ${result.message}`)
-    })
     hookStep('kilo', () => installKiloPlugin(hookPort))
     hookStep('pi', () => installPiExtension(hookPort))
     // A self-update refreshes plugin files here; running engine processes pick them up according to each
@@ -6502,6 +6507,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.log(`[update] applying ${VERSION} → ${newVersion} — restarting daemon`)
     registry.flush()
     daemonBoot.updater?.stop()
+    daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
@@ -6612,6 +6618,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void cableRef?.stop()
     deviceLinkRef?.stop()
     daemonBoot.updater?.stop()
+    daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)

@@ -11,28 +11,17 @@
  *   4. `harness-tui` on PATH
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const TUI_MANIFEST_URL = process.env.HARNESS_TUI_MANIFEST_URL
-  || 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/tui/metadata.json'
-
-const installed = (): string => join(homedir(), '.harness', 'bin', 'harness-tui')
-
-/** `darwin-arm64`, `linux-x64`, … — the key a release publishes each build under. */
-export function platformKey(platform = process.platform, arch = process.arch): string | null {
-  const os = platform === 'darwin' ? 'darwin' : platform === 'linux' ? 'linux' : null
-  const cpu = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'x64' : null
-  return os && cpu ? `${os}-${cpu}` : null
-}
+import { installedTuiPath, installTui } from './install.js'
+export { installTui, platformKey, TUI_MANIFEST_URL } from './install.js'
 
 export function findTuiBinary(): string | null {
   const fromEnv = process.env.HARNESS_TUI_BIN
   if (fromEnv && existsSync(fromEnv)) return fromEnv
-  if (existsSync(installed())) return installed()
+  if (existsSync(installedTuiPath())) return installedTuiPath()
   try {
     const here = dirname(fileURLToPath(import.meta.url))
     for (const up of ['../../../tui', '../../tui', '../tui']) {
@@ -45,31 +34,6 @@ export function findTuiBinary(): string | null {
   const which = spawnSync('sh', ['-c', 'command -v harness-tui'], { encoding: 'utf8' })
   const onPath = which.stdout?.trim()
   return which.status === 0 && onPath ? onPath : null
-}
-
-/** Download the published build for this platform, verify its sha256, install it. */
-export async function installTui(log: (line: string) => void): Promise<string> {
-  const key = platformKey()
-  if (!key) throw new Error(`No harness tui build for ${process.platform}/${process.arch}.`)
-  const manifest = await fetch(TUI_MANIFEST_URL, { signal: AbortSignal.timeout(20_000) })
-  if (!manifest.ok) throw new Error(`The TUI is not published yet (${manifest.status}). Build it: cd tui && cargo build --release`)
-  const meta = await manifest.json() as { version?: string; builds?: Record<string, { url?: string; sha256?: string }> }
-  const build = meta.builds?.[key]
-  if (!build?.url || !build.sha256) throw new Error(`No harness tui build for ${key} in the manifest.`)
-  log(`  Downloading harness-tui ${meta.version ?? ''} for ${key}…`)
-  const response = await fetch(build.url, { signal: AbortSignal.timeout(120_000) })
-  if (!response.ok) throw new Error(`Download failed: ${response.status}`)
-  const bytes = Buffer.from(await response.arrayBuffer())
-  const digest = createHash('sha256').update(bytes).digest('hex')
-  if (digest !== build.sha256.toLowerCase()) throw new Error('The download does not match its published checksum; nothing was installed.')
-  const target = installed()
-  mkdirSync(dirname(target), { recursive: true })
-  const temp = `${target}.${process.pid}.tmp`
-  writeFileSync(temp, bytes, { mode: 0o755 })
-  chmodSync(temp, 0o755)
-  renameSync(temp, target)
-  log(`  ✓ Installed ${target}`)
-  return target
 }
 
 /** Read only the global flags needed for bootstrap; hn validates the full command line. */

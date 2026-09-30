@@ -97,7 +97,7 @@ typedef enum {
     A_QUESTION,
     A_CHOICE,
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
-    A_PANE_PREV, A_PANE_NEXT,
+    A_PANE_PREV, A_PANE_NEXT, A_TAB_LIST,
     A_INBOX,
     A_NOTICE,
     A_TABS,
@@ -338,10 +338,19 @@ static void change(void)
     s.dirty = true;
     habitat_render_notify();
 }
-static unsigned notice_unread(void)
+/*
+ * What the bell counts: unread notices about any agent EXCEPT the one on the face.
+ *
+ * That agent's news is already on the glass — its recap, or its question in the recap's place — so
+ * counting it too told a person something else had happened, somewhere else (owner, 2026-09-30:
+ * people took the +1 for another agent's news). Nothing is marked read by this: look away from that agent
+ * and its unanswered question counts again, until it is answered.
+ */
+static unsigned notice_unread(const char *except)
 {
     unsigned count = 0;
-    for (int i = 0; i < s.notice_count; i++) count += !s.notice[i].read_on_dial;
+    for (int i = 0; i < s.notice_count; i++)
+        count += !s.notice[i].read_on_dial && !(except && !strcmp(s.notice[i].agent_id, except));
     return count;
 }
 static bool notice_was_read(const cable_notif_t *n)
@@ -658,7 +667,8 @@ static bool home_footer(action_kind_t action)
     // bracket control is pressed and released like every other one, while A_PET reads a TAP as a boop
     // and only starts speech on a 650 ms hold — which is the creature's gesture, not a button's.
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-           action == A_CARRY_DROP || action == A_VOICE || action == A_PANE_PREV || action == A_PANE_NEXT;
+           action == A_CARRY_DROP || action == A_VOICE || action == A_PANE_PREV || action == A_PANE_NEXT ||
+           action == A_TAB_LIST;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -857,7 +867,7 @@ static void render_home(ht_scene_t *f)
     bool rotating = home_caption_rotates() && character.id != HT_CHARACTER_FOCUS;
     const char *caption = rotating && home_caption.activity ? activity : a ? a->name : "Choose a pane";
     bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
-    unsigned unread = notice_unread();
+    unsigned unread = notice_unread(a ? a->id : NULL);
     bell = bell && unread > 0;
     char status[100];
     if (s.voice_retry_until) COPY(status, "Try again");
@@ -880,7 +890,8 @@ static void render_home(ht_scene_t *f)
         .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
         .ink = FG, .foreground = FG, .dim = DIM,
-        .primary_title = true, .roomy_reading = true};
+        .primary_title = true, .roomy_reading = true,
+        .more_tabs = s.tab_count > 1, .more_panes = s.count > 1};
     char carried[128];
     if (carry.active) {
         snprintf(carried,sizeof(carried),"%d line%s from %.70s",carry.rows,carry.rows==1?"":"s",carry.source);
@@ -975,10 +986,17 @@ static void render_home(ht_scene_t *f)
         }
     }
     if (!carry.active && !carry.error[0] && !visit.available) {
-        // Both phases of the caption open the same pane picker. On Focus the caption is the pill,
-        // which sits below where the arc would have been.
-        s.hits[s.hit_count++] = focus_face ? (hit_t){{83, 61, 300, 40}, A_AGENTS, 0, true}
-                                           : (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
+        /*
+         * Both phases of the caption open the pane picker on a creature skin. Focus has two doors
+         * where they have one: its tab pill opens the TAB list and its agent's name the PANE list,
+         * each marked ⌄ when there is another to choose (focus.c). The pill's is A_TAB_LIST rather
+         * than A_TABS, because A_TABS on this surface is the slide-to-switch gesture and answers
+         * only a strict tap; a door is pressed and released, like the microphone.
+         */
+        if (focus_face) {
+            s.hits[s.hit_count++] = (hit_t){{83, 61, 300, 40}, A_TAB_LIST, 0, s.connected};
+            s.hits[s.hit_count++] = (hit_t){{83, 118, 300, 48}, A_AGENTS, 0, true};
+        } else s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
             s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
@@ -1901,6 +1919,7 @@ static void dispatch(action_t a)
         }
         break;
     case A_TABS:
+    case A_TAB_LIST:
         tabs_open();
         break;
     case A_MACHINES:
@@ -2504,7 +2523,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Reading/choosing consumed this contact; motion cannot submit an answer.
             } else if (s.view == SELECTION) {
                 // Its bounded reading cursor already consumed this vertical drag.
-            } else if (surface && character.id == HT_CHARACTER_FOCUS && dy > 0 && notice_unread()) {
+            } else if (surface && character.id == HT_CHARACTER_FOCUS && dy > 0 && notice_unread(active() ? active()->id : NULL)) {
                 // Pull down from the badge. The creature skins keep this drag inert — their footer
                 // badge is a target you tap — but on Focus the badge sits at the top edge and a pull
                 // is the gesture the rest of the world already means by it.

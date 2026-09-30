@@ -79,7 +79,7 @@ describe('the package', () => {
     const files = pairPackage({ daemonId: 'tim', engine: 'claude', mcpCommand: MCP, tokenFile: '/t' })
     expect(ensureBuiltinPair(PAIR_HARNESS_ID, files)).toBe(true)
     const installed = installedDsh(PAIR_HARNESS_ID)!
-    expect(installed.manifest.name).toBe('Pair: tim')
+    expect(installed.manifest.name).toBe('Companions')
     expect(dshListRows([installed], []).map((row) => row.id)).not.toContain(PAIR_HARNESS_ID)
     // The dsh runtime hands the engine the injected server and its context, like any harness.
     const workspace = mkdtempSync(join(dir, 'ws-'))
@@ -122,7 +122,7 @@ describe('talking to it', () => {
     const w = world()
     expect(w.token.launched).toBe(false)
     expect(await w.harness.talk('what needs me?')).toEqual({ ok: true, agentId: 'pair-1', started: true })
-    expect(w.deps.create).toHaveBeenCalledWith({ engine: 'claude', cwd: join(dir, 'pair', 'workspace'), prompt: 'what needs me?', name: 'tim' })
+    expect(w.deps.create).toHaveBeenCalledWith({ engine: 'claude', cwd: join(dir, 'pair', 'workspace'), prompt: 'what needs me?', name: 'companions' })
     expect(w.token.launched).toBe(true)
     const token = readFileSync(join(dir, 'pair', 'token'), 'utf8')
     expect(await w.harness.talk('and on the laptop?')).toEqual({ ok: true, agentId: 'pair-1', sent: true })
@@ -137,6 +137,31 @@ describe('talking to it', () => {
     expect(a).toMatchObject({ started: true })
     expect(b).toMatchObject({ sent: true, agentId: a.agentId })
     expect(w.deps.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('opening the DSH starts one terminal without a model prompt, and leaves setup for the person', async () => {
+    const w = world()
+    const [a, b] = await Promise.all([w.harness.open(), w.harness.open()])
+    expect(a).toMatchObject({ ok: true, agentId: 'pair-1', started: true })
+    expect(b).toEqual({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.deps.create.mock.calls[0]?.[0].prompt).toBe('')
+    w.rows[0]!.hasConversation = false
+    expect(await w.harness.open()).toEqual({ ok: true, agentId: 'pair-1' })
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(await w.harness.talk('hi')).toMatchObject({ ok: false, error: 'SETUP_REQUIRED' })
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
+  it('opening a paused companion resumes its history without typing or starting another turn', async () => {
+    const w = world()
+    await w.harness.talk('remember this conversation')
+    w.rows[0]!.status = 'stopped'
+    w.rows[0]!.hasConversation = true
+    expect(await w.harness.open()).toEqual({ ok: true, agentId: 'pair-1', resumed: true })
+    expect(w.deps.resume).toHaveBeenCalledWith('pair-1')
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.deps.send).not.toHaveBeenCalled()
   })
 
   it('pauses when idle (conversation kept), not while it works, and resumes with a new token on the next talk', async () => {
@@ -159,13 +184,14 @@ describe('talking to it', () => {
     expect(readFileSync(join(dir, 'pair', 'token'), 'utf8')).not.toBe(first)
   })
 
-  it('a new paired daemon is a new harness: the old one is paused, never deleted', async () => {
+  it('a new paired daemon keeps the collection conversation and does not interrupt its terminal', async () => {
     const w = world()
     await w.harness.talk('hi tim')
     w.setPair('vim')
-    expect(await w.harness.talk('hi vim')).toEqual({ ok: true, agentId: 'pair-2', started: true })
-    expect(w.deps.stop).toHaveBeenCalledWith('pair-1')
-    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'vim' }))
+    expect(await w.harness.talk('hi vim')).toEqual({ ok: true, agentId: 'pair-1', sent: true })
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    expect(w.deps.create).toHaveBeenCalledTimes(1)
+    expect(w.harness.context('pair-1')).toContain('selected vim (vim)')
   })
 
   it('daemons going off pause it if it is live (conversation kept), and stop its idle timer', async () => {

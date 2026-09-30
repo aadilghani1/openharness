@@ -151,7 +151,7 @@ impl Keymap {
         // ── keys tmux leaves unbound: the Harness ones ──
         b(ch('C'), "customize-mode -Z", false, "Customize options");
         // Harness's own, on keys tmux leaves unbound.
-        b(ch('N'), "new-harness", false, "New harness: agent, machine, folder, first message");
+        b(ch('N'), "new-harness", false, "New Harness: agent, project and options");
         b(ch('@'), "choose-tree -m", false, "Machines (then their harnesses)");
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
         b(ch('a'), "next-harness", false, "Go to the next harness that needs you");

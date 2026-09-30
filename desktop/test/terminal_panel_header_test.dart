@@ -1,6 +1,8 @@
 // The pane header's transport badge: which of the three paths carries this
 // pane's bytes, drawn by shape as well as colour, and absent where there is no
 // such choice to report.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -10,7 +12,6 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/terminal_panel.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'support/real_fonts.dart';
 
@@ -154,17 +155,17 @@ void main() {
     (tester) async {
       final marks = {
         'p2p': (
-          icon: LucideIcons.link2,
+          icon: AppIcons.link2,
           color: AppColors.success,
           label: 'P2P · Direct peer connection',
         ),
         'turn': (
-          icon: LucideIcons.waypoints,
+          icon: AppIcons.waypoints,
           color: AppColors.warning,
           label: 'TURN · Via Cloudflare relay',
         ),
         'relay': (
-          icon: LucideIcons.server,
+          icon: AppIcons.server,
           color: AppColors.mutedStrong,
           label: 'WS · Via Harness WebSocket relay',
         ),
@@ -206,11 +207,7 @@ void main() {
     expect(session.linkMode, isNull);
     await pump(tester, session);
 
-    for (final icon in [
-      LucideIcons.link2,
-      LucideIcons.waypoints,
-      LucideIcons.server,
-    ]) {
+    for (final icon in [AppIcons.link2, AppIcons.waypoints, AppIcons.server]) {
       expect(find.byIcon(icon), findsNothing);
     }
   });
@@ -223,19 +220,19 @@ void main() {
     session.linkMode = 'p2p';
     await pump(tester, session);
 
-    expect(find.byIcon(LucideIcons.link2), findsOneWidget);
-    final position = tester.getCenter(find.byIcon(LucideIcons.link2));
+    expect(find.byIcon(AppIcons.link2), findsOneWidget);
+    final position = tester.getCenter(find.byIcon(AppIcons.link2));
     session.linkMode = 'turn';
     await pump(tester, session);
-    expect(find.byIcon(LucideIcons.link2), findsNothing);
-    expect(find.byIcon(LucideIcons.waypoints), findsOneWidget);
-    expect(tester.getCenter(find.byIcon(LucideIcons.waypoints)), position);
+    expect(find.byIcon(AppIcons.link2), findsNothing);
+    expect(find.byIcon(AppIcons.waypoints), findsOneWidget);
+    expect(tester.getCenter(find.byIcon(AppIcons.waypoints)), position);
 
     session.linkMode = 'relay';
     await pump(tester, session);
-    expect(find.byIcon(LucideIcons.waypoints), findsNothing);
-    expect(find.byIcon(LucideIcons.server), findsOneWidget);
-    expect(tester.getCenter(find.byIcon(LucideIcons.server)), position);
+    expect(find.byIcon(AppIcons.waypoints), findsNothing);
+    expect(find.byIcon(AppIcons.server), findsOneWidget);
+    expect(tester.getCenter(find.byIcon(AppIcons.server)), position);
   });
 
   // ── the harness verdict chip ─────────────────────────────────────────────

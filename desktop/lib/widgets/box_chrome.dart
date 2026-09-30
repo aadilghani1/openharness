@@ -7,7 +7,7 @@ import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
 
-/// One rim for workspace panes and the dialogs that take their keyboard focus.
+/// A stable rim for the terminal pane, independent of the desktop dialog frame.
 BorderSide terminalPaneBorder({bool focused = false}) => BorderSide(
   color: focused ? grid.AppPalette.accentOnSurface : grid.AppPalette.divider,
   width: 1,
@@ -16,36 +16,69 @@ BorderSide terminalPaneBorder({bool focused = false}) => BorderSide(
 /// One gutter around the workspace, between panes, and beside command docks.
 const double kWorkspaceInset = 9.5;
 
-/// The selected tab joins the workspace with the same small radius used at
-/// its top corners. The bottom curves turn outward, like a browser tab.
-class TerminalTabBorder extends ShapeBorder {
-  const TerminalTabBorder({this.radius = kTerminalCornerRadius});
+/// How solid the workspace's panes paint their own fill: below 1 while the
+/// background shows through them (Behind harnesses). Only fills turn
+/// translucent — text, colored cells, banners and the composer stay solid.
+class PaneOpacity extends InheritedWidget {
+  const PaneOpacity({super.key, required this.opacity, required super.child});
+  final double opacity;
+
+  /// 1 outside a workspace that set one.
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<PaneOpacity>()?.opacity ?? 1;
+
+  /// [color] at the pane opacity.
+  static Color fill(BuildContext context, Color color) {
+    final opacity = of(context);
+    return opacity >= 1 ? color : color.withValues(alpha: color.a * opacity);
+  }
+
+  @override
+  bool updateShouldNotify(PaneOpacity old) => old.opacity != opacity;
+}
+
+/// A desktop tab joins its workspace through two outward lower shoulders.
+/// AppKit mirrors these geometry tokens in SwarmTitlebar.swift.
+class DesktopTabBorder extends ShapeBorder {
+  const DesktopTabBorder({
+    this.radius = grid.AppDesktop.tabRadius,
+    this.shoulder = grid.AppDesktop.tabShoulder,
+    this.side = BorderSide.none,
+  });
   final double radius;
+  final double shoulder;
+  final BorderSide side;
 
   @override
   EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
 
   @override
-  ShapeBorder scale(double t) => TerminalTabBorder(radius: radius * t);
+  ShapeBorder scale(double t) => DesktopTabBorder(
+    radius: radius * t,
+    shoulder: shoulder * t,
+    side: side.scale(t),
+  );
 
   @override
   Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
-    final r = radius.clamp(0.0, rect.shortestSide / 4);
+    final r = radius.clamp(0.0, rect.shortestSide / 2);
+    final s = shoulder.clamp(0.0, rect.shortestSide / 2);
     final c = r * .5522847498;
-    final left = rect.left + r, right = rect.right - r;
+    final sc = s * .5522847498;
+    final left = rect.left + s, right = rect.right - s;
     final top = rect.top, bottom = rect.bottom;
     return Path()
       ..moveTo(rect.left, bottom)
-      ..cubicTo(rect.left + c, bottom, left, bottom - r + c, left, bottom - r)
+      ..cubicTo(rect.left + sc, bottom, left, bottom - s + sc, left, bottom - s)
       ..lineTo(left, top + r)
       ..cubicTo(left, top + r - c, left + r - c, top, left + r, top)
       ..lineTo(right - r, top)
       ..cubicTo(right - r + c, top, right, top + r - c, right, top + r)
-      ..lineTo(right, bottom - r)
+      ..lineTo(right, bottom - s)
       ..cubicTo(
         right,
-        bottom - r + c,
-        rect.right - c,
+        bottom - s + sc,
+        rect.right - sc,
         bottom,
         rect.right,
         bottom,
@@ -58,7 +91,13 @@ class TerminalTabBorder extends ShapeBorder {
       getOuterPath(rect, textDirection: textDirection);
 
   @override
-  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    if (side.style == BorderStyle.none) return;
+    canvas.drawPath(
+      getOuterPath(rect.deflate(side.width / 2), textDirection: textDirection),
+      side.toPaint(),
+    );
+  }
 }
 
 /// Box ink at [alpha] for rims, hairlines and washes: white on a dark palette,
@@ -306,9 +345,7 @@ class BoxHintStrip extends StatelessWidget {
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: boxInk(.08)),
-        ),
+        border: Border(top: BorderSide(color: boxInk(.08))),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

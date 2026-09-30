@@ -159,6 +159,11 @@ jobs:
           HN_PANE_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
           HN_PANE_UI_PORT: 19783
         run: python3 -u tests/pane-ui.py
+      - name: New Harness popup, draft and launch recovery
+        env:
+          HN_NEW_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+        run: python3 -u tests/new-harness.py
+
       - name: Layout keys and shared desk synchronization
         env:
           HN_LAYOUT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui

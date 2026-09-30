@@ -56,6 +56,8 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
+  /** Context for a verified process-owned agent, only on its real user turn. */
+  onPromptContext?: (agentId: string) => string | null
   onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
@@ -553,7 +555,9 @@ export function startHookServer(
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        json(200, { ok: true })
+        const context = body.hookEvent === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex')
+          ? handlers.onPromptContext?.(result.entry.agentId) : null
+        json(200, { ok: true, ...(context ? { additionalContext: context } : {}) })
         return
       }
 

@@ -93,13 +93,12 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // has it] when another window has the pane to type in, and its project and branch
         // where there is room. Git context stays here; the status bar keeps the location cue.
         m.insert("pane-border-format".into(), " #{pane_heading}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
-        // Session and window navigation on the left; connection, quota, fleet, location and
-        // clock on the right. Always show the desk's local machine/session label so
-        // changing the focused machine or window does not shift the tab list.
+        // Window navigation on the left; connection, quota, fleet, machine and clock on the
+        // right. The quoted name is this computer's name in Harness, independent of focus.
         // One cell at each outer edge aligns status text with the pane surfaces.
         // Two spaces separate the window list from the information on the right.
-        m.insert("status-left".into(), " #{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} ".into());
-        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?pane_machine,#{=/12/…:pane_machine},#{host_short}}#{?pane_current_path,:#{=/18/…:#{b:pane_current_path}},#{?pane_project,:#{=/18/…:pane_project},}}  %H:%M ".into());
+        m.insert("status-left".into(), " #{?client_prefix,#[bold]›#[nobold] ,}".into());
+        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}\"#{=/21/…:local_machine}\"  %H:%M ".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other
@@ -117,9 +116,9 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // so a terminal tab says what is in it (the status changing in the title as it works).
         m.insert("set-titles".into(), "on".into());
         m.insert("set-titles-string".into(), "#{?fleet_needs,?#{fleet_needs} ,}#{pane_title}#{?pane_agent_state, (#{pane_agent_state}),} — Harness".into());
-        // A session is a machine, named as the machine is (tmux's are 0, 1, …): room for its name.
+        // Leave room for custom status-left formats as well as the prefix cue.
         m.insert("status-left-length".into(), "24".into());
-        // Room for both subscription allowances without cutting off location and time.
+        // Room for both subscription allowances without cutting off machine name and time.
         m.insert("status-right-length".into(), "96".into());
         // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
         m.insert("history-limit".into(), "10000".into());
@@ -667,9 +666,9 @@ mod tests {
     #[test]
     fn every_default_is_in_the_table() {
         for name in defaults().keys() { assert!(find(name).is_some(), "{name}") }
-        // tmux's own default, in the fixture; hn's status-left adds emphasis and a prefix cue.
+        // tmux's own default stays in the fixture; hn leaves only padding and a prefix cue.
         assert!(include_str!("../../tests/fixtures/tmux-3.5a-options.txt").contains("session status-left \"[#{session_name}] \""));
-        assert_eq!(defaults().get("status-left").map(String::as_str), Some(" #{?client_prefix,#[bold],}[#{session_name}]#{?client_prefix, ›#[nobold],} "));
+        assert_eq!(defaults().get("status-left").map(String::as_str), Some(" #{?client_prefix,#[bold]›#[nobold] ,}"));
         assert_eq!(defaults().get("status-interval").map(String::as_str), Some("15"));
     }
 

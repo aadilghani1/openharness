@@ -61,6 +61,10 @@ void main() {
     expect(find.byKey(const ValueKey('web-menu:web.sign_out')), findsOneWidget);
     // An empty tab has no pane to split, zoom or close.
     expect(find.byKey(const ValueKey('web-menu:pane.close')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('web-menu:pane.split_right')),
+      findsNothing,
+    );
     await tester.tap(find.byKey(const ValueKey('web-menu:app.settings')));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(SettingsScreen), findsOneWidget);
@@ -104,6 +108,47 @@ void main() {
           .scopePrefix,
       '@',
     );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+  });
+
+  testWidgets('View on a machine picks it and closes Machines', (tester) async {
+    final app = await _mount(tester, connectedMachine: 'remote-box');
+    await _openMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('web-menu:machines.list')));
+    await tester.pump(const Duration(milliseconds: 400));
+    final search = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search;
+    final index = search.rows.indexWhere(
+      (row) => row.isMachine && row.machineId == 'remote-box',
+    );
+    search.move(index - search.cursor);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(
+      find.byKey(const ValueKey('resource-action:picker.resource_view')),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(SwarmSearchResults), findsNothing);
+    expect(app.selectedMachineId, 'remote-box');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+  });
+
+  testWidgets('an empty new tab closes from its close mark', (tester) async {
+    final app = await _mount(tester);
+    app.newSwarm(newTabPage: true);
+    await tester.pump(const Duration(milliseconds: 200));
+    final tabs = app.swarms.length;
+    final empty = app.activeSwarmId;
+    expect(app.activeSwarm.panes, isEmpty);
+    await tester.tap(find.byKey(ValueKey('tab-close:$empty')));
+    // Past the tab's double-tap-to-rename window, which holds the tap.
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(app.swarms, hasLength(tabs - 1));
+    expect(app.swarms.any((tab) => tab.id == empty), isFalse);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();

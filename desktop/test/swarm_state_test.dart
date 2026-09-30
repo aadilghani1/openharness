@@ -131,6 +131,7 @@ void main() {
 
   for (final legacy in [
     'New swarm',
+    'New Tab',
     'New tab',
     'New Tab',
     'New Harness',
@@ -157,7 +158,7 @@ void main() {
         final restored = createApp(store: store);
         addTearDown(restored.dispose);
         await restored.restorePaneLayoutForTest();
-        expect(restored.activeSwarm.name, 'New Swarm');
+        expect(restored.activeSwarm.name, 'New Tab');
         await restored.addAgentToSwarm('m', 'a0');
         expect(restored.activeSwarm.name, 'Agent 0');
       },
