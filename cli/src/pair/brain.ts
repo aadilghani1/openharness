@@ -88,7 +88,7 @@ export interface PairBrainDeps {
    */
   shown?: ShownLines
   /** `daemon_talk`: the person's words to the pair harness (pair/pairHarness.ts), which starts or wakes. */
-  talk?: (text: string) => Promise<Record<string, unknown>>
+  talk?: (text: string, companionUid?: string) => Promise<Record<string, unknown>>
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
   relayLimits?: Array<{ windowMs: number; max: number }>
   /**
@@ -515,7 +515,8 @@ export class PairBrain {
       reply({ ok: false, error: 'RATE_LIMITED', detail: 'Six talks a minute, sixty an hour.', retryAfterMs: this.talkLimit.retryAfter(connId) })
       return
     }
-    const result = await this.deps.talk(text).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+    const uid = str(payload.companionUid, 64)
+    const result = await (uid ? this.deps.talk(text, uid) : this.deps.talk(text)).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
     reply(result)
   }
 

@@ -48,11 +48,70 @@ function world(over: Partial<PairHarnessDeps> = {}) {
 }
 
 describe('the instructions and the package', () => {
+  it('never types into first-run setup and starts fresh if no conversation was created', async () => {
+    const w = world()
+    await w.harness.talk('first words')
+    w.rows[0]!.hasConversation = false
+    expect(await w.harness.talk('are you there?')).toMatchObject({ error: 'SETUP_REQUIRED', agentId: 'pair-1' })
+    expect(w.deps.send).not.toHaveBeenCalled()
+    w.rows[0]!.status = 'stopped'
+    expect(await w.harness.talk('try again')).toMatchObject({ started: true, agentId: 'pair-2' })
+    expect(w.deps.resume).not.toHaveBeenCalled()
+    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'try again' }))
+    w.rows[1]!.hasConversation = true
+    expect(await w.harness.talk('now we can talk')).toMatchObject({ sent: true })
+    expect(w.deps.send).toHaveBeenLastCalledWith('pair-2', 'now we can talk')
+    await w.harness.off()
+  })
+
+  it('keeps each individual conversation and workspace separate and resumes the same friend', async () => {
+    let uid = 'tim-one'
+    const w = world({ pairedUid: () => uid })
+    const first = await w.harness.talk('hello')
+    expect(first).toMatchObject({ started: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: join(w.deps.workspace, 'tim-one') }))
+    uid = 'tim-two'
+    expect(await w.harness.talk('a different little Tim')).toMatchObject({ started: true, agentId: 'pair-2' })
+    expect(w.rows.find(r => r.agentId === 'pair-1')?.status).toBe('stopped')
+    uid = 'tim-one'
+    expect(await w.harness.talk('remember me?')).toMatchObject({ resumed: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(2)
+    expect(w.deps.send).toHaveBeenLastCalledWith('pair-1', 'remember me?')
+    expect(w.harness.agentId()).toBe('pair-1')
+    await w.harness.off()
+    const restarted = new PairHarness(w.deps)
+    expect(await restarted.talk('and after a restart?')).toMatchObject({ resumed: true, agentId: 'pair-1' })
+    expect(w.deps.create).toHaveBeenCalledTimes(2)
+    await restarted.off()
+  })
+
+  it('never redirects a queued or stale-window message to a newly selected companion', async () => {
+    let uid = 'tim-one'
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const w = world({ pairedUid: () => uid, engine: async () => { await ready; return 'claude' } })
+    expect(await w.harness.talk('for a different friend', 'tim-other')).toMatchObject({ error: 'STALE_COMPANION' })
+    const pending = w.harness.talk('for Tim', 'tim-one')
+    await Promise.resolve()
+    uid = 'gnu-one'
+    release()
+    expect(await pending).toMatchObject({ error: 'STALE_COMPANION' })
+    expect(w.deps.create).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
+  })
+
+  it('pins the reply identity in the generated DSH and keeps memory claims grounded', () => {
+    const text = pairPackage({ daemonId: 'tim', uid: 'tim-one', engine: 'claude', mcpCommand: ['h'], tokenFile: '/t' })['AGENTS.md']!.content
+    expect(text).toContain('companionUid for the say tool is "tim-one"')
+    expect(text).toContain('Deliver EVERY conversational answer')
+    expect(text).toContain('harness pair lessons list --json')
+    expect(text).toContain('chatting never grants wider autonomy')
+  })
   it('still names the daemon — and invents nothing — for one the roster does not know', () => {
     const text = pairInstructions('ghost')
     expect(text).toContain('You are **ghost**')
     expect(text).not.toMatch(/Family:|Your first words were/)
-    expect(text).toMatch(/\{summary\}` a brief\):\n\n\nTalk the way/)   // no lines to quote
+    expect(text).toMatch(/\{summary\}` a brief\):\n\n\nKeep your small/)   // no lines to quote
     expect(text).toContain('## The floor (never, at any level)')
   })
 

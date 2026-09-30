@@ -1742,7 +1742,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
   const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
   /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
-  let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
+  let pairTalk: (text: string, companionUid?: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
@@ -4468,7 +4468,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       journal: (payload) => pairSensor.journal(payload),
       harnesses: () => pairSensor.snapshot().harnesses,
     },
-    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon(),
+      pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null },
     autonomy: () => pairAutonomy(),
     tokenMatches: (candidate) => pairToken.matches(candidate),
     voice: pairVoice,
@@ -4486,6 +4487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
+    pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4503,8 +4505,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
@@ -4528,7 +4530,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     now: Date.now,
   })
-  pairTalk = (text) => pairHarness.talk(text)
+  pairTalk = (text, uid) => pairHarness.talk(text, uid)
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
   // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
@@ -4609,7 +4611,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
-    talk: (text) => pairTalk(text),
+    talk: (text, uid) => pairTalk(text, uid),
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's

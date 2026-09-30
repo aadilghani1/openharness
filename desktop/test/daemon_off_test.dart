@@ -818,7 +818,8 @@ void main() {
     final native = jsonEncode(nativeKeymapSnapshot(AppKeymap()));
     expect(native, contains('app.daemon_talk'));
     expect(await talkChord(tester), isTrue);
-    expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
+    expect(app.activeSwarm.isCompanions, isTrue);
     await unmount(tester);
     expect(daemonCommandsActive.value, isFalse, reason: 'the window is gone');
   });

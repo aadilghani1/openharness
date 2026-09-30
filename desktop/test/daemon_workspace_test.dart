@@ -104,6 +104,23 @@ void main() {
 
   final slot = find.byKey(const ValueKey('daemon-slot'));
 
+  // Advanced activity, consent, and lesson approvals keep their guarded quick
+  // controls. The top-bar click now opens the companion's full viewer first.
+  Future<void> openControls(
+    WidgetTester tester, {
+    String section = 'now',
+  }) async {
+    await tester.tap(slot);
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('companion-settings')));
+    await tester.pump();
+    final tab = find.byKey(ValueKey('daemon-tab-$section'));
+    if (tab.evaluate().isNotEmpty) {
+      await tester.tap(tab);
+      await tester.pump();
+    }
+  }
+
   /// The semantic pose driving the illustrated slot. Pixel assets have their own render tests.
   String glyph(WidgetTester tester) => tester
       .widget<DaemonSlotButton>(find.byType(DaemonSlotButton))
@@ -325,8 +342,7 @@ void main() {
     await zoo.flush();
     expect(remote.zoo.consent!.watching, isFalse);
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester);
     expect(
       tester
           .widget<Text>(find.byKey(const ValueKey('daemon-panel-consent')))
@@ -360,8 +376,7 @@ void main() {
       'computer is never needed', (tester) async {
     await mount(tester);
     await tester.pump();
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester);
     expect(find.text('all of it can happen on this computer.'), findsOneWidget);
     double top(String key) =>
         tester.getTopLeft(find.byKey(ValueKey('daemon-habit-$key'))).dy;
@@ -505,8 +520,7 @@ void main() {
     );
     await tester.pump();
     expect(glyph(tester), '(o o)');
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester);
     expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
     // Four tabs, tmux's window list; now is first. 2 is the zoo.
     expect(find.text('1 Now'), findsOneWidget);
@@ -571,8 +585,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
     // It opens again where it was left.
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester, section: 'settings');
     expect(find.text('4 Settings'), findsOneWidget);
     await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
@@ -580,7 +593,9 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('command search opens the panel as "Daemon"', (tester) async {
+  testWidgets('command search opens the companion home as "Daemon"', (
+    tester,
+  ) async {
     await mount(tester);
     await tester.pump();
     await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
@@ -592,13 +607,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
-    expect(find.text('Your first egg'), findsOneWidget);
-    expect(find.byKey(const ValueKey('daemon-habit-turn')), findsOneWidget);
-    await skipName(tester);
-    await key(tester, LogicalKeyboardKey.escape);
+    expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
+    expect(app.activeSwarm.isCompanions, isTrue);
+    expect(find.text('Someone little\nis on their way.'), findsOneWidget);
+    await app.closeSwarm(app.activeSwarmId);
     await tester.pump();
-    expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
+    expect(find.byKey(const ValueKey('companion-home')), findsNothing);
     await unmount(tester);
   });
 
@@ -694,8 +708,7 @@ void main() {
     app.notifyListeners();
     await tester.pump();
     expect(glyph(tester), '(o o)', reason: 'not x eyes');
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester);
     expect(
       find.text('Test host is asleep or unreachable. its harnesses wait.'),
       findsOneWidget,
@@ -850,7 +863,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
     // The switches are on the settings tab: 4.
-    await key(tester, LogicalKeyboardKey.digit4);
+    await tester.tap(find.byKey(const ValueKey('companion-settings')));
     await tester.pump();
     expect(find.text('4 Settings'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('daemon-quiet')));
@@ -939,8 +952,7 @@ void main() {
       findsOneWidget,
       reason: 'additional eggs wait in the panel, without a bar count',
     );
-    await tester.tap(slot);
-    await tester.pump();
+    await openControls(tester);
     await tester.tap(find.byKey(const ValueKey('daemon-egg:turn')));
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsOneWidget);
@@ -1088,8 +1100,7 @@ void main() {
     };
 
     Future<void> openPanel(WidgetTester tester) async {
-      await tester.tap(slot);
-      await tester.pump();
+      await openControls(tester);
       expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
     }
 
@@ -1114,7 +1125,7 @@ void main() {
       // ⌘⌥T, the keymap's Talk to daemon: the panel, the talk box focused.
       await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true);
       await tester.pump();
-      final input = find.byKey(const ValueKey('daemon-talk-input'));
+      final input = find.byKey(const ValueKey('companion-chat-input'));
       expect(input, findsOneWidget);
       expect(
         tester.widget<TextField>(input).focusNode!.hasFocus,
@@ -1128,9 +1139,9 @@ void main() {
       expect(talk.$2['text'], 'what needs me?');
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
             .data,
-        'waking tim...',
+        'Waking Tim…',
       );
       await frame(tester, 'daemon_talk_result', {
         'requestId': talk.$2['requestId'],
@@ -1140,10 +1151,22 @@ void main() {
       });
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
             .data,
         contains('starting'),
       );
+      // The next send can report first-run setup without typing into its trust screen.
+      await tester.enterText(input, 'are you there?');
+      await tester.testTextInput.receiveAction(TextInputAction.send);
+      await tester.pump();
+      final setupTalk = frames.lastWhere((f) => f.$1 == 'daemon_talk');
+      await frame(tester, 'daemon_talk_result', {
+        'requestId': setupTalk.$2['requestId'],
+        'ok': false,
+        'agentId': 'pair1',
+        'error': 'SETUP_REQUIRED',
+      });
+      expect(find.byKey(const ValueKey('companion-chat-setup')), findsOneWidget);
       // Its answer: a dim line in the status line, and in the talk.
       await frame(tester, 'daemon_say', {
         'id': 'say:1',
@@ -1154,19 +1177,29 @@ void main() {
         'ttlMs': 30000,
       });
       await tester.pump();
-      expect(find.text('<tim> api waits on you, 40m.'), findsOneWidget);
-      expect(find.text('you > what needs me?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('companion-chat-setup')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('companion-chat')),
+          matching: find.text('api waits on you, 40m.'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('what needs me?'), findsOneWidget);
       // Every talk says what it costs.
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-cost')))
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-cost')))
             .data,
         contains('model usage'),
       );
       // The whole conversation: the pair harness's own pane.
-      expect(app.focusedPane!.agentId, 'a3');
-      await tapIn(tester, find.byKey(const ValueKey('daemon-conversation')));
+      expect(app.activeSwarm.isCompanions, isTrue);
+      await tapIn(tester, find.byKey(const ValueKey('companion-conversation')));
       expect(app.focusedPane!.agentId, 'pair1');
+      expect(app.activeSwarm.isUtility, isFalse);
+      expect(app.swarms.singleWhere((s) => s.isCompanions).panes, isEmpty);
+      expect(find.byKey(const ValueKey('companion-home')), findsNothing);
       expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
       await tester.pump(const Duration(seconds: 31));
       await unmount(tester);
@@ -1887,7 +1920,7 @@ void main() {
       await frame(tester, 'daemon_state', state());
       await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true);
       await tester.pump();
-      final input = find.byKey(const ValueKey('daemon-talk-input'));
+      final input = find.byKey(const ValueKey('companion-chat-input'));
       await tester.enterText(input, 'again?');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await tester.pump();
@@ -1902,25 +1935,32 @@ void main() {
             'Each talk is a turn of your pair harness on its engine: it '
             'spends your model usage.',
       });
-      expect(tester.widget<TextField>(input).enabled, isFalse);
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
-            .data,
-        'six talks a minute, sixty an hour. again in 30s.',
+            .widget<IconButton>(
+              find.byKey(const ValueKey('companion-chat-send')),
+            )
+            .onPressed,
+        isNull,
       );
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-cost')))
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
+            .data,
+        'You can send another message in 30 seconds.',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-cost')))
             .data,
         startsWith('Each talk is a turn of your pair harness'),
       );
       await tester.pump(const Duration(seconds: 10));
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
             .data,
-        'six talks a minute, sixty an hour. again in 20s.',
+        'You can send another message in 20 seconds.',
       );
       await tester.pump(const Duration(seconds: 21));
       expect(tester.widget<TextField>(input).enabled, isTrue);

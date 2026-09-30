@@ -11,6 +11,7 @@ import 'terminal_pane.dart';
 /// for their owner. Ties follow pane order, independently of keyboard focus.
 String tabHarnessType(AppNotifier app, Swarm tab) {
   if (tab.isStore) return 'store';
+  if (tab.isCompanions) return 'companions';
   if (tab.isOrchestrator) return 'orchestrator';
   final counts = <String, int>{};
   for (final pane in tab.panes) {
@@ -102,6 +103,8 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
           ? tab.name
           : tab.isStore
           ? 'store'
+          : tab.isCompanions
+          ? 'companions'
           : tab.isOrchestrator
           ? 'orchestrator'
           : candidates[tab.id]!.isEmpty

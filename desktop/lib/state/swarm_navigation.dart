@@ -928,7 +928,7 @@ Future<bool> activateSwarmSearchSelection(
         .where((tab) => tab.id == destinationSwarmId)
         .firstOrNull;
     if (placement == HarnessPlacement.currentTab) {
-      if (target == null || target.isStore || target.isOrchestrator) {
+      if (target == null || target.isUtility || target.isOrchestrator) {
         return false;
       }
       final existing = target.panes.any(

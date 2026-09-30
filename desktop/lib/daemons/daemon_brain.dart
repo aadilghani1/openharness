@@ -30,6 +30,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -579,8 +580,11 @@ class DaemonSay {
     this.detail,
     this.harness,
     this.confirm,
+    this.reply,
+    this.companionUid,
   });
   final String id, line;
+  final String? reply, companionUid;
   final DaemonAbout? about;
   final DaemonSayMood? mood;
   final List<DaemonAction> actions;
@@ -615,6 +619,9 @@ class DaemonSay {
     return DaemonSay(
       id: id,
       line: line.trim(),
+      reply: _opt(raw['reply'])
+          ?.substring(0, _str(raw['reply']).length.clamp(0, 8000)),
+      companionUid: _opt(raw['companionUid']),
       about: DaemonAbout.fromJson(raw['about']),
       mood: mood,
       // The pair talking never carries a key, whatever it sends (BRAIN.md,
@@ -771,7 +778,7 @@ class DaemonBrain extends ChangeNotifier {
   static const deskKey = 'daemons.desk.v1';
 
   /// The talk keeps this many turns for the panel.
-  static const talkKept = 8;
+  static const talkKept = 80;
 
   /// A line's keys arm this long after the window said it drew it: the
   /// daemon's own 400 ms (`pair/shown.ts` `ARM_MS`), and a margin for the
@@ -804,13 +811,20 @@ class DaemonBrain extends ChangeNotifier {
   bool _disposed = false;
 
   String? _talkRequest;
+  bool _talkNeedsSetup = false;
+  Timer? _talkTimer;
   DaemonTalkPhase _talkPhase = DaemonTalkPhase.idle;
   String? _talkError;
   String? _talkCost;
   DateTime? _talkRetryAt;
   Timer? _talkRetryTimer;
   String? _pairAgentId;
+  String? _conversationScope, _companionUid;
+  int _conversationGeneration = 0;
+  bool _historyLoading = false;
+  Future<void> _savingTalk = Future.value();
   final _talk = <DaemonTalkEntry>[];
+  final _heardReplies = <String>{};
 
   /// Whether this harnessd has a brain (it has sent `daemon_state`).
   bool get active => _state != null;
@@ -855,6 +869,79 @@ class DaemonBrain extends ChangeNotifier {
 
   /// The talk so far, oldest first: what you said and what it answered.
   List<DaemonTalkEntry> get talk => List.unmodifiable(_talk);
+  bool get talkNeedsSetup => _talkNeedsSetup;
+
+  /// A different account or individual never inherits the previous chat.
+  void bindConversation(String? scope, String? uid) {
+    if (scope == _conversationScope && uid == _companionUid) return;
+    _conversationScope = scope;
+    _companionUid = uid;
+    final generation = ++_conversationGeneration;
+    _talkRequest = null;
+    _talkTimer?.cancel();
+    _talkTimer = null;
+    _talkPhase = DaemonTalkPhase.idle;
+    _talkNeedsSetup = false;
+    _talkError = null;
+    _pairAgentId = null;
+    _talk.clear();
+    _heardReplies.clear();
+    notifyListeners();
+    final key = _conversationKey;
+    _historyLoading = key != null && storage != null;
+    if (_historyLoading) unawaited(_loadConversation(key!, generation));
+  }
+
+  String? get _conversationKey =>
+      _conversationScope == null || _companionUid == null
+      ? null
+      : 'daemons.chat.v1.${base64Url.encode(utf8.encode(jsonEncode([_conversationScope, _companionUid])))}';
+
+  Future<void> _loadConversation(String key, int generation) async {
+    List<DaemonTalkEntry> saved = const [];
+    try {
+      final encoded = await storage?.read(key);
+      final raw = encoded == null ? null : jsonDecode(encoded);
+      if (raw is List) {
+        saved = [
+          for (final item in raw.take(talkKept))
+            if (item is Map &&
+                item['you'] is bool &&
+                item['text'] is String &&
+                (item['text'] as String).length <= 8000)
+              (you: item['you'] as bool, text: item['text'] as String),
+        ];
+      }
+    } catch (_) {
+      /* A missing or unreadable local history starts empty. */
+    }
+    if (_disposed || generation != _conversationGeneration) return;
+    final arrived = List<DaemonTalkEntry>.of(_talk);
+    _talk
+      ..clear()
+      ..addAll([...saved, ...arrived]);
+    if (_talk.length > talkKept) _talk.removeRange(0, _talk.length - talkKept);
+    _historyLoading = false;
+    if (arrived.isNotEmpty) _saveConversation();
+    notifyListeners();
+  }
+
+  void _saveConversation() {
+    final key = _conversationKey;
+    if (key == null || storage == null || _historyLoading) return;
+    final value = jsonEncode([
+      for (final entry in _talk) {'you': entry.you, 'text': entry.text},
+    ]);
+    _savingTalk = _savingTalk.then((_) async {
+      try {
+        await storage!.write(key, value);
+      } catch (_) {
+        /* Live chat still works. */
+      }
+    });
+  }
+
+  Future<void> flushConversation() => _savingTalk;
 
   /// The level the daemon acts at now (the badge), when harnessd says.
   String? get autonomy => _state?.autonomy;
@@ -951,7 +1038,17 @@ class DaemonBrain extends ChangeNotifier {
       case 'daemon_say':
         final say = DaemonSay.fromJson(payload);
         if (say == null) return;
-        if (say.mood == DaemonSayMood.say) _heard(say.line);
+        if (say.companionUid != null &&
+            _companionUid != null &&
+            say.companionUid != _companionUid) {
+          return;
+        }
+        if (say.mood == DaemonSayMood.say && _heardReplies.add(say.id)) {
+          if (_heardReplies.length > shownKept) {
+            _heardReplies.remove(_heardReplies.first);
+          }
+          _heard(say.fromPair ? say.reply ?? say.line : say.line);
+        }
         _said.add(say);
       case 'daemon_unsay':
         final id = payload['id'];
@@ -1021,7 +1118,13 @@ class DaemonBrain extends ChangeNotifier {
         final requestId = payload['requestId'];
         if (_talkRequest == null || requestId != _talkRequest) return;
         _talkRequest = null;
+        _talkTimer?.cancel();
+        _talkTimer = null;
         _talkCost = _opt(payload['cost']) ?? _talkCost;
+        _talkNeedsSetup =
+            payload['setupRequired'] == true ||
+            payload['error'] == 'SETUP_REQUIRED';
+        _pairAgentId = _opt(payload['agentId']) ?? _pairAgentId;
         final retry = payload['retryAfterMs'];
         if (retry is num && retry > 0) _holdTalk(retry.toInt());
         if (payload['ok'] == true) {
@@ -1179,14 +1282,32 @@ class DaemonBrain extends ChangeNotifier {
   /// while harnessd asked to wait ([talkWait]).
   bool talkTo(String text) {
     final words = text.trim();
-    if (_disposed || words.isEmpty || talkWait != null) return false;
+    if (_disposed ||
+        words.isEmpty ||
+        talkWait != null ||
+        _talkRequest != null) {
+      return false;
+    }
     final requestId = _id(12);
-    final sent = send('daemon_talk', {'requestId': requestId, 'text': words});
+    final sent = send('daemon_talk', {
+      'requestId': requestId,
+      'text': words,
+      if (_companionUid != null) 'companionUid': _companionUid,
+    });
     _remember((you: true, text: words));
     if (sent) {
       _talkRequest = requestId;
       _talkPhase = DaemonTalkPhase.waking;
+      _talkNeedsSetup = false;
       _talkError = null;
+      _talkTimer = Timer(const Duration(seconds: 45), () {
+        if (_disposed || _talkRequest != requestId) return;
+        _talkRequest = null;
+        _talkTimer = null;
+        _talkPhase = DaemonTalkPhase.failed;
+        _talkError = 'The companion is taking longer to connect. Open the full conversation to check before sending again.';
+        notifyListeners();
+      });
     } else {
       _talkRequest = null;
       _talkPhase = DaemonTalkPhase.failed;
@@ -1197,9 +1318,12 @@ class DaemonBrain extends ChangeNotifier {
   }
 
   void _heard(String line) {
+    final completedSetup = _talkNeedsSetup;
+    _talkNeedsSetup = false;
     _remember((you: false, text: line));
-    if (_talkPhase != DaemonTalkPhase.failed) {
+    if (_talkPhase != DaemonTalkPhase.failed || completedSetup) {
       _talkPhase = DaemonTalkPhase.idle;
+      _talkError = null;
     }
     notifyListeners();
   }
@@ -1207,6 +1331,7 @@ class DaemonBrain extends ChangeNotifier {
   void _remember(DaemonTalkEntry entry) {
     _talk.add(entry);
     if (_talk.length > talkKept) _talk.removeAt(0);
+    _saveConversation();
   }
 
   /// Whether you are at this window, and for how long you were away, with the
@@ -1277,6 +1402,14 @@ class DaemonBrain extends ChangeNotifier {
 
   /// A new account or harnessd: nothing heard so far still holds.
   void reset() {
+    _talkNeedsSetup = false;
+    _conversationGeneration++;
+    _conversationScope = null;
+    _companionUid = null;
+    _historyLoading = false;
+    _talkTimer?.cancel();
+    _talkTimer = null;
+    _heardReplies.clear();
     _state = null;
     _brief = null;
     _pendingActs.clear();
@@ -1305,6 +1438,7 @@ class DaemonBrain extends ChangeNotifier {
 
   @override
   void dispose() {
+    _talkTimer?.cancel();
     _disposed = true;
     for (final waiting in _requests.values) {
       if (!waiting.isCompleted) {

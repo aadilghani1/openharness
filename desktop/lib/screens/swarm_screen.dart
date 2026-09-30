@@ -131,6 +131,7 @@ import '../daemons/zoo.dart';
 import '../daemons/zoo_controller.dart';
 import '../widgets/daemon_hatch.dart';
 import '../widgets/daemon_panel.dart';
+import '../companions/companion_home.dart';
 import '../widgets/daemon_slot.dart';
 import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
@@ -334,6 +335,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   DaemonBrief? _lastBrief;
   StreamSubscription<int?>? _zooPushes;
   OverlayEntry? _daemonOverlay;
+  int _companionTalkRequest = 0;
   OverlayEntry? _hatchOverlay;
   OverlayEntry? _daemonHintOverlay;
   OverlayEntry? _daemonPreview;
@@ -2538,7 +2540,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // the empty starter tab (or a fresh one), the way New Tab does.
     placement ??= search?.placement;
     if (swarmId == null &&
-        (app.activeSwarm.isStore || app.activeSwarm.isOrchestrator)) {
+        (app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator)) {
       placement = HarnessPlacement.newTab;
     }
     final target = swarmId ?? search?.targetId ?? app.activeSwarmId;
@@ -3087,7 +3089,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// the first project any tile in this tab has, else the machine's home —
   /// which is what the daemon opens when no folder is named.
   Future<void> _newTerminal() async {
-    if (app.activeSwarm.isStore) app.newSwarm();
+    if (app.activeSwarm.isUtility) app.newSwarm();
     final target = app.activeSwarmId;
     final focused = app.focusedPane;
     final machine = focused == null
@@ -3554,11 +3556,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// one a talk reached, else the one this machine lists.
   ({String machineId, String agentId})? get _pairHarness {
     final local = app.localMachineState;
-    if (local == null) return null;
+    final uid = _zoo.paired?.uid;
+    if (local == null || uid == null) return null;
     final machineId = local.machine.machineId;
     final agentId =
         _brain.pairAgentId ??
-        local.agents.where((a) => a.dsh == 'autonomous/pair').firstOrNull?.id;
+        local.agents
+            .where(
+              (a) =>
+                  a.dsh == 'autonomous/pair' &&
+                  (a.project?.cwd.replaceAll('\\', '/').endsWith('/$uid') ??
+                      false),
+            )
+            .firstOrNull
+            ?.id;
     return agentId == null ? null : (machineId: machineId, agentId: agentId);
   }
 
@@ -3588,16 +3599,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// "Talk to daemon": the panel, with the talk box ready.
   void _talkToDaemon() {
-    if (!_zoo.loaded) return;
-    if (_daemonOverlay != null) _closeDaemon(restoreFocus: false);
-    if (!_brain.paired) {
-      _face.sayNote(
-        _brain.active
-            ? 'pair a daemon first: its panel has [ pair ].'
-            : 'harnessd here cannot talk yet. update it.',
-      );
-    }
-    _toggleDaemon(talk: true);
+    _openCompanions(talk: true);
   }
 
   // ── idle: away at the window ───────────────────────────────────────────────
@@ -3764,8 +3766,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// away, and (for a guest, whose zoo is local) which daemon it pairs with.
   Map<String, dynamic>? get _guestCompanion {
     final paired = _zoo.paired;
-    if (!app.isGuest || paired == null || !IllustratedArt.supports(paired.id))
+    if (!app.isGuest || paired == null || !IllustratedArt.supports(paired.id)) {
       return null;
+    }
     return {
       'id': paired.id,
       'uid': paired.uid,
@@ -3845,6 +3848,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _zooChanged() {
     if (!mounted) return;
+    _brain.bindConversation(_zoo.scope, _zoo.paired?.uid);
     if (!_zoo.loaded || _lastZooScope != _zoo.scope) {
       _closeDaemonHint();
       _closeDaemon(restoreFocus: false);
@@ -4137,8 +4141,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return true;
   }
 
-  /// A click on the status slot: a ready egg hatches; otherwise the daemon is
-  /// booped and its panel opens (or closes).
+  /// The companion's home, with its illustrated viewer and pair DSH chat.
+  /// Ready first eggs retain their direct hatch gesture.
   void _activateDaemon() {
     _closeDaemonPreview();
     _closeDaemonHint();
@@ -4153,7 +4157,35 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _hatch(egg);
       return;
     }
-    if (_daemonOverlay == null) _face.boop();
+    _face.boop();
+    _openCompanions();
+  }
+
+  void _openCompanions({bool talk = false}) {
+    if (!_zoo.loaded ||
+        !_creatureEnabled ||
+        _hatchOverlay != null ||
+        _newHarness?.requestDismiss() == false) {
+      return;
+    }
+    _closeDaemon(restoreFocus: false);
+    _closeDaemonHint();
+    _closeDaemonPreview();
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    if (talk) _companionTalkRequest++;
+    app.openCompanions();
+    _face.look();
+    _face.seen();
+    setState(() {});
+  }
+
+  void _openCompanionControls(String section) {
+    if (_daemonOverlay != null) _closeDaemon(restoreFocus: false);
+    _daemonSettings.tab = section;
     _toggleDaemon();
   }
 
@@ -4711,7 +4743,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       placement:
           placement ??
           (adding && split == null
-              ? (app.activeSwarm.isStore || app.activeSwarm.isOrchestrator
+              ? (app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator
                     ? HarnessPlacement.newTab
                     : HarnessPlacement.currentTab)
               : null),
@@ -5403,7 +5435,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _addAgent({String query = '#'}) async {
-    if ((app.activeSwarm.isStore || app.activeSwarm.isOrchestrator) &&
+    if ((app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator) &&
         !_newTab()) {
       return;
     }
@@ -5708,7 +5740,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'app.customize': () => unawaited(_customize()),
     'app.add_phone': () => unawaited(_addPhone()),
     'app.store': _openStore,
-    'app.daemon': _toggleDaemon,
+    'app.daemon': _openCompanions,
     'app.daemon_talk': _talkToDaemon,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
@@ -6234,11 +6266,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           Offstage(
                             key: const ValueKey('workspace-canvas'),
                             offstage:
-                                app.activeSwarm.isStore ||
+                                app.activeSwarm.isUtility ||
                                 app.activeSwarm.isOrchestrator,
                             child: ExcludeFocus(
                               excluding:
-                                  app.activeSwarm.isStore ||
+                                  app.activeSwarm.isUtility ||
                                   app.activeSwarm.isOrchestrator,
                               child: Padding(
                                 padding: app.panes.isEmpty
@@ -6261,7 +6293,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           soloFocused: _compact(context),
                                           empty:
                                               app.panes.isEmpty &&
-                                                  !app.activeSwarm.isStore &&
+                                                  !app.activeSwarm.isUtility &&
                                                   !app
                                                       .activeSwarm
                                                       .isOrchestrator
@@ -6365,6 +6397,45 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               notifier: app,
                               recentHarnesses: _navigation.recent,
                               source: 'tab',
+                            ),
+                          if (_creatureEnabled &&
+                              _zoo.loaded &&
+                              app.swarms.any((s) => s.isCompanions))
+                            Offstage(
+                              offstage: !app.activeSwarm.isCompanions,
+                              child: ExcludeFocus(
+                                excluding: !app.activeSwarm.isCompanions,
+                                child: TickerMode(
+                                  enabled: app.activeSwarm.isCompanions,
+                                  child: CompanionHome(
+                                    key: ValueKey(
+                                      'companion-home:${_zoo.scope}',
+                                    ),
+                                    face: _face,
+                                    brain: _brain,
+                                    onHatch: _hatch,
+                                    onOpenControls: _openCompanionControls,
+                                    onOpenConversation: _zoo.isPreview
+                                        ? null
+                                        : _openConversation,
+                                    canOpenConversation: () =>
+                                        _pairHarness != null,
+                                    dial: app.dial,
+                                    onDeviceSettings: app.setDeviceSettings,
+                                    focusRequest: _companionTalkRequest,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (app.activeSwarm.isCompanions &&
+                              (!_creatureEnabled || !_zoo.loaded))
+                            Center(
+                              child: Text(
+                                _creatureEnabled &&
+                                        _zoo.daemons == DaemonsSwitch.unknown
+                                    ? 'Opening your collection…'
+                                    : 'Companions is available in Settings → Experimental.',
+                              ),
                             ),
                           if (_hasCommandBar && _commandBarOpen)
                             _commandPalette(),

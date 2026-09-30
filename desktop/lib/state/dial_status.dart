@@ -29,6 +29,8 @@ class DeviceSettings {
     required this.voiceLang,
     this.followCompanion,
     this.companion,
+    this.companionProtocol,
+    this.companionDetails,
   });
 
   final int brightness;
@@ -40,6 +42,8 @@ class DeviceSettings {
   final String voiceLang;
   final bool? followCompanion;
   final String? companion;
+  final int? companionProtocol;
+  final DialCompanion? companionDetails;
 
   /// Read with `is`, never `as`, and refused whole when a field is missing: a default here is a value
   /// this window invented, and the pane would then offer a setting the device does not have.
@@ -84,6 +88,55 @@ class DeviceSettings {
       companion: value['companion'] is String
           ? value['companion'] as String
           : null,
+      companionProtocol: value['companionProtocol'] == 2 ? 2 : null,
+      companionDetails: value['companionProtocol'] == 2
+          ? DialCompanion.fromJson(value['companionDetails'])
+          : null,
+    );
+  }
+}
+
+/// The identity acknowledged by the physical screen, not an optimistic choice.
+class DialCompanion {
+  const DialCompanion({
+    required this.id,
+    required this.uid,
+    required this.version,
+    required this.seed,
+    required this.colour,
+    required this.mark,
+  });
+
+  final String id, uid, version;
+  final int seed, colour, mark;
+
+  static DialCompanion? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final id = value['id'], uid = value['uid'], version = value['version'];
+    final seed = value['seed'], colour = value['colour'], mark = value['mark'];
+    if (id is! String ||
+        uid is! String ||
+        uid.isEmpty ||
+        uid.length > 64 ||
+        !const ['0.1', '1.0', '2.0'].contains(version) ||
+        seed is! int ||
+        seed < 0 ||
+        seed > 0xffffffff ||
+        colour is! int ||
+        colour < -1 ||
+        colour > 5 ||
+        mark is! int ||
+        mark < 0 ||
+        mark > 4) {
+      return null;
+    }
+    return DialCompanion(
+      id: id,
+      uid: uid,
+      version: version as String,
+      seed: seed,
+      colour: colour,
+      mark: mark,
     );
   }
 }
