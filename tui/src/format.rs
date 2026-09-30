@@ -1322,9 +1322,12 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let mut parts = Vec::new();
             let n = app.fleet.count(NeedsInput);
             if n > 0 { parts.push(format!("#[bold]?{n}#[nobold]")) }
-            for (state, glyph) in [(Failed, "✗"), (Done, "✓"), (Working, crate::theme::spinner(app.tick))] {
+            for state in [Failed, Done, Working] {
                 let n = app.fleet.count(state);
-                if n > 0 { parts.push(format!("{glyph}{n}")) }
+                if n > 0 {
+                    let glyph = match state { Failed => "✗", Done => "✓", _ => crate::theme::spinner(app.tick) };
+                    parts.push(format!("{glyph}{n}"));
+                }
             }
             parts.join(" ")
         }
@@ -1685,6 +1688,21 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fleet_only_requests_animation_while_working_and_motion_is_enabled() {
+        let mut app = status_fixture(1, 1);
+        for working in [false, true, false] {
+            app.fleet.agents.values_mut().next().unwrap().working = working;
+            crate::theme::begin_animation_frame(true);
+            super::expand(&app, "#{fleet}/#{fleet}", 0, Some(1), false);
+            assert_eq!(crate::theme::needs_animation_frame(), working);
+        }
+        app.fleet.agents.values_mut().next().unwrap().working = true;
+        crate::theme::begin_animation_frame(false);
+        assert_eq!(super::expand(&app, "#{fleet}", 0, Some(1), false), "⠋1");
+        assert!(!crate::theme::needs_animation_frame());
+    }
+
     fn status_fixture(windows: usize, agents: usize) -> crate::app::App {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(19789, sink, (200, 60));

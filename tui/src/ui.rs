@@ -2,7 +2,7 @@
 //! The tmux split tree remains intact beneath presentation insets. Classic and tmux looks
 //! retain line borders; the search keeps fzf's layout and colours with a preview window.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::TermMode;
@@ -24,6 +24,123 @@ use crate::picker::Picker;
 use crate::theme::{self, bold, fg, engine_mark, state_mark};
 use crate::input::{home_rows, HomeRow};
 
+/// Time-dependent content asks for its next repaint; a static surface asks for
+/// none. Hints and messages are deadlines, independent of reduced motion.
+pub fn next_repaint(app: &App, frame_started: Instant) -> Option<Instant> {
+    // A deadline crossed during rendering still needs one more frame. The next
+    // draw starts after it, so expired messages cannot create a repaint loop.
+    let now = frame_started;
+    let mut next = theme::needs_animation_frame().then(|| now + Duration::from_millis(100));
+    let mut deadline = |at: Instant, ms: u64| {
+        if let Some(at) = at.checked_add(Duration::from_millis(ms)).filter(|at| *at > now) {
+            next = Some(next.map_or(at, |old| old.min(at)));
+        }
+    };
+    if let Some((_, _, at)) = app.toast.as_ref().filter(|_| app.toast_ms() != u64::MAX) {
+        deadline(*at, app.toast_ms());
+    }
+    let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
+    if app.prefix && hints {
+        if let Some(at) = app.prefix_at { deadline(at, app.keymap.hint_ms); }
+    }
+    next
+}
+
+#[cfg(test)]
+mod repaint_tests {
+    use super::*;
+
+    fn app() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.started = Instant::now() - Duration::from_secs(4);
+        app
+    }
+
+    fn render(app: &mut App) {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        term.draw(|frame| draw(frame, app)).unwrap();
+    }
+
+    #[test]
+    fn rendered_formats_start_and_stop_motion_and_terminal_titles_count_too() {
+        let mut app = app();
+        render(&mut app);
+        assert!(next_repaint(&app, Instant::now()).is_none(), "an empty, settled home is static");
+        app.options.global_session.insert("status-right".into(), "#{spinner}".into());
+        render(&mut app);
+        assert!(next_repaint(&app, Instant::now()).is_some());
+        app.options.global_session.insert("@hn-animations".into(), "off".into());
+        render(&mut app);
+        assert!(next_repaint(&app, Instant::now()).is_none());
+        app.options.global_session.insert("@hn-animations".into(), "on".into());
+        app.options.global_session.insert("status".into(), "off".into());
+        render(&mut app);
+        assert!(next_repaint(&app, Instant::now()).is_none(), "a hidden status must not keep its spinner alive");
+        app.options.global_session.insert("set-titles-string".into(), "#{spinner}".into());
+        assert!(app.window_title().is_some());
+        assert!(next_repaint(&app, Instant::now()).is_some(), "terminal titles are expanded after the screen");
+        app.options.global_session.insert("set-titles-string".into(), "Harness".into());
+        render(&mut app);
+        app.window_title();
+        assert!(next_repaint(&app, Instant::now()).is_none());
+    }
+
+    #[test]
+    fn timed_notices_and_hints_keep_their_deadlines_without_motion() {
+        let mut app = app();
+        theme::begin_animation_frame(false);
+        let at = Instant::now();
+        app.toast = Some(("notice".into(), Color::Yellow, at));
+        app.display_ms = 2500;
+        app.prefix = true;
+        app.prefix_at = Some(at);
+        app.keymap.hint_ms = 1000;
+        assert_eq!(next_repaint(&app, Instant::now()), Some(at + Duration::from_millis(1000)));
+        app.prefix = false;
+        assert_eq!(next_repaint(&app, Instant::now()), Some(at + Duration::from_millis(2500)));
+        app.toast_exact = Some(0);
+        assert!(next_repaint(&app, Instant::now()).is_none(), "until-keypress notices have no expiry timer");
+        app.toast_exact = Some(20);
+        app.toast.as_mut().unwrap().2 = at - Duration::from_secs(1);
+        app.prefix = true;
+        app.prefix_at = Some(at - Duration::from_secs(2));
+        assert!(next_repaint(&app, Instant::now()).is_none(), "expired deadlines must not spin the loop");
+        app.keymap.hint_ms = u64::MAX;
+        next_repaint(&app, Instant::now()); // user-configured delays must not overflow Instant
+    }
+
+    #[test]
+    fn a_deadline_crossed_during_drawing_gets_one_more_frame() {
+        let mut app = app();
+        theme::begin_animation_frame(false);
+        let now = Instant::now();
+        let at = now - Duration::from_millis(100);
+        app.toast = Some(("notice".into(), Color::Yellow, at));
+        app.toast_exact = Some(90);
+        assert_eq!(next_repaint(&app, at), Some(at + Duration::from_millis(90)));
+        assert!(next_repaint(&app, now).is_none());
+        app.toast = None;
+        app.prefix = true;
+        app.prefix_at = Some(at);
+        app.keymap.hint_ms = 90;
+        assert_eq!(next_repaint(&app, at), Some(at + Duration::from_millis(90)));
+        assert!(next_repaint(&app, now).is_none());
+    }
+
+    #[test]
+    fn tmux_hints_only_request_a_frame_when_enabled() {
+        let mut app = app();
+        theme::begin_animation_frame(false);
+        app.options.global_session.insert("@hn-look".into(), "tmux".into());
+        app.prefix = true;
+        app.prefix_at = Some(Instant::now());
+        assert!(next_repaint(&app, Instant::now()).is_none());
+        app.options.global_session.insert("@hn-hint-time".into(), "600".into());
+        assert_eq!(next_repaint(&app, Instant::now()), app.prefix_at.map(|at| at + Duration::from_millis(600)));
+    }
+}
+
 /// screen_write_box_border_set: a box's corners, sides and its rule's joins, for tmux's box
 /// lines (single, double, heavy, simple, rounded, padded, none).
 fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
@@ -38,7 +155,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    theme::set_animations(app.options.animations());
+    theme::begin_animation_frame(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is
     // named so in the window list it is drawn with.
@@ -1181,7 +1298,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, sea
     const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
     let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
-    let spinner = frames[if theme::animations() { (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len() } else { 0 }];
+    let spinner = frames[if reading { theme::animation_frame() % frames.len() } else { 0 }];
     let w = ia.width as i32;
     let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
     let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| {
@@ -2592,5 +2709,20 @@ mod fzf_list_tests {
         p.set_rows(vec![Row::new("a", "alpha")]);
         p.set_query("zzz");
         assert!(!screen(&mut p).contains("(empty)"));
+    }
+
+    #[test]
+    fn only_loading_pickers_ask_for_animation_frames() {
+        let mut p = Picker::new("t", "");
+        for busy in [false, true, false] {
+            theme::begin_animation_frame(true);
+            p.busy = busy.then(|| "loading".into());
+            screen(&mut p);
+            assert_eq!(theme::needs_animation_frame(), busy);
+        }
+        theme::begin_animation_frame(false);
+        p.busy = Some("loading".into());
+        screen(&mut p);
+        assert!(!theme::needs_animation_frame());
     }
 }
