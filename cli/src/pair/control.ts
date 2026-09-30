@@ -141,6 +141,8 @@ export interface ControlDeps {
   changed?: () => void
   /** `lessons { action, id?, confirmed?, create? }`: the learner's verbs (pair/learn/propose.ts). */
   lessons?: (payload: Record<string, unknown>) => Promise<Result>
+  /** Issue a lesson review only to a verified attached window, never through agent tools. */
+  lessonReview?: (connId: string, id: string) => Promise<Result>
   /**
    * Person-only lesson actions (approve, restore, export; pair/learn/approval.ts): who is asking, and the
    * one-time nonces. Absent: those actions are refused.
@@ -195,6 +197,10 @@ export class PairControl {
     if (!lessons) return fail('UNSUPPORTED')
     const action = str(payload.action, 20)
     const id = str(payload.id, 40)
+    if (action === 'review') {
+      if (typeof payload.token === 'string' && payload.token) return fail('PERSON_ONLY')
+      return this.deps.lessonReview?.(connId, id) ?? fail('UNSUPPORTED')
+    }
     // A caller's own `confirmed` never counts, and its token and nonce go no further than here.
     const { token: _token, confirmed: _confirmed, nonce: _nonce, for: _for, ...rest } = payload
     const forAction = str(payload.for, 20)

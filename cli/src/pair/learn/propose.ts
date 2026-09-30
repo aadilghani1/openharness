@@ -34,7 +34,7 @@ import type { Distilled } from './distill.js'
 import type { ExportStep } from './export.js'
 import { findProject, publishNote, unpublishNote, withdrawSkill } from './publish.js'
 import { NO_GIT_NOTE, type LessonRecord, type LessonStore } from './store.js'
-import type { Signal } from './types.js'
+import { contentHash, type Signal } from './types.js'
 import type { LessonUsage } from './usage.js'
 
 export const LESSON_PROPOSAL_GAP_MS = 60 * 60_000
@@ -60,6 +60,7 @@ export interface LearnerDeps {
   intelligence?: () => IntelligenceStatus
   /** One durable review queue per collection; null until its DSH is opened. */
   queueFile?: () => string | null
+  history?: { status: () => Record<string, unknown> | null; start: (hours: unknown) => Result; cancel: () => Result; tick: () => Promise<void> }
   pairedDaemon: () => string | null
   autonomy: () => Autonomy
   voice: { say: (say: DaemonSay) => boolean; unsay: (id: string, reason: string) => boolean; showing: (mood: DaemonMood) => boolean }
@@ -109,6 +110,7 @@ export class PairLearner {
   private exportKey: string | null = null
   private ticking = false
   private seq = 0
+  private readonly reviews = new Map<string, { lessonId: string; textHash: string; until: number; scope: string | null | undefined }>()
 
   constructor(private readonly deps: LearnerDeps) {}
 
@@ -131,7 +133,8 @@ export class PairLearner {
   status(): Record<string, unknown> {
     this.loadQueue()
     return { ...(this.deps.intelligence?.() ?? {}), queued: this.queue.length,
-      pending: this.deps.store.pending().length, reviewing: this.ticking, lastReview: this.lastReview }
+      pending: this.deps.store.pending().length, reviewing: this.ticking, lastReview: this.lastReview,
+      ...(this.deps.history ? { history: this.deps.history.status() } : {}) }
   }
 
   private loadQueue(): void {
@@ -170,6 +173,7 @@ export class PairLearner {
     if (this.ticking) return
     this.ticking = true
     try {
+      if (this.deps.history) await this.deps.history.tick()
       await this.distillBatch()
       this.borrow()
       this.propose()
@@ -296,6 +300,7 @@ export class PairLearner {
     const why = lesson.signal.kind === 'correction' ? `you corrected ${who}.`
       : lesson.signal.kind === 'repeat-failure' ? `${who} hit the same failure.`
         : lesson.signal.kind === 'borrowed' ? `borrowed from ${who}.`
+          : lesson.signal.kind === 'conversation' ? 'from your recent conversations.'
           : `the same steps, ${new Set(lesson.from.map((f) => `${f.agentId}:${f.session}:${f.turn}`)).size} times in ${where}.`
     const what = lesson.kind === 'skill' ? `teach your agents "${lesson.name}"?` : `add a note for ${where}?`
     return statusText(`${keysPrefix([TEACH, SKIP, SHOW])}${what} ${why}`, 140)
@@ -310,6 +315,20 @@ export class PairLearner {
   // ── the brain's proposals interface ───────────────────────────────────────────────────────────────
 
   owns(id: string): boolean { return id.startsWith('lesson:') }
+
+  /** A deliberate viewer review. Its capability goes only to the requesting, verified window. */
+  review(id: string): Result {
+    if (!this.deps.pairedDaemon()) return fail('PAIR_OFF')
+    const lesson = this.deps.store.pending().find(r => r.id === id)
+    if (!lesson) return fail('NOT_PENDING')
+    for (const [key, row] of this.reviews) if (row.until <= this.deps.now()) this.reviews.delete(key)
+    if (this.reviews.size >= 30) this.reviews.delete(this.reviews.keys().next().value!)
+    const reviewId = lessonLineId(id)
+    this.reviews.set(reviewId, { lessonId: id, textHash: contentHash(this.deps.store.text(lesson)), until: this.deps.now() + LESSON_ASK_TTL_MS, scope: this.deps.queueFile?.() })
+    return { ok: true, reviewId, lesson: this.summary(lesson), text: this.deps.store.text(lesson), expiresInMs: LESSON_ASK_TTL_MS }
+  }
+
+  cancelReviews(): void { this.reviews.clear() }
 
   /** For daemon_state `asks`: the one lesson waiting for a key, while it waits, its text in full. */
   pending(): Array<{ id: string; line: string; actions: DaemonAction[]; detail: string }> {
@@ -326,6 +345,18 @@ export class PairLearner {
 
   /** A key on the line (daemon_act): y teach, n skip, s show. Always answers. The id is the nonce. */
   async act(id: string, choice: string): Promise<Result> {
+    const reviewed = this.reviews.get(id)
+    if (reviewed) {
+      const record = this.deps.store.pending().find(r => r.id === reviewed.lessonId)
+      if (reviewed.until <= this.deps.now() || !this.deps.pairedDaemon() || reviewed.scope !== this.deps.queueFile?.() ||
+        !record || contentHash(this.deps.store.text(record)) !== reviewed.textHash) {
+        this.reviews.delete(id); return fail('GONE')
+      }
+      if (!['y', 'n'].includes(choice)) return fail('NOT_OFFERED')
+      this.reviews.delete(id)
+      // An explicit person action, like CLI approval, is independent of unsolicited suggestion autonomy.
+      return choice === 'y' ? this.approve(reviewed.lessonId, 'key') : this.skip(reviewed.lessonId)
+    }
     const live = this.current()
     if (!live || live.id !== id) return fail('GONE')
     const key = [TEACH, SKIP, SHOW].find((a) => a.key === choice || a.choice === choice || a.label === choice)?.key
@@ -461,6 +492,8 @@ export class PairLearner {
     const action = str(payload.action, 20) || 'list'
     const id = str(payload.id, 40)
     const store = this.deps.store
+    if (action === 'review_recent') return this.deps.history?.start(payload.hours ?? 24) ?? fail('UNSUPPORTED')
+    if (action === 'cancel_review') return this.deps.history?.cancel() ?? fail('UNSUPPORTED')
     if (action === 'list') {
       return {
         ok: true, root: this.tilde(store.root), git: store.git, ...(store.git ? {} : { note: NO_GIT_NOTE }),
@@ -499,6 +532,8 @@ export class PairLearner {
     return {
       id: r.id, kind: r.kind, name: r.name, status: r.status, description: r.description, learnedBy: r.learnedBy,
       signal: r.signal.kind, project: r.projectName, source: r.source, created: new Date(r.created).toISOString(),
+      reason: r.reason ?? null, evidence: r.evidence,
+      sources: r.from.map(f => ({ engine: f.engine, machine: f.machine, agentId: f.agentId, session: f.session, turn: f.turn, at: f.at, title: f.title ?? null })),
       ...(r.provenance ? { provenance: r.provenance } : {}),
       ...(r.approved ? { approved: r.approved } : {}), ...(r.commit ? { commit: r.commit } : {}),
       ...(r.status === 'approved' && usage ? {

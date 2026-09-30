@@ -17,6 +17,7 @@ import '../theme/app_theme.dart';
 import '../widgets/daemon_illustration.dart';
 import 'companion_dial.dart';
 import 'companion_story.dart';
+import 'memory_review_text.dart';
 
 /// The illustrated left viewer of the companion DSH. The shared workspace
 /// canvas owns its real agent terminal on the right.
@@ -55,6 +56,7 @@ class _CompanionHomeState extends State<CompanionHome> {
   String? _renameError;
   final _name = TextEditingController();
   final _scroll = ScrollController();
+  final _memoryViewport = GlobalKey();
   late final _lessons = DaemonLessons(widget.brain)..addListener(_changed);
   Timer? _memoryRefresh;
   ZooController get zoo => widget.face.zoo;
@@ -247,6 +249,7 @@ class _CompanionHomeState extends State<CompanionHome> {
                 ),
               Expanded(
                 child: SingleChildScrollView(
+                  key: _memoryViewport,
                   controller: _scroll,
                   padding: const EdgeInsets.fromLTRB(28, 6, 28, 40),
                   child: Align(
@@ -776,7 +779,8 @@ class _CompanionHomeState extends State<CompanionHome> {
     final d = zoo.paired;
     final date = d == null ? null : DateTime.tryParse(d.hatched)?.toLocal();
     final learned = _lessons.lessons.where((l) => l.approvedNow).toList();
-    final pending = _lessons.lessons.where((l) => l.pending).length;
+    final pending = _lessons.lessons.where((l) => l.pending).toList();
+    final history = _lessons.learning?.history;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -790,21 +794,44 @@ class _CompanionHomeState extends State<CompanionHome> {
           style: ink(15, AppColors.textSoft),
         ),
         const SizedBox(height: 28),
-        if (d != null) ...[
+        if (widget.brain.active) ...[
           _memoryCard(
-            Icons.wb_sunny_outlined,
-            'The day you met',
-            date == null
-                ? '${companionName(d)} joined your collection.'
-                : '${companionName(d)} hatched on ${_date(date)}. A little beginning, all your own.',
+            Icons.history_rounded,
+            history?.title ?? 'A little time to look back',
+            history?.detail ?? 'Your recent conversations can hold the beginnings of a useful memory. Review the last 24 hours on this computer with your companion’s chosen model.',
           ),
-          const SizedBox(height: 12),
-          _memoryCard(
-            Icons.favorite_border_rounded,
-            'A bond that keeps growing',
-            '${d.xp} XP together · ${companionAge(d.version)}',
+          if (history?.more == true || (history?.indexing ?? 0) > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'This review covers the recent conversations currently indexed on this computer. Some turns remain outside this snapshot.',
+                style: ink(12, AppColors.textSoft),
+              ),
+            ),
+          Wrap(
+            spacing: 8,
+            children: [
+              _button(
+                history?.state == 'failed'
+                    ? 'Retry review'
+                    : 'Look back over 24 hours',
+                _lessons.busy || history?.active == true
+                    ? null
+                    : () => unawaited(_lessons.reviewRecent()),
+                key: const ValueKey('memory-review-recent'),
+                primary: true,
+                icon: Icons.history_rounded,
+              ),
+              if (history?.active == true)
+                _button(
+                  'Stop review',
+                  _lessons.busy
+                      ? null
+                      : () => unawaited(_lessons.cancelReview()),
+                ),
+            ],
           ),
-          const SizedBox(height: 30),
+          const SizedBox(height: 20),
         ],
         _eyebrow('Shared lessons'),
         const SizedBox(height: 10),
@@ -840,6 +867,25 @@ class _CompanionHomeState extends State<CompanionHome> {
             _lessons.learning!.title,
             _lessons.learning!.detail,
           ),
+          const SizedBox(height: 18),
+        ],
+        if (pending.isNotEmpty) ...[
+          _eyebrow('Yours to decide'),
+          const SizedBox(height: 10),
+          Text(
+            '${pending.length} ${pending.length == 1 ? 'possible memory' : 'possible memories'}',
+            style: display(26),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Read what your companion noticed. Only the lessons you approve are shared with your harnesses.',
+            style: ink(14, AppColors.textSoft),
+          ),
+          const SizedBox(height: 16),
+          for (final lesson in pending) ...[
+            _pendingMemory(lesson),
+            const SizedBox(height: 14),
+          ],
           const SizedBox(height: 18),
         ],
         for (final lesson in learned) ...[
@@ -916,13 +962,22 @@ class _CompanionHomeState extends State<CompanionHome> {
           ),
           const SizedBox(height: 12),
         ],
-        if (pending > 0)
-          _button(
-            '$pending ${pending == 1 ? 'lesson' : 'lessons'} waiting for your review',
-            () => widget.onOpenControls('lessons'),
-            icon: Icons.menu_book_outlined,
-            primary: true,
+        if (d != null) ...[
+          _memoryCard(
+            Icons.wb_sunny_outlined,
+            'The day you met',
+            date == null
+                ? '${companionName(d)} joined your collection.'
+                : '${companionName(d)} hatched on ${_date(date)}. A little beginning, all your own.',
           ),
+          const SizedBox(height: 12),
+          _memoryCard(
+            Icons.favorite_border_rounded,
+            'A bond that keeps growing',
+            '${d.xp} XP together · ${companionAge(d.version)}',
+          ),
+          const SizedBox(height: 30),
+        ],
         if (_lessons.message != null)
           Text(_lessons.message!, style: ink(13, AppColors.textSoft)),
         if (widget.brain.active)
@@ -932,6 +987,138 @@ class _CompanionHomeState extends State<CompanionHome> {
             icon: Icons.refresh_rounded,
           ),
       ],
+    );
+  }
+
+  Widget _pendingMemory(DaemonLesson lesson) {
+    final open = _lessons.shownId == lesson.id;
+    final reviewId = open ? _lessons.reviewId : null;
+    return Container(
+      key: ValueKey('memory-candidate-${lesson.id}'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: story.accent.withValues(alpha: .06),
+        border: Border.all(color: story.accent.withValues(alpha: .22)),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            lesson.kind == 'note'
+                ? lesson.description
+                : lesson.name.replaceAll('-', ' '),
+            style: ink(18).copyWith(fontWeight: FontWeight.w600),
+          ),
+          if (lesson.kind != 'note' && lesson.description.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(lesson.description, style: ink(14, AppColors.textSoft)),
+          ],
+          const SizedBox(height: 16),
+          _eyebrow('Why this might stay'),
+          const SizedBox(height: 6),
+          Text(
+            lesson.reason.isNotEmpty
+                ? lesson.reason
+                : switch (lesson.signal) {
+                    'correction' =>
+                      'A correction you made could help your agents next time.',
+                    'repeat-failure' =>
+                      'The same failure appeared more than once.',
+                    'repeat-steps' =>
+                      'A repeated workflow may be worth keeping.',
+                    'conversation' => 'Your companion noticed this while reviewing recent conversations.',
+                    _ => 'Your companion found something that may help in future work.',
+                  },
+            style: ink(14),
+          ),
+          if (lesson.sources.isNotEmpty || lesson.from.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            for (final source in lesson.sources)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '${source.title.isEmpty ? source.engine : source.title} · ${source.engine} · turn ${source.turn + 1}'
+                  '${source.at == null ? '' : ' · ${_date(source.at!)} ${source.at!.hour.toString().padLeft(2, '0')}:${source.at!.minute.toString().padLeft(2, '0')}'}',
+                  style: ink(12, AppColors.textSoft),
+                ),
+              ),
+            if (lesson.sources.isEmpty)
+              Text(lesson.from.join('\n'), style: ink(12, AppColors.textSoft)),
+          ],
+          if (open && _lessons.shownText != null) ...[
+            const SizedBox(height: 18),
+            _eyebrow('The lesson to share'),
+            const SizedBox(height: 10),
+            MemoryReviewText(
+              key: ValueKey(reviewId ?? 'read-${lesson.id}'),
+              text: _lessons.shownText!,
+              style: ink(13),
+              viewport: _memoryViewport,
+              scroll: _scroll,
+              onRead: () {
+                if (_section == 'Memories' &&
+                    reviewId != null &&
+                    _lessons.reviewId == reviewId) {
+                  widget.brain.shown(reviewId);
+                }
+              },
+            ),
+            if (lesson.evidence.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _eyebrow('From the conversation'),
+              const SizedBox(height: 8),
+              for (final evidence in lesson.evidence)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: SelectableText(
+                    evidence,
+                    style: ink(13, AppColors.textSoft),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              'Approving makes this lesson available to your agents. You can forget it later.',
+              style: ink(12, AppColors.textSoft),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              if (open && reviewId != null)
+                _button(
+                  'Approve memory',
+                  _lessons.busy || !widget.brain.armed(reviewId)
+                      ? null
+                      : _lessons.approveReviewed,
+                  key: ValueKey('memory-approve-${lesson.id}'),
+                  primary: true,
+                  icon: Icons.check_rounded,
+                )
+              else
+                _button(
+                  'Review memory',
+                  _lessons.busy
+                      ? null
+                      : () => unawaited(_lessons.review(lesson.id)),
+                  key: ValueKey('memory-open-${lesson.id}'),
+                  primary: true,
+                ),
+              _button(
+                'Skip',
+                _lessons.busy
+                    ? null
+                    : () => unawaited(_lessons.skip(lesson.id)),
+                key: ValueKey('memory-skip-${lesson.id}'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

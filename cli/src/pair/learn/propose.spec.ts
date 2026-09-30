@@ -100,6 +100,52 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolea
 }
 
 describe('collection learning readiness and durable observations', () => {
+  it('lets a deliberate viewer review approve at watch, once, while keeping automatic suggestions quiet', async () => {
+    const w = world({ autonomy: 'watch' })
+    const lesson = await w.addNote()
+    expect(w.learner.pending()).toEqual([])
+    const review = w.learner.review(lesson.id)
+    expect(review).toMatchObject({ ok: true, text: w.store.text(lesson), lesson: { id: lesson.id } })
+    expect(w.store.approved()).toHaveLength(0)
+    expect(await w.learner.act(String(review.reviewId), 'y')).toMatchObject({ ok: true, learned: lesson.name })
+    expect(await w.learner.act(String(review.reviewId), 'y')).toMatchObject({ error: 'GONE' })
+    expect(w.store.approved()).toHaveLength(1)
+  })
+
+  it('expires viewer review capabilities and refuses them after an account change or off', async () => {
+    let scope = 'collection-a'
+    const w = world({ autonomy: 'watch' }, { queueFile: () => join(dir, `${scope}.json`) })
+    const lesson = await w.addNote()
+    const first = w.learner.review(lesson.id)
+    scope = 'collection-b'
+    expect(await w.learner.act(String(first.reviewId), 'y')).toMatchObject({ error: 'GONE' })
+    const second = w.learner.review(lesson.id)
+    vi.advanceTimersByTime(LESSON_ASK_TTL_MS)
+    expect(await w.learner.act(String(second.reviewId), 'y')).toMatchObject({ error: 'GONE' })
+    const third = w.learner.review(lesson.id)
+    w.learner.cancelReviews()
+    expect(await w.learner.act(String(third.reviewId), 'y')).toMatchObject({ error: 'GONE' })
+    expect(w.store.approved()).toHaveLength(0)
+  })
+
+  it('parses the explicit history review and cancel commands without approval or a lesson ID', () => {
+    expect(parsePairArgs('lessons', ['review-recent', '--hours', '24', '--json'])).toEqual({ json: true, payload: { verb: 'lessons', action: 'review_recent', hours: 24 } })
+    expect(parsePairArgs('lessons', ['cancel-review']).payload).toEqual({ verb: 'lessons', action: 'cancel_review' })
+    expect(() => parsePairArgs('lessons', ['review-recent', '--hours', '48'])).toThrow('--hours')
+  })
+
+  it('refuses approval if the lesson changed after the viewer opened it', async () => {
+    const w = world({ autonomy: 'watch' })
+    const lesson = await w.addNote()
+    const review = w.learner.review(lesson.id)
+    const path = join(w.store.root, 'pending', lesson.id, 'lesson.json')
+    const changed = JSON.parse(readFileSync(path, 'utf8'))
+    changed.lines = ['A different lesson the person has not read.']
+    writeFileSync(path, JSON.stringify(changed))
+    expect(await w.learner.act(String(review.reviewId), 'y')).toMatchObject({ error: 'GONE' })
+    expect(w.store.approved()).toHaveLength(0)
+  })
+
   it('holds observations until the DSH model is ready, and restores them after a restart', async () => {
     let ready = false
     const distill = vi.fn(async () => ({ lesson: null as null, why: 'nothing' as const, source: 'model' as const }))

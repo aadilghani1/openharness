@@ -94,6 +94,7 @@ import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClie
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
+import { ConversationReview } from './pair/learn/conversationReview.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
 import { PlateService } from './pair/plateService.js'
 import { inProjects, PairConfigFile, pairConfigPath, ruleRunner, type PairConfig } from './pair/rules.js'
@@ -4515,6 +4516,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
+    lessonReview: async (connId, id) => pairBrain?.reviewLesson(connId, id) ?? { ok: false, error: 'UNSUPPORTED' },
     person: { verify: verifyLessonCaller, nonces: lessonNonces },
     now: Date.now,
     newId: () => randomUUID(),
@@ -4593,9 +4595,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // experiment and watching consent still gate everything; there is no second model switch.
   const lessonProjects = (): string[] =>
     [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))]
+  const lessonDistiller = new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() })
+  const conversationReview = new ConversationReview({
+    directory: join(env.ADAPTER_DATA_DIR, 'pair', 'learn'),
+    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.agentId() : null,
+    pairedDaemon: () => pairSensor.pairedDaemon(), intelligence: () => companionIntelligence.status(),
+    turns: (from, to) => sessionSearch?.recentConversations(from, to) ?? null,
+    cwd: (id) => registry.resolve(id)?.cwd ?? stoppedAgents.get(id)?.cwd ?? null,
+    machine: () => terminalHintMachineName(), distiller: lessonDistiller, store: lessonStore, now: Date.now,
+    home: homedir(), changed: () => pairBrain?.stateChanged(),
+  })
   pairLearner = new PairLearner({
     store: lessonStore,
-    distiller: new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() }),
+    distiller: lessonDistiller,
+    history: conversationReview,
     intelligence: () => companionIntelligence.status(),
     queueFile: () => {
       const id = pairHarness.agentId()
@@ -4662,6 +4675,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relayed: (fields) => { pairSensor.relayed(fields) },
     // A lesson's key (pair/learn/approval.ts): never a tool client, never a process inside a harness pane.
     lessonKey: (connId) => lessonKeyVerdict(connId, { isTool: (conn) => backend.isToolClient(conn), verify: verifyLessonCaller }),
+    lessonReview: (id) => pairLearner!.review(id),
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
@@ -4702,6 +4716,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       zooTurnReporter.clear()
       zooLessonReporter.clear()
       void pairHarness.off().catch(() => {})
+      conversationReview.stop()
+      pairLearner?.cancelReviews()
       companionIntelligence.cancel()
       companionZoo.reset(); guestCompanion = null
     }

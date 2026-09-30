@@ -33,11 +33,16 @@ from the device's acknowledgement, including the individual UID, growth stage,
 seed, colour and markings. Offline, updating, and older firmware states remain
 explicit. A collection preview cannot send an unowned companion to the dial.
 
-Memories shows the actual hatch date, XP, approved shared lessons, and whether
-the collection's selected model is ready to review queued observations. Read and
-forget use the existing local lesson interface. Forget is explicitly labelled as
-affecting all agents and retains the learner's revision history. Pending lessons
-still need the established person-only approval flow.
+Memories leads with a 24-hour lookback and the pending lesson inbox. Each suggestion
+shows why it may be useful, its conversation sources, and an explicit Review / Approve /
+Skip flow. The full lesson must have been visible while scrolling before approval arms;
+large text can span several screenfuls. The existing person-only key check, one-use
+capability and display delay still apply. A review never types in or remounts the terminal.
+The collection's selected model does the extraction; progress, waiting and incomplete
+local index coverage stay visible. Requested work survives daemon restarts and can be
+stopped. Approved lessons, the actual hatch date and XP follow the inbox. Forget affects
+all agents and retains the learner's revision history. Lessons remain local to this
+computer; this is not cross-machine memory sync.
 
 Opening the home starts or resumes the existing pair DSH through a UI-only local
 socket request, without a prompt, pasted text or Enter key. The complete engine

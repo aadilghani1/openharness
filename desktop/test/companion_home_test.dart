@@ -176,6 +176,7 @@ void main() {
       ..setEnvironment(foreground: true, reduceMotion: true);
     sent = [];
     brain = DaemonBrain(
+      now: tester.binding.clock.now,
       send: (type, payload) {
         sent.add((type, payload));
         return true;
@@ -406,6 +407,163 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  for (final (label, size, brightness, scale) in [
+    ('wide', const Size(1400, 950), Brightness.dark, 1.0),
+    ('narrow', const Size(800, 950), Brightness.dark, 1.0),
+    ('large-light', const Size(1100, 950), Brightness.light, 1.8),
+  ]) {
+    testWidgets('memory inbox reviews and approves a sourced lesson: $label', (
+      tester,
+    ) async {
+      await mount(tester, size: size, brightness: brightness, scale: scale);
+      final renderer = tester.state(find.byType(TerminalView));
+      await tester.tap(find.byKey(const ValueKey('companion-nav-Memories')));
+      await tester.pump();
+      final lesson = {
+        'id': 'beef01',
+        'name': 'keep-the-dsh-layout',
+        'kind': 'skill',
+        'status': 'pending',
+        'description': 'Keep the standard viewer and agent arrangement.',
+        'signal': 'conversation',
+        'reason': 'You explicitly described this layout in your conversation.',
+        'sources': [
+          {
+            'title': 'Companion design',
+            'engine': 'claude',
+            'turn': 2,
+            'at': 1790762400000,
+          },
+        ],
+        'evidence': ['You: Every DSH has a viewer and an agent terminal.'],
+      };
+      brain.receive('pair_result', {
+        'requestId': sent.last.$2['requestId'],
+        'ok': true,
+        'lessons': [lesson],
+        'learning': {
+          'state': 'ready',
+          'model': 'opus',
+          'pending': 1,
+          'history': {
+            'state': 'complete',
+            'hours': 24,
+            'total': 8,
+            'reviewed': 8,
+            'proposed': 1,
+          },
+        },
+      });
+      await tester.pump();
+      expect(find.text('1 possible memory'), findsOneWidget);
+      expect(
+        find.text('You explicitly described this layout in your conversation.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Companion design · claude'), findsOneWidget);
+      final open = find.byKey(const ValueKey('memory-open-beef01'));
+      await tester.ensureVisible(open);
+      await tester.tap(open);
+      await tester.pump();
+      expect(sent.last.$2, containsPair('action', 'review'));
+      brain.receive('pair_result', {
+        'requestId': sent.last.$2['requestId'],
+        'ok': true,
+        'reviewId': 'lesson:beef01:one-time',
+        'text': 'Keep the viewer on the left.\nKeep the agent terminal on the right.',
+        'expiresInMs': 600000,
+      });
+      await tester.pump();
+      await tester.ensureVisible(find.text('Keep the viewer on the left.'));
+      await tester.pump();
+      await tester.ensureVisible(
+        find.text('Keep the agent terminal on the right.'),
+      );
+      await tester.pump();
+      final approve = find.byKey(const ValueKey('memory-approve-beef01'));
+      expect(sent.where((s) => s.$1 == 'daemon_act'), isEmpty);
+      expect(brain.wasShown('lesson:beef01:one-time'), isTrue);
+      await tester.pump(DaemonBrain.armAfter);
+      await tester.ensureVisible(approve);
+      await tester.pump();
+      expect(tester.widget<TextButton>(approve).onPressed, isNotNull);
+      await capture(tester, 'memory-inbox-$label');
+      await tester.tap(approve);
+      await tester.pump();
+      final approval = sent.last;
+      expect(approval.$1, 'daemon_act');
+      expect(approval.$2, containsPair('id', 'lesson:beef01:one-time'));
+      expect(approval.$2, containsPair('choice', 'y'));
+      brain.receive('daemon_act_result', {
+        'requestId': approval.$2['requestId'],
+        'id': 'lesson:beef01:one-time',
+        'ok': true,
+        'learned': 'keep-the-dsh-layout',
+      });
+      await tester.pump();
+      brain.receive('pair_result', {
+        'requestId': sent.last.$2['requestId'],
+        'ok': true,
+        'lessons': [
+          {...lesson, 'status': 'approved'},
+        ],
+      });
+      await tester.pump();
+      expect(find.text('1 possible memory'), findsNothing);
+      expect(tester.state(find.byType(TerminalView)), same(renderer));
+      expect(input, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('a 24-hour lookback queues a review without approving lessons', (
+    tester,
+  ) async {
+    await mount(tester);
+    await tester.tap(find.byKey(const ValueKey('companion-nav-Memories')));
+    await tester.pump();
+    brain.receive('pair_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': true,
+      'lessons': [],
+      'learning': {'state': 'ready', 'model': 'opus'},
+    });
+    await tester.pump();
+    final review = find.byKey(const ValueKey('memory-review-recent'));
+    await tester.ensureVisible(review);
+    await tester.tap(review);
+    await tester.pump();
+    expect(sent.last.$2, containsPair('action', 'review_recent'));
+    expect(sent.last.$2, containsPair('hours', 24));
+    brain.receive('pair_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': true,
+    });
+    await tester.pump();
+    brain.receive('pair_result', {
+      'requestId': sent.last.$2['requestId'],
+      'ok': true,
+      'lessons': [],
+      'learning': {
+        'state': 'ready',
+        'model': 'opus',
+        'history': {
+          'state': 'reviewing',
+          'hours': 24,
+          'total': 10,
+          'reviewed': 0,
+          'proposed': 0,
+        },
+      },
+    });
+    await tester.pump();
+    expect(find.text('Looking back over 24 hours'), findsOneWidget);
+    expect(find.text('Stop review'), findsOneWidget);
+    expect(tester.widget<TextButton>(review).onPressed, isNull);
+    expect(sent.where((s) => s.$1 == 'daemon_act'), isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'memory book shows backend lessons and forget is an explicit action',

@@ -350,6 +350,13 @@ and — except usage tracking and the `lessons` verbs — only while pairing is 
   approval, `git revert` per revert, and `stale:` (empty), `archive:`, `restore:` commits from the curator;
   no global git config, author `Harness`; without git a plain journal, and it says so. Everything written
   is redacted.
+- **Conversation review** (`conversationReview.ts`): an explicit 1–24 hour lookback over
+  up to 300 dated local indexed turns, excluding tools and reasoning. Bounded project
+  batches share the collection DSH's selected model and the distiller's rate limit.
+  Progress and reviewed hashes survive restarts; incomplete coverage and waiting states
+  are visible. Every cited candidate stays pending in the Memories inbox. Its verified
+  window receives a one-use, expiring capability bound to the lesson text; approval still
+  requires `daemon_shown`, the arming delay and the person-only key verdict.
 - **Propose** (`propose.ts`, `PairLearner`): `daemon_say { mood: 'ask', actions: [y teach, n skip, s show] }`,
   e.g. `[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.` At most one an hour,
   never while a `need` shows, never about the focused pane (`PairBrain.isFocused`), never at `watch`,

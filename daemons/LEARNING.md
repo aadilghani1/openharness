@@ -89,6 +89,33 @@ Timeouts, failures, and hourly limits without a usable result leave observations
 `lessons list` includes readiness, the actual model, queued observations, pending lessons and the last
 review outcome; the Memories viewer presents this status. Approving a lesson remains the person's action.
 
+### Initial conversation review
+
+“Look back over 24 hours” in the companion's Memories viewer, or
+`harness pair lessons review-recent --hours 24`, explicitly queues an initial review.
+It captures up to 300 of the newest dated user/assistant turns in the local conversation
+index, within the requested 1–24 hour window. Missing timestamps never borrow a
+session's last activity. Tool output and hidden reasoning are excluded; excerpts are
+redacted and limited to 2,500 characters per side. The viewer reports incomplete index
+coverage instead of claiming to have read every conversation.
+
+The saved job belongs to the collection, groups turns by project, and reviews at most
+eight turns / 20,000 excerpt characters per batch. It uses the collection DSH's observed
+engine, model and effort, sharing the live learner's six calls per hour and 90-second
+budget. Larger reviews continue in the background, including after daemon restarts.
+No observed model means waiting, not choosing another model. Cancellation or disabling
+the experiment discards in-flight results. Reviewed turn hashes and existing lessons
+prevent overlapping reviews from repeating suggestions.
+
+Each batch can propose up to three guarded lessons, with a reason, cited conversation
+titles, dates, turns and redacted evidence. Every lesson stays pending. The inbox offers
+Review, Approve and Skip; approval uses the existing person-only `daemon_act` path.
+A review capability is bound to the requesting verified window, collection, unchanged
+lesson text and a ten-minute expiry. The viewer acknowledges only text actually shown
+while scrolling, and retains the 400 ms arming delay. A deliberate review is available
+at `watch`; unsolicited suggestions remain suppressed there. No review automatically
+approves or publishes a lesson.
+
 ### Untrusted text (`guard.ts`)
 
 Everything an agent or a tool wrote is untrusted: a README or a test's output can carry text written to
@@ -249,13 +276,15 @@ project unless the person opted that project in.
 |---|---|
 | `lessons [list]` | every lesson: pending, approved, reverted, skipped; the folder and whether git is there |
 | `lessons show <id>` | its SKILL.md or NOTE.md, with provenance |
+| `lessons review-recent [--hours 24]` | queue a bounded review of 1–24 hours of local indexed conversations; pairing must be on |
+| `lessons cancel-review` | stop the collection's history review; already proposed lessons remain pending |
 | `lessons approve <id> [--create]` | person-only (Security): a challenge, the lesson shown, `[y/N]` at the terminal, then approved with the nonce (and published, exported); `--create` writes a new AGENTS.md for a note in an opted-in project |
 | `lessons skip <id>` | drops a pending lesson for good |
 | `lessons revert <id>` | `git revert` of its commit, and unpublished (its note taken out, its skill out of runtimes and exports) |
 | `lessons restore <id>` | person-only: an archived skill back in `skills/` (one commit), its unused clock started again |
 | `lessons export [--dry-run]` | what export would do; without `--dry-run`, person-only: does it |
 
-The verbs work with pairing off: the folder is the person's. An agent may list and show lessons; it can
+Existing lesson-management verbs work with pairing off: the folder is the person's. An agent may list and show lessons; it can
 never approve, restore or export (Security).
 
 ### Limits of L1
@@ -265,7 +294,7 @@ never approve, restore or export (Security).
   reach a plain session only in a project opted in to AGENTS.md.
 - Signals and pending lessons are **per machine**: a failure on the laptop and the same one on the
   office machine are not matched, and a lesson is proposed on the machine that noticed it, when you are
-  at it. The signal queue lives in memory.
+  at it. Observation and requested history-review queues persist per collection on that machine.
 - Approval is guarded against agents, not against same-user malware (Security).
 - Clients: `s`, the `lesson` brief item and the line's `detail` are new; a client that does not know them
   still sees the line, but its `y`/`n` count only once it sends `daemon_shown` for the line (as for every
