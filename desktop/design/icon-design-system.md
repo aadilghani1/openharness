@@ -140,9 +140,10 @@ application-menu icons now use the same regular-symbol configuration as other
 native menus. Brand, PR, quantitative and content exceptions above were
 reviewed and retained deliberately.
 
-Validation: 221 targeted widget tests pass, including keyboard/mouse menu
+Validation: 241 targeted widget tests pass, including keyboard/mouse menu
 behavior, pane creation/zoom/close, viewer controls, companion memories,
-enlarged Settings text, attachment handling, share badges, tab scrolling and
+enlarged Settings text, attachment handling, sharing/header placement,
+notification grouping, tab scrolling and
 subscription contrast across workspace palettes. Linux window controls,
 web share badges and tab scroller arrows also use the shared catalogue.
 First-party app code and the changed tests pass static analysis.

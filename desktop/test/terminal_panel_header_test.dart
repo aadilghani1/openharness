@@ -11,6 +11,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/theme/app_theme.dart';
+import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/pane_share_badge.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 
@@ -107,6 +108,7 @@ void main() {
                 session: session,
                 focused: true,
                 compactHeader: compactHeader,
+                onClose: compactHeader ? () {} : null,
               ),
             ),
           ),
@@ -134,16 +136,15 @@ void main() {
     'shares': [],
   };
 
-  // A workspace pane's header is compact: its right side's budget holds only
-  // the close button, and a status beside the name fills the name's row. The
-  // mark sits at the right edge either way.
+  // Sharing stays beside the trailing model and pane controls, including when
+  // a connection status fills the title row. It must not overlap either group.
   for (final width in [420.0, 900.0]) {
     for (final status in [
       TerminalSessionStatus.controlling,
       TerminalSessionStatus.takenOver,
     ]) {
       testWidgets(
-        'a shared pane says so at the right edge, ${status.name}, width $width',
+        'a shared pane keeps its badge before model and controls, ${status.name}, width $width',
         (tester) async {
           final session = sessionNamed('Desktop')..status = status;
           addTearDown(session.dispose);
@@ -163,9 +164,24 @@ void main() {
             rect.left,
             greaterThan(tester.getRect(find.text('Desktop')).right),
           );
-          // Only the header's own right-side controls (the close icon) follow.
-          expect(rect.right, greaterThan(width - 100));
-          expect(rect.right, lessThanOrEqualTo(width));
+          final model = tester.getRect(
+            find.byKey(const ValueKey(('pane-model', 'local', 'agent-1'))),
+          );
+          final controls = [
+            for (final key in [
+              'pane-split-down',
+              'pane-split-right',
+              'pane-zoom',
+            ])
+              tester.getRect(find.byKey(ValueKey(key))),
+            tester.getRect(find.byType(PaneCloseButton)),
+          ];
+          expect(rect.right, closeTo(model.left, 1));
+          expect(model.right, closeTo(controls.first.left, 1));
+          for (var i = 1; i < controls.length; i++) {
+            expect(controls[i - 1].right, closeTo(controls[i].left, 1));
+          }
+          expect(controls.last.right, closeTo(width - 4, 1));
           if (width > 560) expect(find.text('Public'), findsOneWidget);
           expect(tester.takeException(), isNull);
           await tester.pumpWidget(const SizedBox());

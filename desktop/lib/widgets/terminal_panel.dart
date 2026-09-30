@@ -2969,9 +2969,8 @@ class _TerminalHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                // At the right edge, outside the right side's width budget:
-                // a workspace pane's compact header leaves that only its close
-                // button, and a status beside the name fills the name's row.
+                // Keep sharing status outside the model/action width budget.
+                // It follows the title and precedes the model and pane controls.
                 if (agent != null && PaneShareStatus.visibleOf(context))
                   PaneShareBadge(
                     notifier: notifier,
