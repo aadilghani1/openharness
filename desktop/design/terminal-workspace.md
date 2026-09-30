@@ -21,7 +21,9 @@ of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
 inside the same picker. The top row keeps swarms, `+`, a plain search icon, the
-notification bell, and the rounded Harness Store button. The bottom row holds focused
+notification bell, and the rounded Harness Store button. When enabled in
+Experimental settings, the illustrated daemon sits after Store at the far right;
+its hover portrait is a deliberate artwork exception to text-first chrome. The bottom row holds focused
 machine/repo/branch/PR links on the left and the model selector on the right.
 Keep descriptive tooltips and accessible names. Search and bell are deliberate
 icon exceptions; the bell shows a count only when there is something to see.

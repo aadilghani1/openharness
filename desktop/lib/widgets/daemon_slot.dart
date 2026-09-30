@@ -5,6 +5,8 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/illustrated_art.dart';
+import 'daemon_illustration.dart';
 import '../daemons/individuals.dart';
 import '../daemons/plates.dart';
 import '../daemons/render.dart' show cardWidth;
@@ -273,25 +275,47 @@ Color? daemonSlotPatch(DaemonFace face, TerminalTheme theme) {
 Color daemonDimInk(TerminalTheme theme) =>
     theme.foreground.withValues(alpha: .62);
 
-/// The status line's daemon: ten cells (eight and a one-cell gutter each
-/// side). Counts and progress belong in its panel. Only this widget
-/// repaints on a new face.
-class DaemonSlotButton extends StatelessWidget {
+/// The tab bar's fixed-width creature. Counts and progress belong in its
+/// panel. Only this widget repaints on a new face.
+class DaemonSlotButton extends StatefulWidget {
   const DaemonSlotButton({
     super.key,
     required this.face,
     required this.onPressed,
     this.selected = false,
     this.tooltip,
+    this.onHover,
+    this.enabled = true,
   });
+  final bool enabled;
   final DaemonFace face;
   final VoidCallback onPressed;
   final bool selected;
   final String Function()? tooltip;
+  final ValueChanged<bool>? onHover;
+
+  @override
+  State<DaemonSlotButton> createState() => _DaemonSlotButtonState();
+}
+
+class _DaemonSlotButtonState extends State<DaemonSlotButton> {
+  bool _hovered = false;
+
+  @override
+  void didUpdateWidget(DaemonSlotButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled && _hovered) {
+      _hovered = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_hovered) widget.onHover?.call(false);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    final face = widget.face;
     return ListenableBuilder(
       listenable: Listenable.merge([
         face,
@@ -300,52 +324,63 @@ class DaemonSlotButton extends StatelessWidget {
       ]),
       builder: (context, _) {
         if (!face.visible) return const SizedBox.shrink();
-        final cell = workspaceBarCellSizeOf(context);
         final theme = currentTerminalTheme();
-        final patch = daemonSlotPatch(face, theme);
+        final art = IllustratedArt.forFace(face);
         return MouseRegion(
           onEnter: (_) {
+            if (!widget.enabled ||
+                face.revealing ||
+                face.zoo.hatchingEgg != null) {
+              return;
+            }
+            _hovered = true;
             face.look();
             face.seen();
+            widget.onHover?.call(true);
+          },
+          onExit: (_) {
+            if (!_hovered) return;
+            _hovered = false;
+            widget.onHover?.call(false);
           },
           child: Semantics(
             value: face.detail,
             child: WorkspaceBarControl(
               key: const ValueKey('daemon-slot'),
               label: face.label,
-              tooltip: tooltip?.call() ?? face.tooltip,
-              selected: selected,
-              onPressed: face.revealing || face.zoo.hatchingEgg != null
+              tooltip: art == null
+                  ? (widget.tooltip?.call() ?? face.tooltip)
+                  : null,
+              selected: widget.selected,
+              onPressed:
+                  !widget.enabled ||
+                      face.revealing ||
+                      face.zoo.hatchingEgg != null
                   ? null
-                  : onPressed,
+                  : widget.onPressed,
               builder: (context, emphasized) => SizedBox(
                 height: workspaceBarControlHeight(context),
-                width: cell.width * (face.roster.rules.statusCells + 2),
-                child: Stack(
-                  alignment: Alignment.centerLeft,
-                  children: [
-                    if (patch != null)
-                      Positioned(
-                        left: cell.width,
-                        width: cell.width * face.roster.rules.statusCells,
-                        height: cell.height,
-                        child: ColoredBox(
-                          key: const ValueKey('daemon-slot-patch'),
-                          color: patch,
+                width: 44,
+                child: Center(
+                  child: art != null
+                      ? DaemonIllustration(
+                          key: const ValueKey('daemon-slot-art'),
+                          art: art,
+                          frame: IllustratedArt.frameForFace(face),
+                          size: 32,
+                        )
+                      : FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            face.cell,
+                            key: const ValueKey('daemon-slot-glyph'),
+                            maxLines: 1,
+                            style: workspaceBarTextStyle(
+                              color: daemonSlotInk(face, theme),
+                              emphasized: emphasized,
+                            ).copyWith(fontFeatures: daemonTextFeatures),
+                          ),
                         ),
-                      ),
-                    Text(
-                      face.cell,
-                      key: const ValueKey('daemon-slot-glyph'),
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.clip,
-                      style: workspaceBarTextStyle(
-                        color: daemonSlotInk(face, theme),
-                        emphasized: emphasized,
-                      ).copyWith(fontFeatures: daemonTextFeatures),
-                    ),
-                  ],
                 ),
               ),
             ),
@@ -482,10 +517,7 @@ class DaemonKeys extends StatelessWidget {
     final height = this.height ?? workspaceBarControlHeight(context);
     Widget text(String value) => SizedBox(
       height: height,
-      child: Center(
-        widthFactor: 1,
-        child: Text(value, style: style()),
-      ),
+      child: Center(widthFactor: 1, child: Text(value, style: style())),
     );
     Widget faint(String key) => SizedBox(
       key: ValueKey('$idPrefix-$key-arming'),
@@ -515,8 +547,7 @@ class DaemonKeys extends StatelessWidget {
               actions.any((a) => a.key == key))
             faint(key)
           else if (actions.where((a) => a.key == key).firstOrNull
-              case final action?
-              when onAnswer != null && (live || key == 'g'))
+              case final action? when onAnswer != null && (live || key == 'g'))
             WorkspaceBarControl(
               key: ValueKey('$idPrefix-$key'),
               label: action.label,
@@ -530,9 +561,8 @@ class DaemonKeys extends StatelessWidget {
                   widthFactor: 1,
                   child: Text(
                     key,
-                    style: style(emphasized).copyWith(
-                      decoration: TextDecoration.underline,
-                    ),
+                    style: style(emphasized)
+                        .copyWith(decoration: TextDecoration.underline),
                   ),
                 ),
               ),
@@ -550,6 +580,14 @@ class DaemonKeys extends StatelessWidget {
 /// daemon's colour, on its backdrop when it brings one (the grue's black). A
 /// filled daemon's portrait plate takes the plate colour instead, glyph by
 /// glyph down its gradient ([plate]).
+String illustratedCardDetails(List<String> lines, int portraitRows) => [
+  for (var i = 1; i < lines.length - 1; i++)
+    if (!(i >= 2 && i < 3 + portraitRows))
+      lines[i].startsWith('| ') && lines[i].endsWith(' |')
+          ? lines[i].substring(2, lines[i].length - 2).trimRight().trimLeft()
+          : lines[i],
+].join('\n').trim();
+
 class DaemonCardText extends StatelessWidget {
   const DaemonCardText({
     super.key,
@@ -560,7 +598,9 @@ class DaemonCardText extends StatelessWidget {
     this.backdrop,
     this.plate,
     this.mats,
+    this.illustration,
   });
+  final IllustratedArt? illustration;
   final List<String> lines;
   final int portraitRows;
   final TextStyle style;
@@ -574,6 +614,21 @@ class DaemonCardText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (illustration case final art?) {
+      return SizedBox(
+        width: 350,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DaemonIllustration(art: art, size: 260, semanticsLabel: 'Tim'),
+            SelectableText(
+              illustratedCardDetails(lines, portraitRows),
+              style: style,
+            ),
+          ],
+        ),
+      );
+    }
     // card.mjs: the border, the head and a blank row, then the portrait. Only
     // the inside of those rows takes the daemon's colour; the frame stays ink.
     final art = style.copyWith(color: colour, backgroundColor: backdrop);
@@ -728,9 +783,8 @@ class _DaemonDetailNoticeState extends State<DaemonDetailNotice> {
               color: color,
               emphasized: emphasized,
             ).copyWith(fontFeatures: daemonTextFeatures);
-        final legend = [
-          for (final a in widget.actions) '${a.key} ${a.label}',
-        ].join(' · ');
+        final legend = [for (final a in widget.actions) '${a.key} ${a.label}']
+            .join(' · ');
         return Material(
           key: const ValueKey('daemon-detail'),
           color: theme.background,
@@ -866,9 +920,9 @@ class _DaemonBriefNoticeState extends State<DaemonBriefNotice> {
       builder: (context, _) {
         final theme = currentTerminalTheme();
         final cell = workspaceBarCellSizeOf(context);
-        TextStyle ink(Color color) => workspaceBarTextStyle(
-          color: color,
-        ).copyWith(fontFeatures: daemonTextFeatures);
+        TextStyle ink(Color color) =>
+            workspaceBarTextStyle(color: color)
+                .copyWith(fontFeatures: daemonTextFeatures);
         return Material(
           color: theme.background,
           shape: RoundedRectangleBorder(
@@ -885,16 +939,14 @@ class _DaemonBriefNoticeState extends State<DaemonBriefNotice> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (brief.line.isNotEmpty)
-                  Text(
-                    '$name: ${brief.line}',
-                    style: ink(theme.foreground),
-                  ),
+                  Text('$name: ${brief.line}', style: ink(theme.foreground)),
                 for (final (i, item) in brief.items.indexed) ...[
                   () {
                     final about = item.about;
                     final actions = [
                       ...item.actions,
-                      if (about != null && !item.actions.any((a) => a.key == 'g'))
+                      if (about != null &&
+                          !item.actions.any((a) => a.key == 'g'))
                         (key: 'g', label: 'open', choice: 'open'),
                     ];
                     final split = splitDaemonKeys(item.line, actions);

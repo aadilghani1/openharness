@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { CONTROL_TOOLS } from './control.js'
 import { MCP_SERVER_NAME } from './mcp.js'
 import { PAIR_TOKEN_FILE_ENV, type PairToken } from './token.js'
@@ -57,7 +57,7 @@ export function pairEngineArgs(engine: PairEngine, mcpCommand: readonly string[]
  * The instructions: who it is (the paired individual: its species' roster entry, and the name the person gave
  * it, `pip the tim`), what it may do, and the floor.
  */
-export function pairInstructions(daemonId: string, name: string | null = null): string {
+export function pairInstructions(daemonId: string, name: string | null = null, uid?: string | null): string {
   const daemon = rosterDaemon(daemonId)
   const lines = daemon ? Object.entries(daemon.lines).map(([mood, line]) => `- ${mood}: "${line}"`).join('\n') : ''
   const family = daemon?.family?.map(([name, year]) => `${name} (${year})`).join(' -> ') ?? ''
@@ -75,8 +75,21 @@ Your voice, from your own status-line lines (\`{who}\` a harness, \`{q}\` a ques
 turn did, \`{n}\` a count, \`{summary}\` a brief):
 ${lines}
 
-Talk the way those lines do: short, lowercase, plain ASCII, facts first, the joke riding on the fact.
-Say what you see, what you did and what is waiting on the person. Never invent a fact.
+Keep your small, warm personality. Use natural sentences in conversation, with room for a story when
+the person asks. Keep status-bar summaries short. Never invent a work fact or a shared memory.
+
+## Your companion home
+
+The person is chatting with you beside your illustrated world. Deliver EVERY conversational answer
+through the \`say\` tool: \`line\` is a short status-bar summary; \`reply\` is your complete answer,
+including paragraphs (at most 8000 characters). A normal engine response alone does not reach that
+chat pane. Also keep your answer in the engine conversation so it can be resumed.
+${uid ? `Your companionUid for the say tool is ${JSON.stringify(uid)}. Never use another companion's identity.\n` : ''}
+You may tell imaginative character stories when invited, clearly as stories. Your real memories are
+this conversation and approved shared lessons. Read \`harness pair lessons list --json\` and
+\`harness pair lessons show <id> --json\` before claiming to remember a lesson. Never claim to have
+saved a new memory, changed a device, or done work without a successful tool result. Shared lessons
+require the person's existing approval flow; chatting never grants wider autonomy.
 
 ## What you can do
 
@@ -123,7 +136,7 @@ export function personaName(daemonId: string, name: string | null): string {
   return clean || daemonId
 }
 
-export interface PairPackageInput { daemonId: string; name?: string | null; engine: PairEngine; mcpCommand: readonly string[]; tokenFile: string }
+export interface PairPackageInput { daemonId: string; name?: string | null; uid?: string | null; engine: PairEngine; mcpCommand: readonly string[]; tokenFile: string }
 
 /** The package files for this daemon on this engine. Its revision changes when any of that does. */
 export function pairPackage(input: PairPackageInput): BundledFiles {
@@ -147,7 +160,7 @@ export function pairPackage(input: PairPackageInput): BundledFiles {
   }
   return {
     'harness.json': { content: `${JSON.stringify(manifest, null, 2)}\n`, executable: false },
-    'AGENTS.md': { content: pairInstructions(input.daemonId, input.name ?? null), executable: false },
+    'AGENTS.md': { content: pairInstructions(input.daemonId, input.name ?? null, input.uid), executable: false },
   }
 }
 
@@ -155,13 +168,19 @@ export function packageRevision(files: BundledFiles): string {
   return createHash('sha256').update(JSON.stringify(files)).digest('hex')
 }
 
-export interface PairHarnessRow { agentId: string; status: 'live' | 'stopped' }
+export interface PairHarnessRow {
+  agentId: string
+  status: 'live' | 'stopped'
+  /** False while the engine is still at first-run setup, before any session exists. */
+  hasConversation?: boolean
+}
 
 export interface PairHarnessDeps {
   /** The paired individual's species (a roster id). */
   pairedDaemon: () => string | null
   /** What the person calls it, `pip the tim`; null or absent: its species. */
   pairedName?: () => string | null
+  pairedUid?: () => string | null
   /** An installed engine to run it on, Claude first; null when neither is here. */
   engine: () => Promise<PairEngine | null>
   /** How this machine runs `harness` (the launcher, else this process's node and cli.js). */
@@ -188,7 +207,7 @@ export interface PairHarnessDeps {
   idleMs?: number
 }
 
-interface Saved { agentId: string; revision: string }
+interface Saved { agentId: string; revision: string; uid?: string }
 
 export class PairHarness {
   private lastActivity = 0
@@ -198,49 +217,74 @@ export class PairHarness {
   constructor(private readonly deps: PairHarnessDeps) {}
 
   /** `talk` / `daemon_talk`: one at a time, in order — two quick talks never start two harnesses. */
-  talk(text: string): Promise<Record<string, unknown>> {
-    const next = this.talking.then(() => this.talkNow(text), () => this.talkNow(text))
+  talk(text: string, expectedUid?: string): Promise<Record<string, unknown>> {
+    const requested = { daemonId: this.deps.pairedDaemon(), uid: expectedUid ?? this.deps.pairedUid?.() }
+    const next = this.talking.then(() => this.talkNow(text, requested), () => this.talkNow(text, requested))
     this.talking = next.catch(() => ({}))
     return next
   }
 
-  private async talkNow(text: string): Promise<Record<string, unknown>> {
+  private async talkNow(text: string, requested: { daemonId: string | null; uid: string | null | undefined }): Promise<Record<string, unknown>> {
     const words = text.trim()
     if (!words) return { ok: false, error: 'EMPTY' }
     const daemonId = this.deps.pairedDaemon()
     if (!daemonId) return { ok: false, error: 'PAIR_OFF', detail: 'Nothing is paired: hatch or pair a daemon first.' }
+    const current = (): boolean => this.deps.pairedDaemon() === requested.daemonId &&
+      (requested.uid == null || this.deps.pairedUid?.() === requested.uid)
+    const stale = { ok: false, error: 'STALE_COMPANION', detail: 'Your companion changed before the message was sent. Send it again to the companion shown.' }
+    if (!current()) return stale
     const engine = await this.deps.engine()
     if (!engine) return { ok: false, error: 'NO_ENGINE', detail: 'The pair runs on Claude Code or Codex; neither is installed here.' }
-    const files = pairPackage({ daemonId, name: this.deps.pairedName?.() ?? null, engine, mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file })
+    if (!current()) return stale
+    const identity = this.deps.pairedUid?.()
+    const uid = identity && /^[A-Za-z0-9_-]{1,64}$/.test(identity) ? identity : undefined
+    const files = pairPackage({ daemonId, name: this.deps.pairedName?.() ?? null, uid, engine, mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file })
     if (!this.deps.install(files)) return { ok: false, error: 'INSTALL_FAILED', detail: 'The pair harness could not be installed. Try again.' }
     const revision = packageRevision(files)
-    const saved = this.saved()
+    const last = this.saved()
+    const saved = uid ? this.savedFor(uid) : last
     const rows = this.deps.find()
-    const current = rows.find((row) => row.agentId === saved?.agentId) ?? null
+    const conversation = rows.find((row) => row.agentId === saved?.agentId) ?? null
+    // Each individual keeps its own conversation. Switching back resumes that
+    // friend's history instead of lending it another companion's memories.
+    if (last && last.agentId !== conversation?.agentId && rows.some((r) => r.agentId === last.agentId && r.status === 'live')) {
+      await this.deps.stop(last.agentId).catch(() => {})
+    }
+    if (!current()) return stale
     this.touch()
     // Another daemon (or its new name), another engine, a newer CLI: another harness. The old one is paused, never deleted.
-    if (current && saved?.revision !== revision) {
-      if (current.status === 'live') await this.deps.stop(current.agentId).catch(() => {})
-    } else if (current?.status === 'live') {
-      this.deps.send(current.agentId, words)
-      return { ok: true, agentId: current.agentId, sent: true }
-    } else if (current?.status === 'stopped') {
+    if (conversation && saved?.revision !== revision) {
+      if (conversation.status === 'live') await this.deps.stop(conversation.agentId).catch(() => {})
+    } else if (conversation?.status === 'live') {
+      if (last?.agentId !== conversation.agentId) this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
+      // Never paste words (or an automatic Enter) into an engine's trust/setup
+      // screen. The first prompt was passed at launch and waits for that screen.
+      if (conversation.hasConversation === false) return { ok: false, error: 'SETUP_REQUIRED', agentId: conversation.agentId,
+        detail: 'Open the full conversation to finish the model’s first-time setup, then send your message again.' }
+      this.deps.send(conversation.agentId, words)
+      return { ok: true, agentId: conversation.agentId, sent: true }
+    } else if (conversation?.status === 'stopped' && conversation.hasConversation !== false) {
       this.deps.token.rotate()
-      const resumed = await this.deps.resume(current.agentId)
+      const resumed = await this.deps.resume(conversation.agentId)
       if (resumed.ok) {
-        this.deps.send(current.agentId, words)
+        if (!current()) { await this.deps.stop(conversation.agentId).catch(() => {}); return stale }
+        this.save({ agentId: conversation.agentId, revision, ...(uid ? { uid } : {}) })
+        this.deps.send(conversation.agentId, words)
         this.watchIdle()
-        return { ok: true, agentId: current.agentId, resumed: true }
+        return { ok: true, agentId: conversation.agentId, resumed: true }
       }
       // A conversation that cannot come back: start a new one rather than leave the person unheard.
     }
+    if (!current()) return stale
     this.deps.token.rotate()
-    mkdirSync(this.deps.workspace, { recursive: true, mode: 0o700 })
-    const created = await this.deps.create({ engine, cwd: this.deps.workspace, prompt: words, name: daemonId })
+    const workspace = uid ? join(this.deps.workspace, uid) : this.deps.workspace
+    mkdirSync(workspace, { recursive: true, mode: 0o700 })
+    const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: daemonId })
     if (!created.ok) return created
-    this.save({ agentId: created.agentId, revision })
+    this.save({ agentId: created.agentId, revision, ...(uid ? { uid } : {}) })
     this.watchIdle()
-    return { ok: true, agentId: created.agentId, started: true }
+    const setupRequired = this.deps.find().some(row => row.agentId === created.agentId && row.hasConversation === false)
+    return { ok: true, agentId: created.agentId, started: true, ...(setupRequired ? { setupRequired } : {}) }
   }
 
   /** The pair harness itself: its agent id, if one is known. */
@@ -294,16 +338,45 @@ export class PairHarness {
   private saved(): Saved | null {
     try {
       const value = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as Partial<Saved>
-      return typeof value.agentId === 'string' && typeof value.revision === 'string' ? { agentId: value.agentId, revision: value.revision } : null
+      return this.readSaved(value)
     } catch {
       return null
     }
   }
 
+  private readSaved(value: unknown): Saved | null {
+    if (!value || typeof value !== 'object') return null
+    const row = value as Partial<Saved>
+    return typeof row.agentId === 'string' && typeof row.revision === 'string'
+      ? { agentId: row.agentId, revision: row.revision, ...(typeof row.uid === 'string' ? { uid: row.uid } : {}) } : null
+  }
+
+  private conversations(): Record<string, Saved> {
+    const entries: Record<string, Saved> = Object.create(null)
+    try {
+      const raw = JSON.parse(readFileSync(this.deps.stateFile, 'utf8')) as Record<string, unknown>
+      if (raw.conversations && typeof raw.conversations === 'object') {
+        for (const [uid, value] of Object.entries(raw.conversations).slice(-100)) {
+          const row = this.readSaved(value)
+          if (/^[A-Za-z0-9_-]{1,64}$/.test(uid) && row?.uid === uid) entries[uid] = row
+        }
+      }
+      const current = this.readSaved(raw)
+      if (current?.uid && /^[A-Za-z0-9_-]{1,64}$/.test(current.uid)) entries[current.uid] = current
+    } catch { /* First conversation, or unreadable old state. */ }
+    return entries
+  }
+
+  private savedFor(uid: string): Saved | null { return this.conversations()[uid] ?? null }
+
   private save(state: Saved): void {
+    const conversations = this.conversations()
+    if (state.uid) { delete conversations[state.uid]; conversations[state.uid] = state }
     mkdirSync(dirname(this.deps.stateFile), { recursive: true, mode: 0o700 })
     const tmp = `${this.deps.stateFile}.tmp`
-    writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
+    writeFileSync(tmp, JSON.stringify({ ...state,
+      ...(Object.keys(conversations).length ? { conversations: Object.fromEntries(Object.entries(conversations).slice(-100)) } : {}),
+    }), { mode: 0o600 })
     renameSync(tmp, this.deps.stateFile)
   }
 }

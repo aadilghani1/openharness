@@ -1,3 +1,4 @@
+import { readCompanionIdentity, sameCompanion, type CompanionIdentity, type CompanionMilestone } from './companionIdentity.js'
 // The message layer: what the daemon and the dial SAY to each other, on top of the bytes serial.ts moves.
 //
 // Written twice — here and in devices/harness-device/firmware/main/cable_client.c — with no shared code, because one half
@@ -232,6 +233,10 @@ export interface RouteDecision {
  * and a network to prove that `hello` gets a `welcome`.
  */
 export interface CableHost {
+  /** Account/guest paired species while the creature experiment is on; otherwise null. */
+  companion?(): string | null
+  companionIdentity?(): CompanionIdentity | null
+  companionMilestone?(): CompanionMilestone | null
   /** The computer at the other end of the cable — its identity, not "the" machine's. */
   localMachine(): { id: string; name: string }
   /** Every machine the owner has, local row included. Never rejects: `source` explains a short list. */
@@ -367,10 +372,16 @@ export interface DeviceSettings {
   scrollReversed: boolean
   round: boolean
   voiceLang: string
+  /** Presence advertises companion.set support. Omitted by older firmware. */
+  followCompanion?: boolean
+  /** Active transient companion; null means the saved device skin is showing. */
+  companion?: string | null
+  companionProtocol?: number
+  companionDetails?: CompanionIdentity | null
 }
 
 /** The fields a `settings.set` may name. Absent means unchanged — see handle_settings_set on the device. */
-export type DeviceSettingsPatch = Partial<Omit<DeviceSettings, 'round' | 'face'>>
+export type DeviceSettingsPatch = Partial<Omit<DeviceSettings, 'round' | 'face' | 'companion' | 'companionProtocol' | 'companionDetails'>>
 
 /** What a window needs to draw the device row. `updating` names the version on its way over. */
 export interface DialStatus {
@@ -460,6 +471,10 @@ function readSettings(value: unknown): DeviceSettings | undefined {
     scrollReversed: raw.scrollReversed as boolean,
     round: raw.round as boolean,
     voiceLang: raw.voiceLang,
+    ...(raw.companionProtocol === 2 ? {companionProtocol:2, companionDetails:readCompanionIdentity(raw.companionDetails)} : {}),
+    ...(typeof raw.followCompanion === 'boolean' &&
+        (raw.companion === null || typeof raw.companion === 'string')
+      ? { followCompanion: raw.followCompanion, companion: raw.companion as string | null } : {}),
   }
 }
 
@@ -472,6 +487,8 @@ export class CableSession {
   private greetedHw: string | undefined
   /** What the device last SAID its settings are. Never what this computer last asked for. */
   private greetedSettings: DeviceSettings | undefined
+  private companionEventSeen: string | null | undefined
+  private companionAttempt: { id: string | null; at: number } | undefined
   private greetedFw: string | null = null
   private lastRx = 0
   private stopped = false
@@ -652,6 +669,7 @@ export class CableSession {
     // restarted greets the dial before its registry has finished loading, so the one thing it ever said
     // was "no agents". The dial removed both tiles and sat empty while the daemon knew about two.
     if (this.greetedMac !== null) {
+      await this.syncCompanion()
       // Machines FIRST. The dial paints its Overview eyebrow from the machine list, so an agent list that
       // lands first shows a nameless "Machine" for a frame.
       if (Date.now() - this.machinesAt >= MACHINES_POLL_MS) {
@@ -751,6 +769,8 @@ export class CableSession {
     this.decoder.reset()
     this.greetedMac = null
     this.greetedFw = null
+    this.companionAttempt = undefined
+    this.companionEventSeen = undefined
     this.appFocusGeneration += 1
     this.drivingAppFocus = false
     this.expectedAppFocusEcho = ''
@@ -903,7 +923,7 @@ export class CableSession {
         // pane: its fw and mac are the same, and without this the greeting would be treated as a keepalive.
         const settings = readSettings(msg.settings)
         const settingsChanged = JSON.stringify(settings) !== JSON.stringify(this.greetedSettings)
-        if (settings) this.greetedSettings = settings
+        this.greetedSettings = settings
         if (settingsChanged && mac === this.greetedMac && fw === this.greetedFw) this.report()
         if (mac !== this.greetedMac || fw !== this.greetedFw) {
           const returning = mac === this.greetedMac
@@ -924,6 +944,7 @@ export class CableSession {
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
         await this.maybeOfferFirmware(str('fw') ?? '')
+        await this.syncCompanion()
         return
       }
       case 'pong':
@@ -1644,11 +1665,37 @@ export class CableSession {
    */
   async setSettings(patch: DeviceSettingsPatch): Promise<boolean> {
     // `id` addresses the DEVICE; it is not one of its settings and must not be sent as one.
-    const fields = Object.entries(patch).filter(([key, value]) => value !== undefined && key !== 'id')
+    const fields = Object.entries(patch).filter(([key, value]) => value !== undefined && key !== 'id' && key !== 'companion' && key !== 'companionDetails' && key !== 'companionProtocol')
     if (!fields.length) return true
     const sent = await this.send({ t: 'settings.set', ...Object.fromEntries(fields) })
     if (!sent) this.log('cable: settings change not written — the device is not on the wire')
     return sent
+  }
+
+  /** A transient identity, independent of the device's saved skin and preferences. */
+  private async syncCompanion(): Promise<void> {
+    const settings = this.greetedSettings
+    if (!this.greetedMac || typeof settings?.followCompanion !== 'boolean') return
+    const requested = settings.followCompanion ? this.host.companion?.() : null
+    const id = requested && ['tim', 'gnu', 'lynx', 'mutt', 'yak', 'gopher', 'bug', 'tux', 'auk', 'beastie'].includes(requested)
+      ? requested : null
+    const identity = id ? this.host.companionIdentity?.() ?? null : null
+    const detailed = settings.companionProtocol === 2 && !!identity
+    const key = detailed ? JSON.stringify(identity) : id
+    const now = Date.now()
+    const same = settings.companion === id && (!detailed || sameCompanion(settings.companionDetails, identity))
+    if (same) this.companionAttempt = undefined
+    else if (this.companionAttempt?.id !== key || now - this.companionAttempt.at >= 5_000) {
+      this.companionAttempt = {id:key,at:now}
+      if (await this.send({t:'companion.set',id,...(detailed?{identity}: {})})) this.log(`cable: companion → ${id ?? 'saved skin'}${detailed?` (${identity!.name}, ${identity!.version})`:''}`)
+    }
+    const event = this.host.companionMilestone?.() ?? null
+    if (this.companionEventSeen === undefined) { this.companionEventSeen=event?.token ?? null; return }
+    if (event && event.token !== this.companionEventSeen) {
+      this.companionEventSeen=event.token
+      if (settings.companionProtocol===2 && settings.followCompanion && !settings.quiet && now>=event.at && now-event.at<=8_000)
+        await this.send({t:'companion.celebrate',kind:event.kind,token:event.token,identity:event.companion})
+    }
   }
 
   private async send(msg: Message): Promise<boolean> {

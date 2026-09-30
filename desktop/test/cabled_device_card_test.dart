@@ -47,8 +47,9 @@ Future<void> _tap(WidgetTester tester, Key key) async {
 
 Future<List<(String, Map<String, Object?>)>> _pump(
   WidgetTester tester,
-  List<DialStatus> devices,
-) async {
+  List<DialStatus> devices, {
+  bool showCompanion = false,
+}) async {
   final sent = <(String, Map<String, Object?>)>[];
   await tester.pumpWidget(
     MaterialApp(
@@ -56,6 +57,7 @@ Future<List<(String, Map<String, Object?>)>> _pump(
         body: SingleChildScrollView(
           child: CabledDeviceCard(
             devices: devices,
+            showCompanion: showCompanion,
             onChanged: (id, patch) => sent.add((id, patch)),
           ),
         ),
@@ -66,11 +68,67 @@ Future<List<(String, Map<String, Object?>)>> _pump(
 }
 
 void main() {
-  testWidgets('the pane names the robot it is changing, before any row', (tester) async {
+  testWidgets(
+    'companion following is gated and changes only the named device preference',
+    (tester) async {
+      const devices = [
+        DialStatus(
+          attached: true,
+          id: 'dial',
+          settings: DeviceSettings(
+            brightness: 40,
+            character: 2,
+            face: 466,
+            muted: true,
+            quiet: false,
+            straightTitle: false,
+            focusFace: false,
+            scrollReversed: false,
+            round: true,
+            voiceLang: 'en',
+            followCompanion: true,
+            companion: 'gnu',
+          ),
+        ),
+      ];
+      await _pump(tester, devices);
+      expect(find.text('Follow desktop companion'), findsNothing);
+      final sent = await _pump(tester, devices, showCompanion: true);
+      expect(find.text('Follow desktop companion'), findsOneWidget);
+      expect(find.text('Showing GNU from your Zoo.'), findsOneWidget);
+      await _tap(tester, const ValueKey('device-followCompanion-dial'));
+      expect(sent, hasLength(1));
+      expect(sent.single.$1, 'dial');
+      expect(sent.single.$2, {'followCompanion': false});
+      // The switch waits for the device's read-back acknowledgement.
+      expect(
+        tester
+            .widget<Switch>(
+              find.byKey(const ValueKey('device-followCompanion-dial')),
+            )
+            .value,
+        isTrue,
+      );
+      await _pump(tester, const [
+        DialStatus(attached: true, id: 'old', settings: _round),
+      ], showCompanion: true);
+      expect(find.text('Follow desktop companion'), findsNothing);
+    },
+  );
+
+  testWidgets('the pane names the robot it is changing, before any row', (
+    tester,
+  ) async {
     // These rows look exactly like the app's own preferences, so without this they read as settings
     // for Harness itself.
     await _pump(tester, const [
-      DialStatus(attached: true, id: 'AA:01', mac: 'aa:bb', fw: '0.0.86', settings: _round),
+      DialStatus(
+        attached: true,
+        id: 'AA:01',
+        mac: 'aa:bb',
+        fw: '0.0.86',
+        settings: _round,
+      ),
     ]);
     expect(find.text('These settings apply to'), findsOneWidget);
     expect(find.text('Dial'), findsOneWidget);
@@ -86,9 +144,11 @@ void main() {
     expect(find.text('Skin'), findsOneWidget);
     expect(find.text('Edge text'), findsOneWidget);
     expect(find.text('Voice language'), findsOneWidget);
-      });
+  });
 
-  testWidgets('a square face HIDES the row it has no meaning for', (tester) async {
+  testWidgets('a square face HIDES the row it has no meaning for', (
+    tester,
+  ) async {
     // Greying them out would still claim the settings exist there.
     await _pump(tester, const [
       DialStatus(attached: true, id: 'BB:02', settings: _square),
@@ -99,33 +159,46 @@ void main() {
     expect(find.text('Reverse scrolling'), findsOneWidget);
   });
 
-  testWidgets('one field at a time crosses, named the way the device names it', (tester) async {
-    final sent = await _pump(tester, const [
-      DialStatus(attached: true, id: 'AA:01', settings: _round),
-    ]);
-    await _tap(tester, const ValueKey('device-quiet-AA:01'));
-    expect(sent, hasLength(1));
-    expect(sent.single.$1, 'AA:01');
-    expect(sent.single.$2, {'quiet': true});
+  testWidgets(
+    'one field at a time crosses, named the way the device names it',
+    (tester) async {
+      final sent = await _pump(tester, const [
+        DialStatus(attached: true, id: 'AA:01', settings: _round),
+      ]);
+      await _tap(tester, const ValueKey('device-quiet-AA:01'));
+      expect(sent, hasLength(1));
+      expect(sent.single.$1, 'AA:01');
+      expect(sent.single.$2, {'quiet': true});
 
-    // The switch says "sound on"; the wire field is its opposite, and the flip belongs in the pane.
-    await _tap(tester, const ValueKey('device-muted-AA:01'));
-    expect(sent.last.$2, {'muted': true});
-  });
+      // The switch says "sound on"; the wire field is its opposite, and the flip belongs in the pane.
+      await _tap(tester, const ValueKey('device-muted-AA:01'));
+      expect(sent.last.$2, {'muted': true});
+    },
+  );
 
-  testWidgets('an unplugged robot is readable and not writable', (tester) async {
+  testWidgets('an unplugged robot is readable and not writable', (
+    tester,
+  ) async {
     final sent = await _pump(tester, const [
       DialStatus(attached: false, id: 'AA:01', mac: 'aa:bb', settings: _round),
     ]);
     expect(find.text('Unplugged'), findsOneWidget);
-    expect(find.text('Skin'), findsOneWidget, reason: 'the values stay readable');
-    final toggle = tester.widget<Switch>(find.byKey(const ValueKey('device-quiet-AA:01')));
+    expect(
+      find.text('Skin'),
+      findsOneWidget,
+      reason: 'the values stay readable',
+    );
+    final toggle = tester.widget<Switch>(
+      find.byKey(const ValueKey('device-quiet-AA:01')),
+    );
     expect(toggle.onChanged, isNull);
     await _tap(tester, const ValueKey('device-quiet-AA:01'));
     expect(sent, isEmpty);
   });
 
-  testWidgets('two robots on one desk get a picker, and the rows follow it', (tester) async {
+  testWidgets('two robots on one desk get a picker, and the rows follow it', (
+    tester,
+  ) async {
     // Both are dials, so the name alone cannot separate them: the detail line carries the address.
     // And the rows belong to ONE of them — reading them as account-wide would overwrite one device
     // with the other's taste the first time somebody touched a row.
@@ -143,14 +216,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Edge text'), findsNothing);
     await _tap(tester, const ValueKey('device-quiet-BB:02'));
-    expect(sent.single.$1, 'BB:02', reason: 'the change goes to the selected robot');
+    expect(
+      sent.single.$1,
+      'BB:02',
+      reason: 'the change goes to the selected robot',
+    );
   });
 
-  testWidgets('a robot that has not reported says so instead of showing defaults', (tester) async {
-    await _pump(tester, const [
-      DialStatus(attached: true, id: 'AA:01', fw: '0.0.68'),
-    ]);
-    expect(find.textContaining('keeps its settings on the glass'), findsOneWidget);
-    expect(find.text('Skin'), findsNothing);
-  });
+  testWidgets(
+    'a robot that has not reported says so instead of showing defaults',
+    (tester) async {
+      await _pump(tester, const [
+        DialStatus(attached: true, id: 'AA:01', fw: '0.0.68'),
+      ]);
+      expect(
+        find.textContaining('keeps its settings on the glass'),
+        findsOneWidget,
+      );
+      expect(find.text('Skin'), findsNothing);
+    },
+  );
 }

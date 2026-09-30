@@ -55,6 +55,8 @@ set(BOARD_SRCS
     "ui/habitat/gestures.c"
     "ui/habitat/tim.c"
     "ui/habitat/character.c"
+    "ui/habitat/illustrated.c"
+    "ui/habitat/illustrated_cache.c"
     "ui/habitat/character_motion.c"
     "ui/habitat/character_layout.c"
     "ui/habitat/tux.c"
@@ -94,6 +96,7 @@ idf_component_register(
         "ui"
         "board"
     REQUIRES ${BOARD_REQUIRES}
+    EMBED_FILES "../assets/companions/companion_art.pack"
 )
 
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy

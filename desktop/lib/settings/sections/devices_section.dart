@@ -19,7 +19,14 @@ import '../../state/dial_status.dart';
 import 'cabled_device_card.dart';
 
 class DevicesSection extends StatefulWidget {
-  const DevicesSection({super.key, this.cli, this.dial, this.onDeviceSettings});
+  const DevicesSection({
+    super.key,
+    this.cli,
+    this.dial,
+    this.onDeviceSettings,
+    this.showCompanion = false,
+  });
+  final bool showCompanion;
   final AutonomousDeviceCli? cli;
 
   /// The robots on a cable at THIS desk. Null in a build with no daemon behind it (and in the tests
@@ -294,6 +301,7 @@ class _DevicesSectionState extends State<DevicesSection> {
                 listenable: dial,
                 builder: (context, _) => CabledDeviceCard(
                   devices: dial.devices,
+                  showCompanion: widget.showCompanion,
                   onChanged: widget.onDeviceSettings ?? (_, _) {},
                 ),
               ),

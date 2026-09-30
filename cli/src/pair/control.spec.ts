@@ -79,6 +79,17 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; fleet?: boolean }
 }
 
 describe('each tool maps to the right call', () => {
+  it('delivers a complete chat answer with a bounded status summary, no action keys, and exact identity', async () => {
+    const w = world()
+    w.deps.pairing.pairedUid = () => 'tim-one'
+    const reply = 'Hello. I remember our conversation.\n\nHere is the longer answer. '.repeat(8)
+    expect(await w.call('say', { line: 'A little story.', reply, companionUid: 'tim-other' })).toMatchObject({ error: 'STALE_COMPANION' })
+    expect(await w.call('say', { line: 'A little story.', reply, companionUid: 'tim-one' }, false)).toMatchObject({ error: 'TOKEN_REQUIRED' })
+    expect(await w.call('say', { line: 'A little story.', reply: 'x'.repeat(8001), companionUid: 'tim-one' })).toMatchObject({ error: 'TOO_LONG' })
+    expect(w.said).toHaveLength(0)
+    expect(await w.call('say', { line: '[y/n] A little story.', reply, companionUid: 'tim-one', actions: [{ key: 'y' }] })).toEqual({ ok: true })
+    expect(w.said).toEqual([expect.objectContaining({ line: 'A little story.', reply: reply.trim(), companionUid: 'tim-one', actions: [], from: 'pair', mood: 'say' })])
+  })
   it('lists the BRAIN.md table, and nothing that deletes, restarts, forks or bypasses', () => {
     expect(CONTROL_TOOLS.map((t) => t.name)).toEqual(['list_machines', 'list_harnesses', 'read_harness', 'brief', 'answer_question',
       'send_prompt', 'stop_turn', 'start_harness', 'pause_harness', 'resume_harness', 'say'])

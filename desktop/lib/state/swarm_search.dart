@@ -1173,7 +1173,7 @@ class SwarmSearchController extends ChangeNotifier {
           app.swarms.any(
             (swarm) =>
                 swarm.id == targetId &&
-                !swarm.isStore &&
+                !swarm.isUtility &&
                 !swarm.isOrchestrator &&
                 swarm.panes.length < AppNotifier.maxPanes,
           )) &&
@@ -2020,7 +2020,7 @@ class SwarmSearchController extends ChangeNotifier {
                 app.swarms.any(
                   (swarm) =>
                       swarm.id == targetId &&
-                      !swarm.isStore &&
+                      !swarm.isUtility &&
                       !swarm.isOrchestrator &&
                       swarm.panes.length < AppNotifier.maxPanes,
                 ))
@@ -2041,7 +2041,7 @@ class SwarmSearchController extends ChangeNotifier {
                         app.swarms.any(
                           (swarm) =>
                               swarm.id == targetId &&
-                              !swarm.isStore &&
+                              !swarm.isUtility &&
                               !swarm.isOrchestrator &&
                               swarm.panes.length + _missingCount(row) <=
                                   AppNotifier.maxPanes,

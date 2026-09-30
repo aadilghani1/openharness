@@ -1088,6 +1088,123 @@ private func validDaemonText(_ value: String?, cells: Int) -> String? {
   return value
 }
 
+/// Only generated, bundled slot frames may reach AppKit. No URLs, paths supplied
+/// by a daemon, or full-size hover portraits are decoded by this small control.
+private final class SwarmDaemonArt {
+  // Generated from each idle pose, shared with Flutter. Keep anchors fixed
+  // throughout animation so breathing and jumps don't get centered away.
+  private lazy var centers: [String: [Double]] = {
+    guard let url = assetURL("assets/daemon-art/alignment.json"),
+      let data = try? Data(contentsOf: url), data.count <= 16384,
+      let values = try? JSONDecoder().decode([String: [Double]].self, from: data),
+      values.count <= 64,
+      values.values.allSatisfy({ $0.count == 4 && $0.enumerated().allSatisfy {
+        $0.element.isFinite && (0...($0.offset < 2 ? 64.0 : 350.0)).contains($0.element)
+      } }) else { return [:] }
+    return values
+  }()
+
+  func center(asset: String?) -> NSPoint {
+    guard let asset, Self.opens(asset) else { return NSPoint(x: 0.5, y: 0.5) }
+    let name = asset.components(separatedBy: "/").last ?? ""
+    let key = name.components(separatedBy: "_").prefix(2).joined(separator: "_")
+    guard let center = centers[key] else { return NSPoint(x: 0.5, y: 0.5) }
+    return NSPoint(x: center[0] / 64, y: center[1] / 64)
+  }
+
+  static func opens(_ asset: String) -> Bool {
+    let prefix = "assets/daemon-art/slot/"
+    guard asset.utf8.count <= 160, asset.hasPrefix(prefix), asset.hasSuffix(".png") else { return false }
+    let stem = asset.dropFirst(prefix.count).dropLast(4)
+    return !stem.isEmpty && stem.unicodeScalars.allSatisfy {
+      (0x30...0x39).contains($0.value) || (0x41...0x5a).contains($0.value) ||
+        (0x61...0x7a).contains($0.value) || $0.value == 0x5f || $0.value == 0x2d
+    }
+  }
+
+  private let cache = NSCache<NSString, NSImage>()
+  private var missing: Set<String> = []
+  private let assetURL: (String) -> URL?
+
+  init(assetURL: @escaping (String) -> URL? = { asset in
+    let framework = Bundle.main.privateFrameworksURL?.appendingPathComponent("App.framework")
+    let bundle = framework.flatMap { Bundle(url: $0) }
+      ?? Bundle(identifier: "io.flutter.flutter.app") ?? Bundle.main
+    return bundle.resourceURL?.appendingPathComponent("flutter_assets").appendingPathComponent(asset)
+  }) {
+    self.assetURL = assetURL
+    cache.countLimit = 128
+    cache.totalCostLimit = 2 * 1024 * 1024
+  }
+
+  private lazy var palettes: [String: [[[Int]]]] = {
+    guard let url = assetURL("assets/daemon-art/styles.json"), let data = try? Data(contentsOf: url), data.count < 32768,
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { return [:] }
+    return object.compactMapValues { $0["palettes"] as? [[[Int]]] }
+  }()
+
+  private func frame(_ asset: String) -> CGImage? {
+    guard Self.opens(asset), let url=assetURL(asset), let source=CGImageSourceCreateWithURL(url as CFURL,nil) else { return nil }
+    return CGImageSourceCreateThumbnailAtIndex(source,0,[
+      kCGImageSourceCreateThumbnailFromImageAlways:true,kCGImageSourceCreateThumbnailWithTransform:true,
+      kCGImageSourceThumbnailMaxPixelSize:64,kCGImageSourceShouldCacheImmediately:true] as CFDictionary)
+  }
+
+  private func rgba(_ image: CGImage) -> [UInt8]? {
+    var bytes=[UInt8](repeating:0,count:image.width*image.height*4)
+    let valid=bytes.withUnsafeMutableBytes { memory -> Bool in
+      guard let context=CGContext(data:memory.baseAddress,width:image.width,height:image.height,bitsPerComponent:8,
+        bytesPerRow:image.width*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,
+        bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+      context.draw(image,in:CGRect(x:0,y:0,width:image.width,height:image.height));return true
+    }
+    return valid ? bytes : nil
+  }
+
+  func image(asset: String?, style: [String: Any]? = nil) -> NSImage? {
+    guard let asset,Self.opens(asset) else { return nil }
+    let colour=style?["colour"] as? Int ?? -1, mark=style?["mark"] as? Int ?? 0
+    let validColour=(-1...5).contains(colour) ? colour : -1, validMark=(0...4).contains(mark) ? mark : 0
+    let key="\(asset):\(validColour):\(validMark)"
+    guard !missing.contains(key) else { return nil }
+    if let image=cache.object(forKey:key as NSString) { return image }
+    guard var decoded=frame(asset) else { if missing.count<128 { missing.insert(key) };return nil }
+    let species=asset.components(separatedBy:"/").last?.components(separatedBy:"_").first ?? ""
+    if (validColour>=0 || validMark>0), let table=palettes[species],
+      let material=frame(asset.replacingOccurrences(of:".png",with:"_material.png")),
+      let marks=frame(asset.replacingOccurrences(of:".png",with:"_marks.png")),
+      material.width==decoded.width,material.height==decoded.height,marks.width==decoded.width,marks.height==decoded.height,
+      var pixels=rgba(decoded),let m=rgba(material),let k=rgba(marks) {
+      let palette=validColour>=0 && validColour<table.count ? table[validColour] : nil
+      for at in stride(from:0,to:pixels.count,by:4) {
+        let alpha=Int(pixels[at+3]),shade=Int(m[at]),weight=Int(m[at+1])
+        let marking=validMark==1 ? Int(m[at+2]) : validMark>=2 ? Int(k[at+validMark-2]) : 0
+        for channel in 0..<3 {
+          var value=alpha>0 ? min(255,Int(pixels[at+channel])*255/alpha) : 0
+          if let palette,palette.count==2,palette[0].count==3,palette[1].count==3 {
+            let dark=palette[0][channel],light=palette[1][channel]
+            value=max(0,min(255,(value*(255-weight)+dark*weight+(light-dark)*shade+127)/255))
+          }
+          value=value*(255-marking*100/255)/255
+          pixels[at+channel]=UInt8((value*alpha+127)/255)
+        }
+      }
+      let transformed=pixels.withUnsafeMutableBytes { memory -> CGImage? in
+        let context=CGContext(data:memory.baseAddress,width:decoded.width,height:decoded.height,bitsPerComponent:8,
+          bytesPerRow:decoded.width*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,
+          bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        return context?.makeImage()
+      }
+      if let transformed { decoded=transformed }
+    }
+    let scale=32/CGFloat(max(decoded.width,decoded.height))
+    let image=NSImage(cgImage:decoded,size:NSSize(width:CGFloat(decoded.width)*scale,height:CGFloat(decoded.height)*scale))
+    cache.setObject(image,forKey:key as NSString,cost:decoded.bytesPerRow*decoded.height)
+    return image
+  }
+
+}
+
 private func statusColor(_ value: Any?, fallback: NSColor) -> NSColor {
   guard let number = value as? NSNumber else { return fallback }
   let argb = number.uint32Value
@@ -1398,9 +1515,8 @@ private final class SwarmContextButton: SwarmIconButton {
   }
 }
 
-/// Plain terminal symbols with fixed cell gutters: the daemon's eight cells plus a
-/// one-cell gutter each side. Counts and progress stay in the panel. Only this
-/// control repaints when its face changes, with no layout changes.
+/// A fixed top-bar companion slot. Bundled artwork and legacy ASCII share the
+/// same footprint; changing a frame or growth stage never moves adjacent tabs.
 private final class SwarmSymbolButton: SwarmIconButton {
   var glyph = ""
   /// The ten cells as Flutter drew them: the glyph centred on its version's base
@@ -1412,38 +1528,73 @@ private final class SwarmSymbolButton: SwarmIconButton {
   var foreground = NSColor.white
   /// The grue on a light theme: a black patch behind its eight cells.
   var patch: NSColor?
+  var art: NSImage?
+  var artCenter = NSPoint(x: 0.5, y: 0.5)
   /// The pointer arrived: "I see you". Never moves keyboard focus.
   var onEnter: (() -> Void)?
+  var onExit: (() -> Void)?
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ceil(workspaceBarTextWidth("m", font: textFont)) }
-  var preferredWidth: CGFloat {
-    cellWidth * CGFloat(columns + 2)
-  }
+  var preferredWidth: CGFloat { 44 }
 
   override func mouseEntered(with event: NSEvent) {
     super.mouseEntered(with: event)
     if !isHidden { onEnter?() }
   }
 
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onExit?()
+  }
+
   override func draw(_ dirtyRect: NSRect) {
+    if let art {
+      let maximum = min(32, min(bounds.width - 8, bounds.height - 4))
+      guard maximum > 0 else { return }
+      let scale = maximum / max(art.size.width, art.size.height)
+      let size = NSSize(width: art.size.width * scale, height: art.size.height * scale)
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current?.imageInterpolation = .high
+      let yCenter = isFlipped ? artCenter.y : 1 - artCenter.y
+      art.draw(in: NSRect(x: bounds.midX - size.width * artCenter.x, y: bounds.midY - size.height * yCenter,
+        width: size.width, height: size.height), from: .zero, operation: .sourceOver,
+        fraction: isEnabled || busy ? 1 : 0.35, respectFlipped: true, hints: nil)
+      if isEnabled && hasKeyboardFocus {
+        NSColor.keyboardFocusIndicatorColor.setStroke()
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4)
+        ring.lineWidth = 2
+        ring.stroke()
+      }
+      NSGraphicsContext.restoreGraphicsState()
+      return
+    }
     guard !glyph.isEmpty || !cells.isEmpty else { return }
+    // Species without illustrated artwork retain their complete, safe ASCII
+    // face, scaled into the same fixed slot rather than clipped at either edge.
+    let slotWidth = cellWidth * CGFloat(columns + 2)
+    let scale = min(1, max(0, bounds.width - 8) / slotWidth)
+    guard scale > 0, let context = NSGraphicsContext.current?.cgContext else { return }
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    context.translateBy(x: bounds.midX, y: bounds.midY)
+    context.scaleBy(x: scale, y: scale)
     let ink = isEnabled || busy ? foreground : foreground.withAlphaComponent(0.35)
     let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
     let drawFont = active ? workspaceBarEmphasisFont(textFont) : textFont
     let attributes: [NSAttributedString.Key: Any] = [.font: drawFont, .foregroundColor: ink, .ligature: 0]
     guard !cells.isEmpty else {
       let size = (glyph as NSString).size(withAttributes: attributes)
-      (glyph as NSString).draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2),
+      (glyph as NSString).draw(at: NSPoint(x: -size.width / 2, y: -size.height / 2),
         withAttributes: attributes)
       return
     }
-    let slotX: CGFloat = 0
+    let slotX = -slotWidth / 2
     let height = (cells as NSString).size(withAttributes: attributes).height
     if let patch {
       patch.setFill()
-      NSRect(x: slotX + cellWidth, y: bounds.midY - height / 2, width: cellWidth * CGFloat(columns), height: height).fill()
+      NSRect(x: slotX + cellWidth, y: -height / 2, width: cellWidth * CGFloat(columns), height: height).fill()
     }
-    (cells as NSString).draw(at: NSPoint(x: slotX, y: bounds.midY - height / 2), withAttributes: attributes)
+    (cells as NSString).draw(at: NSPoint(x: slotX, y: -height / 2), withAttributes: attributes)
   }
 }
 
@@ -1595,6 +1746,8 @@ private final class SwarmTabStrip: NSView {
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
+  private var daemonArt = SwarmDaemonArt()
+  private var daemonHovering = false
   fileprivate let voiceLabel = SwarmVoiceLabel()
   // What the status line holds, apart from whether the daemon's voice covers it.
   private var hasFocusedModel = false
@@ -1671,9 +1824,12 @@ private final class SwarmTabStrip: NSView {
     daemonButton.action = #selector(openDaemon)
     daemonButton.onEnter = { [weak self] in
       guard let self, self.actionsEnabled, !self.daemonButton.isHidden else { return }
+      guard self.window == nil || NSApp.isActive else { return }
       self.emit?("daemonLook", nil)
+      self.setDaemonHover(true)
     }
-    statusBar.addSubview(daemonButton)
+    daemonButton.onExit = { [weak self] in self?.setDaemonHover(false) }
+    addSubview(daemonButton)
     notificationsButton.isBordered = false
     notificationsButton.focusRingType = .none
     notificationsButton.title = ""
@@ -1720,15 +1876,22 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityRole(.group)
     statusBar.setAccessibilityLabel("Focused pane status")
     statusBar.setAccessibilityParent(self)
-    setAccessibilityChildren([scroll, newButton, searchButton, notificationsButton, storeButton, statusBar])
-    statusBar.setAccessibilityChildren([contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton, focusedModelButton])
+    setAccessibilityChildren([scroll, newButton, searchButton, notificationsButton, storeButton, daemonButton, statusBar])
+    statusBar.setAccessibilityChildren([contextButton, pullRequestButton, voiceLabel, shareButton, focusedModelButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
-                 NSWindow.didChangeOcclusionStateNotification, NSView.boundsDidChangeNotification] {
+                 NSWindow.didChangeOcclusionStateNotification, NSWindow.didResignKeyNotification,
+                 NSView.boundsDidChangeNotification] {
       let object: AnyObject? = name == NSView.boundsDidChangeNotification ? scroll.contentView : nil
       activityObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) {
-        [weak self] _ in self?.syncActivityAnimation()
+        [weak self] notification in
+        guard let self else { return }
+        if notification.name == NSApplication.didResignActiveNotification ||
+           (notification.name == NSWindow.didResignKeyNotification && notification.object as? NSWindow === self.window) {
+          self.setDaemonHover(false)
+        }
+        self.syncActivityAnimation()
       })
     }
     motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -1747,6 +1910,7 @@ private final class SwarmTabStrip: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    if window == nil { setDaemonHover(false) }
     syncActivityAnimation()
   }
 
@@ -1755,6 +1919,10 @@ private final class SwarmTabStrip: NSView {
   }
 
   private func syncActivityAnimation() {
+    if isHiddenOrHasHiddenAncestor || (window != nil &&
+       (!NSApp.isActive || window?.occlusionState.contains(.visible) != true)) {
+      setDaemonHover(false)
+    }
     let moving = actionsEnabled && !reduceMotion &&
       !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && NSApp.isActive &&
       window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor &&
@@ -1917,7 +2085,13 @@ private final class SwarmTabStrip: NSView {
     if let gate = daemonMayAppear { return gate() }
     guard NSEvent.pressedMouseButtons == 0 else { return false }
     guard let window else { return true }
-    return !statusBar.bounds.contains(statusBar.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    return !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+  }
+
+  private func setDaemonHover(_ hovered: Bool) {
+    guard hovered != daemonHovering else { return }
+    daemonHovering = hovered
+    emit?("daemonHover", ["hovered": hovered])
   }
 
   /// Try the held state again; the timer stops once it is shown or withdrawn.
@@ -1955,11 +2129,14 @@ private final class SwarmTabStrip: NSView {
     daemonRevealTimer?.invalidate()
     daemonRevealTimer = nil
     daemonButton.isHidden = !wanted
+    if !wanted || !actionsEnabled { setDaemonHover(false) }
     daemonButton.busy = state["busy"] as? Bool == true
     daemonButton.isEnabled = actionsEnabled && !daemonButton.isHidden && !daemonButton.busy
     daemonButton.state = state["open"] as? Bool == true ? .on : .off
     daemonButton.glyph = validDaemonGlyph(state["glyph"] as? String) ?? ""
     daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
+    daemonButton.art = wanted ? daemonArt.image(asset: state["art"] as? String, style: state["artStyle"] as? [String: Any]) : nil
+    daemonButton.artCenter = daemonArt.center(asset: state["art"] as? String)
     daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
     daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil
     let label = state["label"] as? String ?? "Daemon"
@@ -1979,7 +2156,7 @@ private final class SwarmTabStrip: NSView {
     voiceLabel.armed = state["voiceArmed"] as? Bool ?? true
     voiceActive = !voice.isEmpty
     applyStatusVisibility()
-    // The slot always keeps ten cells; layout runs only when it appears or goes.
+    // The slot always keeps 44 points; layout runs only when it appears or goes.
     if wasHidden != daemonButton.isHidden {
       needsLayout = true
       needsDisplay = true
@@ -2006,9 +2183,13 @@ private final class SwarmTabStrip: NSView {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
     let toolHeight = workspaceBarControlHeight(barFont)
+    let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, max(0, bounds.width - trailing * 2))
+    let daemonHeight = min(bounds.height, max(36, toolHeight))
+    daemonButton.frame = NSRect(x: bounds.width - trailing - daemonWidth,
+      y: (bounds.height - daemonHeight) / 2, width: daemonWidth, height: daemonHeight)
     let storeWidth = min(storeButton.preferredWidth,
-      max(0, bounds.width - cell * 14))
-    storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth,
+      max(0, bounds.width - cell * 14 - daemonWidth))
+    storeButton.frame = NSRect(x: daemonButton.frame.minX - storeWidth,
       y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
     let iconWidth = cell * 4
     notificationsButton.frame = NSRect(x: storeButton.frame.minX - iconWidth,
@@ -2048,17 +2229,14 @@ private final class SwarmTabStrip: NSView {
     let height = workspaceBarControlHeight(barFont)
     let y = (statusBar.bounds.height - height) / 2
     let available = max(0, statusBar.bounds.width - cell * 2)
-    let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
-    let modelBudget = max(0, available - daemonWidth - shareWidth - cell * 4)
+    let modelBudget = max(0, available - shareWidth - cell * 4)
     let modelWidth = hasFocusedModel ? min(focusedModelButton.preferredWidth, modelBudget * 0.4) : 0
     focusedModelButton.frame = NSRect(x: statusBar.bounds.width - cell - modelWidth,
       y: y, width: modelWidth, height: height)
     let shareRight = focusedModelButton.frame.minX - (modelWidth > 0 ? cell : 0)
     shareButton.frame = NSRect(x: shareRight - shareWidth, y: y, width: shareWidth, height: height)
-    let daemonRight = shareButton.frame.minX - (shareWidth > 0 ? cell : 0)
-    daemonButton.frame = NSRect(x: daemonRight - daemonWidth, y: y, width: daemonWidth, height: height)
-    let contextRight = daemonButton.frame.minX - cell * 2
+    let contextRight = shareButton.frame.minX - (shareWidth > 0 ? cell : 0) - cell * 2
     let statusWidth = max(0, contextRight - cell)
     voiceLabel.frame = NSRect(x: cell, y: y, width: statusWidth, height: height)
     let prWidth = hasPullRequest ? min(pullRequestButton.preferredWidth, statusWidth * 0.3) : 0
@@ -2109,6 +2287,7 @@ private final class SwarmTabStrip: NSView {
     emit?("focusedModel", ["paneId": paneId, "agentId": agentId])
   }
   @objc private func openDaemon() {
+    setDaemonHover(false)
     if actionsEnabled && daemonButton.isEnabled { emit?("daemon", nil) }
   }
   @objc private func openNotifications() {

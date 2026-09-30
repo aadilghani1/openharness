@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
 import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -1741,7 +1742,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
   const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
   /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
-  let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
+  let pairTalk: (text: string, companionUid?: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
@@ -3746,8 +3747,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // generated models, kept under the data folder, served to windows (`daemon_plate_get`, Unix socket) and
   // phones (`pair_plate_get`, sealed). Idle, and nothing on disk touched, while daemons are off.
   const plates = new PlateService({ dir: join(env.ADAPTER_DATA_DIR, 'pair', 'plates') })
+  const companionZoo = new CompanionZoo()
   let zooPair: { known: boolean; pair: string | null; name: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
   let guestPair: string | null = null
+  let guestCompanion: CompanionIdentity | null = null
   let guestAutonomy: Autonomy | null = null
   let guestConsent = false
   // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
@@ -3769,6 +3772,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   onZooRead = (result) => {
     if (result.status === 200) {
       const zoo = (result.body.data as { zoo?: { autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
+      companionZoo.observe(zoo, Date.now(), (result.body.data as { revision?: number } | undefined)?.revision)
       // The zoo holds individuals and `paired` names one by uid; the brain speaks as its species.
       const paired = pairedIndividual(zoo)
       const pair = paired && isRosterDaemon(paired.id) ? paired : null
@@ -3781,6 +3785,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A uid not seen before is a hatch: its art is drawn now, before a window asks (idle while daemons are off).
       plates.observeZoo(zoo)
     } else if (result.status === 401) {
+      companionZoo.reset()
       zooPair = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
     }
     applyPair()
@@ -4463,7 +4468,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       journal: (payload) => pairSensor.journal(payload),
       harnesses: () => pairSensor.snapshot().harnesses,
     },
-    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon(),
+      pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null },
     autonomy: () => pairAutonomy(),
     tokenMatches: (candidate) => pairToken.matches(candidate),
     voice: pairVoice,
@@ -4481,6 +4487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
+    pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4498,8 +4505,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
@@ -4523,7 +4530,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     now: Date.now,
   })
-  pairTalk = (text) => pairHarness.talk(text)
+  pairTalk = (text, uid) => pairHarness.talk(text, uid)
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
   // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
@@ -4595,11 +4602,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
-    onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
+    onGuestPair: (daemonId, identity) => {
+      guestPair = isRosterDaemon(daemonId) ? daemonId : null
+      const parsed = readCompanionIdentity(identity)
+      guestCompanion = parsed?.id === guestPair ? parsed : null
+      applyPair()
+    },
     onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
-    talk: (text) => pairTalk(text),
+    talk: (text, uid) => pairTalk(text, uid),
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -4610,6 +4622,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   onDaemonsChanged = (on) => {
     plates.setOn(on)
+    if (!on) { companionZoo.reset(); guestCompanion = null }
     if (on) {
       // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
       // everything off within the tick (before the rest of the file is read), and any other change asks for
@@ -6718,6 +6731,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
+    // Zoo selection is visual identity; it does not require consent to watch terminal activity.
+    // Guest identity is only a fallback while signed out, never another account's cached choice.
+    companion: () => daemons.on() ? (zooPair.known ? zooPair.pair : readAuthSession() ? null : guestPair) : null,
+    companionIdentity: () => daemons.on() ? (zooPair.known ? companionZoo.identity : readAuthSession() ? null : guestCompanion) : null,
+    companionMilestone: () => daemons.on() ? companionZoo.milestone : null,
     activityText: async (agentId) => {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
