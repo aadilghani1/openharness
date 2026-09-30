@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -56,6 +56,62 @@ describe('owning-machine project metadata', () => {
     expect(await agentProject(null)).toBeNull()
     expect(await agentProject('relative')).toBeNull()
     expect(await agentProject('/tmp/unsafe\n')).toBeNull()
+  })
+
+  it('uses exact branch keys and the last config value, including empty and valueless overrides', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-config-')); roots.push(root)
+    const branch = 'Topic/a.b+(review)'
+    const marker = `branch.${branch}.harness`
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
+    git('init', '-b', branch)
+    const included = join(root, 'included config')
+    git('config', '--file', included, 'remote.origin.url', 'git@github.com:Org/Included.git')
+    git('config', '--file', included, marker, 'placeholder')
+    git('config', 'include.path', included)
+    git('config', '--add', 'remote.origin.url', 'https://user:secret@github.com/Org/Current.git?token=secret')
+    const reader = createAgentProjectReader()
+    expect(await reader.read(root)).toMatchObject({ branch, remote: 'github.com/org/current', branchPending: true })
+    git('config', '--add', marker, '')
+    reader.forget(root)
+    expect(await reader.read(root)).not.toHaveProperty('branchPending')
+    git('config', '--add', marker, 'placeholder')
+    reader.forget(root)
+    expect(await reader.read(root)).toHaveProperty('branchPending', true)
+    await appendFile(join(root, '.git', 'config'), `\n[branch "${branch}"]\nharness\n[remote "origin"]\nurl\n`)
+    reader.forget(root)
+    const cleared = await reader.read(root)
+    expect(cleared).toMatchObject({ branch, remote: null })
+    expect(cleared).not.toHaveProperty('branchPending')
+  })
+
+  it('honours linked-worktree config overrides without changing the shared checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-worktree-config-')); roots.push(root)
+    const repo = join(root, 'main'); await mkdir(repo)
+    const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
+    git('init', '-b', 'main')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+    git('config', 'remote.origin.url', 'git@github.com:Org/Main.git')
+    git('config', 'extensions.worktreeConfig', 'true')
+    const linked = join(root, 'linked')
+    git('worktree', 'add', '-b', 'topic', linked)
+    git('config', 'branch.topic.harness', 'placeholder')
+    execFileSync('git', ['-C', linked, 'config', '--worktree', 'remote.origin.url', 'git@github.com:Org/Linked.git'])
+    execFileSync('git', ['-C', linked, 'config', '--worktree', 'branch.topic.harness', 'named'])
+    const reader = createAgentProjectReader()
+    const project = await reader.read(linked)
+    expect(project).toMatchObject({ branch: 'topic', remote: 'github.com/org/linked', worktree: true })
+    expect(project).not.toHaveProperty('branchPending')
+    expect(await reader.read(repo)).toMatchObject({ branch: 'main', remote: 'github.com/org/main' })
+  })
+
+  it('retains metadata when duplicate config values exceed the combined output bound', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-large-config-')); roots.push(root)
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
+    git('init', '-b', 'main')
+    await appendFile(join(root, '.git', 'config'), '\n[remote "origin"]\n' +
+      `url = https://example.invalid/${'x'.repeat(1000)}\n`.repeat(20) +
+      'url = git@github.com:Org/Current.git\n[branch "main"]\nharness = placeholder\n')
+    expect(await createAgentProjectReader().read(root)).toMatchObject({ remote: 'github.com/org/current', branchPending: true })
   })
 
   it('checks metadata without running Git again for unchanged historical folders', async () => {
