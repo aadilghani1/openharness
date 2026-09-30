@@ -480,7 +480,7 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
         let (mark, mark_color) = engine_mark(&a.engine);
         let since = crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64);
         let mut detail = vec![span(who.clone(), fg(theme::MUTED))];
-        if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::ACCENT))) }
+        if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::accent()))) }
         rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(format!("{who} {} {options}", a.branch))
             .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::BOLD)), span(mark, fg(mark_color)), span(" ", Style::default())])
             .detail(detail)
@@ -534,7 +534,7 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
     let mut rows: Vec<Row> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| {
         let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
         Row::new(m.id.clone(), m.name.clone())
-            .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::ACCENT } else { theme::ONLINE }))])
+            .lead(vec![span(if m.id == prefer { "● " } else { "○ " }, fg(if m.id == prefer { theme::accent() } else { theme::ONLINE }))])
             .detail(vec![span(format!("{}{running} running", if m.local { "this computer · " } else { "" }), fg(theme::MUTED))])
     }).collect();
     rows.sort_by_key(|r| r.id != prefer);

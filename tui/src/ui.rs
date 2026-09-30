@@ -222,7 +222,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         if col >= cols || (items.len() > fits && i + 1 >= fits) { break }
         let x = area.x + 2 + (col * col_w) as u16;
         let y = area.y + 1 + row as u16;
-        buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD));
+        buf.set_string(x, y, format!("{key:>key_w$}"), bold(theme::accent()));
         let room = col_w - key_w - 3;
         buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default());
     }
@@ -378,8 +378,8 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     let left = area.x + (area.width.saturating_sub(width)) / 2;
     let compact = area.height < 22;
     let mut lines: Vec<Line> = Vec::new();
-    if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::ACCENT))) } lines.push(Line::raw("")) }
-    else { lines.push(Line::styled("harness", bold(theme::ACCENT))) }
+    if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::accent()))) } lines.push(Line::raw("")) }
+    else { lines.push(Line::styled("harness", bold(theme::accent()))) }
     let local = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_default();
     let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
     let sub = if app.fleet.machines.len() > 1 { format!("{local} · {up}/{} machines connected", app.fleet.machines.len()) } else { local };
@@ -394,7 +394,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     } else if rows.is_empty() {
         lines.push(Line::styled("Nothing running.", fg(theme::SOFT)));
         let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
-        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
+        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::accent())), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::accent())), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
         let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
         for (index, row) in rows.iter().enumerate() {
@@ -430,7 +430,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let bg = match (selected, theme::fzf().bw) { (true, true) => Style::default().add_modifier(Modifier::REVERSED), (true, false) => Style::default().bg(theme::fzf().bg_plus), _ => Style::default() };
             let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::DIM) } else { bg.fg(theme::paint(c)) };
             lines.push(Line::from(vec![
-                Span::styled(format!("{} ", index + 1), tint(theme::ACCENT)),
+                Span::styled(format!("{} ", index + 1), tint(theme::accent())),
                 Span::styled(format!("{dot} "), tint(color)),
                 Span::styled(format!("{mark} "), tint(mark_color)),
                 Span::styled(format!("{name}  "), bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::BOLD)),
@@ -451,14 +451,14 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     for (k, w) in keys {
         let piece_w = k.width() + w.width() + 4;
         if row_w + piece_w > width as usize { lines.push(Line::from(std::mem::take(&mut row))); row_w = 0 }
-        row.push(Span::styled(k.clone(), bold(theme::ACCENT)));
+        row.push(Span::styled(k.clone(), bold(theme::accent())));
         row.push(Span::styled(format!(" {w}   "), fg(theme::SOFT)));
         row_w += piece_w;
     }
     if !row.is_empty() { lines.push(Line::from(row)) }
     lines.push(Line::raw(""));
     let prefix = crate::keys::name(&app.keymap.prefix);
-    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::ACCENT)), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(format!("{prefix} d"), bold(theme::ACCENT)), Span::styled(" detach — everything keeps running", fg(theme::SOFT))]));
+    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::accent())), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(format!("{prefix} d"), bold(theme::accent())), Span::styled(" detach — everything keeps running", fg(theme::SOFT))]));
     let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
     for (index, line) in lines.iter().enumerate() {
         let y = top + index as u16;

@@ -395,10 +395,13 @@ pub mod fzfcolor {
 }
 
 
-// Hn's own chrome speaks the 16 ANSI colours, as tmux's does: the terminal's theme decides what
-// they look like, so it reads on dark, light and Solarized alike. SOFT and MUTED are not colours
-// but emphasis (the terminal's dim), `fg` turns them into that.
-pub const ACCENT: Color = Color::Blue;
+/// Readable accent for hn controls. ANSI blue can be nearly black in terminal themes.
+/// Keep engine branding and explicitly configured tmux colors separate from chrome.
+pub fn accent() -> Color {
+    if palette().2 { Color::Rgb(0, 100, 120) } else { Color::Rgb(95, 215, 230) }
+}
+// Semantic status colors use the terminal palette. SOFT and MUTED represent emphasis;
+// `fg` applies it to the theme's foreground.
 pub const ACCENT_SOFT: Color = Color::Cyan;
 pub const ONLINE: Color = Color::Green;
 pub const WARN: Color = Color::Yellow;
@@ -1170,7 +1173,7 @@ fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
         "grok" => ("X", TEXT),
         "devin" => ("◆", TEAL),
         "copilot" => ("◉", Color::Rgb(0x8B, 0x94, 0x9E)),
-        "commandcode" => ("⌘", ACCENT),
+        "commandcode" => ("⌘", Color::Blue),
         "muse" => ("♪", ATTENTION),
         "agy" => ("◈", Color::Rgb(0x42, 0x85, 0xF4)),
         "terminal" => ("❯", SOFT),
