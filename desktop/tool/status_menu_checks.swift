@@ -6,6 +6,19 @@ private func check(_ value: @autoclosure () -> Bool, _ message: String) throws {
   checks += 1
 }
 
+private func renderedStatusPixels(_ image: NSImage) -> Data {
+  let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+    pixelsWide: Int(image.size.width * 2), pixelsHigh: Int(image.size.height * 2),
+    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+  bitmap.size = image.size
+  NSGraphicsContext.saveGraphicsState()
+  NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+  image.draw(in: NSRect(origin: .zero, size: image.size), from: .zero, operation: .copy, fraction: 1)
+  NSGraphicsContext.restoreGraphicsState()
+  return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+}
+
 private func fixture(_ agent: String, project: String = "autonomous-harness",
                      unread: Bool = true, token: String = "first", offline: Bool = false) -> [String: Any] {
   var row: [String: Any] = ["machineId": "office", "machineName": "Office Mac",
@@ -81,7 +94,7 @@ do {
   try check(status.item("openWindow").isEnabled && status.item("quit").isEnabled,
             "The signed-out menu still offers Open and Quit")
   // Exercise the actual AppKit status button: the displayed number must agree
-  // with the notification rows, including zero after the last read.
+  // with the notification rows, with a bare icon after the last read.
   func checkCounter() throws {
     let assets = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"]!)
     let logo = NSImage(contentsOf: assets.deletingLastPathComponent().appendingPathComponent(
@@ -95,10 +108,13 @@ do {
               indicator.statusItem?.button?.image?.isTemplate == true &&
               indicator.statusItem?.button?.accessibilityValue() as? String == "3 unread",
               "The monochrome Harness template carries the count badge without a separate text label")
+    let unreadPixels = renderedStatusPixels(indicator.statusItem!.button!.image!)
     indicator.update(["enabled": true, "statusMenuEntries": []])
     try check(indicator.statusItem?.button?.image?.accessibilityDescription == "0 unread" &&
-              indicator.statusItem?.button?.toolTip == "Harness · 0 unread",
-              "Zero remains visible when no notifications are unread")
+              indicator.statusItem?.button?.toolTip == "Harness · 0 unread" &&
+              indicator.statusItem?.button?.accessibilityValue() as? String == "0 unread",
+              "An empty inbox keeps its exact count in the tooltip and accessibility value")
+    let zeroPixels = renderedStatusPixels(indicator.statusItem!.button!.image!)
     let badgeSize = indicator.statusItem?.button?.image?.size
     indicator.update(["enabled": true, "statusMenuEntries": (0..<101).map { fixture("Task \($0)") }])
     try check(indicator.statusItem?.button?.image?.size == badgeSize &&
@@ -107,6 +123,11 @@ do {
     indicator.update([:])
     try check(indicator.statusItem?.button?.image?.accessibilityDescription == "Harness",
               "Sign-out clears the account's counter")
+    let plainPixels = renderedStatusPixels(indicator.statusItem!.button!.image!)
+    try check(zeroPixels == plainPixels,
+              "Zero notifications render only the plain icon, without a number or badge circle")
+    try check(unreadPixels != plainPixels,
+              "Unread notifications add a visible badge to the icon")
   }
   try checkCounter()
   print("Harness status menu passed \(checks) checks")

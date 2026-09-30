@@ -105,8 +105,9 @@ func dockScene(icon: NSImage, at origin: NSPoint) {
 // Match the production status item's 20pt artwork and lower-right count badge.
 func statusImage(logo: NSImage, count: Int?) -> NSImage {
   NSImage(size: NSSize(width: 32, height: 22), flipped: false) { bounds in
-    logo.draw(in: NSRect(x: count == nil ? 6 : 0, y: count == nil ? 1 : 2, width: 20, height: 20))
-    if let count, let context = NSGraphicsContext.current?.cgContext {
+    let hasBadge = (count ?? 0) > 0
+    logo.draw(in: NSRect(x: hasBadge ? 0 : 6, y: hasBadge ? 2 : 1, width: 20, height: 20))
+    if hasBadge, let count, let context = NSGraphicsContext.current?.cgContext {
       let badge = NSRect(x: bounds.maxX - 13, y: 0.5, width: 12.5, height: 12.5)
       context.saveGState()
       context.setBlendMode(.clear)

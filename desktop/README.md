@@ -183,7 +183,7 @@ upstream package upgrade without preserving the local rendering and IME fixes.
 
 On macOS, the Harness portrait symbol follows the system menu bar's appearance and
 carries a small circular unread badge at its bottom-right corner,
-including zero (`99+` above 99; the tooltip keeps the exact count). Open it for
+only when notifications are unread (`99+` above 99; the tooltip keeps the exact count). Open it for
 sessions with unread results or questions, grouped
 by project and marked with blue dots. Read sessions disappear from the list;
 an empty inbox says “No unread notifications.” The menu also offers New Harness,

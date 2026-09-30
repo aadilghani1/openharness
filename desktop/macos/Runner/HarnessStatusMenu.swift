@@ -173,7 +173,12 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   /// the menu bar's appearance and selection. Clear digits and a small halo
   /// keep the overlapping badge legible without painting a fixed background.
   private static func badgeImage(logo: NSImage?, count: Int?) -> NSImage {
-    let label = count.map { $0 > 99 ? "99+" : String($0) } ?? ""
+    let label: String
+    if let count, count > 0 {
+      label = count > 99 ? "99+" : String(count)
+    } else {
+      label = ""
+    }
     let image = NSImage(size: NSSize(width: 32, height: 22), flipped: false) { bounds in
       logo?.draw(in: NSRect(x: label.isEmpty ? (bounds.width - 20) / 2 : 0, y: label.isEmpty ? 1 : 2,
                            width: 20, height: 20))

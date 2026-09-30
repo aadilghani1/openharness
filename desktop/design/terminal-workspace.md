@@ -25,8 +25,8 @@ rounded Harness Store button. On macOS, notifications live in the system menu
 bar; Flutter's Linux and browser bars keep the notification bell. The bottom row
 holds focused machine/repo/branch/PR links on the left and the model selector on
 the right. Keep descriptive tooltips and accessible names. Search and the fallback
-bell are deliberate icon exceptions. The macOS menu bar keeps its count visible
-at zero; the fallback bell shows a badge only when there is something to see.
+bell are deliberate icon exceptions. Both the macOS menu bar and the fallback
+bell show a badge only when there is something to see.
 Store restores its colorful polymath mark and a quiet filled pill. The bottom
 context has no separate background or divider.
 

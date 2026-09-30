@@ -192,7 +192,8 @@ follow a dependent viewer's owner.
 
 On macOS, the Harness menu bar uses the team's portrait symbol,
 stored as vector paths and rendered as a monochrome template. A small circular
-count badge sits at the bottom-right corner, including zero. The badge
+count badge sits at the bottom-right corner when notifications are unread.
+At zero, only the portrait icon is shown, with no number or badge circle. The badge
 sits slightly outside the mark so both remain legible. The combined template
 adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
 above 99 with the exact count in its tooltip and accessibility
