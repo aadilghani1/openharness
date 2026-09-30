@@ -49,7 +49,24 @@ def state(route='dial'):
         return result.get('data', result)
 
 def screen(): return tmux('capture-pane', '-p', '-t', 'test')
-def keys(*args): tmux('send-keys', '-t', 'test', *args)
+def settle_ui():
+    # The form moves when a side chooser opens/closes. Wait for the visible
+    # geometry, not tmux send-keys returning, before taking mouse coordinates.
+    # Crop to popup borders so animated working panes cannot keep it unsettled.
+    previous, changed = None, time.monotonic()
+    deadline = changed + 3
+    while time.monotonic() < deadline:
+        signature = tuple(line[line.index('│'):line.rindex('│') + 1]
+                          for line in screen().splitlines() if line.count('│') >= 2)
+        if signature != previous:
+            previous, changed = signature, time.monotonic()
+        elif time.monotonic() - changed >= .15:
+            return
+        time.sleep(.025)
+    raise AssertionError('popup did not settle\n' + screen())
+def keys(*args):
+    tmux('send-keys', '-t', 'test', *args)
+    settle_ui()
 def type_text(text): tmux('send-keys', '-l', '-t', 'test', text)
 def wait(fn, label, seconds=8):
     end = time.monotonic() + seconds
@@ -66,6 +83,7 @@ def click(x, y):
     for suffix in ['M', 'm']:
         raw = f'\x1b[<0;{x+1};{y+1}{suffix}'.encode()
         tmux('send-keys', '-H', '-t', 'test', *[f'{b:02x}' for b in raw])
+    settle_ui()
 def field(label):
     def find():
         for y, line in enumerate(screen().splitlines()):
@@ -137,7 +155,10 @@ try:
     snapshot('new-harness-retry')
     keys('Escape'); new_form(); shows('Fixture launch failure')
     submit(before + 2)
-    assert state()['created'][-1]['creationId'] == request['creationId'], 'retry reuses its creation receipt'
+    retry = state()['created'][-1]
+    assert retry['creationId'] != request['creationId'], 'confirmed refusal requires a fresh receipt'
+    assert retry['cwd'] == '/home/demo/fail-once', 'reuse the already prepared folder'
+    assert not any(k in retry for k in ('projectSource', 'projectName', 'gitSource', 'branchRef')), retry
     assert len(state('reconnect')['inputs']) == input_before, 'form input must never reach a working pane'
     print('PASS New Harness: desktop fields, keyboard, search, paste, retry and no duplicate/input leak', flush=True)
 
@@ -189,6 +210,34 @@ try:
     raw('\x1b]10;rgb:2020/2020/2020\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
     snapshot('new-harness-light'); keys('Escape')
     print('PASS New Harness: draft restoration, narrow/light rendering and cancellation', flush=True)
+
+    new_form(); field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
+    type_text('lose-reply'); keys('Enter'); shows('New Folder: lose-reply')
+    count = create_count()
+    keys('Enter'); shows('Check status'); shows('Launch not confirmed')
+    assert create_count() == count + 1
+    request = state()['created'][-1]
+    # Changes cannot turn a lost reply into another launch, even across dismissal.
+    keys('Down', 'a'); assert 'Search agents' not in screen()
+    keys('Escape'); new_form(); shows('Check status')
+    wait(lambda: any(c['machine'] == request.get('machineId', 'mock0000000000000000000000000001') for c in state('reconnect')['connections']), 'machine reconnected')
+    time.sleep(.5)
+    keys('Enter'); shows('Still starting your harness')
+    assert create_count() == count + 1
+    keys('Enter'); wait(lambda: 'Options' not in screen(), 'original harness recovered')
+    assert create_count() == count + 1, 'status recovery must never send a second create'
+    checks = state()['creationChecks'][-2:]
+    assert len(checks) == 2 and all(c['creationId'] == request['creationId'] for c in checks)
+
+    new_form(); field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
+    type_text('unknown-launch'); keys('Enter'); keys('Enter'); shows('Launch outcome unknown')
+    count = create_count()
+    keys('Enter'); shows('Launch outcome unknown')
+    keys('Escape'); new_form(); shows('Check status')
+    assert create_count() == count
+    keys('Escape')
+    print('PASS New Harness: lost reply, reconnect, pending status and uncertain launch never duplicate', flush=True)
+
 finally:
     try:
         if started:

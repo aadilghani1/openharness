@@ -172,7 +172,11 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
                 .push((Rect::new(r.x + 1, fy, r.width - 2, 1), *field));
         }
         let hint = if form.starting {
-            "Starting…"
+            if form.checking {
+                "Checking…"
+            } else {
+                "Starting…"
+            }
         } else {
             &form.error
         };

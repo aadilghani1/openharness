@@ -1,5 +1,7 @@
 //! The desktop's compact New Harness form, with a persistent draft and side choosers.
 mod data;
+mod receipt;
+pub(crate) use receipt::Creation;
 mod view;
 use crate::{
     app::App,
@@ -88,9 +90,10 @@ pub struct Form {
     pub draft: Draft,
     pub id: String,
     pub starting: bool,
+    checking: bool,
     pub error: String,
-    pub creation_id: String,
-    pub last_payload: Option<Value>,
+    pub attempt: Option<Creation>,
+    prepared_folder: Option<String>,
     focus: Field,
     expanded: bool,
     child: Option<Child>,
@@ -112,6 +115,20 @@ pub struct Form {
     modes: HashMap<String, String>,
 }
 impl Form {
+    fn project_payload(&self) -> Result<(Option<String>, Value), String> {
+        // A confirmed failure may have already made a clone or worktree. Reuse that
+        // exact folder until the user explicitly chooses another project/branch.
+        if let Some(path) = &self.prepared_folder {
+            if matches!(&self.draft.project, Project::Folder(p) if p == path)
+                && self.draft.worktree == Some(false)
+                && self.draft.branch.is_none()
+                && self.draft.new_branch.is_none()
+            {
+                return Ok((Some(path.clone()), json!({})));
+            }
+        }
+        data::project_payload(&self.draft, &self.git)
+    }
     fn fields(&self) -> Vec<Field> {
         let mut fields = vec![Field::Agent, Field::Project, Field::Options];
         if self.expanded {
@@ -231,7 +248,13 @@ impl Form {
             ),
             Field::Create => (
                 if self.starting {
-                    "Starting…"
+                    if self.checking {
+                        "Checking…"
+                    } else {
+                        "Starting…"
+                    }
+                } else if self.attempt.is_some() {
+                    "Check status"
                 } else {
                     "New Harness"
                 },
@@ -309,7 +332,10 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
     {
         return app.error("That machine is not connected");
     }
-    if app.new_harness_draft.as_ref().is_some_and(|f| f.starting)
+    if app
+        .new_harness_draft
+        .as_ref()
+        .is_some_and(|f| f.starting || f.attempt.is_some())
         || (machine.is_none() && cwd.is_none() && app.new_harness_draft.is_some())
     {
         let mut form = app.new_harness_draft.take().unwrap();
@@ -380,9 +406,10 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
         draft,
         id: uuid::Uuid::new_v4().to_string(),
         starting: false,
+        checking: false,
         error: String::new(),
-        creation_id: uuid::Uuid::new_v4().to_string(),
-        last_payload: None,
+        attempt: None,
+        prepared_folder: None,
         focus: Field::Create,
         expanded: false,
         child: None,
@@ -596,7 +623,9 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
                 }
                 form.git_loading = false;
                 form.git = reply.unwrap_or_else(|_| json!({"error":"UNAVAILABLE"}));
-                if let Some(main) = form.git["mainFolder"].as_str().map(str::to_string) {
+                if let Some(main) = form.git["mainFolder"].as_str().map(str::to_string)
+                    .filter(|_| !matches!(&form.draft.project, Project::Folder(p) if form.prepared_folder.as_ref() == Some(p)))
+                {
                     if form.draft.worktree == Some(false) && form.draft.branch.is_none() {
                         form.draft.branch = form.git["branch"]
                             .as_str()
@@ -847,6 +876,7 @@ fn activate(app: &mut App, form: &mut Form) -> bool {
     false
 }
 fn set_project(form: &mut Form, project: Project) {
+    form.prepared_folder = None;
     form.draft.project = project;
     form.draft.worktree = None;
     form.draft.branch = None;
@@ -1118,6 +1148,14 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
         app.modal = Some(Modal::NewHarness(form));
         return;
     }
+    if form.attempt.is_some() {
+        let check = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
+        app.modal = Some(Modal::NewHarness(form));
+        if check {
+            start(app);
+        }
+        return;
+    }
     let mut launch = false;
     if form.child_active {
         if let Some(c) = &mut form.child {
@@ -1237,7 +1275,7 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     }
 }
 pub fn paste(form: &mut Form, text: &str) {
-    if form.starting {
+    if form.starting || form.attempt.is_some() {
         return;
     }
     if let Some(c) = &mut form.child {
@@ -1264,7 +1302,18 @@ pub fn mouse(app: &mut App, mouse: MouseEvent) {
     };
     let pos = Position::new(mouse.column, mouse.row);
     let mut launch = false;
-    if !form.starting {
+    if !form.starting && form.attempt.is_some() {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            launch = form
+                .hits
+                .iter()
+                .any(|(r, field)| *field == Field::Create && r.contains(pos));
+            if !form.area.contains(pos) {
+                app.new_harness_draft = Some(form);
+                return;
+            }
+        }
+    } else if !form.starting {
         if matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -1313,12 +1362,21 @@ pub fn start(app: &mut App) {
         app.modal = Some(Modal::NewHarness(form));
         return;
     }
+    if let Some(attempt) = form.attempt.clone() {
+        form.starting = true;
+        form.checking = true;
+        form.error.clear();
+        let id = form.id.clone();
+        app.modal = Some(Modal::NewHarness(form));
+        crate::input::check_creation(app, id, attempt);
+        return;
+    }
     let fail = if form.git_loading {
         Some("Checking the project…".into())
     } else if form.git["error"].is_string() {
         Some("Could not read this project. Open Options → Branch to retry.".into())
     } else {
-        data::project_payload(&form.draft, &form.git).err()
+        form.project_payload().err()
     };
     if let Some(error) = fail {
         form.error = error;
@@ -1365,7 +1423,7 @@ pub fn start(app: &mut App) {
 }
 fn launch(app: &mut App, mut form: Box<Form>, visible: bool) {
     let d = form.draft.clone();
-    let (cwd, mut extra) = match data::project_payload(&d, &form.git) {
+    let (cwd, mut extra) = match form.project_payload() {
         Ok(v) => v,
         Err(e) => {
             form.error = e;
@@ -1416,10 +1474,49 @@ fn launch(app: &mut App, mut form: Box<Form>, visible: bool) {
         app.modal = previous;
     }
 }
+/// Apply the daemon's receipt before deciding whether another launch is allowed.
+/// A status check is read-only, even after a reconnect or a daemon upgrade.
+pub fn creation_reply(
+    app: &mut App,
+    id: &str,
+    reply: &Result<Value, crate::daemon::RpcError>,
+    checking: bool,
+) -> bool {
+    let mut created = false;
+    with_form(app, id, |app, form| {
+        let Some(attempt) = &form.attempt else { return };
+        let outcome = receipt::outcome(&attempt.id, reply, checking);
+        form.starting = false;
+        form.checking = false;
+        match outcome {
+            receipt::Outcome::Created => created = true,
+            receipt::Outcome::Failed {
+                message,
+                prepared_folder,
+            } => {
+                form.attempt = None;
+                form.error = message;
+                if let Some(path) = prepared_folder {
+                    set_project(form, Project::Folder(path.clone()));
+                    form.prepared_folder = Some(path);
+                    form.draft.worktree = Some(false);
+                    sync_git(app, form, true);
+                }
+            }
+            receipt::Outcome::Uncertain(message) => form.error = message,
+        }
+    });
+    created
+}
+
 pub fn created(app: &mut App, id: &str, agent: &Value) {
     with_form(app, id, |_, form| {
         if !matches!(form.draft.project, Project::Folder(_)) {
-            if let Some(cwd) = agent["cwd"].as_str() {
+            if let Some(cwd) = agent
+                .pointer("/project/cwd")
+                .or_else(|| agent.get("cwd"))
+                .and_then(Value::as_str)
+            {
                 form.draft.project = Project::Folder(cwd.into());
             }
         }
@@ -1574,6 +1671,101 @@ mod tests {
         assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
         assert_eq!(app.new_harness_draft.as_ref().unwrap().error, "late error");
         with_form(&mut app, "stale-id", |_, _| panic!("wrong draft"));
+    }
+
+    #[tokio::test]
+    async fn uncertain_launch_keeps_its_machine_and_choices_until_confirmed() {
+        let mut app = app();
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(mut f)) = app.modal.take() else {
+            panic!()
+        };
+        let id = f.id.clone();
+        f.attempt = Some(Creation {
+            id: "intent".into(),
+            machine: "local".into(),
+            session: 0,
+        });
+        app.modal = Some(Modal::NewHarness(f));
+        assert!(!creation_reply(
+            &mut app,
+            &id,
+            &Err(crate::daemon::RpcError::new("TIMEOUT", "")),
+            false
+        ));
+        let Some(Modal::NewHarness(f)) = app.modal.take() else {
+            panic!()
+        };
+        key(
+            &mut app,
+            f,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        );
+        let Some(Modal::NewHarness(f)) = app.modal.take() else {
+            panic!()
+        };
+        assert!(
+            f.child.is_none(),
+            "choices cannot change an unresolved launch"
+        );
+        key(&mut app, f, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // Even an explicit new destination must recover the existing attempt first.
+        open(&mut app, Some("local".into()), Some("/another".into()));
+        let Some(Modal::NewHarness(f)) = &app.modal else {
+            panic!()
+        };
+        assert_eq!(f.id, id);
+        assert_eq!(f.describe(Field::Create).0, "Check status");
+        assert!(!creation_reply(
+            &mut app,
+            &id,
+            &Ok(json!({"creationId":"wrong", "state":"created", "agent":{"id":"wrong"}})),
+            true
+        ));
+        assert!(creation_reply(
+            &mut app,
+            &id,
+            &Ok(json!({"creationId":"intent", "state":"created", "agent":{"id":"original"}})),
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn confirmed_failure_reuses_prepared_worktree_without_preparing_another() {
+        let mut app = app();
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(mut f)) = app.modal.take() else {
+            panic!()
+        };
+        let id = f.id.clone();
+        f.attempt = Some(Creation {
+            id: "intent".into(),
+            machine: "local".into(),
+            session: 0,
+        });
+        app.modal = Some(Modal::NewHarness(f));
+        assert!(!creation_reply(
+            &mut app,
+            &id,
+            &Ok(
+                json!({"creationId":"intent", "state":"failed", "failure":{"code":"ENGINE_UNAVAILABLE"}, "preparedFolder":"/repo/worktree"})
+            ),
+            true
+        ));
+        let Some(Modal::NewHarness(f)) = &mut app.modal else {
+            panic!()
+        };
+        assert!(
+            f.attempt.is_none(),
+            "a new deliberate retry gets a fresh receipt"
+        );
+        f.git = json!({"isGit":true, "branch":"feature", "defaultRef":"refs/heads/main"});
+        assert_eq!(
+            f.project_payload().unwrap(),
+            (Some("/repo/worktree".into()), json!({}))
+        );
+        set_project(f, Project::Folder("/another".into()));
+        assert!(f.prepared_folder.is_none());
     }
 
     #[test]

@@ -1277,17 +1277,12 @@ pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Optio
     if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) { payload["name"] = json!(name) }
     if let Some(extra) = opts.extra.as_ref().and_then(|v| v.as_object()) { for (key, value) in extra { payload[key] = value.clone(); } }
     if let Some(form_id) = &opts.form_id {
-        if let Some(Modal::NewHarness(form)) = &mut app.modal {
-            if &form.id == form_id {
-                let mut fingerprint = payload.clone();
-                fingerprint.as_object_mut().unwrap().remove("creationId");
-                // Retry the same request id after a lost reply; changed choices start a new request.
-                if form.last_payload.as_ref() != Some(&fingerprint) { form.creation_id = uuid::Uuid::new_v4().to_string(); }
-                payload["creationId"] = json!(form.creation_id);
-                form.last_payload = Some(fingerprint);
-                form.starting = true; form.error.clear();
-            }
-        }
+        let Some(Modal::NewHarness(form)) = &mut app.modal else { return };
+        if &form.id != form_id || form.attempt.is_some() { return }
+        form.attempt = Some(crate::new_harness::Creation {
+            id: payload["creationId"].as_str().unwrap().into(), machine: machine.clone(), session: app.session_id,
+        });
+        form.starting = true; form.error.clear();
     }
     // (From a shell: nothing said on the way — a message there is the command's error.)
     if app.capture.is_none() { app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT) }
@@ -1295,7 +1290,29 @@ pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Optio
     // -P: the shell that asked waits for it, and is told where it is (as new-window -P).
     if opts.print.is_some() { app.print_new = opts.print.clone() }
     let session = app.session_id;
-    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
+    let timeout = Duration::from_secs(if opts.form_id.is_some() { 20 } else { 180 });
+    app.spawn(async move { link.rpc("agent_create", payload, timeout).await }, move |app, reply| {
+        creation_finished(app, machine, session, opts, reply, false);
+    });
+}
+
+pub(crate) fn check_creation(app: &mut App, form_id: String, attempt: crate::new_harness::Creation) {
+    let opts = NewOpts { form_id: Some(form_id), ..Default::default() };
+    let Some(link) = app.link(&attempt.machine) else {
+        return creation_finished(app, attempt.machine, attempt.session, opts, Err(crate::daemon::RpcError::new("DISCONNECTED", "")), true);
+    };
+    app.spawn(async move {
+        link.rpc("agent_create_status", json!({"creationId":attempt.id}), Duration::from_secs(10)).await
+    }, move |app, reply| {
+        creation_finished(app, attempt.machine, attempt.session, opts, reply, true);
+    });
+}
+
+fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts, reply: Result<serde_json::Value, crate::daemon::RpcError>, checking: bool) {
+    if let Some(id) = &opts.form_id {
+        if !crate::new_harness::creation_reply(app, id, &reply, checking) { return }
+    }
+    match reply {
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
@@ -1325,7 +1342,7 @@ pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Optio
             if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some(format!("Could not start it: {e}"))); }
             app.say(format!("Could not start it: {e}"), theme::DANGER)
         }
-    });
+    }
 }
 
 fn modal_key(app: &mut App, key: KeyEvent) {

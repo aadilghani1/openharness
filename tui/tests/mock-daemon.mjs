@@ -156,6 +156,7 @@ if (layoutTest && !(port >= 19800 && port <= 19809)) throw new Error('unsafe lay
 const layoutFaults = { delays: [], failures: [], writes: [] }
 const reconnect = process.env.MOCK_RECONNECT === '1'
 if (reconnect && !(port >= 19780 && port <= 19789)) throw new Error('unsafe reconnect test port')
+const creationReceipts = new Map()
 const connections = new Map()
 const opens = []
 const inputs = []
@@ -406,15 +407,37 @@ wss.on('connection', (ws) => {
         const rows = turns.map(([ask, answer], turn) => ({ turn, at: Date.now() - (turns.length - turn) * HOUR, ask, answer, tools: turn === 0 ? 'Read src/main.ts\nBash npm test' : '' }))
         return reply({ sessionId: payload.sessionId, rows, hasMore: false, total: rows.length, lastAt: x ? x.lastAt : Date.now(), lastAsk: rows[rows.length - 1], ...(x ? { external: { title: x.title, cwd: x.cwd, origin: x.origin, open: x.open } } : {}) })
       }
+      case 'agent_create_status': {
+        dial.creationChecks = [...(dial.creationChecks || []), payload]
+        const receipt = creationReceipts.get(`${machine}:${payload.creationId}`)
+        if (receipt?.pendingChecks) { receipt.pendingChecks--; return reply({ creationId: payload.creationId, state: 'pending' }) }
+        return reply({ creationId: payload.creationId, ...(receipt?.outcome || { state: 'missing' }) })
+      }
       case 'agent_create': {
         dial.created = [...(dial.created || []), payload]
+        const receiptKey = `${machine}:${payload.creationId}`
+        const { requestId: _requestId, creationId: _creationId, ...choices } = payload
+        const fingerprint = JSON.stringify(choices)
+        const previous = creationReceipts.get(receiptKey)
+        if (process.env.MOCK_NEW_UI && previous) {
+          if (previous.fingerprint !== fingerprint) return reply({ error: 'CREATION_CONFLICT' })
+          return reply({ creationId: payload.creationId, ...previous.outcome })
+        }
         // The daemon's wire contract uses branchMode, not its internal existingBranch flag.
         if (process.env.MOCK_NEW_UI && payload.branchName === 'feature' && payload.branchMode !== 'existing') {
           return reply({ error: 'BRANCH_EXISTS', detail: 'Select the existing branch using branchMode.' })
         }
-        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'fail-once' && !dial.failedCreate) {
-          dial.failedCreate = true
-          return setTimeout(() => reply({ error: 'CREATE_FAILED', detail: 'Fixture launch failure' }), 150)
+        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'fail-once') {
+          // The real daemon persists known failures, including a prepared folder.
+          // Reusing this receipt can NEVER make this request succeed.
+          const outcome = { state: 'failed', failure: { code: 'ENGINE_UNAVAILABLE', detail: 'Fixture launch failure' }, preparedFolder: '/home/demo/fail-once' }
+          creationReceipts.set(receiptKey, { fingerprint, outcome })
+          return setTimeout(() => reply({ creationId: payload.creationId, ...outcome }), 150)
+        }
+        if (process.env.MOCK_NEW_UI === '1' && payload.projectName === 'unknown-launch') {
+          const outcome = { state: 'unconfirmed' }
+          creationReceipts.set(receiptKey, { fingerprint, outcome })
+          return reply({ creationId: payload.creationId, ...outcome })
         }
         // Resuming a conversation Harness did not start: refused while it is open elsewhere.
         if (payload.resumeSessionId) {
@@ -428,6 +451,12 @@ wss.on('connection', (ws) => {
         }
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
         agents[machine].push(created)
+        if (process.env.MOCK_NEW_UI === '1') {
+          const outcome = { state: 'created', agent: created }
+          creationReceipts.set(receiptKey, { fingerprint, outcome, pendingChecks: payload.projectName === 'lose-reply' ? 1 : 0 })
+          if (payload.projectName === 'lose-reply') return ws.terminate()
+          return reply({ creationId: payload.creationId, ...outcome })
+        }
         return reply({ agent: created })
       }
       case 'route_task': {

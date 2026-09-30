@@ -146,8 +146,9 @@ Git projects default to a new worktree from main, as on desktop; missing main re
 choice. Models and profiles are checked on the selected machine before starting.
 
 Choosers sit beside the form, or occupy its column in narrow terminals. Escape returns through
-nested choosers and preserves a dismissed draft. Errors keep every choice and the creation receipt
-for retry; repeated Enter cannot submit a second request while one is pending. Input in the form
+nested choosers and preserves a dismissed draft. Confirmed failures keep the draft and reuse
+any prepared project folder on retry. A lost reply offers Check status for the original launch;
+repeated Enter cannot start another harness while its outcome is unknown. Input in the form
 never reaches a working pane. No reverse-video selection is used.
 
 
