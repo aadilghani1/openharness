@@ -11,7 +11,6 @@ import 'package:harness_mobile/state/session_preview.dart'
     show SessionPreviewKey;
 
 import 'agent_index.dart';
-import 'agent_recap.dart';
 import 'desk_groups.dart';
 import 'desk_tab_filter_bar.dart';
 import 'find_row.dart';
@@ -113,10 +112,6 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// on screen names.
   String? _tabId;
 
-  /// The rows whose recap is unfolded, by [PhoneDestination.id]. Kept across a change of tab or
-  /// query, so a recap somebody opened is still open when they come back to it.
-  final _unfolded = <String>{};
-
   /// The order Find opened with — each row's section (needs you, recent, the one on screen,
   /// paused) and place in it, by id. Held while Find is open: a harness that starts or stops
   /// asking, pauses, or does something new keeps its place and only its words change, so the row
@@ -153,19 +148,21 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(notifier.reachAllMachines());
     });
-    // No warm of the recaps here: each row asks for its own as it is built — see [_want].
+    // No warm of the previews here: each row asks for its own as it is built — see [_want].
   }
 
   /// The sessions whose rows this frame built, read once it is over — see [_want].
   final _wanted = <SessionPreviewKey>{};
   bool _warmScheduled = false;
 
-  /// Asks for what [key]'s session last said, because its row is on screen or about to be.
+  /// Asks for what [key]'s session last said, because its row is on screen or about to be — what
+  /// the search matches a session's words against (`phone_search_rank.dart`), no longer drawn under
+  /// the row: the recap that was, is gone (owner, 2026-09-30).
   ///
   /// ⚠️ **By the rows built, not the agents known.** Warming the first 32 agents by recency, as
   /// this did on open, read rows in an order Find does not draw them in — needs you, the frozen
   /// open order, paused last — and never reached a row past the 32nd: a list of a hundred sessions
-  /// held two thirds of its recaps empty however far it was scrolled. The list is lazy, so the rows
+  /// held two thirds of its previews empty however far it was scrolled. The list is lazy, so the rows
   /// built are the ones in view and the next few below; asked for top first and ahead of anything
   /// already queued, they fill in in the order they are read.
   ///
@@ -244,7 +241,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// The desk's tabs as the chips offer them: none off the plain list, and none where the desk has
   /// no tabs or has not answered — and then no chips are drawn at all.
   List<DeskTabFilter> _tabs(PhoneSearchController search) => _plain(search)
-      ? deskTabFilters(widget.notifier, agentIndex(widget.notifier))
+      ? deskTabFilters(widget.notifier)
       : const [];
 
   /// The picked tab among [tabs]; null is All.
@@ -361,7 +358,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final project = search.projectMatch;
     // ⚠️ **Built as they scroll in, not all at once.** Each entry makes its widget only when the
     // list asks for it, so a hundred sessions cost the rows in view: their state words, their lit
-    // matches, their recaps — and the read that fetches each recap ([_want]). An eager list did all
+    // matches — and the read that fetches each one's preview ([_want]). An eager list did all
     // of that for every row on every rebuild, and this screen rebuilds on every preview the store
     // publishes.
     final items = <Widget Function()>[];
@@ -453,11 +450,15 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     );
   }
 
-  /// One session's entry in the list: its row, and under it what the session last came to — folded
-  /// away until the chevron on the row's first line unfolds it.
+  /// One session's entry in the list: its row, and a read of what the session last said for the
+  /// search to match against ([_want]).
+  ///
+  /// ⚠️ **No recap under it any more (owner, 2026-09-30).** The row used to carry a chevron that
+  /// unfolded the session's last reply beneath it; it was removed, and with it the room kept at the
+  /// end of every first line for that chevron. The read stays — the search still needs the words.
   ///
   /// Keyed by the row's id — what [ListView.builder]'s `findChildIndexCallback` looks it up by — so
-  /// a recap somebody unfolded stays with its session when a match moves it up the list.
+  /// the row keeps its element when a match moves it up the list.
   Widget _session(
     PhoneDestination row,
     List<String> terms,
@@ -465,55 +466,22 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     Tty tty, {
     required bool selected,
   }) {
-    final recap = _recap(row);
-    final expanded = recap != null && _unfolded.contains(row.id);
-    void toggle() => setState(() {
-      if (!_unfolded.remove(row.id)) _unfolded.add(row.id);
-    });
+    if (row.isAgent) {
+      if (row.previewKey case final key?) _want(key);
+    }
     return KeyedSubtree(
       key: ValueKey(row.id),
-      // A column whether or not there is a recap, so the row keeps its element when one lands.
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _findRow(
-            row,
-            terms,
-            now,
-            tty,
-            selected: selected,
-            // No chevron until there is something under it: a session still being read, or one
-            // that has said nothing, has nothing to unfold. The room is kept either way.
-            recapToggle: recap == null
-                ? null
-                : AgentRecapToggle(expanded: expanded, onToggle: toggle),
-          ),
-          if (recap != null)
-            AgentRecap(text: recap, expanded: expanded, onToggle: toggle),
-        ],
-      ),
+      child: _findRow(row, terms, now, tty, selected: selected),
     );
   }
 
-  /// What [row]'s session last said, or null for a row that is not a harness, or a session not yet
-  /// read or that has said nothing. Asks for it as the row is drawn — see [_want].
-  String? _recap(PhoneDestination row) {
-    if (!row.isAgent) return null;
-    final key = row.previewKey;
-    if (key != null) _want(key);
-    return phoneRecap(widget.notifier.sessionPreviews, key);
-  }
-
-  /// One harness (or command) as a Find row — see [FindRow]. A session's row keeps room at the end
-  /// of its first line for [recapToggle], so every session's `idle · 25m` stands in one column.
+  /// One harness (or command) as a Find row — see [FindRow].
   Widget _findRow(
     PhoneDestination row,
     List<String> terms,
     DateTime now,
     Tty tty, {
     required bool selected,
-    Widget? recapToggle,
   }) {
     final entry = row.entry;
     final openable = widget.controller.canSubmit(row);
@@ -530,7 +498,6 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         tail: external.engineLabel,
         // Beside the state, as a harness row's age is.
         stateTail: fzfAge(row.lastAt, now),
-        accessoryRoom: AgentRecapToggle.room,
         said: hit == null || hit.snippet.isEmpty || hit.field == 'name'
             ? null
             : (lead: snippetLead(hit.field), runs: snippetRuns(hit.snippet)),
@@ -595,8 +562,6 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
           : onScreen
           ? 'current'
           : fzfAge(entry.agent.updatedAt, now),
-      accessory: recapToggle,
-      accessoryRoom: AgentRecapToggle.room,
       terms: terms,
       selected: selected,
       enabled: openable || _resuming == row.id,
@@ -643,7 +608,13 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     };
   }
 
-  ({String word, Color color}) _stateOf(
+  /// The word at a harness row's right edge, or null for an idle one.
+  ///
+  /// ⚠️ **Idle says nothing (owner, 2026-09-30).** It is what a harness is when none of the words
+  /// above apply — most of the list, most of the time — so `idle` stood on nearly every row and
+  /// said nothing any of them needed saying, while the words that DO ask for something (`asking`,
+  /// `done`, `exited`) were lost among them. The row keeps its age (`1h`) in that place.
+  ({String? word, Color color}) _stateOf(
     AgentEntry entry,
     bool openable,
     Tty tty, {
@@ -661,7 +632,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       agentId: entry.agent.id,
     ));
     if (unread == NoticeKind.done) return (word: 'done', color: tty.faint);
-    return (word: 'idle', color: tty.faint);
+    return (word: null, color: tty.faint);
   }
 
   /// Where a project lives, for `+ New Harness in <project>`: its machine and folder, read from the

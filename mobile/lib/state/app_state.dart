@@ -282,9 +282,9 @@ class AppNotifier extends ChangeNotifier {
   /// phone pays for the bytes, and the live events already keep a connected
   /// machine's agents current.
   ///
-  /// Four reads out at once, not the desktop's two: Find draws a recap under every row and reads
-  /// them as the rows come into view, and each read is one small relay round trip — two at a time
-  /// left a screenful of rows waiting on the latency rather than on the bytes.
+  /// Four reads out at once, not the desktop's two: Find reads them as its rows come into view, so
+  /// its search can match what each session said, and each read is one small relay round trip —
+  /// two at a time left a screenful of rows waiting on the latency rather than on the bytes.
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
     freshFor: const Duration(minutes: 5),
@@ -1897,6 +1897,8 @@ class AppNotifier extends ChangeNotifier {
           // The model sheet's sentence under a Local model.
           prev.gridWebSearch != agent.gridWebSearch ||
           prev.selectedModel != agent.selectedModel ||
+          // What a tab's name votes with — see `identityEngine`.
+          prev.dsh != agent.dsh ||
           prev.dshName != agent.dshName ||
           prev.sessionId != agent.sessionId ||
           prev.engine != agent.engine ||

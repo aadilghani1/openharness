@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
+import '../state/swarm.dart';
 import '../teams/team_controller.dart';
 import 'desk_groups.dart';
 import 'phone_header.dart';
@@ -65,7 +66,8 @@ class TeamPage extends StatelessWidget {
                               ),
                             ),
                             child: Text(
-                              deskTabName(tab, null),
+                              deskTabNames(notifier)[tab.id] ??
+                                  Swarm.defaultName,
                               style: Tty.of(context).style(),
                             ),
                           ),

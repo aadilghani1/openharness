@@ -13,7 +13,7 @@ import 'tty_controls.dart';
 /// ```
 /// api-fix                               asking
 /// "Run the migration on the test db?"
-/// docs-rewrite                    working · 2m ⌄
+/// docs-rewrite                      working · 2m
 /// M2:site ⑂ docs-v2
 /// ```
 class FindRow extends StatelessWidget {
@@ -56,15 +56,17 @@ class FindRow extends StatelessWidget {
   /// Last on line 2, after a `·`: the age, or `current`.
   final String? tail;
 
-  /// `asking`, `working`, `idle`, `exited` — one word, right-aligned on line 1.
+  /// `asking`, `working`, `exited` — one word, right-aligned on line 1. Null for a harness with
+  /// nothing to say (idle), whose line 1 then ends in [stateTail] alone.
   final String? state;
   final Color? stateColor;
 
-  /// After [state] on line 1, behind a `·`: the age, or `current`. On line 1 rather than as [tail],
-  /// where a long folder and branch cut it off.
+  /// After [state] on line 1, behind a `·`: the age, or `current` — or on its own where there is
+  /// no [state]. On line 1 rather than as [tail], where a long folder and branch cut it off.
   final String? stateTail;
 
-  /// A control at the end of line 1, beside [state] — Find's recap toggle — centred on that line.
+  /// A control at the end of line 1, beside [state], centred on that line. No row passes one today
+  /// — Find's recap toggle, its one user, was removed (2026-09-30) — but the slot stays for the next.
   ///
   /// ⚠️ **Over the row, not inside it.** The row lights the moment a finger rests on it
   /// ([TtyTap]), and a control nested in it would light the whole row as though it were about to
@@ -161,21 +163,23 @@ class FindRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (state case final state?) ...[
+                  if (state != null || (stateTail ?? '').isNotEmpty) ...[
                     const SizedBox(width: 12),
                     Text.rich(
                       TextSpan(
                         children: [
-                          TextSpan(
-                            text: state,
-                            style: tty.style(
-                              color: stateColor ?? tty.faint,
-                              size: TtySize.meta,
+                          if (state case final state?)
+                            TextSpan(
+                              text: state,
+                              style: tty.style(
+                                color: stateColor ?? tty.faint,
+                                size: TtySize.meta,
+                              ),
                             ),
-                          ),
                           if (stateTail case final tail? when tail.isNotEmpty)
                             TextSpan(
-                              text: ' · $tail',
+                              // Alone, without the `·` that joins it to a word — see [state].
+                              text: state == null ? tail : ' · $tail',
                               style: tty.style(
                                 color: tty.faint,
                                 size: TtySize.meta,

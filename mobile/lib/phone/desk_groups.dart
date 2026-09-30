@@ -3,6 +3,8 @@ import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
 import 'package:harness_mobile/state/swarm.dart';
+import 'package:harness_mobile/widgets/engine_identity.dart'
+    show canonicalHarnessId, isCodeEngine, isHarnessId;
 
 import 'agent_index.dart';
 
@@ -72,15 +74,12 @@ List<DeskGroup> deskGroups(AppNotifier notifier, List<AgentEntry> visible) {
           entry,
   };
   final byKey = keyed(openable);
-  final known = keyed(visible);
+  final names = deskTabNames(notifier);
   return [
     for (final tab in tabs)
       DeskGroup(
         id: tab.id,
-        name: deskTabName(
-          tab,
-          tab.panes.isEmpty ? null : known[tab.panes.first.key]?.agent,
-        ),
+        name: names[tab.id] ?? Swarm.defaultName,
         entries: [for (final pane in tab.panes) ?byKey[pane.key]],
       ),
   ];
@@ -115,49 +114,124 @@ class DeskTabFilter {
   );
 }
 
-/// The desk's tabs, in the desk's order, each named as the tab strip names it.
+/// The desk's tabs, in the desk's order, each named as the tab strip names it ([deskTabNames]).
 ///
 /// Empty where the desk has no tabs or has not answered — and then there is
 /// nothing to narrow by, so the list draws no filter at all.
-List<DeskTabFilter> deskTabFilters(
-  AppNotifier notifier,
-  List<AgentEntry> visible,
-) {
+List<DeskTabFilter> deskTabFilters(AppNotifier notifier) {
   final tabs = notifier.deskTabs;
   if (tabs.isEmpty) return const [];
-  final known = {
-    for (final entry in visible)
-      DeskPaneRef(machineId: entry.machineId, agentId: entry.agent.id).key:
-          entry.agent,
-  };
+  final names = deskTabNames(notifier);
   return [
     for (final tab in tabs)
       DeskTabFilter(
         id: tab.id,
-        name: deskTabName(
-          tab,
-          tab.panes.isEmpty ? null : known[tab.panes.first.key],
-        ),
+        name: names[tab.id] ?? Swarm.defaultName,
         keys: {for (final pane in tab.panes) pane.key},
       ),
   ];
 }
 
-/// What a tab is called — the desktop's rule (`AppNotifier._syncAgentName`).
+/// What a tab's agents can have in common, strongest claim first when counts tie: what they are,
+/// the project they work in, the machine they run on.
+enum _TabTrait { type, project, machine }
+
+typedef _TabName = ({_TabTrait trait, String label, int count});
+
+/// What each of the desk's tabs is called, by tab id — the desktop's rule, `workspaceTabNames` in
+/// `desktop/lib/state/workspace_status.dart`, so a tab reads the same here as in the window beside
+/// the phone.
 ///
-/// A name somebody gave it stands. Otherwise the tab is named after its first
-/// agent ([first]), and follows that agent's [Agent.displayName] as its session
-/// titles it — `Greet user` rather than the `Untitled Tab` the desk was left
-/// holding. An agent with no name of its own leaves the tab [Swarm.defaultName].
+/// A name somebody gave it stands. Otherwise its agents vote on the three [_TabTrait]s — their type
+/// (`code` for every coding engine, a harness's own name for a harness: [_tabType]), their project,
+/// their machine — and the trait most of them share names the tab. A tie goes to the trait least
+/// repeated across the other tabs, and after that to the stronger trait. A tab with nothing to vote
+/// is [Swarm.defaultName].
 ///
-/// ⚠️ **Derived here, never written back.** Every window derives it the same
-/// way, and the desk syncs only names a person chose (`nameIsCustom`); writing a
-/// derived one would turn it into a chosen one on every computer.
-String deskTabName(DeskTab tab, Agent? first) {
-  if (tab.nameIsCustom) return tab.name;
-  if (first == null) return Swarm.normalizeName(tab.name);
-  final name = first.displayName;
-  return name == kUntitledPane ? Swarm.defaultName : name;
+/// ⚠️ **Why the vote and not the first agent's name (owner, 2026-10-01).** The phone named a tab
+/// after its first agent — the desktop's rule (`AppNotifier._syncAgentName`) until the desktop
+/// moved to this one on 2026-09-24 — and kept that rule after it moved: the same tab of two
+/// Claude Code agents read `code` on the desktop and `Fix bugs` on the phone.
+///
+/// ⚠️ **Derived here, never written back.** Every window derives it the same way, and the desk
+/// syncs only names a person chose (`nameIsCustom`); writing a derived one would turn it into a
+/// chosen one on every computer.
+///
+/// ⚠️ **Where it can still differ from the desktop.** The desktop also votes with a pane's live
+/// session engine when its agent is not listed, and counts repetitions across its window-only tabs
+/// (Store, orchestrator) — neither of which the phone has. Both reach only a tab whose agents the
+/// machine has not listed, or a tie decided by repetitions.
+Map<String, String> deskTabNames(AppNotifier notifier) {
+  final tabs = notifier.deskTabs;
+  final candidates = <String, List<_TabName>>{};
+  for (final tab in tabs) {
+    if (tab.nameIsCustom) {
+      candidates[tab.id] = const [];
+      continue;
+    }
+    final counts = <_TabTrait, Map<String, int>>{
+      for (final trait in _TabTrait.values) trait: {},
+    };
+    void vote(_TabTrait trait, String? label) {
+      if (label == null || label.isEmpty) return;
+      counts[trait]!.update(label, (n) => n + 1, ifAbsent: () => 1);
+    }
+
+    // One vote per agent, however many panes name it.
+    final seen = <String>{};
+    for (final pane in tab.panes) {
+      if (!seen.add(pane.key)) continue;
+      final machine = notifier.stateOf(pane.machineId);
+      final agent = machine?.agents
+          .where((agent) => agent.id == pane.agentId)
+          .firstOrNull;
+      vote(_TabTrait.type, _tabType(agent?.identityEngine));
+      vote(_TabTrait.project, agent?.displayProject?.label);
+      vote(_TabTrait.machine, machine?.machine.displayName ?? pane.machineId);
+    }
+    candidates[tab.id] = [
+      for (final trait in _TabTrait.values)
+        if (counts[trait]!.isNotEmpty)
+          (() {
+            // The first to reach the top count wins it: pane order breaks a tie within a trait.
+            final winner = counts[trait]!.entries.reduce(
+              (a, b) => b.value > a.value ? b : a,
+            );
+            return (trait: trait, label: winner.key, count: winner.value);
+          })(),
+    ];
+  }
+  int repetitions(_TabName name) => candidates.values
+      .where(
+        (choices) => choices.any(
+          (other) => other.trait == name.trait && other.label == name.label,
+        ),
+      )
+      .length;
+  return {
+    for (final tab in tabs)
+      tab.id: tab.nameIsCustom
+          ? tab.name
+          : candidates[tab.id]!.isEmpty
+          ? Swarm.defaultName
+          : candidates[tab.id]!.reduce((a, b) {
+              if (b.count != a.count) return b.count > a.count ? b : a;
+              return repetitions(b) < repetitions(a) ? b : a;
+            }).label,
+  };
+}
+
+/// An agent's type as a tab's name counts it, from its [Agent.identityEngine] — the desktop's:
+/// `code` for a coding engine, a harness's own name (`kicad`, not `autonomous/kicad`), and any
+/// other engine by its id (`terminal`).
+String? _tabType(String? engine) {
+  final id = engine?.trim().toLowerCase() ?? '';
+  if (id.isEmpty) return null;
+  if (isHarnessId(id)) {
+    final canonical = canonicalHarnessId(id);
+    return canonical.substring(canonical.lastIndexOf('/') + 1);
+  }
+  return isCodeEngine(id) ? 'code' : id;
 }
 
 /// Whether [agent] is on none of the desk's tabs — one opened from search or a
