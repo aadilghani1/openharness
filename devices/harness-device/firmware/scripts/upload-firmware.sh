@@ -20,6 +20,13 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"    # devices/harness-device/firmware
+DEV_BRANCH="$(git -C "$HERE" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+case "$DEV_BRANCH" in
+  dev/firmware-*)
+    echo "error: development branches cannot publish firmware; stable releases belong to Diego" >&2
+    exit 1
+    ;;
+esac
 VER_FILE="$HERE/version.txt"
 # A DEDICATED prod build dir + DEVICE_FORCE_PROD so a published binary is always production (ignores any
 # local provisioned_config.h) WITHOUT moving the header, and without clobbering the interactive `build/`
