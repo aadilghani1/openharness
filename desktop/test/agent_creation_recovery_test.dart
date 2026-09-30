@@ -230,6 +230,8 @@ void main() {
         final field = find.byKey(const ValueKey('swarm-search-input'));
         if (entry == 'Open') {
           await openHarnessPicker(tester);
+          expect(find.byType(SwarmSearchResults), findsOneWidget);
+          await chord(tester, LogicalKeyboardKey.keyN);
         } else {
           await chord(tester, LogicalKeyboardKey.keyP, shift: true);
           await tester.enterText(field, '> $entry');
@@ -237,8 +239,6 @@ void main() {
           await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           await tester.pump();
         }
-        expect(find.byType(SwarmSearchResults), findsOneWidget);
-        await chord(tester, LogicalKeyboardKey.keyN);
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsNothing);
