@@ -16,6 +16,7 @@ import '../state/dial_status.dart';
 import '../theme/app_theme.dart';
 import '../widgets/daemon_illustration.dart';
 import 'companion_dial.dart';
+import 'companion_engine_picker.dart';
 import 'companion_story.dart';
 import 'memory_review_text.dart';
 
@@ -31,6 +32,8 @@ class CompanionHome extends StatefulWidget {
     required this.onHatch,
     required this.onOpenControls,
     this.onOpenConversation,
+    this.onSelectEngine,
+    this.openingTerminal = false,
     this.terminalStatus,
     this.dial,
     this.onDeviceSettings,
@@ -40,6 +43,8 @@ class CompanionHome extends StatefulWidget {
   final ValueChanged<ZooEgg> onHatch;
   final ValueChanged<String> onOpenControls;
   final VoidCallback? onOpenConversation;
+  final ValueChanged<String>? onSelectEngine;
+  final bool openingTerminal;
   final String? terminalStatus;
   final DialState? dial;
   final void Function(String, Map<String, Object?>)? onDeviceSettings;
@@ -59,6 +64,7 @@ class _CompanionHomeState extends State<CompanionHome> {
   final _memoryViewport = GlobalKey();
   late final _lessons = DaemonLessons(widget.brain)..addListener(_changed);
   Timer? _memoryRefresh;
+  String? _lastPairEngine;
   ZooController get zoo => widget.face.zoo;
   ZooDaemon? get individual =>
       _previewSpecies != null ? null : zoo.zoo.byUid(_viewingUid) ?? zoo.paired;
@@ -74,10 +80,17 @@ class _CompanionHomeState extends State<CompanionHome> {
     zoo.addListener(_changed);
     widget.face.addListener(_changed);
     widget.brain.addListener(_changed);
+    _lastPairEngine = widget.brain.pairEngine;
   }
 
   void _changed() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final engineChanged = _lastPairEngine != widget.brain.pairEngine;
+    _lastPairEngine = widget.brain.pairEngine;
+    setState(() {});
+    if (engineChanged && _section == 'Memories' && !_lessons.busy) {
+      unawaited(_lessons.refresh());
+    }
   }
 
   TextStyle ink([double size = 14, Color? color]) => TextStyle(
@@ -177,28 +190,41 @@ class _CompanionHomeState extends State<CompanionHome> {
       color: AppColors.background,
       child: LayoutBuilder(
         builder: (context, constraints) {
+          final enginePicker = CompanionEnginePicker(
+            engine: widget.brain.pairEngine,
+            onSelected: widget.onSelectEngine,
+            busy: widget.openingTerminal,
+          );
           final viewer = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(28, 20, 18, 14),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        'Companions',
-                        style: ink(17).copyWith(fontWeight: FontWeight.w600),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Companions',
+                            style: ink(17)
+                                .copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        if (constraints.maxWidth >= 500) enginePicker,
+                        IconButton(
+                          tooltip: 'Companion settings',
+                          key: const ValueKey('companion-settings'),
+                          onPressed: () => widget.onOpenControls('settings'),
+                          icon: Icon(
+                            Icons.tune_rounded,
+                            size: 19,
+                            color: AppColors.textSoft,
+                          ),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: 'Companion settings',
-                      key: const ValueKey('companion-settings'),
-                      onPressed: () => widget.onOpenControls('settings'),
-                      icon: Icon(
-                        Icons.tune_rounded,
-                        size: 19,
-                        color: AppColors.textSoft,
-                      ),
-                    ),
+                    if (constraints.maxWidth < 500) enginePicker,
                   ],
                 ),
               ),
@@ -816,6 +842,7 @@ class _CompanionHomeState extends State<CompanionHome> {
                     ? 'Retry review'
                     : 'Look back over 24 hours',
                 _lessons.busy ||
+                        _lessons.learning?.state == 'unopened' ||
                         (history?.active == true && history?.canRetry != true)
                     ? null
                     : () => unawaited(_lessons.reviewRecent()),

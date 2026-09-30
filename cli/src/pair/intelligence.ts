@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { parseRuntimeProfile, type RuntimeProfile } from '../lib/runtimeProfile.js'
 import { runClaudeOneShot, runCodexOneShot, type OneShotOptions } from '../lib/oneshot.js'
 import type { PairOneShot } from './triage.js'
+import type { StartupProfile } from './startupProfile.js'
 
 export interface CompanionRuntime {
   agentId: string
@@ -13,6 +14,7 @@ export interface CompanionRuntime {
   stopped: boolean
   codexHome?: string | null
   customProvider?: boolean
+  startup?: StartupProfile | null
 }
 
 export interface IntelligenceStatus {
@@ -67,6 +69,7 @@ export class CompanionIntelligence {
       // A result from an old model, account, or conversation is never accepted under the new one.
       if (controller.signal.aborted || current.status.state !== 'ready' ||
         current.runtime?.sessionId !== runtime.sessionId || current.profile?.id !== profile.id ||
+        (!runtime.sessionId && current.runtime?.startup?.processKey !== runtime.startup?.processKey) ||
         current.runtime?.codexHome !== runtime.codexHome) return null
       return result.text
     } finally {
@@ -80,18 +83,21 @@ export class CompanionIntelligence {
     const runtime = this.deps.current()
     if (!runtime) return { status: { state: 'unopened' } }
     const status: IntelligenceStatus = { state: 'waiting', agentId: runtime.agentId, engine: runtime.engine }
-    if (!runtime.sessionId) return { status }
     // Custom provider credentials must not silently fall back to the local subscription.
     if (!['claude', 'codex'].includes(runtime.engine) || runtime.customProvider) return { status: { ...status, state: 'unsupported' } }
+    if (!runtime.sessionId && (runtime.stopped || !runtime.startup)) return { status }
     this.load()
     const cached = this.saved![runtime.agentId]
-    const value = runtime.profile ?? (runtime.stopped && cached?.sessionId === runtime.sessionId ? cached.profile : null)
+    const value = runtime.sessionId
+      ? runtime.profile ?? (runtime.stopped && cached?.sessionId === runtime.sessionId ? cached.profile : null)
+      : runtime.startup?.profile
     const profile = parseRuntimeProfile(value)
     const efforts = runtime.engine === 'claude'
       ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
       : ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
     if (!profile || profile.sessionId !== runtime.agentId || profile.engine !== runtime.engine || !efforts.includes(profile.effort)) return { status }
-    if (cached?.profile !== profile.id || cached.sessionId !== runtime.sessionId) {
+    // Pre-conversation readiness is live evidence, never a durable substitute for a conversation ID.
+    if (runtime.sessionId && (cached?.profile !== profile.id || cached.sessionId !== runtime.sessionId)) {
       this.saved![runtime.agentId] = { sessionId: runtime.sessionId, profile: profile.id }
       mkdirSync(dirname(this.deps.stateFile), { recursive: true, mode: 0o700 })
       const tmp = `${this.deps.stateFile}.tmp`

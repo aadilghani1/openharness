@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CompanionIntelligence, type CompanionRuntime } from './intelligence.js'
@@ -39,6 +39,30 @@ describe('the collection DSH supplies its intelligence', () => {
     w.set({ ...w.get(), sessionId: 'another-conversation' })
     expect(new CompanionIntelligence(w.deps).status().state).toBe('waiting')
     expect(readFileSync(w.deps.stateFile, 'utf8')).not.toContain('prompt')
+  })
+
+  it('can review before the first message with live startup evidence, without persisting a fake conversation', async () => {
+    const w = world()
+    const startup = { processKey: 'live-process-1', profile: w.get().profile! }
+    w.set({ ...w.get(), sessionId: '', profile: null, startup })
+    expect(w.brain.status()).toMatchObject({ state: 'ready', model: 'opus' })
+    expect(await w.brain.run('evidence', { timeoutMs: 1000, signal: new AbortController().signal })).toBe('{"lesson":null}')
+    expect(existsSync(w.deps.stateFile)).toBe(false)
+    w.set({ ...w.get(), stopped: true })
+    expect(new CompanionIntelligence(w.deps).status().state).toBe('waiting')
+    w.set({ ...w.get(), stopped: false, startup: null })
+    expect(w.brain.status().state).toBe('waiting')
+  })
+
+  it('rejects an unbound review result from a replaced process even with the same agent and model', async () => {
+    const w = world(), startup = { processKey: 'live-process-1', profile: w.get().profile! }
+    w.set({ ...w.get(), sessionId: '', profile: null, startup })
+    let finish!: (result: { text: string }) => void
+    w.run.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const result = w.brain.run('evidence', { timeoutMs: 1000, signal: new AbortController().signal })
+    w.set({ ...w.get(), startup: { ...startup, processKey: 'live-process-2' } })
+    finish({ text: 'old answer' })
+    expect(await result).toBeNull()
   })
 
   it('does not guess a model from another agent, setup, unsupported credentials, or a missing DSH', async () => {

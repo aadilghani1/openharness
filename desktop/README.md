@@ -171,10 +171,15 @@ Useful validation commands:
 
 ```bash
 dart analyze
-flutter build macos --debug
+bash scripts/build-macos-debug.sh
 flutter build macos --release
 flutter build linux --release   # must run on an Ubuntu host — no cross-compiling
 ```
+
+The macOS debug script uses the same renderer as the host's release build: Skia on
+Intel, Impeller on Apple Silicon. It also pins that choice for opening `Harness.app`
+directly. On Intel, add `--no-enable-impeller` to `flutter run` and native integration
+test commands; the default renderer can make bitmap artwork disappear.
 
 The terminal core is vendored at `third_party/xterm`. Do not replace it with an
 upstream package upgrade without preserving the local rendering and IME fixes.

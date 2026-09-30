@@ -94,6 +94,7 @@ import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClie
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
+import { CompanionStartupProfile } from './pair/startupProfile.js'
 import { ConversationReview } from './pair/learn/conversationReview.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
 import { PlateService } from './pair/plateService.js'
@@ -4454,9 +4455,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
-    engine: async () => {
-      const found = await probeEngines(['claude', 'codex']).catch(() => [])
-      return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
+    engine: async (preferred) => {
+      if (!preferred) return null // A new collection chooses its engine in the viewer.
+      const found = await probeEngines([preferred]).catch(() => [])
+      return found.some(e => e.engine === preferred && e.installed) ? preferred : null
     },
     // The launcher when this daemon is the installed release it runs; otherwise exactly this process.
     mcpCommand: () => {
@@ -4500,6 +4502,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   isCollectionAgent = (agentId) => agentId === pairHarness.agentId()
   companionPromptContext = (agentId) => daemons.on() ? pairHarness.context(agentId) : null
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
+  const companionStartupProfile = new CompanionStartupProfile({
+    current: () => {
+      if (!daemons.on() || !pairSensor.pairedDaemon()) return null
+      const session = registry.advertised().find(s => s.agentId === pairHarness.agentId())
+      return session?.dsh === PAIR_HARNESS_DSH ? session : null
+    },
+    capture: (id) => captureTerminal(id, 60),
+  })
   const companionIntelligence = new CompanionIntelligence({
     enabled: () => daemons.on() && !!pairSensor.pairedDaemon(),
     current: () => {
@@ -4510,6 +4520,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
       return { agentId, sessionId: session.sessionId, engine: session.engine,
         profile: runtimeProfiles.selectedModel(session), stopped: !live,
+        startup: live ? companionStartupProfile.selected(session) : null,
         codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
     },
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
@@ -4523,7 +4534,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const lessonDistiller = new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() })
   const conversationReview = new ConversationReview({
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'learn'),
-    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.agentId() : null,
+    scope: () => daemons.on() && pairSensor.pairedDaemon() ? pairHarness.learningScope() : null,
     pairedDaemon: () => pairSensor.pairedDaemon(), intelligence: () => companionIntelligence.status(),
     turns: (from, to) => sessionSearch?.recentConversations(from, to) ?? null,
     cwd: (id) => registry.resolve(id)?.cwd ?? stoppedAgents.get(id)?.cwd ?? null,
@@ -4536,7 +4547,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     history: conversationReview,
     intelligence: () => companionIntelligence.status(),
     queueFile: () => {
-      const id = pairHarness.agentId()
+      const id = pairHarness.learningScope()
       return id ? join(env.ADAPTER_DATA_DIR, 'pair', 'learn', `queue-${id}.json`) : null
     },
     pairedDaemon: () => pairSensor.pairedDaemon(),
@@ -4588,7 +4599,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     fleet: pairFleet,
     // Template first, then this collection's selected model when it is ready.
     triage: new PairTriage({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, budgetMs: 30_000 }),
-    companionHarness: () => ({ agentId: pairHarness.agentId(), ...companionIntelligence.status() }),
+    companionHarness: () => ({ ...companionIntelligence.status(), agentId: pairHarness.agentId(), engine: pairHarness.engine() }),
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
@@ -4614,7 +4625,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     talk: (text, uid) => pairTalk(text, uid),
-    open: (uid) => pairHarness.open(uid),
+    open: async (uid, engine) => {
+      const previousEngine = pairHarness.engine()
+      const result = await pairHarness.open(uid, engine)
+      if (result.ok) {
+        if (engine && engine !== previousEngine) {
+          companionIntelligence.cancel()
+          conversationReview.engineChanged()
+        }
+        pairBrain?.stateChanged()
+        return { ...result, engine: pairHarness.engine() }
+      }
+      return result
+    },
     now: Date.now,
   })
   // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
@@ -5423,6 +5446,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const PANE_POLLED_ENGINES = new Set(['devin', 'cursor', 'grok', 'agy', 'opencode', 'kilo'])
   const PANE_POLL_MS = 15_000
   setInterval(() => {
+    void companionStartupProfile.refresh().then(() => companionProfileChanged()).catch(() => undefined)
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
       void captureTerminal(session.agentId, 60)

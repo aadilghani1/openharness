@@ -3833,16 +3833,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_openCompanionTerminal(key));
   }
 
-  Future<void> _openCompanionTerminal(String key) async {
-    final result = await _brain.openConversation();
+  Future<void> _openCompanionTerminal(String key, {String? engine}) async {
+    final result = await _brain.openConversation(engine: engine);
     if (!mounted || _companionOpeningKey != key) return;
     _companionOpeningKey = null;
     if (key != '${_zoo.scope}:${_zoo.paired?.uid}' || !_creatureEnabled) return;
     if (result['ok'] != true) {
       _companionTerminalError = switch (result['error']) {
+        'ENGINE_REQUIRED' => null,
         'UNSUPPORTED' => 'Update Harness CLI to open the companion terminal.',
         'NO_ENGINE' =>
-          'Install Claude Code or Codex to talk with your companion.',
+          result['detail'] as String? ??
+              'Install Claude Code or Codex to talk with your companion.',
         _ =>
           result['detail'] as String? ??
               'The terminal could not connect. Try opening it again.',
@@ -3852,12 +3854,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _scheduleCompanionWorkspace();
   }
 
+  void _selectCompanionEngine(String engine) {
+    final uid = _zoo.paired?.uid;
+    if (uid == null || _companionOpeningKey != null || _zoo.isPreview) return;
+    final key = '${_zoo.scope}:$uid';
+    setState(() {
+      _companionAttemptedKey = key;
+      _companionOpeningKey = key;
+      _companionTerminalError = null;
+    });
+    unawaited(_openCompanionTerminal(key, engine: engine));
+  }
+
   Widget _companionViewer(BuildContext context) => CompanionHome(
     key: ValueKey('companion-home:${_zoo.scope}'),
     face: _face,
     brain: _brain,
     onHatch: _hatch,
     onOpenControls: _openCompanionControls,
+    onSelectEngine: _zoo.isPreview || !_brain.active || _zoo.paired == null
+        ? null
+        : _selectCompanionEngine,
+    openingTerminal: _companionOpeningKey != null,
     terminalStatus:
         _companionTerminalError ??
         (_companionOpeningKey != null

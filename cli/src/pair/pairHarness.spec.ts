@@ -184,6 +184,19 @@ describe('talking to it', () => {
     expect(readFileSync(join(dir, 'pair', 'token'), 'utf8')).not.toBe(first)
   })
 
+  it('keeps a pre-conversation companion available instead of pausing a session that cannot resume', async () => {
+    const w = world()
+    await w.harness.open()
+    w.rows[0]!.hasConversation = false
+    await vi.advanceTimersByTimeAsync(PAIR_IDLE_MS * 2)
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
+    w.rows[0]!.hasConversation = true
+    w.harness.activity('pair-1')
+    await vi.advanceTimersByTimeAsync(PAIR_IDLE_MS + 60_000)
+    expect(w.deps.stop).toHaveBeenCalledWith('pair-1')
+  })
+
   it('a new paired daemon keeps the collection conversation and does not interrupt its terminal', async () => {
     const w = world()
     await w.harness.talk('hi tim')
@@ -209,7 +222,7 @@ describe('talking to it', () => {
 
   it('says why it cannot: nothing paired, no engine, nothing said', async () => {
     expect(await world({ pair: null }).harness.talk('hi')).toMatchObject({ ok: false, error: 'PAIR_OFF' })
-    expect(await world({ engine: null }).harness.talk('hi')).toMatchObject({ ok: false, error: 'NO_ENGINE' })
+    expect(await world({ engine: null }).harness.talk('hi')).toMatchObject({ ok: false, error: 'ENGINE_REQUIRED' })
     expect(await world().harness.talk('   ')).toMatchObject({ ok: false, error: 'EMPTY' })
   })
 })

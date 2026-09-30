@@ -41,7 +41,7 @@ flutter test                                      # whole unit/widget suite (tes
 flutter test test/terminal_session_test.dart      # one file
 flutter test test/ws_conn_test.dart --plain-name "reconnects"   # one test by name substring
 flutter run -d macos                              # or: flutter run -d linux
-flutter build macos --debug
+bash scripts/build-macos-debug.sh                  # pins the host's release renderer
 flutter build macos --release
 flutter build linux --release                     # Ubuntu build host only — no cross-compiling
 ```
@@ -58,7 +58,15 @@ creation and machine-link responses. They refuse to run without `FLUTTER_TEST=1`
 production-only pollers and persistence. The workspace fixture exercises the native macOS titlebar; its injected
 Flutter keys do not establish physical AppKit keyboard/IME behavior. A fixture build replaces
 `Harness.app`, so rebuild the normal review artifact afterward with
-`flutter build macos --debug --no-pub --target lib/main.dart`.
+`bash scripts/build-macos-debug.sh --no-pub --target lib/main.dart`.
+
+**Local macOS renderer:** Intel review builds need Skia, just like the Intel release.
+Plain `flutter build macos --debug` leaves Impeller enabled and can produce invisible
+bitmap artwork on Intel. The script above pins the built bundle's renderer and re-signs
+it so Finder launches work too; Apple Silicon keeps Impeller. For `flutter run` and
+native integration tests on Intel, add `--no-enable-impeller`. Check companion artwork
+on the real renderer with `integration_test/companion_art_native_test.dart`; headless
+image tests alone do not catch this failure.
 
 Local stack / E2E scripts (the CLI comes from this repo's `../cli`; the backend from a sibling
 `autonomous-code` checkout next to `autonomous-harness` — override with `AUTONOMOUS_CODE_ROOT` /

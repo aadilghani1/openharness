@@ -175,13 +175,17 @@ void main() {
     face = DaemonFace(zoo)
       ..setEnvironment(foreground: true, reduceMotion: true);
     sent = [];
-    brain = DaemonBrain(
-      now: tester.binding.clock.now,
-      send: (type, payload) {
-        sent.add((type, payload));
-        return true;
-      },
-    )..receive('daemon_state', {'pair': 'tim'});
+    brain =
+        DaemonBrain(
+          now: tester.binding.clock.now,
+          send: (type, payload) {
+            sent.add((type, payload));
+            return true;
+          },
+        )..receive('daemon_state', {
+          'pair': 'tim',
+          'companionHarness': {'agentId': 'a0', 'engine': 'codex'},
+        });
     zoo.bind('account:fixture', remote: remote);
     await tester.pump();
     face.sync(const DaemonWatch());
@@ -253,6 +257,7 @@ void main() {
                   brain: brain,
                   onHatch: (_) {},
                   onOpenControls: (_) {},
+                  onSelectEngine: (_) {},
                 ),
               ),
             ),
@@ -584,7 +589,7 @@ void main() {
     });
     await tester.pump();
     expect(
-      find.textContaining('Your chosen model has reached its usage limit.'),
+      find.textContaining('Your chosen agent has reached its usage limit.'),
       findsOneWidget,
     );
     expect(find.text('Retry review'), findsOneWidget);
