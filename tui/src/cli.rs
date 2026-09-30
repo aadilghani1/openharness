@@ -293,7 +293,7 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     let (local, list) = machines(port).await.unwrap_or_default();
     let machine_name = list.iter().find(|(id, _, _)| *id == local).map(|(_, n, _)| n.clone()).unwrap_or_else(|| {
         let mut fleet = crate::fleet::Fleet::default();
-        fleet.load_cache();
+        fleet.load_cache(&local);
         fleet.local_machine_name()
     });
     let rows = doc["sessions"].as_array().cloned().unwrap_or_default();

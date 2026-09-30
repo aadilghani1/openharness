@@ -1099,17 +1099,14 @@ impl App {
     // ── start: this machine, the account's machines, the desk ─────────────────
 
     pub fn boot(&mut self) {
-        if self.fleet.agents.is_empty() && self.fleet.machines.is_empty() { self.fleet.load_cache() }
         let port = self.port;
         self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| match status {
             Ok(status) => {
                 app.daemon_down = false;
                 app.viewer_web_url = status.get("webUrl").and_then(Value::as_str).unwrap_or("").to_string();
                 let id = status.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
-                if status.get("signedIn").and_then(Value::as_bool) == Some(false) {
-                    app.say("This computer is not signed in — run `harness login`", theme::DANGER);
-                }
                 if id.is_empty() { return }
+                if app.fleet.agents.is_empty() && app.fleet.machines.is_empty() { app.fleet.load_cache(&id) }
                 app.fleet.local_id = id.clone();
                 for machine in &mut app.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
                 if app.fleet.machine(&id).is_none() {

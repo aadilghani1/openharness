@@ -13,6 +13,7 @@ client="${HN_SOCKET_NAME:-e2e}-$$"
 sock="harness-tui-e2e-$$"
 home="$(mktemp -d /tmp/hn-e2e.XXXXXX)"
 export HN_TMPDIR="$home"
+export ADAPTER_DATA_DIR="$home/.harness/cli/data"
 tmux_() { tmux -L "$sock" "$@"; }
 screen() { tmux_ capture-pane -p -t t; }
 fail() { echo "✗ $1"; echo "--- screen ---"; screen || true; hn show-messages || true; hn display -p 'key-table=#{client_key_table} prefix=#{client_prefix} mode=#{pane_mode}' || true; exit 1; }
@@ -35,7 +36,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-node "$here/mock-daemon.mjs" "$port" >/dev/null &
+HOME="$home" node "$here/mock-daemon.mjs" "$port" >/dev/null &
 mock=$!
 sleep 0.5
 # Its own client socket, named: the test's shell calls must never reach a client of yours

@@ -10,7 +10,7 @@
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | bash               # the CLI and hn
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | sh -s -- --desktop  # Desktop: runtime + CLI only
 #   curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | sh -s -- --host     # Desktop: host requirements only
-#   hn                            # Harness in this terminal: signs in and starts the daemon the first time
+#   hn                            # Harness in this terminal: starts locally, no login required
 #   harness login
 #   harness start
 #   harness remote-password set   # so your other machines (and `harness remote`) can reach this one
@@ -770,7 +770,7 @@ else
   echo ""
   echo "  Start here — every harness on every machine, in this terminal:"
   echo ""
-  echo "      hn                             # signs in and connects this computer the first time"
+  echo "      hn                             # start locally; no login required"
   echo ""
   echo "  Or set this computer up step by step — three commands, in this order:"
   echo ""

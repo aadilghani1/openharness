@@ -39,9 +39,11 @@ with the desktop and phone. With no daemon available, hn opens local shells inst
 PTY supervisor keeps them running through detach, reconnect and a client crash. These local
 sessions stay on this computer and remain intact when Harness reconnects.
 
-On a fresh server `hn` signs in (over SSH the login prints a URL and takes the pasted
-callback), starts the daemon, then opens. If sign-in or daemon startup fails, it still opens
-a local shell. Like `tmux new -A`, it restores your swarms if the desk has any,
+On a fresh computer `hn` starts your local daemon and opens without requiring an account.
+Sign in with `harness login` when you want your other machines and shared desk. If daemon startup
+fails, hn still opens a local shell. Each OS user connects through their own private Unix socket;
+hn never attaches to another user's daemon merely because it occupies the default TCP port.
+Like `tmux new -A`, it restores your swarms if the desk has any,
 else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
 
@@ -419,7 +421,8 @@ notify = true              # OS notifications through the terminal
 | `HARNESS_TUI_DESK=off` | keep tabs to this window |
 | `HARNESS_TUI_PREDICT` | `off` / `always` (see Speed) |
 | `HARNESS_TUI_BIN` | the binary `harness tui` runs |
-| `PORT` | the daemon's port (default 18473) |
+| `PORT` | the configured daemon port naming this user's private socket (default 18473) |
+| `ADAPTER_DATA_DIR` | daemon state directory (default `~/.harness/cli/data`); hn and the CLI must use the same one |
 | `HN_DESKTOP=on` / `off` | whether the desktop app is running, instead of looking (see The dial) |
 
 ## Building
@@ -440,7 +443,7 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 
 | File | |
 |---|---|
-| `daemon.rs` | the loopback WebSocket per machine, requests, pushed frames |
+| `daemon.rs` | the private Unix-socket WebSocket per machine, requests, pushed frames |
 | `proto.rs` | `HTRL` terminal frames (mirrors `cli/src/lib/terminalBinary.ts`) |
 | `pane.rs` | one tile: `alacritty_terminal` grid, key/mouse encoding, selection, find, local echo |
 | `app.rs` | all state: machines, streams, tabs, desk sync |

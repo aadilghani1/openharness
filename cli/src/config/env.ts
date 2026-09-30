@@ -117,9 +117,9 @@ migrateLegacyAdapterState()
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  // Localhost port the SessionStart/SessionEnd hook callbacks POST to (hook/notify.mjs). A quiet FIXED
-  // value (below the OS ephemeral range, outside the project's 80xx/8100-8999/9001-9999 ranges). No
-  // free-port fallback — if it's taken, the adapter reports it (another adapter is likely running).
+  // Preferred localhost control port, also the stable name of this user's private daemon socket.
+  // When another OS user holds it, Unix daemons record a separate TCP port in this user's data dir;
+  // engine hooks and CLI commands use that actual port while native clients use the private socket.
   PORT: z.string().default('18473').transform(Number),
   // The loopback port `harness login` listens on for the SSO redirect. 0 (the default) takes whatever
   // the OS gives, which is right on a real computer: the browser and the listener are the same

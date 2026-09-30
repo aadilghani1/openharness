@@ -2,6 +2,7 @@
 // machines, fake harnesses, and terminals that echo what is typed. Fuzzing and end-to-end checks run
 // against this — never against a daemon whose agents are somebody's real work.
 //
+//   export HOME="$(mktemp -d /tmp/hn-mock.XXXXXX)" ADAPTER_DATA_DIR=
 //   node tui/tests/mock-daemon.mjs 18999 &
 //   PORT=18999 HARNESS_TUI_DESK=off tui/target/release/harness-tui
 //
@@ -11,7 +12,8 @@ import http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { chmodSync, mkdirSync, unlinkSync } from 'node:fs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(join(here, '../../cli/package.json'))
@@ -509,4 +511,17 @@ wss.on('connection', (ws) => {
     }
   })
 })
-server.listen(port, '127.0.0.1', () => console.log(`mock daemon on ${port}`))
+// Real native clients use an OS-user-owned socket. Tests supply a disposable HOME.
+const mockHome = process.env.HOME || ''
+if (!/^\/(?:private\/)?(?:tmp\/|var\/folders\/)/.test(mockHome)) throw new Error('mock-daemon requires a temporary HOME')
+const socketDir = process.env.ADAPTER_DATA_DIR || join(mockHome, '.harness', 'cli', 'data')
+if (!resolve(socketDir).startsWith(resolve(mockHome) + '/')) throw new Error('mock-daemon data must be inside its temporary HOME')
+mkdirSync(socketDir, { recursive: true, mode: 0o700 })
+const socketPath = join(socketDir, `daemon-${port}.sock`)
+try { unlinkSync(socketPath) } catch (error) { if (error.code !== 'ENOENT') throw error }
+const privateServer = http.createServer(server.listeners('request')[0])
+privateServer.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req)))
+privateServer.listen(socketPath, () => {
+  chmodSync(socketPath, 0o600)
+  server.listen(port, '127.0.0.1', () => console.log(`mock daemon on ${port}`))
+})

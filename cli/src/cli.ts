@@ -194,6 +194,7 @@ import {
 import { Watcher, type HistoryEvent, type LineEvent } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
+import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
 import { AutonomousDeviceService } from './lib/autonomous-device/service.js'
@@ -1331,9 +1332,8 @@ async function logout(): Promise<void> {
  * already wears the right id (a `harness login` on a computer that was signed in all along).
  */
 async function restartDaemonForIdentity(): Promise<void> {
-  // OUR daemon, by its pid file, before anything is asked over the port: the port is fixed and shared,
-  // and a login run against an isolated data dir (a test, a second HOME) must not reach across to a
-  // daemon that is not its own and restart it.
+  // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
+  // different OS user's daemon just because it happens to hold the default TCP port.
   const pid = readPid()
   if (!pid || !isAlive(pid)) return
   const daemon = await runningDaemonStatus()
@@ -3871,7 +3871,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(env.PORT, {
+  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onPromptContext: (agentId) => companionPromptContext(agentId),
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
@@ -4263,7 +4263,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onZooRead: () => zooProxy.read(),
     onZooOps: (body) => zooProxy.ops(body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
-  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT) })
+  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), allowPortFallback: true })
+  try { saveDaemonPort(env.ADAPTER_DATA_DIR, env.PORT, hookPort) } catch (error) {
+    await localSocket?.close()
+    hookServer.close()
+    throw error
+  }
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
   // written by whoever spawned us — so a parent that died mid-handover left a daemon nothing could
   // manage — and then, for a while, by us at the top of this function, before the bind — so a child
@@ -6995,11 +7000,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  */
 async function runningDaemonStatus(): Promise<{ version: string; sessions: number; machineId: string | null; connected: boolean } | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/status`, {
-      signal: AbortSignal.timeout(1_500),
-    })
-    if (!res.ok) return null
-    const body: unknown = await res.json()
+    const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
+      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
+    if (!body) return null
     const status = body as { version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown } | null
     const version = typeof status?.version === 'string' && status.version ? status.version : VERSION
     const sessions = Array.isArray(status?.sessions) ? status.sessions.length : 0
@@ -7205,9 +7208,11 @@ function clearAdapterState(): void {
     ]) {
       rmSync(join(dir, name), { recursive: true, force: true })
     }
-    // One daemon socket per control port (lib/localSocket.ts) — whichever ports have run here.
+    // Private sockets and actual TCP port records — whichever configured ports have run here.
     try {
-      for (const name of readdirSync(dir)) if (isLocalSocketName(name)) rmSync(join(dir, name), { force: true })
+      for (const name of readdirSync(dir)) {
+        if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
+      }
     } catch { /* no such directory */ }
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
@@ -8019,7 +8024,8 @@ const enterSafeMode = (err: unknown): void => {
   // itself was what failed, or we never got that far — take the port for the status alone, so the app
   // still reads not-ready rather than down. A port we cannot take at all leaves only a ticking clock.
   if (!daemonBoot.hookServer) {
-    const hosts = loopbackHosts(env.PORT)
+    const port = daemonPort()
+    const hosts = loopbackHosts(port)
     const status = createServer((req, res) => {
       if (!isLoopbackRequest(req, hosts)) { res.writeHead(403).end(); return }
       const body = safeModeStatusBody({
@@ -8030,11 +8036,11 @@ const enterSafeMode = (err: unknown): void => {
       res.end(JSON.stringify(body))
     })
     status.on('error', (e) => {
-      console.error(`[safe-mode] could not serve status on ${env.PORT}: ${e instanceof Error ? e.message : e}`)
+      console.error(`[safe-mode] could not serve status on ${port}: ${e instanceof Error ? e.message : e}`)
       // A ref'd timer, unlike the updater's: something has to hold the event loop open.
       setInterval(() => console.log(`[safe-mode] still waiting for a fixed build · v${VERSION}`), 10 * 60_000)
     })
-    status.listen(env.PORT, '127.0.0.1')
+    status.listen(port, '127.0.0.1')
   }
 
   // Bounded on purpose. A cause that has since cleared — tmux not yet on PATH after a reboot, a lock
@@ -8088,7 +8094,7 @@ switch (cmd) {
     runForeground(readAuthSession()).catch(enterSafeMode)
     break
   case 'autonomous-device':
-    runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)
+    runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair': {
     // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface
@@ -8181,7 +8187,7 @@ switch (cmd) {
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
-    tuiCommand(rest, { port: daemonPort(), signedIn: () => readAuthSession() !== null }).then((code) => { process.exitCode = code }).catch(onError)
+    tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({
