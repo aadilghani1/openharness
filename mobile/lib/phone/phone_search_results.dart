@@ -453,10 +453,11 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     );
   }
 
-  /// One session's entry in the list: its row, and under it what the session last came to.
+  /// One session's entry in the list: its row, and under it what the session last came to — folded
+  /// away until the chevron on the row's first line unfolds it.
   ///
   /// Keyed by the row's id — what [ListView.builder]'s `findChildIndexCallback` looks it up by — so
-  /// a recap somebody is unfolding stays with its session when a match moves it up the list.
+  /// a recap somebody unfolded stays with its session when a match moves it up the list.
   Widget _session(
     PhoneDestination row,
     List<String> terms,
@@ -464,50 +465,55 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     Tty tty, {
     required bool selected,
   }) {
-    final line = _findRow(row, terms, now, tty, selected: selected);
     final recap = _recap(row);
+    final expanded = recap != null && _unfolded.contains(row.id);
+    void toggle() => setState(() {
+      if (!_unfolded.remove(row.id)) _unfolded.add(row.id);
+    });
     return KeyedSubtree(
       key: ValueKey(row.id),
-      child: recap == null
-          ? line
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [line, recap],
-            ),
+      // A column whether or not there is a recap, so the row keeps its element when one lands.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _findRow(
+            row,
+            terms,
+            now,
+            tty,
+            selected: selected,
+            // No chevron until there is something under it: a session still being read, or one
+            // that has said nothing, has nothing to unfold. The room is kept either way.
+            recapToggle: recap == null
+                ? null
+                : AgentRecapToggle(expanded: expanded, onToggle: toggle),
+          ),
+          if (recap != null)
+            AgentRecap(text: recap, expanded: expanded, onToggle: toggle),
+        ],
+      ),
     );
   }
 
-  /// What [row]'s session last came to, folded under it — or its place held while it is read, or
-  /// nothing for a row that is not a harness or a session that has not said anything yet.
-  Widget? _recap(PhoneDestination row) {
+  /// What [row]'s session last said, or null for a row that is not a harness, or a session not yet
+  /// read or that has said nothing. Asks for it as the row is drawn — see [_want].
+  String? _recap(PhoneDestination row) {
     if (!row.isAgent) return null;
-    final previews = widget.notifier.sessionPreviews;
     final key = row.previewKey;
     if (key != null) _want(key);
-    final recap = phoneRecap(previews, key);
-    if (recap != null) {
-      return AgentRecap(
-        recap: recap,
-        expanded: _unfolded.contains(row.id),
-        onToggle: () => setState(() {
-          if (!_unfolded.remove(row.id)) _unfolded.add(row.id);
-        }),
-      );
-    }
-    if (key != null && previews.isPending(key)) {
-      return const AgentRecapPlaceholder();
-    }
-    return null;
+    return phoneRecap(widget.notifier.sessionPreviews, key);
   }
 
-  /// One harness (or command) as a Find row — see [FindRow].
+  /// One harness (or command) as a Find row — see [FindRow]. A session's row keeps room at the end
+  /// of its first line for [recapToggle], so every session's `idle · 25m` stands in one column.
   Widget _findRow(
     PhoneDestination row,
     List<String> terms,
     DateTime now,
     Tty tty, {
     required bool selected,
+    Widget? recapToggle,
   }) {
     final entry = row.entry;
     final openable = widget.controller.canSubmit(row);
@@ -521,10 +527,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         title: row.title,
         detail: row.detail,
         branch: null,
-        tail: [
-          external.engineLabel,
-          if (row.lastAt case final at?) fzfAge(at, now),
-        ].join(' · '),
+        tail: external.engineLabel,
+        // Beside the state, as a harness row's age is.
+        stateTail: fzfAge(row.lastAt, now),
+        accessoryRoom: AgentRecapToggle.room,
         said: hit == null || hit.snippet.isEmpty || hit.field == 'name'
             ? null
             : (lead: snippetLead(hit.field), runs: snippetRuns(hit.snippet)),
@@ -575,19 +581,22 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       title: row.title,
       strict: true,
       said: said,
-      // `M2:site ⑂ docs-v2 · 2m` — or, while it asks, its question.
+      // `M2:site ⑂ docs-v2` — or, while it asks, its question.
       detail: asking
           ? '"${question.split('\n').first}"'
           : '${entry.machineName}:${entry.agent.displayProject?.label ?? entry.project?.name ?? ''}',
       branch: asking || branch == null || branch.isEmpty ? null : branch,
-      tail: asking
+      detailColor: question != null && entry.isWaiting ? tty.text : null,
+      state: state.word,
+      stateColor: state.color,
+      // `idle · 2m` on line 1, where a long folder and branch on line 2 cannot cut the age off.
+      stateTail: asking
           ? null
           : onScreen
           ? 'current'
           : fzfAge(entry.agent.updatedAt, now),
-      detailColor: question != null && entry.isWaiting ? tty.text : null,
-      state: state.word,
-      stateColor: state.color,
+      accessory: recapToggle,
+      accessoryRoom: AgentRecapToggle.room,
       terms: terms,
       selected: selected,
       enabled: openable || _resuming == row.id,
