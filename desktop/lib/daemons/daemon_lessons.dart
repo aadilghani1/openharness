@@ -69,6 +69,79 @@ class DaemonLesson {
   }
 }
 
+@immutable
+class DaemonLearning {
+  const DaemonLearning({
+    required this.state,
+    this.model,
+    this.effort,
+    this.queued = 0,
+    this.pending = 0,
+    this.lastOutcome,
+  });
+  final String state;
+  final String? model, effort, lastOutcome;
+  final int queued, pending;
+
+  static DaemonLearning? fromJson(Object? raw) {
+    if (raw is! Map || raw['state'] is! String) return null;
+    final review = raw['lastReview'];
+    return DaemonLearning(
+      state: raw['state'] as String,
+      model: raw['model'] is String ? raw['model'] as String : null,
+      effort: raw['effort'] is String ? raw['effort'] as String : null,
+      queued: raw['queued'] is int ? raw['queued'] as int : 0,
+      pending: raw['pending'] is int ? raw['pending'] as int : 0,
+      lastOutcome: review is Map && review['outcome'] is String
+          ? review['outcome'] as String
+          : null,
+    );
+  }
+
+  String get title {
+    if (state != 'ready') {
+      return switch (state) {
+        'off' => 'Learning is paused',
+        'unsupported' => 'Learning is waiting for a supported connection',
+        _ => 'Getting ready to learn',
+      };
+    }
+    final name = switch (model) {
+      'opus' => 'Opus',
+      'sonnet' => 'Sonnet',
+      'haiku' => 'Haiku',
+      final String value => value,
+      _ => 'your chosen model',
+    };
+    return 'Learning with $name';
+  }
+
+  String get detail {
+    if (state == 'off') {
+      return 'Learning resumes when your companion is turned on.';
+    }
+    if (state == 'unsupported') {
+      return 'Background learning cannot use this agent connection yet. Your conversation and approved lessons are kept.';
+    }
+    if (state != 'ready') {
+      return 'Finish setting up the agent on the right. Learning follows the model you choose there.';
+    }
+    if (pending > 0) {
+      return 'A useful lesson is waiting for your approval. It will be shared with your agents once you approve it.';
+    }
+    if (['failed', 'timeout', 'no-model'].contains(lastOutcome)) {
+      return 'The last review could not finish. Your observations are queued for another try.';
+    }
+    if (queued > 0) {
+      return '$queued ${queued == 1 ? 'observation is' : 'observations are'} waiting for a quiet moment to review.';
+    }
+    if (lastOutcome == 'nothing' || lastOutcome == 'no-template') {
+      return 'The last review found nothing worth saving yet. I’m watching for useful corrections and patterns in your work.';
+    }
+    return 'Watching for useful corrections and patterns in your work. Lessons are saved after you approve them.';
+  }
+}
+
 class DaemonLessons extends ChangeNotifier {
   DaemonLessons(this.brain) {
     _results = brain.results.listen(_heard);
@@ -83,6 +156,8 @@ class DaemonLessons extends ChangeNotifier {
   bool _loaded = false, _busy = false, _disposed = false;
   String? _message, _note;
   String? _shownId, _shownText;
+  DaemonLearning? _learning;
+  DaemonLearning? get learning => _learning;
 
   /// Pending first, then approved; skipped and reverted ones are history.
   List<DaemonLesson> get lessons => _lessons;
@@ -140,6 +215,7 @@ class DaemonLessons extends ChangeNotifier {
         ...all.where((l) => l.approvedNow),
       ];
       _note = result['note'] is String ? result['note'] as String : null;
+      _learning = DaemonLearning.fromJson(result['learning']);
     } else {
       _message = _words(result);
     }

@@ -646,23 +646,24 @@ void main() {
       zoo.pair('gnu-one');
       await tester.pump();
       await tester.pump();
-      expect(app.panes.where((p) => p.agentId == 'pair-tim'), isEmpty);
+      final terminalPane = app.panes.last;
+      expect(terminalPane.agentId, 'pair-tim');
+      expect(app.panes.first.ownerAgentId, 'pair-tim');
       final next = frames.where((f) => f.$1 == 'daemon_open').last;
       expect(next.$2['companionUid'], 'gnu-one');
       await app.handleEventForTest('m', {
         'type': 'daemon_open_result',
         'payload': {
           'requestId': next.$2['requestId'],
-          'ok': false,
-          'error': 'NO_ENGINE',
+          'ok': true,
+          'agentId': 'pair-tim',
         },
       });
       await tester.pump();
       await tester.pump();
-      expect(
-        find.text('Install Claude Code or Codex to talk with your companion.'),
-        findsOneWidget,
-      );
+      expect(app.panes.last, same(terminalPane));
+      expect(app.swarms, hasLength(1));
+      expect(frames.where((f) => f.$1 == 'daemon_talk'), isEmpty);
       await setCreature(tester, false);
       await tester.pump();
       expect(app.activeSwarm.panes, isEmpty);

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LessonDistiller } from './distill.js'
 import { LessonStore, type LessonRecord } from './store.js'
-import { PairLearner, joinProposals, LESSON_ASK_TTL_MS, LESSON_PROPOSAL_GAP_MS, LESSON_REPROPOSE_MS, DISTILL_EVERY_MS, SIGNAL_MAX_WAIT_MS } from './propose.js'
+import { PairLearner, joinProposals, LESSON_ASK_TTL_MS, LESSON_PROPOSAL_GAP_MS, LESSON_REPROPOSE_MS, DISTILL_EVERY_MS, SIGNAL_MAX_WAIT_MS, type LearnerDeps } from './propose.js'
 import { LESSONS_BEGIN, notesPath } from './publish.js'
 import { projectHash, type Signal } from './types.js'
 import { PairVoice, DISPLAY_MS } from '../voice.js'
@@ -54,7 +54,7 @@ function failureSignal(agentId = 'b1'): Signal {
   }
 }
 
-function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolean } = {}) {
+function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolean } = {}, over: Partial<LearnerDeps> = {}) {
   let autonomy: Autonomy = opts.autonomy ?? 'suggest'
   let present = opts.present !== false
   let busy = false
@@ -71,6 +71,7 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolea
     voice, sendLocal: (f) => frames.push(f), present: () => present, focused: (agentId) => focused.has(agentId), busy: () => busy,
     projects: () => [join(dir, 'code', 'web'), ws], agentsMd: () => opts.agentsMd === true,
     learned, credit, machineId: () => 'machine-a', changed, home: join(dir, 'home'), now: Date.now,
+    ...over,
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const add = async (signal: Signal): Promise<LessonRecord> => {
@@ -97,6 +98,60 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolea
     },
   }
 }
+
+describe('collection learning readiness and durable observations', () => {
+  it('holds observations until the DSH model is ready, and restores them after a restart', async () => {
+    let ready = false
+    const distill = vi.fn(async () => ({ lesson: null as null, why: 'nothing' as const, source: 'model' as const }))
+    const deps: Partial<LearnerDeps> = { intelligence: () => ({ state: ready ? 'ready' : 'waiting', model: ready ? 'opus' : undefined }),
+      queueFile: () => join(dir, 'queue.json'), distiller: { distill } }
+    const first = world({}, deps)
+    first.learner.signal(failureSignal())
+    await first.learner.tick()
+    expect(distill).not.toHaveBeenCalled()
+    const next = world({}, deps)
+    expect(next.learner.queued).toBe(1)
+    ready = true
+    await next.learner.tick()
+    expect(distill).toHaveBeenCalledTimes(1)
+    expect(next.learner.queued).toBe(0)
+    expect(await next.learner.local({ action: 'list' })).toMatchObject({ lessons: [], learning: {
+      state: 'ready', model: 'opus', queued: 0, lastReview: { outcome: 'nothing' },
+    } })
+    expect(world({}, deps).learner.queued).toBe(0)
+  })
+
+  it('retries failed reviews without losing evidence or crossing collections', async () => {
+    let owner = 'a'
+    const distill = vi.fn(async () => ({ lesson: null as null, why: 'timeout' as const }))
+    const deps: Partial<LearnerDeps> = { intelligence: () => ({ state: 'ready' }),
+      queueFile: () => join(dir, `queue-${owner}.json`), distiller: { distill } }
+    const w = world({}, deps)
+    w.learner.signal(failureSignal())
+    await w.learner.tick()
+    expect(w.learner.queued).toBe(1)
+    expect(w.store.pending()).toEqual([])
+    owner = 'b'
+    expect(w.learner.queued).toBe(0)
+    owner = 'a'
+    expect(w.learner.queued).toBe(1)
+    expect(world({}, deps).learner.queued).toBe(1)
+  })
+
+  it('does not publish an in-flight lesson after companions are switched off', async () => {
+    let paired: string | null = 'tim'
+    let complete!: (result: { lesson: { kind: 'note'; lines: string[] }; source: 'model' }) => void
+    const distill = vi.fn(() => new Promise<{ lesson: { kind: 'note'; lines: string[] }; source: 'model' }>(resolve => { complete = resolve }))
+    const w = world({}, { pairedDaemon: () => paired, distiller: { distill }, queueFile: () => join(dir, 'queue.json') })
+    w.learner.signal(failureSignal())
+    const tick = w.learner.tick()
+    paired = null
+    complete({ lesson: { kind: 'note', lines: ['Run the billing test before changing its fixtures.'] }, source: 'model' })
+    await tick
+    expect(w.store.pending()).toEqual([])
+    expect(w.learner.queued).toBe(1)
+  })
+})
 
 describe('distilling waits for a quiet moment', () => {
   it('keeps a signal until nothing is working, or an hour has passed', async () => {

@@ -57,6 +57,8 @@ export class CompanionZoo {
   private revision = -1
   private seen = new Set<string>()
 
+  get uids(): string[] { return [...(this.previous?.keys() ?? [])] }
+
   reset(): void { this.identity = null; this.milestone = null; this.previous = null; this.revision = -1; this.seen.clear() }
 
   observe(zoo: unknown, now = Date.now(), revision?: number): void {

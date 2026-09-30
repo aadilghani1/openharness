@@ -66,17 +66,20 @@ describe('process-owned hook server', () => {
   it('attributes prompt text only after resolving the actual engine process', async () => {
     const entry = { engine: 'claude', agentId: 'agent-scope', sessionId: 'session-scope', runtimes: [{ backend: 'tmux', paneId: '%41' }] } as RegisteredSession
     const onPromptSubmitted = vi.fn()
+    const onPromptContext = vi.fn(() => 'Companions collection context')
     const resolveHookAgent = vi.fn(async () => null as RegisteredSession | null)
     const registration = vi.spyOn(registry, 'register').mockReturnValue({ entry, isNew: false, evicted: null, rebound: null, orphaned: null })
     try {
-      const { base, headers } = await start({ onPromptSubmitted, resolveHookAgent })
+      const { base, headers } = await start({ onPromptSubmitted, onPromptContext, resolveHookAgent })
       const submit = () => fetch(`${base}/api/hook/session-start`, { method: 'POST', headers, body: JSON.stringify({
         engine: 'claude', sessionId: entry.sessionId, tmuxPane: '%41', hookEvent: 'UserPromptSubmit', prompt: 'ask a peer\nfor evidence',
       }) })
       await submit()
       expect(onPromptSubmitted).not.toHaveBeenCalled()
+      expect(onPromptContext).not.toHaveBeenCalled()
       resolveHookAgent.mockResolvedValue(entry)
-      expect((await submit()).status).toBe(200)
+      expect(await (await submit()).json()).toEqual({ ok: true, additionalContext: 'Companions collection context' })
+      expect(onPromptContext).toHaveBeenCalledExactlyOnceWith('agent-scope')
       expect(onPromptSubmitted).toHaveBeenCalledExactlyOnceWith('agent-scope', 'ask a peer\nfor evidence')
     } finally { registration.mockRestore() }
   })

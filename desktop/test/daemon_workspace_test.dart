@@ -112,6 +112,8 @@ void main() {
   }) async {
     await tester.tap(slot);
     await tester.pump();
+    // The DSH's pane layout is attached after the tab's first frame.
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('companion-settings')));
     await tester.pump();
     final tab = find.byKey(ValueKey('daemon-tab-$section'));
@@ -1111,97 +1113,34 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('Talk to daemon: the talk box, the pair starting, its answer '
-        'in the status line and the panel, and the conversation', (
-      tester,
-    ) async {
+    testWidgets('Talk opens the collection viewer and real terminal without sending a model turn', (tester) async {
       await mount(tester, seed: zooWithTim);
-      await tester.pump();
+      app.stateOf('m')!.nodeOnline = true;
       await frame(tester, 'daemon_state', state());
+      app.stateOf('m')!.agents.add(const Agent(
+        id: 'pair1', name: 'Companions', engine: 'claude',
+        dsh: 'autonomous/pair', terminalAvailable: true,
+      ));
       app.adoptSessionForTest(terminal('pair1', []));
-      app.adoptSessionForTest(terminal('a3', []));
-      app.notifyListeners();
-      await tester.pump();
-      // ⌘⌥T, the keymap's Talk to daemon: the panel, the talk box focused.
       await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true);
       await tester.pump();
-      final input = find.byKey(const ValueKey('companion-chat-input'));
-      expect(input, findsOneWidget);
-      expect(
-        tester.widget<TextField>(input).focusNode!.hasFocus,
-        isTrue,
-        reason: 'ready to type',
-      );
-      await tester.enterText(input, 'what needs me?');
-      await tester.testTextInput.receiveAction(TextInputAction.send);
       await tester.pump();
-      final talk = frames.lastWhere((f) => f.$1 == 'daemon_talk');
-      expect(talk.$2['text'], 'what needs me?');
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
-            .data,
-        'Waking Tim…',
-      );
-      await frame(tester, 'daemon_talk_result', {
-        'requestId': talk.$2['requestId'],
-        'ok': true,
-        'agentId': 'pair1',
-        'started': true,
-      });
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
-            .data,
-        contains('starting'),
-      );
-      // The next send can report first-run setup without typing into its trust screen.
-      await tester.enterText(input, 'are you there?');
-      await tester.testTextInput.receiveAction(TextInputAction.send);
-      await tester.pump();
-      final setupTalk = frames.lastWhere((f) => f.$1 == 'daemon_talk');
-      await frame(tester, 'daemon_talk_result', {
-        'requestId': setupTalk.$2['requestId'],
-        'ok': false,
-        'agentId': 'pair1',
-        'error': 'SETUP_REQUIRED',
-      });
-      expect(find.byKey(const ValueKey('companion-chat-setup')), findsOneWidget);
-      // Its answer: a dim line in the status line, and in the talk.
-      await frame(tester, 'daemon_say', {
-        'id': 'say:1',
-        'about': {'machineId': 'm', 'agentId': ''},
-        'mood': 'say',
-        'line': 'api waits on you, 40m.',
-        'actions': [],
-        'ttlMs': 30000,
+      final opening = frames.lastWhere((f) => f.$1 == 'daemon_open');
+      expect(opening.$2.containsKey('text'), isFalse);
+      await frame(tester, 'daemon_open_result', {
+        'requestId': opening.$2['requestId'], 'ok': true,
+        'agentId': 'pair1', 'setupRequired': true,
       });
       await tester.pump();
-      expect(find.byKey(const ValueKey('companion-chat-setup')), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('companion-chat')),
-          matching: find.text('api waits on you, 40m.'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('what needs me?'), findsOneWidget);
-      // Every talk says what it costs.
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-cost')))
-            .data,
-        contains('model usage'),
-      );
-      // The whole conversation: the pair harness's own pane.
       expect(app.activeSwarm.isCompanions, isTrue);
-      await tapIn(tester, find.byKey(const ValueKey('companion-conversation')));
+      expect(app.panes, hasLength(2));
+      expect(app.panes.first.isCompanion, isTrue);
+      expect(app.panes.first.ownerAgentId, 'pair1');
+      expect(app.panes.last.agentId, 'pair1');
       expect(app.focusedPane!.agentId, 'pair1');
-      expect(app.activeSwarm.isUtility, isFalse);
-      expect(app.swarms.singleWhere((s) => s.isCompanions).panes, isEmpty);
-      expect(find.byKey(const ValueKey('companion-home')), findsNothing);
-      expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
-      await tester.pump(const Duration(seconds: 31));
+      expect(find.byKey(const ValueKey('companion-home')), findsOneWidget);
+      expect(find.byKey(const ValueKey('companion-chat-input')), findsNothing);
+      expect(frames.where((f) => f.$1 == 'daemon_talk'), isEmpty);
       await unmount(tester);
     });
 
@@ -1343,8 +1282,8 @@ void main() {
       await openPanel(tester);
       expect(
         frames.where((f) => f.$2['doneSeen'] == true),
-        hasLength(1),
-        reason: 'opening the panel is a look',
+        hasLength(2),
+        reason: 'opening the viewer and then its controls each acknowledges a look',
       );
       expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
       expect(
@@ -1912,63 +1851,25 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('talk waits when harnessd says so, and says how long', (
-      tester,
-    ) async {
+    testWidgets('an unavailable companion engine explains setup and retries in the same DSH', (tester) async {
       await mount(tester, seed: zooWithTim);
-      await tester.pump();
       await frame(tester, 'daemon_state', state());
       await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true);
       await tester.pump();
-      final input = find.byKey(const ValueKey('companion-chat-input'));
-      await tester.enterText(input, 'again?');
-      await tester.testTextInput.receiveAction(TextInputAction.send);
       await tester.pump();
-      final talk = frames.lastWhere((f) => f.$1 == 'daemon_talk');
-      await frame(tester, 'daemon_talk_result', {
-        'requestId': talk.$2['requestId'],
-        'ok': false,
-        'error': 'RATE_LIMITED',
-        'detail': 'Six talks a minute, sixty an hour.',
-        'retryAfterMs': 30000,
-        'cost':
-            'Each talk is a turn of your pair harness on its engine: it '
-            'spends your model usage.',
+      final opening = frames.lastWhere((f) => f.$1 == 'daemon_open');
+      final tab = app.activeSwarm.id;
+      await frame(tester, 'daemon_open_result', {
+        'requestId': opening.$2['requestId'], 'ok': false, 'error': 'NO_ENGINE',
       });
-      expect(
-        tester
-            .widget<IconButton>(
-              find.byKey(const ValueKey('companion-chat-send')),
-            )
-            .onPressed,
-        isNull,
-      );
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
-            .data,
-        'You can send another message in 30 seconds.',
-      );
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-cost')))
-            .data,
-        startsWith('Each talk is a turn of your pair harness'),
-      );
-      await tester.pump(const Duration(seconds: 10));
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('companion-chat-status')))
-            .data,
-        'You can send another message in 20 seconds.',
-      );
-      await tester.pump(const Duration(seconds: 21));
-      expect(tester.widget<TextField>(input).enabled, isTrue);
-      await skipName(tester);
-      await key(tester, LogicalKeyboardKey.escape);
-      await skipName(tester);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pump(const Duration(minutes: 3));
+      await tester.pump();
+      expect(find.text('Install Claude Code or Codex to talk with your companion.'), findsOneWidget);
+      await tester.tap(find.text('Open terminal'));
+      await tester.pump();
+      await tester.pump();
+      expect(frames.where((f) => f.$1 == 'daemon_open'), hasLength(2));
+      expect(frames.where((f) => f.$1 == 'daemon_talk'), isEmpty);
+      expect(app.activeSwarm.id, tab);
       await unmount(tester);
     });
 

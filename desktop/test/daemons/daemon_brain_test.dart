@@ -66,8 +66,28 @@ void main() {
       'agentId': 'pair-tim',
     });
     expect((await stale)['error'], 'STALE_COMPANION');
+    expect(brain.pairAgentId, 'pair-tim');
+    brain.bindConversation('account:another', 'other-tim');
     expect(brain.pairAgentId, isNull);
   });
+
+  test('daemon state restores the collection terminal without matching a character workspace', () {
+    brain.bindConversation('account:test', 'tim-one');
+    brain.receive('daemon_state', {
+      'pair': 'tim',
+      'companionHarness': {
+        'agentId': 'collection-agent',
+        'state': 'ready',
+        'model': 'opus',
+      },
+    });
+    expect(brain.pairAgentId, 'collection-agent');
+    brain.bindConversation('account:test', 'gnu-one');
+    expect(brain.pairAgentId, 'collection-agent');
+    brain.bindConversation(null, null);
+    expect(brain.pairAgentId, isNull);
+  });
+
 
   test('recent conversation survives a window restart, scoped to account and individual', () async {
     brain.bindConversation('account:one', 'tim-one');

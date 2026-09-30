@@ -56,6 +56,7 @@ class _CompanionHomeState extends State<CompanionHome> {
   final _name = TextEditingController();
   final _scroll = ScrollController();
   late final _lessons = DaemonLessons(widget.brain)..addListener(_changed);
+  Timer? _memoryRefresh;
   ZooController get zoo => widget.face.zoo;
   ZooDaemon? get individual =>
       _previewSpecies != null ? null : zoo.zoo.byUid(_viewingUid) ?? zoo.paired;
@@ -98,6 +99,14 @@ class _CompanionHomeState extends State<CompanionHome> {
 
   void _selectSection(String value) {
     setState(() => _section = value);
+    _memoryRefresh?.cancel();
+    _memoryRefresh = value == 'Memories'
+        ? Timer.periodic(const Duration(seconds: 30), (_) {
+            if (widget.brain.active && !_lessons.busy) {
+              unawaited(_lessons.refresh());
+            }
+          })
+        : null;
     if (_scroll.hasClients) _scroll.jumpTo(0);
     if (value == 'Memories' && widget.brain.active && !_lessons.busy) {
       unawaited(_lessons.refresh());
@@ -819,12 +828,20 @@ class _CompanionHomeState extends State<CompanionHome> {
                 : 'Your memory book is ready to open.',
             style: ink(14, AppColors.textSoft),
           )
-        else if (learned.isEmpty)
+        else if (learned.isEmpty && _lessons.learning == null)
           _memoryCard(
             Icons.auto_stories_outlined,
             'Room for a first memory',
             'When a useful lesson is proposed and you approve it, it will appear here. No memories are invented.',
           ),
+        if (widget.brain.active && _lessons.learning != null) ...[
+          _memoryCard(
+            Icons.auto_stories_outlined,
+            _lessons.learning!.title,
+            _lessons.learning!.detail,
+          ),
+          const SizedBox(height: 18),
+        ],
         for (final lesson in learned) ...[
           Container(
             padding: const EdgeInsets.all(20),
@@ -988,6 +1005,7 @@ class _CompanionHomeState extends State<CompanionHome> {
 
   @override
   void dispose() {
+    _memoryRefresh?.cancel();
     zoo.removeListener(_changed);
     widget.face.removeListener(_changed);
     widget.brain.removeListener(_changed);

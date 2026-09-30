@@ -91,6 +91,8 @@ export interface PairBrainDeps {
   talk?: (text: string, companionUid?: string) => Promise<Record<string, unknown>>
   /** Open the pair's terminal without typing into it or starting a model turn. */
   open?: (companionUid?: string) => Promise<Record<string, unknown>>
+  /** The collection's persistent agent and its observed model. Local windows only. */
+  companionHarness?: () => Record<string, unknown>
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
   relayLimits?: Array<{ windowMs: number; max: number }>
   /**
@@ -673,6 +675,7 @@ export class PairBrain {
       })
     return {
       pair: daemonId,
+      ...(this.deps.companionHarness ? { companionHarness: this.deps.companionHarness() } : {}),
       needs,
       working: harnesses.filter((h) => h.harness.working && !h.harness.question).length,
       failing: harnesses.filter((h) => h.harness.failing).map((h) => ({

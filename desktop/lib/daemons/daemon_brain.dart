@@ -871,9 +871,11 @@ class DaemonBrain extends ChangeNotifier {
   List<DaemonTalkEntry> get talk => List.unmodifiable(_talk);
   bool get talkNeedsSetup => _talkNeedsSetup;
 
-  /// A different account or individual never inherits the previous chat.
+  /// Legacy compact replies stay archived by individual. The real agent terminal
+  /// belongs to the collection and stays attached while changing characters.
   void bindConversation(String? scope, String? uid) {
     if (scope == _conversationScope && uid == _companionUid) return;
+    final sameCollection = scope != null && scope == _conversationScope;
     _conversationScope = scope;
     _companionUid = uid;
     final generation = ++_conversationGeneration;
@@ -883,7 +885,7 @@ class DaemonBrain extends ChangeNotifier {
     _talkPhase = DaemonTalkPhase.idle;
     _talkNeedsSetup = false;
     _talkError = null;
-    _pairAgentId = null;
+    if (!sameCollection || uid == null) _pairAgentId = null;
     _talk.clear();
     _heardReplies.clear();
     notifyListeners();
@@ -1035,6 +1037,8 @@ class DaemonBrain extends ChangeNotifier {
     switch (type) {
       case 'daemon_state':
         _state = DaemonBrainState.fromJson(payload);
+        final harness = payload['companionHarness'];
+        if (harness is Map) _pairAgentId = _opt(harness['agentId']);
         notifyListeners();
       case 'daemon_say':
         final say = DaemonSay.fromJson(payload);

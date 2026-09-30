@@ -22,6 +22,9 @@
  * curator (curate.ts) marks and archives what goes unused, and export (export.ts, opt-in) follows every change.
  */
 import type { Autonomy } from '../floor.js'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import type { IntelligenceStatus } from '../intelligence.js'
 import { DISPLAY_MS, keysPrefix } from '../voice.js'
 import { DIALOG_MAX, statusText, str, type DaemonAction, type DaemonMood, type DaemonSay } from '../protocol.js'
 import { lessonLineId } from './approval.js'
@@ -54,6 +57,9 @@ const PERSON = 'asks you at a terminal outside Harness, or press [y] on the daem
 export interface LearnerDeps {
   store: LessonStore
   distiller: { distill: (signal: Signal) => Promise<Distilled> }
+  intelligence?: () => IntelligenceStatus
+  /** One durable review queue per collection; null until its DSH is opened. */
+  queueFile?: () => string | null
   pairedDaemon: () => string | null
   autonomy: () => Autonomy
   voice: { say: (say: DaemonSay) => boolean; unsay: (id: string, reason: string) => boolean; showing: (mood: DaemonMood) => boolean }
@@ -94,7 +100,9 @@ export interface LearnerDeps {
 interface Live { id: string; lessonId: string; at: number; until: number }
 
 export class PairLearner {
-  private readonly queue: Signal[] = []
+  private queue: Signal[] = []
+  private queuePath: string | null | undefined
+  private lastReview: { at: number; outcome: string } | null = null
   private live: Live | null = null
   private lastDistill = -Infinity
   private lastBorrow = -Infinity
@@ -109,12 +117,53 @@ export class PairLearner {
   /** A signal this machine noticed (signals.ts). Kept until a quiet moment; nothing happens at once. */
   signal(signal: Signal): void {
     if (!this.deps.pairedDaemon()) return
+    this.loadQueue()
+    if (this.deps.queueFile && !this.queuePath) return
     if (this.queue.some((s) => s.key === signal.key)) return
     this.queue.push(signal)
     if (this.queue.length > SIGNAL_QUEUE_MAX) this.queue.shift()
+    this.saveQueue()
+    this.deps.changed?.()
   }
 
-  get queued(): number { return this.queue.length }
+  get queued(): number { this.loadQueue(); return this.queue.length }
+
+  status(): Record<string, unknown> {
+    this.loadQueue()
+    return { ...(this.deps.intelligence?.() ?? {}), queued: this.queue.length,
+      pending: this.deps.store.pending().length, reviewing: this.ticking, lastReview: this.lastReview }
+  }
+
+  private loadQueue(): void {
+    if (!this.deps.queueFile) return
+    const path = this.deps.queueFile()
+    if (path === this.queuePath) return
+    this.queuePath = path
+    this.queue = []; this.lastReview = null; this.lastDistill = -Infinity
+    if (!path) return
+    try {
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as { v?: number; queue?: unknown; lastReview?: { at?: unknown; outcome?: unknown } }
+      if (raw.v !== 1 || !Array.isArray(raw.queue)) return
+      this.queue = raw.queue.filter((s): s is Signal => !!s && typeof s === 'object' &&
+        ['correction', 'repeat-failure', 'repeat-steps'].includes(s.kind) && typeof s.key === 'string' &&
+        typeof s.at === 'number' && Array.isArray(s.from) && s.from.every((f: unknown) => !!f && typeof f === 'object') &&
+        Array.isArray(s.evidence) && s.evidence.every((e: unknown) => typeof e === 'string') &&
+        (!s.steps || (Array.isArray(s.steps) && s.steps.every((e: unknown) => typeof e === 'string')))).slice(-SIGNAL_QUEUE_MAX)
+      if (typeof raw.lastReview?.at === 'number' && typeof raw.lastReview.outcome === 'string') {
+        this.lastReview = { at: raw.lastReview.at, outcome: raw.lastReview.outcome }
+      }
+    } catch { /* First review, or unreadable local state. */ }
+  }
+
+  private saveQueue(): void {
+    if (!this.queuePath) return
+    try {
+      mkdirSync(dirname(this.queuePath), { recursive: true, mode: 0o700 })
+      const tmp = `${this.queuePath}.tmp`
+      writeFileSync(tmp, JSON.stringify({ v: 1, queue: this.queue, lastReview: this.lastReview }), { mode: 0o600 })
+      renameSync(tmp, this.queuePath)
+    } catch { this.deps.log?.('[learn] could not persist the review queue') }
+  }
 
   /** Distill, borrow, maybe propose, curate, export. Called on a timer; safe to call any time. */
   async tick(): Promise<void> {
@@ -132,17 +181,34 @@ export class PairLearner {
   }
 
   private async distillBatch(): Promise<void> {
+    this.loadQueue()
     const daemon = this.deps.pairedDaemon()
     const now = this.deps.now()
     if (!daemon || !this.queue.length || now - this.lastDistill < DISTILL_EVERY_MS) return
+    if (this.deps.intelligence && this.deps.intelligence().state !== 'ready') return
     const waited = now - this.queue[0]!.at
     if (this.deps.busy?.() && waited < SIGNAL_MAX_WAIT_MS) return
     this.lastDistill = now
-    for (const signal of this.queue.splice(0, DISTILL_BATCH)) {
+    const path = this.queuePath
+    for (const signal of this.queue.slice(0, DISTILL_BATCH)) {
       const result = await this.deps.distiller.distill(signal).catch((): Distilled => ({ lesson: null, why: 'failed' }))
-      if (!result.lesson) { this.deps.log?.(`[learn] ${signal.kind} · nothing (${result.why}${result.refusal ? `: ${result.refusal}` : ''})`); continue }
-      const added = this.deps.store.add({ lesson: result.lesson, signal, learnedBy: daemon, source: result.source })
-      this.deps.log?.(`[learn] ${signal.kind} · ${added.ok ? `pending ${added.record.id} "${added.record.name}"` : added.error}`)
+      if (!this.deps.pairedDaemon() || (this.deps.queueFile && path !== this.deps.queueFile()) ||
+        (this.deps.intelligence && this.deps.intelligence().state !== 'ready')) return
+      const retry = !result.lesson && ['timeout', 'failed', 'no-model', 'cap'].includes(result.why)
+      this.queue = this.queue.filter(s => s.key !== signal.key)
+      // Keep failures, but don't let one troublesome observation starve the rest.
+      if (retry) this.queue.push(signal)
+      if (!result.lesson) {
+        this.lastReview = { at: this.deps.now(), outcome: result.why }
+        this.deps.log?.(`[learn] ${signal.kind} · nothing (${result.why}${result.refusal ? `: ${result.refusal}` : ''})`)
+      } else {
+        const added = this.deps.store.add({ lesson: result.lesson, signal, learnedBy: daemon, source: result.source })
+        this.lastReview = { at: this.deps.now(), outcome: added.ok ? 'pending' : added.error }
+        this.deps.log?.(`[learn] ${signal.kind} · ${added.ok ? `pending ${added.record.id} "${added.record.name}"` : added.error}`)
+      }
+      this.saveQueue()
+      this.deps.changed?.()
+      if (retry) break
     }
   }
 
@@ -399,6 +465,7 @@ export class PairLearner {
       return {
         ok: true, root: this.tilde(store.root), git: store.git, ...(store.git ? {} : { note: NO_GIT_NOTE }),
         lessons: store.list().map((r) => this.summary(r)),
+        learning: this.status(),
       }
     }
     if (action === 'export') {

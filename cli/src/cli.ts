@@ -93,6 +93,7 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { CompanionIntelligence } from './pair/intelligence.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
 import { PlateService } from './pair/plateService.js'
 import { inProjects, PairConfigFile, pairConfigPath, ruleRunner, type PairConfig } from './pair/rules.js'
@@ -217,7 +218,7 @@ import {
   syncSummaryPoolSessions,
 } from './lib/summarize.js'
 import type { CableAgent } from './cable/cableSession.js'
-import { routeVoiceTask, runPairOneShot, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
+import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { E2eeStore } from './lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -1745,6 +1746,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairTalk: (text: string, companionUid?: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
+  let companionPromptContext: (agentId: string) => string | null = () => null
+  let companionProfileChanged: () => void = () => {}
+  let isCollectionAgent: (agentId: string) => boolean = () => false
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
   const pairConfig = new PairConfigFile(pairConfigPath())
   /** pair.jsonc as the person confirmed it (pair/gate.ts): a new or changed file waits for their yes. */
@@ -2965,6 +2969,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   runtimeProfiles.onChanged = (sessionId) => {
     const session = registry.resolve(sessionId)
     if (session) syncSession(session)
+    companionProfileChanged()
   }
 
   // Turn heartbeat (5s): pushes `turn_heartbeat` to the web while the turn is open (keeps its 10s
@@ -3127,9 +3132,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // to the device and self-cancels once mirror.heartbeat() reports idle (summary done).
       }
     }
-    // Learning notices only what the sensor would: pairing on, never a sub-agent, a terminal or the pair itself.
+    // Real work and the person's collection conversation can teach lessons. Archived
+    // pair chats, sub-agents and replay stay excluded. Tool-free background reviews
+    // never register as agents, so they cannot feed their own results back in here.
     const learnFrom = registry.bySession(sessionId)
-    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) && !isPairHarnessSession(sessionId)) {
+    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
+      (!isPairHarnessSession(sessionId) || isCollectionAgent(learnFrom.agentId))) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
     }
@@ -3908,6 +3916,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(env.PORT, {
+    onPromptContext: (agentId) => companionPromptContext(agentId),
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4488,6 +4497,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
+    collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4505,8 +4515,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, hasConversation: !!s.sessionId })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, hasConversation: !!s.sessionId })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
@@ -4531,14 +4541,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
   })
   pairTalk = (text, uid) => pairHarness.talk(text, uid)
+  isCollectionAgent = (agentId) => agentId === pairHarness.agentId()
+  companionPromptContext = (agentId) => daemons.on() ? pairHarness.context(agentId) : null
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
-  // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
-  // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
+  const companionIntelligence = new CompanionIntelligence({
+    enabled: () => daemons.on() && !!pairSensor.pairedDaemon(),
+    current: () => {
+      const agentId = pairHarness.agentId()
+      if (!agentId) return null
+      const live = registry.advertised().find(s => s.agentId === agentId)
+      const session = live ?? stoppedAgents.get(agentId)
+      if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
+      return { agentId, sessionId: session.sessionId, engine: session.engine,
+        profile: runtimeProfiles.selectedModel(session), stopped: !live,
+        codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
+    },
+    directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
+    stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
+  })
+  companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
+  // The collection's DSH supplies learning and triage with its observed model. The
+  // experiment and watching consent still gate everything; there is no second model switch.
   const lessonProjects = (): string[] =>
     [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))]
   pairLearner = new PairLearner({
     store: lessonStore,
-    distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now, home: homedir() }),
+    distiller: new LessonDistiller({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, home: homedir() }),
+    intelligence: () => companionIntelligence.status(),
+    queueFile: () => {
+      const id = pairHarness.agentId()
+      return id ? join(env.ADAPTER_DATA_DIR, 'pair', 'learn', `queue-${id}.json`) : null
+    },
     pairedDaemon: () => pairSensor.pairedDaemon(),
     autonomy: () => pairAutonomy(),
     voice: pairVoice,
@@ -4586,8 +4619,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
-    // A model's words only when the person opted in (pair.jsonc "model": true).
-    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now }),
+    // Template first, then this collection's selected model when it is ready.
+    triage: new PairTriage({ oneshot: companionIntelligence.run, modelEnabled: () => companionIntelligence.ready(), now: Date.now, budgetMs: 30_000 }),
+    companionHarness: () => ({ agentId: pairHarness.agentId(), ...companionIntelligence.status() }),
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
@@ -4623,7 +4657,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   onDaemonsChanged = (on) => {
     plates.setOn(on)
-    if (!on) { companionZoo.reset(); guestCompanion = null }
     if (on) {
       // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
       // everything off within the tick (before the rest of the file is read), and any other change asks for
@@ -4640,6 +4673,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       zooTurnReporter.clear()
       zooLessonReporter.clear()
       void pairHarness.off().catch(() => {})
+      companionIntelligence.cancel()
+      companionZoo.reset(); guestCompanion = null
     }
     applyPair()
     pairBrain?.refresh()

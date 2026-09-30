@@ -418,6 +418,12 @@ void main() {
       brain.receive('pair_result', {
         'requestId': request['requestId'],
         'ok': true,
+        'learning': {
+          'state': 'ready',
+          'model': 'opus',
+          'effort': 'high',
+          'queued': 2,
+        },
         'lessons': [
           {
             'id': 'lesson-one',
@@ -430,6 +436,11 @@ void main() {
       });
       await tester.pump();
       expect(find.text('Check the small things'), findsOneWidget);
+      expect(find.text('Learning with Opus'), findsOneWidget);
+      expect(
+        find.text('2 observations are waiting for a quiet moment to review.'),
+        findsOneWidget,
+      );
       await capture(tester, 'memories');
       await tester.ensureVisible(find.text('Forget…'));
       await tester.tap(find.text('Forget…'));

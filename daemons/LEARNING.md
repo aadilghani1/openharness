@@ -31,8 +31,9 @@ while pairing is on — and nothing of it, usage and lessons in launches include
 ### Notice (`signals.ts`)
 
 `LessonSignals` reads the same session events the pair sensor does (`emitSessionEvents`): turns,
-prompts, tool calls and their results. Replays, sub-agents, terminals and the pair harness are never
-read. Three signals:
+prompts, tool calls and their results. Replays, sub-agents, terminals and archived pair chats are never
+read. The current collection DSH's real conversation/work is included. Tool-free background reviews
+do not register as agents and cannot feed their own results back into the detector. Three signals:
 
 - **correction**: the person's next prompt after an agent's turn (finished or interrupted) starts by
   correcting it: `no, …`, `nope, …`, `don't …`, `do not …`, `stop, …`, `stop editing …`, `that's wrong`,
@@ -52,27 +53,41 @@ Each signal carries provenance for every turn involved — engine, machine name,
 the project as a **hash** (the folder's name is kept for words, never its path) — and its evidence, one
 line each, trimmed, redacted and with instructions to a model struck out. Failures and step sequences
 are kept in `ADAPTER_DATA_DIR/pair/learn/signals.json` (0600) so a restart does not forget the week.
+Quoted separators stay inside arguments; heredocs and compound scripts are omitted conservatively.
+The v2 detector rebuilds v1's derived step index, which could contain lines from script bodies. Existing
+lesson records and failure observations are preserved.
 
 ### Distill (`distill.ts`)
 
-Signals wait in a queue (20 at most) and are distilled three at a time, every ten minutes, when nothing
+Signals wait in a durable queue per collection (20 at most) and are distilled three at a time, every ten minutes, when nothing
 on the machine is working — or after an hour regardless. One signal becomes at most ONE lesson:
 
 - a **skill**: a kebab-case name, a one-line description, a body of at most 30 lines;
 - a **note**: at most 5 lines for the project's AGENTS.md.
 
-**Model off** (the default): templates only, for what needs no judgment — steps in order (a skill:
+**Before the DSH is ready:** observations wait. Opening Companions and completing its real agent setup
+supplies the learning engine, model, and effort; changing the agent's model changes learning too.
+Experimental-off and watching consent remain the gates. The legacy `pair.jsonc.model` field is no
+longer a separate intelligence switch. An observed profile is retained for that conversation's idle
+pause, never borrowed from another agent or account. Custom provider connections without a supported
+background runner report unavailable instead of silently using another credential/model.
+
+**Conservative template fallback:** for what needs no judgment — steps in order (a skill:
 `Run X before Y, and Y before Z.`), and only when the same steps ran at least three times across at least
 two sessions. Every step goes in as an inert code span (no backticks, no newlines, 80 characters at most).
 A failure or a correction teaches nothing without a model: the old "the failing test is flaky" template
 taught agents to rerun real failures, and is gone. Steps that push, deploy, publish, merge or delete (the
 floor's deny class) are no lesson.
 
-**Model on** (`pair.jsonc` `"model": true`): ONE one-shot per signal through the pair's `runPairOneShot`
-(the warm router pool, `runRouterOneShot`), 30 s budget, six an hour. The prompt says, three times, that
+**Model ready:** ONE tool-free review per signal through `CompanionIntelligence`, on the DSH's own
+engine, model and effort, with a 90 s budget, six an hour. These bounded reviews do not create a second
+interactive agent or write into the collection conversation. The prompt says, three times, that
 the expected answer is `{"lesson": null}`; it saves only what is specific, would change what an agent
 does, and is shown by the evidence; the evidence is fenced as untrusted data. A model that answers
-nothing is taken at its word; one that times out, fails or answers badly falls back to the template.
+nothing is taken at its word; one that times out, fails or answers badly can fall back to the template.
+Timeouts, failures, and hourly limits without a usable result leave observations queued for retry.
+`lessons list` includes readiness, the actual model, queued observations, pending lessons and the last
+review outcome; the Memories viewer presents this status. Approving a lesson remains the person's action.
 
 ### Untrusted text (`guard.ts`)
 

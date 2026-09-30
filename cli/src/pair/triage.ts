@@ -4,8 +4,8 @@
  *
  *   tier 0 — the paired daemon's template line (pair/voice.ts), filled with the facts. Said AT ONCE: the
  *            brain never waits on a model before speaking.
- *   tier 1 — OPT-IN (pair.jsonc `"model": true`; off by default): ONE small model call on the warm router
- *            pool — about 1k tokens in, 80 out, a 2.5 s budget, cached per requestId, capped per hour,
+ *   tier 1 — the collection DSH's selected model: ONE small call, about 1k tokens in, 80 out,
+ *            a caller-bounded budget, cached per requestId, capped per hour,
  *            only while the person is at this computer. Its line REPLACES the template in place when it
  *            comes back in time. Any failure — a timeout, output that is not the JSON asked for, a
  *            recommendation that is not one of the dialog's own options, or one that answers for more
@@ -62,7 +62,7 @@ export type PairOneShot = (prompt: string, opts: { timeoutMs: number; signal: Ab
 
 export interface TriageDeps {
   oneshot?: PairOneShot | null
-  /** Model calls are opt-in (pair.jsonc `"model": true`). Absent: off. */
+  /** The collection DSH has a usable observed model. Absent: templates only. */
   modelEnabled?: () => boolean
   now: () => number
   budgetMs?: number
@@ -134,7 +134,7 @@ export class PairTriage {
     return pending
   }
 
-  /** A model can be asked at all on this machine: one exists, and the person opted in. */
+  /** The collection has an enabled model available on this machine. */
   hasModel(): boolean { return !!this.deps.oneshot && this.deps.modelEnabled?.() === true }
 
   /** Model calls left this hour. False when there are none. */
