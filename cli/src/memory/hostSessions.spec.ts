@@ -31,3 +31,11 @@ it('preserves the host-observed fork boundary and replaces a rotated session ins
   expect(roster.refresh([{ ...session, sessionId: 'new_native' }], no, no)).toMatchObject([{ sessionId: 'new_native' }])
   expect(roster.refresh([session], no, no)[0].liveFrom).toBeUndefined()
 })
+
+it('uses personal scope only for the current verified collection conversation, not an archived companion', () => {
+  const roster = new MemorySessionRoster('/home/person')
+  const companion = { ...session, dsh: 'autonomous/pair' }
+  expect(roster.refresh([companion], no, no)).toEqual([])
+  expect(roster.refresh([companion], no, no, 'agent')).toMatchObject([{ scope: 'profile' }])
+  expect(roster.refresh([], no, no, 'another_agent')).toEqual([])
+})

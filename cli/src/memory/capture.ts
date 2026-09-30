@@ -8,7 +8,7 @@ import type { MemoryPort } from './operations.js'
 import { MemoryError, type SourceEvent } from './types.js'
 
 export interface CaptureSession {
-  profileId: string; projectId: string; engine: 'claude' | 'codex'; sessionId: string
+  profileId: string; projectId: string | null; engine: 'claude' | 'codex'; sessionId: string
   /** Bound by the host registry, never copied from a model-supplied path. */
   transcriptPath: string
   busy: boolean

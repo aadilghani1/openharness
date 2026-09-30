@@ -154,6 +154,83 @@ describe('session privacy', () => {
   })
 })
 
+describe('specific requirements and personal defaults', () => {
+  function personalDefault() {
+    const event = source('personal', { projectId: null, sessionId: 'companion' })
+    store.ingest(event)
+    return store.propose(draft(event, { scope: { profileId: 'owner' } }), access).record
+  }
+
+  function projectRequirement(changes: Partial<MemoryDraft> = {}, sourceChanges: Partial<SourceEvent> = {}) {
+    const event = source('requirement', { sessionId: 'project_session', ...sourceChanges })
+    store.ingest(event)
+    return store.propose(draft(event, { claim: 'For this project, debug using an integration reproducer.', ...changes }),
+      { ...access, taskId: changes.scope?.taskId, branchId: changes.scope?.branchId }).record
+  }
+
+  const request = { query: 'reproducer', conditions: { taskType: 'debugging' } }
+
+  it('uses the project requirement here and keeps the personal default available elsewhere', () => {
+    const personal = personalDefault()
+    const project = projectRequirement()
+    expect(store.recall(request, access).items.map(item => item.id)).toEqual([project.id])
+    expect(store.recall(request, elsewhere).items.map(item => item.id)).toEqual([personal.id])
+    expect(store.read(personal.id, access)?.state).toBe('active')
+    // An already delivered project requirement must not cause a broader default to be substituted.
+    expect(store.recall({ ...request, excludeIds: [project.id] }, access).items).toEqual([])
+  })
+
+  it('withholds a conflicting default even when only that default matches the current search words', () => {
+    personalDefault()
+    projectRequirement({ claim: 'Use the integration harness first.', rationale: null, retrievalCues: ['integration'] })
+    expect(store.recall(request, access).items).toEqual([])
+  })
+
+  it('does not fall back to a personal default when project requirements need clarification', () => {
+    personalDefault()
+    const first = projectRequirement()
+    const event = source('contradiction', { sessionId: 'project_session' })
+    store.ingest(event)
+    store.propose(draft(event, { claim: 'Use a manual reproducer first in this project.' }), access)
+    expect(store.read(first.id, access)?.state).toBe('needs_verification')
+    expect(store.recall(request, access).items).toEqual([])
+  })
+
+  it.each([
+    ['not applicable', { applicability: { taskType: 'design' } }],
+    ['excepted', { exceptions: [{ when: { taskType: 'debugging' }, reason: 'This rule excludes debugging.' }] }],
+    ['expired', { validity: { validFrom: null, validUntil: 999, recheckWhen: [] } }],
+    ['not yet valid', { validity: { validFrom: 1_001, validUntil: null, recheckWhen: [] } }],
+    ['tentative', { evidenceClass: 'inferred', assertionType: 'observed_usage' }],
+  ] as Array<[string, Partial<MemoryDraft>]>)('ignores a more specific requirement that is %s', (_label, changes) => {
+    const personal = personalDefault()
+    projectRequirement(changes)
+    expect(store.recall(request, access).items.map(item => item.id)).toEqual([personal.id])
+  })
+
+  it('does not let a private requirement affect public recall', () => {
+    const personal = personalDefault()
+    projectRequirement()
+    store.setSessionIncluded('claude', 'project_session', false)
+    expect(store.recall(request, access).items.map(item => item.id)).toEqual([personal.id])
+  })
+
+  it.each(['taskId', 'branchId'] as const)('keeps %s precedence inside the active task or branch', key => {
+    personalDefault()
+    const project = projectRequirement()
+    const event = source(`scoped_${key}`, { [key]: 'current' })
+    store.ingest(event)
+    const scopedAccess = { ...access, [key]: 'current' }
+    const scoped = store.propose(draft(event, {
+      scope: { profileId: 'owner', projectId: 'project_a', [key]: 'current' },
+      claim: 'For this work, keep a local reproducer beside the changed module.',
+    }), scopedAccess).record
+    expect(store.recall(request, scopedAccess).items.map(item => item.id)).toEqual([scoped.id])
+    expect(store.recall(request, { ...access, [key]: 'different' }).items.map(item => item.id)).toEqual([project.id])
+    expect(store.recall(request, access).items.map(item => item.id)).toEqual([project.id])
+  })
+})
+
 describe('coding memory ownership and admission', () => {
   it('persists sourced, conditional knowledge across reopen without tying it to an engine', () => {
     const record = learn()
@@ -267,6 +344,18 @@ describe('coding memory ownership and admission', () => {
     const event = source()
     store.ingest(event)
     expect(() => store.propose(draft(event, { scope: { profileId: 'owner' } }), access)).toThrow('evidence_scope')
+  })
+
+  it('keeps personal coding preferences portable and rejects project decisions without a bound project', () => {
+    const event = source('companion', { projectId: null })
+    store.ingest(event)
+    const preference = draft(event, { scope: { profileId: 'owner' } })
+    const record = store.propose(preference, access).record
+    expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, elsewhere).items[0].id).toBe(record.id)
+    expect(() => store.propose({ ...preference, kind: 'project_decision', assertionType: 'accepted_decision' }, access))
+      .toThrow('project_scope_required')
+    expect(() => store.propose({ ...preference, kind: 'working_continuity', assertionType: 'temporary_state' }, access))
+      .toThrow('project_scope_required')
   })
 
   it('can retain an explicit preference without inventing a reason the user never supplied', () => {

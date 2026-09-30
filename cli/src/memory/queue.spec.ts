@@ -96,6 +96,20 @@ describe('durable coding episode capture', () => {
 })
 
 describe('model availability, leases, and idempotent publication', () => {
+  it('shows personal defaults to project reviews without authorizing project evidence to rewrite global preferences', () => {
+    const personal = event('personal', { projectId: null, sessionId: 'companion' })
+    store.ingest(personal)
+    const personalAccess = { ...access, includeProfile: true }
+    const original = store.propose(proposal(personal, { scope: { profileId: 'owner' } }), personalAccess).record
+    store.learning.capture(batch())
+    const lease = claim()
+    expect(store.list(lease.access).map(record => record.id)).toContain(original.id)
+    const result = store.learning.finish(lease, [proposal(event(), { scope: { profileId: 'owner' } })], target)
+    expect(result).toEqual({ state: 'failed', reason: 'evidence_scope' })
+    expect(store.read(original.id, personalAccess)?.revision).toBe(1)
+    expect(store.support(original.id, personalAccess)?.independentUserStatements).toBe(1)
+  })
+
   it('cancels private work and rejects late extraction, including episodes with derived private roots', () => {
     store.learning.capture(batch())
     const lease = claim()

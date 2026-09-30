@@ -71,7 +71,7 @@ The full [architecture](2026-09-30-tim-memory.md) and its [64 synthetic scenario
 
 - Exercise the development-gated daemon integration with authenticated live sessions, account changes and native invocation. Unit tests establish the lifecycle contract, not a running-app end-to-end result.
 - Expose private-session/project controls, learning/recall preferences, queue gaps and model availability through authenticated user-facing transports and the viewer before removing the development flag.
-- Add profile-scoped capture for explicit coding preferences in the current collection conversation. Initial native project capture deliberately does not promote project evidence into global preferences.
+- Validate profile-scoped companion capture with real-model negative-domain and scope tests. The host now binds only the current collection conversation to personal scope; native project evidence cannot become a global preference.
 - Add quiet-period episode batching; bounded retention is implemented, while incomplete or oversized episodes remain explicit gaps rather than being silently summarized.
 - Validate the extraction process and faithful field-level support with real models. Structural source checks alone cannot establish this.
 - Integrate the measured worker recall path and its deadline into live callers; measure actual received context and hook latency.
@@ -126,3 +126,13 @@ Review also found unnecessary native CLI probing on idle ticks. The learner now 
 Checkpoint before the final version-probe cancellation case: **231 tests passed across 21 files**, including memory, companion intelligence, authentication, daemon-switch, SQLite and input-guard regressions. TypeScript passed and CLI release bundling passed. No personal conversations were ingested and no real provider model was called. The remaining native hook/CLI/MCP delivery, receipts, companion viewer, profile-preference entry point and behavioral evaluation are still required.
 
 The added slow-version cancellation case also passed with the full eight-test native Codex process file. The final CLI bundle and bundled `version` smoke check passed. These are 232 distinct validated tests, with the additional case run after the broad suite.
+
+## Round eight: personal preferences and project requirements
+
+The host now classifies the current collection's verified companion conversation as a personal coding-memory source. It does not scan archived companion conversations or treat another `autonomous/pair` session as the active collection. Personal capture and project capture have separate cache identities even if their working directories match. A synthetic runtime test learns a stated coding preference from the companion and recalls it in two separate projects. Project decisions, verified findings and temporary task state require project scope; companion extraction is instructed to abstain on repository-specific statements without a bound project.
+
+Project review may read relevant personal defaults to reuse their topic keys, but captured project evidence still cannot confirm or revise a global record. Recall suppresses a broader memory when an applicable, visible, more specific record has the same conflict key. This also withholds the broader fallback when the specific records need clarification, or when the specific record does not match the search terms. Private, expired, tentative, excepted or inapplicable records do not influence this precedence. Task/branch rules apply only in their current scope. The global default remains available in other projects. This is explicit-key precedence, not a semantic contradiction detector; extraction quality and missed topic matching still need evaluation.
+
+The 10,000-record benchmark with these filters measured warm p95 **19.5 ms**, new-worker p95 **39.4 ms**, and zero timeouts among 310 requests. It uses unique conflict keys and does not establish behavior under a pathological high-collision topic distribution. Unit tests exercise actual override/conflict cases. The broader benchmark limitations remain in the [measurement artifact](../research/2026-09-30-memory-performance.json).
+
+Checkpoint: **156 memory tests and 92 companion/authentication/daemon-switch/SQLite/guard regression tests passed** (248 total across two runs). TypeScript, the CLI release bundle and its version smoke check passed. Native delivery, authenticated user controls, real extraction quality and behavioral evaluation remain open; this still requires the development flag and has not changed the installed app.

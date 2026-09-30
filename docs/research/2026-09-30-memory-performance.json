@@ -23,6 +23,11 @@
     "coldP95Ms": 36.883, "timeouts": 0, "parentEventLoopP95Ms": 1.2902,
     "largestPacketBytes": 2491
   },
+  "afterScopePrecedenceFiltering": {
+    "warmP50Ms": 2.0287, "warmP95Ms": 19.5328, "warmMaxMs": 22.3854,
+    "coldP95Ms": 39.4458, "timeouts": 0, "parentEventLoopP95Ms": 1.2769,
+    "largestPacketBytes": 2591
+  },
   "queryPlanFinding": "The original plan used the scope index first and repeated MATCH for each project row. Driving the join from FTS once preserves access filtering before LIMIT and avoids those repeated scans.",
   "limitations": [
     "These are synthetic lexical requests, not a retrieval-quality benchmark.",

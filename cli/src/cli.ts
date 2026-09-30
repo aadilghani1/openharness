@@ -4868,7 +4868,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           watching: !!pairSensor.pairedDaemon() && (current
             ? !!profileId && zooMemoryOwner === profileId && zooPair.consent : guestConsent) }
       },
-      sessions: () => roster.refresh(registry.advertised(), id => mirror.isBusy(id), isSubagentSession),
+      sessions: () => roster.refresh(registry.advertised(), id => mirror.isBusy(id), isSubagentSession, pairHarness.agentId()),
       inference: companionMemoryInference(companionIntelligence, () => pairSensor.snapshot().harnesses.some(h => h.working)),
     })
     let refreshing: Promise<void> | null = null

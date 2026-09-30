@@ -132,14 +132,14 @@ it('checks session and project exclusions before opening a transcript', async ()
   store.setSessionIncluded(session.engine, session.sessionId, false)
   expect((await capture.poll(session)).reason).toBe('source_ineligible') // The path does not exist.
   store.setSessionIncluded(session.engine, session.sessionId, true)
-  store.setProjectIncluded(session.projectId, false)
+  store.setProjectIncluded(session.projectId!, false)
   expect((await capture.poll(session)).reason).toBe('source_ineligible')
   expect(store.learning.status().capturedStreams).toBe(0)
 })
 
 it.each(['session', 'project'] as const)('resumes after a private %s interval without replaying it or getting stuck on a cancelled episode', async kind => {
   const include = (value: boolean) => kind === 'session' ? store.setSessionIncluded(session.engine, session.sessionId, value)
-    : store.setProjectIncluded(session.projectId, value)
+    : store.setProjectIncluded(session.projectId!, value)
   await writeFile(session.transcriptPath, user('Before privacy.', 'before'))
   await capture.poll(session)
   now += 1_000

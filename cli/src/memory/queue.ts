@@ -189,7 +189,7 @@ export class MemoryQueue {
       const token = randomUUID()
       const until = now() + LEASE_MS
       const access: MemoryAccess = { profileId: this.deps.profileId,
-        projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: job.project_id === null,
+        projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: true,
         ...commonScope(sources),
       }
       db.prepare(`UPDATE memory_jobs SET state='reviewing', lease_token=?, lease_until=?, generation=?, context_key=?, source_digest=?,
@@ -217,7 +217,7 @@ export class MemoryQueue {
           if (!Array.isArray(proposals) || proposals.length > 8) throw new MemoryError('invalid_proposals')
           const sourceIds = new Set(this.sources(lease.jobId).map(source => source.id))
           const access: MemoryAccess = { profileId: this.deps.profileId,
-            projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: job.project_id === null,
+            projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: true,
             ...commonScope(this.sources(lease.jobId)),
           }
           const records = proposals.map(proposal => {

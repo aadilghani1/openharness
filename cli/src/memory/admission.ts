@@ -19,6 +19,10 @@ export function assertSafe(value: unknown): void {
 /** These checks establish structural provenance, not a proof that an LLM paraphrase is faithful. */
 export function admission(draft: MemoryDraft, sources: Map<string, SourceEvent>): MemoryState {
   assertSafe(draft)
+  if (!draft.scope.projectId && (!['working_preference', 'reference'].includes(draft.kind)
+    || ['project_constraint', 'accepted_decision', 'verified_finding', 'temporary_state'].includes(draft.assertionType))) {
+    throw new MemoryError('project_scope_required')
+  }
   for (const evidence of draft.evidence) {
     const source = sources.get(evidence.sourceEventId)
     if (!source) throw new MemoryError('evidence_missing')

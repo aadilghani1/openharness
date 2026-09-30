@@ -37,7 +37,7 @@ function lines(text = preference, id = 'first'): string {
 }
 function proposal(source: SourceEvent): MemoryDraft {
   return { kind: 'working_preference', facet: 'changes', assertionType: 'stated_preference',
-    scope: { profileId: source.profileId, projectId: source.projectId! }, claim: preference, rationale: null,
+    scope: { profileId: source.profileId, ...(source.projectId ? { projectId: source.projectId } : {}) }, claim: preference, rationale: null,
     futureAction: 'Keep coding changes small.', applicability: {}, exceptions: [], retrievalCues: ['coding', 'changes'],
     evidenceClass: 'user_stated', evidence: [{ sourceEventId: source.id, quote: preference, paths: ['/claim', '/futureAction', '/applicability'] }],
     conflictKey: 'change_size', validity: { validFrom: null, validUntil: null, recheckWhen: [] } }
@@ -122,6 +122,29 @@ it('never captures an unclassified general-domain DSH and does not resolve its w
   expect(stores.get('owner_a')!.learning.status().capturedStreams).toBe(0)
   expect(locate).not.toHaveBeenCalled()
   expect((await runtime.recall('agent', { query: 'coding' })).status).toBe('denied')
+})
+
+it('learns explicit personal coding preferences in the collection conversation and recalls them in other projects', async () => {
+  sessions[0].scope = 'profile'
+  await learn()
+  expect(locate).not.toHaveBeenCalled()
+  const store = stores.get('owner_a')!
+  expect(store.list({ profileId: 'owner_a', projectIds: [], includeProfile: true })[0].scope).toEqual({ profileId: 'owner_a' })
+  sessions.push(...['one', 'two'].map(name => ({ ...sessions[0], agentId: name, scope: 'project' as const,
+    workspace: `/projects/${name}`, sessionId: name, transcriptPath: join(directory, `${name}.jsonl`) })))
+  await runtime.tick()
+  for (const agentId of ['one', 'two']) expect((await runtime.recall(agentId, { query: 'coding changes' })).items[0].claim).toBe(preference)
+  await expect(runtime.setProjectIncluded('agent', false)).rejects.toThrow('project_unavailable')
+})
+
+it('keeps personal and project identity caches separate even if two agents use the same folder', async () => {
+  sessions[0].scope = 'profile'
+  await runtime.tick()
+  sessions.push({ ...sessions[0], agentId: 'ordinary', scope: 'project', sessionId: 'ordinary', transcriptPath: join(directory, 'ordinary.jsonl') })
+  await runtime.tick()
+  await runtime.setProjectIncluded('ordinary', false)
+  expect((await runtime.recall('ordinary', { query: 'changes' })).status).toBe('denied')
+  expect((await runtime.recall('agent', { query: 'changes' })).status).toBe('ok')
 })
 
 it('waits for quiet and cancels background inference when foreground activity resumes', async () => {

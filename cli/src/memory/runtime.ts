@@ -24,6 +24,8 @@ export interface MemoryHostSession {
   busy: boolean
   /** Positive host classification is required; a general-domain DSH is not implicitly coding. */
   coding: boolean
+  /** Only the host's verified current collection conversation may use the personal scope. */
+  scope?: 'project' | 'profile'
   liveFrom?: number
 }
 interface Connection extends MemoryPort { close(): Promise<void> }
@@ -39,7 +41,7 @@ interface RuntimeDeps {
 }
 interface ActiveProfile {
   id: string; connection: Connection; port: MemoryPort; capture: NativeMemoryCapture; learner: MemoryLearner
-  preferences: MemoryPreferences; projects: Map<string, { projectId: string; checkedAt: number }>
+  preferences: MemoryPreferences; projects: Map<string, { projectId: string | null; checkedAt: number }>
   learning: Promise<LearningOutcome> | null; learningStatus: LearningOutcome | null; captureStatus: CaptureOutcome | null
   maintainedAt: number
   ready: boolean
@@ -115,8 +117,8 @@ export class CodingMemoryRuntime {
   async setProjectIncluded(agentId: string, included: boolean): Promise<void> {
     const active = this.requireActive()
     const session = this.session(agentId)
-    const project = session && active.projects.get(session.workspace)
-    if (!project) throw new MemoryError('project_unavailable')
+    const project = session && active.projects.get(projectKey(session))
+    if (!project?.projectId) throw new MemoryError('project_unavailable')
     if (!included) active.learner.cancel()
     await active.port.request('setProjectIncluded', [project.projectId, included])
   }
@@ -132,12 +134,12 @@ export class CodingMemoryRuntime {
       if (!session) return empty('denied')
       // Recall must not wait for Git or SQLite startup on the user's input path. Background capture
       // primes the identity cache; the first unprimed request safely gets no additional context.
-      const project = active.projects.get(session.workspace)
+      const project = active.projects.get(projectKey(session))
       if (!project || this.now() - project.checkedAt > 60_000) return empty('unavailable')
       const policy = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], 50)
       if (!policy.included) return empty('denied')
       const packet = await active.port.request('recall', [request,
-        { profileId: active.id, projectIds: [project.projectId], includeProfile: true }], remaining())
+        { profileId: active.id, projectIds: project.projectId ? [project.projectId] : [], includeProfile: true }], remaining())
       const current = await active.port.request('capturePolicy', [project.projectId, session.engine, session.sessionId], remaining())
       if (performance.now() >= deadline) return empty('timeout')
       if (!current.included || current.generation !== policy.generation || !active.preferences.recall || !this.sameSession(session)) return empty('denied')
@@ -181,6 +183,7 @@ export class CodingMemoryRuntime {
     const current = this.session(session.agentId)
     return !!current && current.engine === session.engine && current.sessionId === session.sessionId
       && current.workspace === session.workspace && current.transcriptPath === session.transcriptPath && current.liveFrom === session.liveFrom
+      && (current.scope ?? 'project') === (session.scope ?? 'project')
   }
 
   private async detach(): Promise<void> {
@@ -235,13 +238,13 @@ export class CodingMemoryRuntime {
     for (let index = 0; index < count; index++) {
       const session = sessions[(this.offset + index) % sessions.length]
       try {
-        let project = active.projects.get(session.workspace)
+        let project = active.projects.get(projectKey(session))
         if (!project || this.now() - project.checkedAt > 60_000) {
-          const located = await (this.deps.locate ?? locateProject)(session.workspace)
+          const located = session.scope === 'profile' ? null : await (this.deps.locate ?? locateProject)(session.workspace)
           if (!this.sameSession(session)) continue
-          const projectId = await active.port.request('projectForLocator', [located.locator])
+          const projectId = located ? await active.port.request('projectForLocator', [located.locator]) : null
           project = { projectId, checkedAt: this.now() }
-          active.projects.set(session.workspace, project)
+          active.projects.set(projectKey(session), project)
           if (active.projects.size > 128) active.projects.delete(active.projects.keys().next().value!)
         }
         if (!this.sameSession(session)) continue
@@ -260,4 +263,5 @@ export class CodingMemoryRuntime {
 }
 
 function reason(error: unknown): string { return error instanceof MemoryError ? error.code : 'memory_unavailable' }
+function projectKey(session: MemoryHostSession): string { return digest([session.scope ?? 'project', session.workspace]) }
 function empty(status: RecallPacket['status']): RecallPacket { return { status, items: [], text: '', estimatedTokens: 0 } }

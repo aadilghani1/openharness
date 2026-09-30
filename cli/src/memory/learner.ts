@@ -25,6 +25,11 @@ Use only source event IDs from this episode and exact quoted spans from their re
 
 Scope may only stay within the captured project/task/branch and this profile. Do not broaden project evidence into a global preference. Existing memories are provided for deduplication and contradictions; they are not independent evidence. If new evidence supports exactly the same meaning, reuse that draft's exact fields and conflictKey, replacing only its evidence. If it contradicts the same decision or preference, reuse the relevant conflictKey and preserve the new source's actual conditions. Do not rewrite or silently resolve the previous record.
 
+Existing personal defaults may be visible while reviewing project evidence. They help identify the topic, but project evidence may only support a project-scoped record. Reuse the relevant conflictKey for a project-specific exception, keep its scope within this episode, and do not treat it as a global confirmation or correction.
+
+${lease.access.includeProfile && lease.access.projectIds.length === 0
+    ? 'This episode is from the current coding companion conversation without a bound project. Retain only explicit personal coding preferences, learning goals or useful coding references. Do not turn a statement about one repository, experiment or temporary task into a general preference. Project decisions, technical findings and task continuity need a bound project; omit them here. If the intended scope is unclear, return no proposal for that statement.' : ''}
+
 Profile and authorized scope: ${JSON.stringify(lease.access)}
 Existing drafts: ${JSON.stringify(existing.map(record => {
     const { schemaVersion: _schema, id, revision, state, createdAt: _created, updatedAt: _updated, evidence: _evidence, ...draft } = record

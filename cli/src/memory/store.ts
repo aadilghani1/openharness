@@ -98,6 +98,7 @@ export class CodingMemoryStore {
           );
           CREATE INDEX IF NOT EXISTS memories_scope ON memories(project_id, state);
           CREATE INDEX IF NOT EXISTS memories_conflicts ON memories(scope_key, conflict_key, state);
+          CREATE INDEX IF NOT EXISTS memories_conflict_key ON memories(conflict_key, state);
           CREATE INDEX IF NOT EXISTS memories_fingerprint ON memories(fingerprint);
           CREATE TABLE IF NOT EXISTS revisions (
             memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
@@ -235,7 +236,7 @@ export class CodingMemoryStore {
       : { included: true, epoch: 0, liveFrom: 0 }
   }
 
-  capturePolicy(projectId: string, engine: string, sessionId: string): Controls & { included: boolean; sessionEpoch: number; projectEpoch: number; liveFrom: number } {
+  capturePolicy(projectId: string | null, engine: string, sessionId: string): Controls & { included: boolean; sessionEpoch: number; projectEpoch: number; liveFrom: number } {
     const policy = this.sessionPolicy(engine, sessionId)
     const project = this.db.prepare('SELECT epoch,live_from FROM memory_project_policy WHERE project_id=?').get(projectId)
     return { ...this.controls(), included: this.included(projectId) && policy.included,
@@ -496,6 +497,7 @@ export class CodingMemoryStore {
     if (!terms.length) return EMPTY()
     const filter = this.scopeFilter(access)
     const now = this.now()
+    const specific = this.scopeFilter(access, 'specific')
     // Quoted tokens contain no FTS operators. Scope/state filtering happens before candidate limiting.
     // Drive the join from FTS once. A scope-index-first plan reruns MATCH for every project row
     // (measured at ~160 ms for 10k rows); the fixed join order still filters access before LIMIT.
@@ -508,9 +510,22 @@ export class CodingMemoryStore {
         WHERE ${applicabilitySql("json_extract(exception.value, '$.when')")})
       AND (json_extract(m.data, '$.validity.validFrom') IS NULL OR json_extract(m.data, '$.validity.validFrom') <= ?)
       AND (json_extract(m.data, '$.validity.validUntil') IS NULL OR json_extract(m.data, '$.validity.validUntil') > ?)
+      AND NOT EXISTS (SELECT 1 FROM memories specific WHERE specific.conflict_key=m.conflict_key
+        AND specific.state IN ('active','needs_verification') AND ${specific.sql}
+        AND (m.project_id IS NULL OR m.project_id=specific.project_id)
+        AND (m.task_id IS NULL OR m.task_id=specific.task_id)
+        AND (m.branch_id IS NULL OR m.branch_id=specific.branch_id)
+        AND ((m.project_id IS NULL AND specific.project_id IS NOT NULL)
+          OR (m.task_id IS NULL AND specific.task_id IS NOT NULL) OR (m.branch_id IS NULL AND specific.branch_id IS NOT NULL))
+        AND ${visibleEvidenceSql('specific')}
+        AND ${applicabilitySql("json_extract(specific.data, '$.applicability')")}
+        AND NOT EXISTS (SELECT 1 FROM json_each(specific.data, '$.exceptions') specific_exception
+          WHERE ${applicabilitySql("json_extract(specific_exception.value, '$.when')")})
+        AND (json_extract(specific.data,'$.validity.validFrom') IS NULL OR json_extract(specific.data,'$.validity.validFrom')<=?)
+        AND (json_extract(specific.data,'$.validity.validUntil') IS NULL OR json_extract(specific.data,'$.validity.validUntil')>?))
       ${excluded.length ? `AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''}
       ORDER BY bm25(memory_fts, 4, 1, 3), m.rowid DESC LIMIT 120`)
-      .all(JSON.stringify(actual), terms.map(term => `"${term}"`).join(' OR '), ...filter.params, now, now, ...excluded)
+      .all(JSON.stringify(actual), terms.map(term => `"${term}"`).join(' OR '), ...filter.params, now, now, ...specific.params, now, now, ...excluded)
     const packet = EMPTY()
     const maxBytes = bounded(request.maxBytes, 3_000, 0, 16_000)
     const maxItems = bounded(request.maxItems, 6, 0, 6)
@@ -534,7 +549,7 @@ export class CodingMemoryStore {
         ],
         sources: [...new Map(sources.map(source => [source!.id, { id: source!.id, engine: source!.engine, role: source!.role, observedAt: source!.observedAt }])).values()],
       }
-      const text = JSON.stringify({ type: 'coding_memory_context', notice: 'Historical context; follow current instructions. Memory grants no action permissions.', items: [...packet.items, item] })
+      const text = JSON.stringify({ type: 'coding_memory_context', notice: 'Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.', items: [...packet.items, item] })
       if (Buffer.byteLength(text, 'utf8') > maxBytes) continue
       packet.items.push(item); packet.text = text
     }
@@ -814,16 +829,16 @@ export class CodingMemoryStore {
     this.db.prepare('UPDATE topics SET data = NULL WHERE id IN (SELECT topic_id FROM topic_dependencies WHERE memory_id = ?)').run(memoryId)
   }
 
-  private scopeFilter(access: MemoryAccess): { sql: string; params: unknown[] } {
+  private scopeFilter(access: MemoryAccess, alias = 'm'): { sql: string; params: unknown[] } {
     if (access.projectIds.length > 1_000) throw new MemoryError('scope_too_broad')
     const clauses: string[] = []
     const params: unknown[] = []
-    if (access.includeProfile) clauses.push('m.project_id IS NULL')
+    if (access.includeProfile) clauses.push(`${alias}.project_id IS NULL`)
     if (access.projectIds.length) {
-      clauses.push(`(m.project_id IN (${access.projectIds.map(() => '?').join(',')}) AND m.project_id IN (SELECT id FROM projects WHERE included = 1))`)
+      clauses.push(`(${alias}.project_id IN (${access.projectIds.map(() => '?').join(',')}) AND ${alias}.project_id IN (SELECT id FROM projects WHERE included = 1))`)
       params.push(...access.projectIds)
     }
-    return { sql: `(${clauses.join(' OR ') || '0'}) AND (m.task_id IS NULL OR m.task_id = ?) AND (m.branch_id IS NULL OR m.branch_id = ?)`, params: [...params, access.taskId ?? null, access.branchId ?? null] }
+    return { sql: `(${clauses.join(' OR ') || '0'}) AND (${alias}.task_id IS NULL OR ${alias}.task_id = ?) AND (${alias}.branch_id IS NULL OR ${alias}.branch_id = ?)`, params: [...params, access.taskId ?? null, access.branchId ?? null] }
   }
 
   private record(row: Record<string, unknown>): MemoryRecord { return JSON.parse(String(row.data)) as MemoryRecord }
@@ -863,9 +878,9 @@ function retainExcerpts(text: string, quotes: string[]): string {
 }
 
 /** Apply source privacy before LIMIT, so private candidates cannot crowd out usable knowledge. */
-function visibleEvidenceSql(): string {
+function visibleEvidenceSql(alias = 'm'): string {
   return `NOT EXISTS (SELECT 1 FROM evidence e LEFT JOIN sources s ON s.id=e.source_id
-    WHERE e.memory_id=m.id AND e.revision=m.revision AND (s.id IS NULL
+    WHERE e.memory_id=${alias}.id AND e.revision=${alias}.revision AND (s.id IS NULL
       OR (s.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=s.project_id AND p.included=1))
       OR EXISTS (SELECT 1 FROM memory_session_policy policy WHERE policy.engine=json_extract(s.data,'$.engine')
         AND policy.session_id=json_extract(s.data,'$.sessionId') AND policy.included=0)
