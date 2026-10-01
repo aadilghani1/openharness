@@ -71,6 +71,23 @@ it('extracts scoped knowledge through one selected target and retains its exact 
   expect(provider.target).toHaveBeenCalledTimes(2)
 })
 
+it('shows separate episode boundaries and original roles while using a single provider call', async () => {
+  const reply: SourceEvent = { ...event, id: 'other_reply', nativeEventId: 'other_reply', engine: 'claude', sessionId: 'other_session',
+    role: 'assistant', rootIds: ['other_reply'], text: 'An unrelated assistant statement, not user acceptance.' }
+  store.learning.capture({ streamId: 'other_stream', engine: 'claude', sessionId: 'other_session', projectId: 'project',
+    episodeId: 'other_episode', from: null, to: '1', events: [reply], boundary: 'complete' })
+  const provider = inference()
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'learned', learned: 1 })
+  expect(provider.run).toHaveBeenCalledOnce()
+  const prompt = vi.mocked(provider.run).mock.calls[0][0]
+  const boundaries = JSON.parse(prompt.split('Episode boundaries: ')[1].split('\n')[0])
+  const sources = JSON.parse(prompt.split('Captured source events: ')[1])
+  expect(boundaries).toEqual([{ episodeId: 'episode', sourceIndexes: [0] }, { episodeId: 'other_episode', sourceIndexes: [1] }])
+  expect(sources).toEqual([event, reply])
+  expect(prompt).toContain('Never treat a reply in one episode as acceptance of a statement in another')
+  expect(store.learning.status().jobs).toEqual({ learned: 1, no_useful_memory: 1 })
+})
+
 it('records a no-useful-memory result separately from unavailable intelligence', async () => {
   const provider = inference(null)
   const learner = new MemoryLearner(memory, provider)

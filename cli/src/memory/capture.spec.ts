@@ -80,8 +80,11 @@ it('does not backfill messages from before consent or from a paused capture inte
   // The old project lease is still in flight, but the new episode and its two sources are durable.
   expect(store.learning.status().jobs.queued).toBe(1)
   now += 120_001
-  store.learning.finish(claim(), [], target)
-  expect(claim().sources.map(source => source.text)).toEqual(['After re-enabling.', 'New reply.'])
+  const recovered = claim()
+  expect(recovered.sources.map(source => source.text)).toEqual(['Understood.', 'After re-enabling.', 'New reply.'])
+  expect(recovered.episodes).toHaveLength(2)
+  store.learning.finish(recovered, [], target)
+  expect(store.learning.status().jobs.no_useful_memory).toBe(2)
 })
 
 it('detects an in-place rewrite and establishes a new baseline without relearning its history', async () => {

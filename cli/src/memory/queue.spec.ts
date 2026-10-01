@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CodingMemoryStore } from './store.js'
+import { builtinSqlite } from '../lib/sqliteRead.js'
 import type { CaptureBatch, LearningLease } from './queue.js'
 import type { MemoryAccess, MemoryDraft, SourceEvent } from './types.js'
 
@@ -39,6 +40,13 @@ function claim(handle = store): LearningLease {
   if (result.state !== 'claimed') throw new Error(result.state)
   return result.lease
 }
+function captureEpisode(id: string, changes: Partial<SourceEvent> = {}): SourceEvent {
+  const source = event(id, { sessionId: `session_${id}`, ...changes })
+  store.learning.capture(batch(id, { streamId: `stream_${id}`, engine: source.engine, sessionId: source.sessionId,
+    projectId: source.projectId, events: [source] }))
+  now++
+  return source
+}
 beforeEach(() => {
   now = 10_000
   directory = mkdtempSync(join(tmpdir(), 'memory-queue-'))
@@ -47,6 +55,127 @@ beforeEach(() => {
   store.setControls({ learn: true, recall: true })
 })
 afterEach(() => { for (const handle of opened.splice(0)) handle.close(); rmSync(directory, { recursive: true, force: true }) })
+
+describe('bounded episode batches', () => {
+  it('reviews four compatible episodes per reservation and records each episode outcome separately', () => {
+    const sources = Array.from({ length: 5 }, (_, index) => captureEpisode(`source_${index}`,
+      { engine: index % 2 ? 'codex' : 'claude' }))
+    const lease = claim()
+    expect(lease.episodes.map(episode => episode.sourceIds)).toEqual(sources.slice(0, 4).map(source => [source.id]))
+    expect(lease.sources.map(source => source.id)).toEqual(sources.slice(0, 4).map(source => source.id))
+    expect(store.learning.status().callsLastHour).toBe(1)
+    expect(store.learning.status().jobs).toEqual({ reviewing: 4, queued: 1 })
+    expect(store.learning.finish(lease, [proposal(sources[1])], target).state).toBe('learned')
+    expect(store.learning.status().jobs).toEqual({ learned: 1, no_useful_memory: 3, queued: 1 })
+    expect(claim().sources.map(source => source.id)).toEqual(['source_4'])
+  })
+
+  it('keeps unknown, task, branch and project scope boundaries separate', () => {
+    store.registerProject('other_project')
+    captureEpisode('first', { taskId: 'task', branchId: 'branch' })
+    captureEpisode('other_task', { taskId: 'other', branchId: 'branch' })
+    captureEpisode('other_branch', { taskId: 'task', branchId: 'other' })
+    captureEpisode('unknown_scope')
+    captureEpisode('other_project', { projectId: 'other_project', taskId: 'task', branchId: 'branch' })
+    captureEpisode('compatible', { taskId: 'task', branchId: 'branch' })
+    const lease = claim()
+    expect(lease.sources.map(source => source.id)).toEqual(['first', 'compatible'])
+    expect(lease.access).toMatchObject({ projectIds: ['project'], taskId: 'task', branchId: 'branch' })
+    expect(store.learning.status().jobs).toEqual({ reviewing: 2, queued: 4 })
+  })
+
+  it('rolls back the whole batch on invalid evidence, then retries failed episodes individually', () => {
+    const first = captureEpisode('first'), second = captureEpisode('second')
+    store.ingest(event('outside_batch'))
+    const lease = claim()
+    lease.episodes.push({ jobId: 'forged_member', sourceIds: ['outside_batch'] })
+    lease.sources.push(event('outside_batch'))
+    expect(store.learning.finish(lease, [proposal(first), proposal(event('outside_batch'), { conflictKey: 'other' })], target))
+      .toEqual({ state: 'failed', reason: 'episode_evidence' })
+    expect(store.list(access)).toEqual([])
+    expect(store.learning.status().jobs).toEqual({ failed: 2 })
+    expect(store.source(second.id, access)).not.toBeNull()
+    now += 300_001
+    const retry = claim()
+    expect(retry.sources.map(source => source.id)).toEqual(['first'])
+    expect(store.learning.finish(retry, [proposal(first)], target).state).toBe('learned')
+    expect(claim().sources.map(source => source.id)).toEqual(['second'])
+  })
+
+  it.each(['first', 'second'])('rejects all output when %s becomes private, and releases only the still-authorized episode', privateId => {
+    const first = captureEpisode('first'), second = captureEpisode('second')
+    const lease = claim()
+    expect(lease.episodes).toHaveLength(2)
+    store.setSessionIncluded('claude', `session_${privateId}`, false)
+    expect(store.learning.finish(lease, [proposal(first), proposal(second)], target).state).toBe('stale')
+    expect(store.list(access)).toEqual([])
+    expect(store.learning.status().jobs).toEqual({ cancelled: 1, queued: 1 })
+    expect(claim().sources.map(source => source.id)).toEqual([privateId === 'first' ? 'second' : 'first'])
+  })
+
+  it('recovers every member after restart and rejects a late result without releasing the replacement lease', () => {
+    captureEpisode('first'); captureEpisode('second'); captureEpisode('third')
+    const abandoned = claim()
+    store.close(); store = open()
+    now = abandoned.until + 1
+    const recovered = claim()
+    expect(recovered.sources.map(source => source.id)).toEqual(['first', 'second', 'third'])
+    expect(recovered.token).not.toBe(abandoned.token)
+    expect(store.learning.finish(abandoned, [], target).state).toBe('stale')
+    expect(store.learning.status().jobs).toEqual({ reviewing: 3 })
+    store.learning.defer(recovered, 'queued')
+    expect(store.learning.status().jobs).toEqual({ queued: 3 })
+    expect(store.learning.status().callsLastHour).toBe(2)
+  })
+
+  it('keeps byte and source-count caps when several complete episodes are waiting', () => {
+    for (let i = 0; i < 4; i++) captureEpisode(`large_${i}`, { text: 'x'.repeat(31_500) })
+    const large = claim()
+    expect(large.episodes).toHaveLength(3)
+    expect(Buffer.byteLength(JSON.stringify(large.sources))).toBeLessThanOrEqual(96_000)
+    store.learning.finish(large, [], target)
+    store.learning.finish(claim(), [], target)
+    for (let i = 0; i < 4; i++) {
+      store.learning.capture(batch(`many_${i}`, { streamId: `many_${i}`,
+        events: Array.from({ length: 64 }, (_, index) => event(`many_${i}_${index}`)) }))
+      now++
+    }
+    const many = claim()
+    expect(many.episodes).toHaveLength(2)
+    expect(many.sources).toHaveLength(128)
+    expect(store.learning.status().jobs.queued).toBe(2)
+  })
+
+  it('preserves episode boundaries without duplicating shared source text or support', () => {
+    store.learning.capture(batch())
+    store.learning.capture(batch('second', { from: 'first', events: [event()] }))
+    const lease = claim()
+    expect(lease.sources).toHaveLength(1)
+    expect(lease.episodes.map(episode => episode.sourceIds)).toEqual([['first'], ['first']])
+    const result = store.learning.finish(lease, [proposal()], target)
+    expect(result.state).toBe('learned')
+    expect(store.learning.status().jobs.learned).toBe(2)
+    expect(store.support(store.list(access)[0].id, access)?.independentUserStatements).toBe(1)
+  })
+
+  it('opens an earlier queue without batch metadata and recovers its unfinished lease after expiry', () => {
+    captureEpisode('first')
+    const old = claim()
+    store.close()
+    const Database = builtinSqlite()!
+    const legacy = new Database(join(directory, 'memory.sqlite'), { readOnly: false })
+    try { legacy.exec('DROP TABLE memory_inference_jobs') } finally { legacy.close() }
+    store = open()
+    expect(store.learning.claim(target).state).toBe('idle')
+    expect(store.learning.finish(old, [], target).state).toBe('stale')
+    expect(store.source('first', access)?.text).toBe(event().text)
+    now = old.until + 1
+    const recovered = claim()
+    expect(recovered.episodes).toEqual([{ jobId: 'episode_first', sourceIds: ['first'] }])
+    expect(store.learning.status().callsLastHour).toBe(2)
+    expect(store.learning.finish(recovered, [], target).state).toBe('no_useful_memory')
+  })
+})
 
 describe('durable coding episode capture', () => {
   it('captures the first user turn before an assistant reply and resumes after reopen', () => {
@@ -137,7 +266,7 @@ describe('model availability, leases, and idempotent publication', () => {
     expect(claim().sources).toHaveLength(1)
   })
 
-  it('leases at most one episode per project and recovers an expired process without accepting its late result', () => {
+  it('leases at most one review per project and recovers an expired process without accepting its late result', () => {
     store.learning.capture(batch())
     store.learning.capture(batch('second', { from: 'first' }))
     const first = claim()
@@ -168,10 +297,11 @@ describe('model availability, leases, and idempotent publication', () => {
 
   it('reserves the rolling inference budget durably and preserves deferred sources and foreground priority', () => {
     let previous: string | null = null
-    for (let index = 0; index < 7; index++) {
+    for (let index = 0; index < 25; index++) {
       const id = `source_${index}`
       store.learning.capture(batch(id, { from: previous }))
       previous = id
+      now++
     }
     expect(store.learning.claim({ ...target, foregroundBusy: true }).state).toBe('foreground_busy')
     for (let index = 0; index < 6; index++) expect(store.learning.finish(claim(), [], target).state).toBe('no_useful_memory')
@@ -180,9 +310,9 @@ describe('model availability, leases, and idempotent publication', () => {
     expect(store.learning.claim(target).state).toBe('budget_deferred')
     expect(store.learning.status().callsLastHour).toBe(6)
     expect(store.learning.status().jobs.budget_deferred).toBe(1)
-    expect(store.learning.cursor('stream')).toBe('source_6')
+    expect(store.learning.cursor('stream')).toBe('source_24')
     now += 3_600_001
-    expect(claim().sources.map(source => source.id)).toEqual(['source_6'])
+    expect(claim().sources.map(source => source.id)).toEqual(['source_24'])
   })
 
   it('publishes a proposal batch atomically and rejects evidence outside the captured episode', () => {

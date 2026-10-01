@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { CodingMemoryStore } from './store.js'
-import { MAX_PENDING_EPISODES, PENDING_RETENTION_MS, type CaptureBatch } from './queue.js'
+import { MAX_EPISODES_PER_CALL, MAX_PENDING_EPISODES, PENDING_RETENTION_MS, type CaptureBatch } from './queue.js'
 import type { MemoryDraft, SourceEvent } from './types.js'
 
 let directory: string, store: CodingMemoryStore, now: number
@@ -73,9 +73,10 @@ it('keeps exact evidence while removing unused surrounding conversation text', (
 it('preserves full input until every pending episode that shares it has finished', () => {
   const source = event('shared')
   capture(source)
-  capture(source, { episodeId: 'another', to: 'another' })
+  capture(source, { episodeId: 'another', to: 'another', boundary: 'open' })
   expect(store.learning.finish(claim(), [draft(source)], target).state).toBe('learned')
   expect(store.source(source.id, access)?.text).toBe(source.text)
+  capture(source, { episodeId: 'another', to: 'another_end', events: [] })
   expect(claim().sources[0].text).toBe(source.text)
   now += 120_001
   expect(store.learning.finish(claim(), [], target).state).toBe('no_useful_memory')
@@ -92,7 +93,12 @@ it('applies backpressure without acknowledging or saving a new episode when the 
   store.learning.finish(claim(), [], target)
   capture(next)
   expect(store.learning.cursor('stream')).toBe(next.id)
+  expect(store.learning.status().jobs.queued).toBe(MAX_PENDING_EPISODES - MAX_EPISODES_PER_CALL + 1)
+  for (let i = 1; i < MAX_EPISODES_PER_CALL; i++) capture(event(`refilled_${i}`))
   expect(store.learning.status().jobs.queued).toBe(MAX_PENDING_EPISODES)
+  const fullCursor = store.learning.cursor('stream')
+  expect(() => capture(event('still_blocked'))).toThrow('memory_backlog_full')
+  expect(store.learning.cursor('stream')).toBe(fullCursor)
 })
 
 it('expires unreviewed input as an explicit gap, rejects late results and eventually prunes job metadata', () => {

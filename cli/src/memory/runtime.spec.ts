@@ -58,7 +58,7 @@ beforeEach(() => {
     transcriptPath: join(directory, 'conversation.jsonl'), busy: false, coding: true }]
   target = { state: 'ready', key: 'selected' }
   inference = { target: vi.fn(async () => target), run: vi.fn(async prompt => {
-    const sources = JSON.parse(prompt.split('Captured episode: ')[1]) as SourceEvent[]
+    const sources = JSON.parse(prompt.split('Captured source events: ')[1]) as SourceEvent[]
     return JSON.stringify({ proposals: [proposal(sources.find(source => source.role === 'user')!)] })
   }) }
   locate = vi.fn(async workspace => ({ locator: { kind: 'directory' as const, path: workspace }, workspacePath: workspace, branchRef: null, revision: null }))

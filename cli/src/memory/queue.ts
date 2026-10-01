@@ -28,6 +28,11 @@ export const QUEUE_SCHEMA = `
     id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, context_key TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS memory_calls_time ON memory_inference_calls(started_at);
+  CREATE TABLE IF NOT EXISTS memory_inference_jobs (
+    call_id TEXT NOT NULL REFERENCES memory_inference_calls(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL REFERENCES memory_jobs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL,
+    PRIMARY KEY(call_id, job_id)
+  );
   CREATE TABLE IF NOT EXISTS memory_queue_totals (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
 `
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
@@ -55,6 +60,8 @@ export interface InferenceTarget {
 export interface LearningLease {
   jobId: string; token: string; until: number; generation: number; contextKey: string
   sources: SourceEvent[]; access: MemoryAccess
+  /** Explicit boundaries; the store's durable membership remains the publication authority. */
+  episodes: Array<{ jobId: string; sourceIds: string[] }>
 }
 export type ClaimResult = { state: 'claimed'; lease: LearningLease }
   | { state: 'idle' | 'learning_off' | 'foreground_busy' | 'waiting_for_model' | 'budget_deferred' | 'source_incomplete'; retryAt?: number }
@@ -76,6 +83,9 @@ interface QueueDeps {
 const HOUR = 3_600_000
 const LEASE_MS = 120_000
 const MAX_CALLS_PER_HOUR = 6
+export const MAX_EPISODES_PER_CALL = 4
+const MAX_REVIEW_SOURCES = 128
+const MAX_REVIEW_SOURCE_BYTES = 96_000
 const RETRYABLE = "('queued', 'waiting_for_model', 'budget_deferred', 'failed')"
 
 export class MemoryQueue {
@@ -114,7 +124,7 @@ export class MemoryQueue {
       }
       const sources = this.sources(batch.episodeId)
       commonScope(sources)
-      if (sources.length > 128 || Buffer.byteLength(JSON.stringify(sources)) > 96_000) throw new MemoryError('episode_too_large')
+      if (sources.length > MAX_REVIEW_SOURCES || Buffer.byteLength(JSON.stringify(sources)) > MAX_REVIEW_SOURCE_BYTES) throw new MemoryError('episode_too_large')
       const state: JobState = batch.boundary === 'open' ? 'open' : batch.boundary === 'incomplete' ? 'source_incomplete'
         : sources.length ? 'queued' : 'cancelled'
       db.prepare('UPDATE memory_jobs SET state = ?, priority = MAX(priority, ?), updated_at = ? WHERE id = ?')
@@ -149,6 +159,10 @@ export class MemoryQueue {
   }
 
   private nextJob(): Record<string, unknown> | undefined {
+    return this.readyJobs(1)[0]
+  }
+
+  private readyJobs(limit: number, projectId?: string | null): Record<string, unknown>[] {
     const { db, now } = this.deps
     return db.prepare(`SELECT j.* FROM memory_jobs j WHERE
       ((j.state IN ${RETRYABLE} AND j.available_at<=? AND j.failures<3) OR (j.state='reviewing' AND j.lease_until<=?))
@@ -156,7 +170,9 @@ export class MemoryQueue {
       AND (j.project_id IS NULL OR j.project_id IN (SELECT id FROM projects WHERE included=1))
       AND NOT EXISTS (SELECT 1 FROM memory_jobs active WHERE active.id!=j.id AND active.project_id IS j.project_id
         AND active.state='reviewing' AND active.lease_until>?)
-      ORDER BY j.priority DESC,j.created_at,j.id LIMIT 1`).get(now(), now(), now() - PENDING_RETENTION_MS, now())
+      ${projectId === undefined ? '' : 'AND j.project_id IS ?'}
+      ORDER BY j.priority DESC,j.created_at,j.id LIMIT ?`).all(now(), now(), now() - PENDING_RETENTION_MS, now(),
+        ...(projectId === undefined ? [] : [projectId]), limit)
   }
 
   /** Reserving a call and acquiring the project lease share one transaction. */
@@ -180,51 +196,81 @@ export class MemoryQueue {
         this.release(jobId, 'budget_deferred', 'hourly_budget', retryAt)
         return { state: 'budget_deferred' as const, retryAt }
       }
-      const sources = this.sources(jobId)
-      if (!sources.length) {
+      const firstSources = this.sources(jobId)
+      if (!firstSources.length) {
         this.release(jobId, 'source_incomplete', 'sources_unavailable', 0)
         return { state: 'source_incomplete' as const }
+      }
+      const group = [{ job, sources: firstSources }]
+      const scope = commonScope(firstSources)
+      let sources = firstSources
+      // Failed batches retry individually. Scan a bounded window, never a whole transcript archive.
+      if (Number(job.failures) === 0) for (const candidate of this.readyJobs(16, job.project_id as string | null)) {
+        if (group.length >= MAX_EPISODES_PER_CALL) break
+        if (candidate.id === job.id || Number(candidate.failures) !== 0) continue
+        const candidateSources = this.sources(String(candidate.id))
+        if (!candidateSources.length) {
+          this.release(String(candidate.id), 'source_incomplete', 'sources_unavailable', 0)
+          continue
+        }
+        if (digest(commonScope(candidateSources)) !== digest(scope)) continue
+        const combined = uniqueSources([...sources, ...candidateSources])
+        if (combined.length > MAX_REVIEW_SOURCES || Buffer.byteLength(JSON.stringify(combined)) > MAX_REVIEW_SOURCE_BYTES) continue
+        group.push({ job: candidate, sources: candidateSources })
+        sources = combined
       }
       const contextKey = digest(target.key)
       const token = randomUUID()
       const until = now() + LEASE_MS
       const access: MemoryAccess = { profileId: this.deps.profileId,
         projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: true,
-        ...commonScope(sources),
+        ...scope,
       }
-      db.prepare(`UPDATE memory_jobs SET state='reviewing', lease_token=?, lease_until=?, generation=?, context_key=?, source_digest=?,
-        attempts=attempts+1, updated_at=?, last_error=NULL WHERE id=?`).run(token, until, controls.generation, contextKey, digest(sources), now(), jobId)
       db.prepare('INSERT INTO memory_inference_calls(id, started_at, context_key) VALUES(?, ?, ?)').run(token, now(), contextKey)
-      return { state: 'claimed' as const, lease: { jobId, token, until, generation: controls.generation, contextKey, sources, access } }
+      group.forEach((member, ordinal) => {
+        db.prepare(`UPDATE memory_jobs SET state='reviewing', lease_token=?, lease_until=?, generation=?, context_key=?, source_digest=?,
+          attempts=attempts+1, updated_at=?, last_error=NULL WHERE id=?`)
+          .run(token, until, controls.generation, contextKey, digest(member.sources), now(), member.job.id)
+        db.prepare('INSERT INTO memory_inference_jobs(call_id, job_id, ordinal) VALUES(?, ?, ?)').run(token, member.job.id, ordinal)
+      })
+      const episodes = group.map(member => ({ jobId: String(member.job.id), sourceIds: member.sources.map(source => source.id) }))
+      return { state: 'claimed' as const, lease: { jobId, token, until, generation: controls.generation, contextKey, sources, access, episodes } }
     })
   }
 
   finish(lease: LearningLease, proposals: MemoryDraft[], target: InferenceTarget): FinishResult {
-    const { db, now } = this.deps
+    const { now } = this.deps
     return this.deps.transaction(() => {
       this.expire()
-      const job = db.prepare('SELECT * FROM memory_jobs WHERE id = ?').get(lease.jobId)
+      const jobs = this.members(lease)
       const controls = this.deps.controls()
-      if (!job || job.state !== 'reviewing' || job.lease_token !== lease.token) return { state: 'stale' as const, reason: 'lease_changed' }
-      if (!controls.learn || !this.deps.included(job.project_id as string | null) || controls.generation !== job.generation
-        || Number(job.lease_until) <= now() || target.state !== 'ready' || !target.key || digest(target.key) !== job.context_key
-        || digest(this.sources(lease.jobId)) !== job.source_digest) {
-        this.release(lease.jobId, 'queued', 'context_changed', now())
+      if (!jobs.length || jobs.some(job => job.state !== 'reviewing' || job.lease_token !== lease.token)) {
+        this.releaseLease(lease, 'queued', 'lease_changed', now())
+        return { state: 'stale' as const, reason: 'lease_changed' }
+      }
+      const group = jobs.map(job => ({ job, sources: this.sources(String(job.id)) }))
+      if (!controls.learn || target.state !== 'ready' || !target.key || group.some(({ job, sources }) =>
+        !this.deps.included(job.project_id as string | null) || controls.generation !== job.generation
+        || Number(job.lease_until) <= now() || digest(target.key!) !== job.context_key || !sources.length || digest(sources) !== job.source_digest)) {
+        this.releaseLease(lease, 'queued', 'context_changed', now())
         return { state: 'stale' as const, reason: 'context_changed' }
       }
       try {
         const records = this.deps.transaction(() => {
           if (!Array.isArray(proposals) || proposals.length > 8) throw new MemoryError('invalid_proposals')
-          const sourceIds = new Set(this.sources(lease.jobId).map(source => source.id))
+          const sources = uniqueSources(group.flatMap(member => member.sources))
+          const sourceIds = new Set(sources.map(source => source.id))
           const access: MemoryAccess = { profileId: this.deps.profileId,
-            projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: true,
-            ...commonScope(this.sources(lease.jobId)),
+            projectIds: jobs[0].project_id === null ? [] : [String(jobs[0].project_id)], includeProfile: true,
+            ...commonScope(sources),
           }
           const records = proposals.map(proposal => {
             if (!Array.isArray(proposal?.evidence) || proposal.evidence.some(evidence => !sourceIds.has(evidence.sourceEventId))) throw new MemoryError('episode_evidence')
-            return this.deps.propose(proposal, access, Number(job.generation)).record
+            return this.deps.propose(proposal, access, controls.generation).record
           })
-          this.release(lease.jobId, records.length ? 'learned' : 'no_useful_memory', null, 0)
+          const used = new Set(proposals.flatMap(proposal => proposal.evidence.map(evidence => evidence.sourceEventId)))
+          for (const member of group) this.release(String(member.job.id),
+            member.sources.some(source => used.has(source.id)) ? 'learned' : 'no_useful_memory', null, 0)
           this.deps.compact([...sourceIds])
           return records
         })
@@ -232,7 +278,7 @@ export class MemoryQueue {
         return { state, records }
       } catch (error) {
         const reason = error instanceof MemoryError ? error.code : 'store_unavailable'
-        this.release(lease.jobId, 'failed', reason, now() + 300_000)
+        this.releaseLease(lease, 'failed', reason, now() + 300_000)
         return { state: 'failed' as const, reason }
       }
     })
@@ -240,9 +286,7 @@ export class MemoryQueue {
 
   defer(lease: LearningLease, reason: 'queued' | 'waiting_for_model' | 'budget_deferred' | 'failed' | 'source_incomplete'): void {
     this.deps.transaction(() => {
-      const job = this.deps.db.prepare('SELECT state, lease_token FROM memory_jobs WHERE id = ?').get(lease.jobId)
-      if (job?.state !== 'reviewing' || job.lease_token !== lease.token) return
-      this.release(lease.jobId, reason, reason, this.deps.now() + (reason === 'queued' ? 0 : reason === 'budget_deferred' ? HOUR : 60_000))
+      this.releaseLease(lease, reason, reason, this.deps.now() + (reason === 'queued' ? 0 : reason === 'budget_deferred' ? HOUR : 60_000))
     })
   }
 
@@ -305,11 +349,27 @@ export class MemoryQueue {
     return sources.every((source): source is SourceEvent => source !== null) ? sources : []
   }
 
+  private members(lease: LearningLease): Record<string, unknown>[] {
+    const jobs = this.deps.db.prepare(`SELECT j.* FROM memory_inference_jobs m JOIN memory_jobs j ON j.id=m.job_id
+      WHERE m.call_id=? ORDER BY m.ordinal`).all(lease.token)
+    return jobs[0]?.id === lease.jobId ? jobs : []
+  }
+
+  private releaseLease(lease: LearningLease, state: JobState, error: string | null, availableAt: number): void {
+    for (const job of this.members(lease)) {
+      if (job.state === 'reviewing' && job.lease_token === lease.token) this.release(String(job.id), state, error, availableAt)
+    }
+  }
+
   private release(id: string, state: JobState, error: string | null, availableAt: number): void {
     this.deps.db.prepare(`UPDATE memory_jobs SET state=?, last_error=?, available_at=?, lease_token=NULL, lease_until=0,
       source_digest=NULL, failures=CASE WHEN ?='failed' THEN failures+1 ELSE 0 END, updated_at=? WHERE id=?`)
       .run(state, error, availableAt, state, this.deps.now(), id)
   }
+}
+
+function uniqueSources(sources: SourceEvent[]): SourceEvent[] {
+  return [...new Map(sources.map(source => [source.id, source])).values()]
 }
 
 function commonScope(sources: SourceEvent[]): { taskId?: string; branchId?: string } {
