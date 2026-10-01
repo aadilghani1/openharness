@@ -10,6 +10,9 @@ export interface AuthSession {
   autonomousEnv: 'prod' | 'stag'
   computerId: string
   machineId?: string
+  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued session, which
+   *  the Autonomous services behind billing and grid do not take); absent or `sso` — the browser. */
+  method?: 'sso' | 'qr'
   updatedAt: number
 }
 
@@ -41,6 +44,7 @@ function parse(raw: string): AuthSession | null {
       autonomousEnv: value.autonomousEnv,
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
+      ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
     }
   } catch { return null }

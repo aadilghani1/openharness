@@ -145,6 +145,22 @@ class ApiClient {
     }
   }
 
+  // -- signing a computer in by its QR (backend routes/qrSignIn.ts) --
+
+  /// What is asking to sign in: `{label, kind, country?, ipHint?, sameNetwork, status}`.
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    final res = await _dio.post('/api/auth/qr/lookup', data: {'code': code});
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  Future<void> approveSignIn(String code) async {
+    unwrapApiResponse(await _dio.post('/api/auth/qr/approve', data: {'code': code}));
+  }
+
+  Future<void> denySignIn(String code) async {
+    unwrapApiResponse(await _dio.post('/api/auth/qr/deny', data: {'code': code}));
+  }
+
   // -- the desk: the account's tabs, the same on every computer --
 
   /// `{revision, tabs}` as the backend holds it (its `routes/desk.ts`); null on

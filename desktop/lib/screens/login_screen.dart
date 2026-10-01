@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
+import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../widgets/login_fleet_map.dart';
@@ -385,6 +388,19 @@ class _ActionState extends State<_Action> {
             ),
             label: Text(signingOutFailed ? 'Retry sign out' : 'Sign in'),
           ),
+          // The other way in: a QR a phone already signed in scans and approves. Not on a web page
+          // at phone width — that page IS the phone.
+          if (notifier.canSignInWithPhone &&
+              !signingOutFailed &&
+              !(kIsWeb && MediaQuery.sizeOf(context).width < 720)) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              key: const Key('login-scan-with-phone'),
+              onPressed: notifier.loginWithPhone,
+              icon: const Icon(AppIcons.smartphone, size: 16),
+              label: const Text('Scan with your phone'),
+            ),
+          ],
           const SizedBox(height: 12),
           Semantics(
             liveRegion: signingOutFailed || notifier.sessionExpired,
@@ -399,6 +415,94 @@ class _ActionState extends State<_Action> {
             ),
           ),
         ],
+      );
+    }
+
+    // A phone approved this sign-in: whose account is it? Someone else's phone may have scanned
+    // the code, and nothing is signed in until the person here says yes.
+    if (notifier.pendingConfirmEmail case final email?) {
+      final previous = notifier.previousAccountEmail;
+      final changed =
+          previous != null && previous.toLowerCase() != email.toLowerCase();
+      return Column(
+        children: [
+          Text(
+            'Sign in as $email?',
+            key: const Key('login-phone-confirm'),
+            textAlign: TextAlign.center,
+            style: grid.AppType.heading(),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            changed
+                ? 'This computer was signed in as $previous. Continue only if $email is yours.'
+                : 'Your phone approved this sign-in. Continue only if this is your account.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: changed ? grid.AppPalette.warn : null),
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              FilledButton(
+                key: const Key('login-phone-continue'),
+                autofocus: true,
+                onPressed: () => notifier.confirmPhoneSignIn(true),
+                child: const Text('Continue'),
+              ),
+              TextButton(
+                key: const Key('login-phone-refuse'),
+                onPressed: () => notifier.confirmPhoneSignIn(false),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    // Waiting for a phone to scan the QR.
+    if (notifier.pendingQrLink case final link?) {
+      return _RevealOnShow(
+        child: Column(
+          children: [
+            QrCodeView(
+              key: const Key('login-phone-qr'),
+              data: link,
+              side: 200,
+              semanticLabel: 'QR code to sign in with your phone',
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'On your phone: Harness ▸ Settings ▸ Sign in a computer',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                OutlinedButton(
+                  onPressed: () {
+                    notifier.cancelLogin();
+                    unawaited(notifier.login());
+                  },
+                  child: const Text('Use browser instead'),
+                ),
+                TextButton(
+                  onPressed: notifier.cancelLogin,
+                  style: TextButton.styleFrom(
+                    foregroundColor: grid.AppPalette.textSecondary,
+                  ),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ],
+        ),
       );
     }
 
@@ -731,4 +835,29 @@ class _SignInSheetState extends State<_SignInSheet> {
     if (notifier.canCancelLogin) notifier.cancelLogin();
     Navigator.of(context).pop(false);
   }
+}
+
+/// Scrolls its child into view when it first appears: the QR and its Cancel are taller than the
+/// button they replace, and on a short window they would otherwise land below the fold.
+class _RevealOnShow extends StatefulWidget {
+  const _RevealOnShow({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_RevealOnShow> createState() => _RevealOnShowState();
+}
+
+class _RevealOnShowState extends State<_RevealOnShow> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(Scrollable.ensureVisible(context, alignment: 1));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/harness_cli_runner.dart';
+import 'phone_sign_in.dart';
 import 'sign_in_client.dart';
 
 class CliAuthStatus {
@@ -46,7 +47,7 @@ class CliNotAvailableException implements Exception {
 /// signed-in session, and driving `harness login --json`'s NDJSON event stream when it does not. The
 /// CLI owns the SSO session end to end (`~/.harness/auth/session.json`) — this app never sees, stores,
 /// or refreshes an access token itself.
-class CliLogin implements SignInClient {
+class CliLogin implements SignInClient, PhoneSignInClient {
   final HarnessCliRunner _runner;
   Process? _activeProcess;
   int _loginRevision = 0;
@@ -74,8 +75,22 @@ class CliLogin implements SignInClient {
   /// the CLI's own loopback callback server completes the flow (or throws on failure/cancellation).
   /// The process is killed if [cancel] is called while this is in flight.
   @override
-  Future<void> login({
-    required void Function(String url) onAuthorizeUrl,
+  Future<void> login({required void Function(String url) onAuthorizeUrl}) =>
+      _login(const [], onAuthorizeUrl: onAuthorizeUrl);
+
+  /// `harness login --qr`: the QR arrives as an event, and so does the question of whose account
+  /// approved it — answered with a `yes` or `no` line on the process's standard input.
+  @override
+  Future<void> loginWithPhone({
+    required void Function(String link, int expiresIn) onQr,
+    required Future<bool> Function(String email) onConfirm,
+  }) => _login(const ['--qr'], onQr: onQr, onConfirm: onConfirm);
+
+  Future<void> _login(
+    List<String> extra, {
+    void Function(String url)? onAuthorizeUrl,
+    void Function(String link, int expiresIn)? onQr,
+    Future<bool> Function(String email)? onConfirm,
   }) async {
     // A cancelled spawn can finish after a replacement login has started.
     // Each process owns only its attempt, including its eventual cleanup.
@@ -88,6 +103,7 @@ class CliLogin implements SignInClient {
         'login',
         '--force',
         '--json',
+        ...extra,
         '--entry-point=desktop',
       ]);
     } catch (error) {
@@ -110,6 +126,8 @@ class CliLogin implements SignInClient {
       var gotResult = false;
       var success = false;
       String? message;
+      String? code;
+      var tooOld = false;
       await for (final raw in lines) {
         if (revision != _loginRevision) continue;
         final line = raw.trim();
@@ -122,25 +140,55 @@ class CliLogin implements SignInClient {
         }
         switch (json['type']) {
           case 'authorize_url':
+            // Asked for a QR and given a browser page: a CLI from before `--qr`, which ignores the
+            // flag and starts SSO. Nothing would ever be shown — stop it and say why.
+            if (onQr != null) {
+              tooOld = true;
+              process.kill();
+              break;
+            }
             final url = json['url'];
-            if (url is String) onAuthorizeUrl(url);
+            if (url is String) onAuthorizeUrl?.call(url);
+          case 'qr':
+            final url = json['url'], expiresIn = json['expiresIn'];
+            if (url is String) {
+              onQr?.call(url, expiresIn is int ? expiresIn : 120);
+            }
+          case 'confirm':
+            final email = json['email'];
+            final yes =
+                email is String && onConfirm != null && await onConfirm(email);
+            if (revision != _loginRevision) break;
+            process.stdin.writeln(yes ? 'yes' : 'no');
+            await process.stdin.flush();
           case 'result':
             gotResult = true;
             success = json['status'] == 'success';
             message = json['message'] as String?;
+            code = json['code'] as String?;
         }
       }
       final exitCode = await process.exitCode;
       if (revision != _loginRevision) {
         throw StateError('Sign-in was cancelled.');
       }
-      if (!gotResult || !success) {
-        throw StateError(
-          message ??
-              (exitCode != 0
-                  ? 'Sign-in was cancelled.'
-                  : 'Sign-in did not complete.'),
+      if (tooOld) {
+        throw const PhoneSignInException(
+          'CLI_TOO_OLD',
+          'This computer\'s Harness CLI is too old to sign in with a phone. Use Sign in, or update Harness.',
         );
+      }
+      if (!gotResult || !success) {
+        final text =
+            message ??
+            (exitCode != 0
+                ? 'Sign-in was cancelled.'
+                : 'Sign-in did not complete.');
+        // A phone sign-in says why it ended, so the screen can offer the right next step.
+        if (onQr != null && code != null) {
+          throw PhoneSignInException(code, text);
+        }
+        throw StateError(text);
       }
     } finally {
       if (identical(_activeProcess, process)) _activeProcess = null;

@@ -23,6 +23,7 @@ import '../viewer/viewer_location.dart';
 import '../viewer/group_sync.dart' show GroupSyncOutcome;
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
+import '../auth/phone_sign_in.dart';
 import '../auth/sign_in_client.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
@@ -36,6 +37,7 @@ import '../core/agent_preference.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/engine_availability.dart';
+import '../core/browser_label.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
@@ -2083,6 +2085,21 @@ class AppNotifier extends ChangeNotifier {
   // over. It identifies the current sign-in link; [signingIn] tracks the whole
   // attempt, including CLI startup and workspace restoration.
   String? pendingAuthorizeUrl;
+
+  /// Signing in by a phone (`auth/phone_sign_in.dart`): the QR to show while a phone approves it.
+  String? pendingQrLink;
+
+  /// The account a phone approved this sign-in for, waiting on [confirmPhoneSignIn] — someone
+  /// else's phone may have approved it, and nothing is signed in until the person here says yes.
+  String? pendingConfirmEmail;
+
+  /// Who was signed in here before, so the confirmation can say when the account changes.
+  String? previousAccountEmail;
+
+  Completer<bool>? _phoneConfirm;
+
+  /// Whether this build can sign in by a phone at all (the CLI's, and a viewer's, can).
+  bool get canSignInWithPhone => cliLogin is PhoneSignInClient;
   bool openingLoginBrowser = false;
   String? loginBrowserError;
   int _loginBrowserRevision = 0;
@@ -4524,6 +4541,83 @@ class AppNotifier extends ChangeNotifier {
     if (_authWorkCurrent(revision)) notifyListeners();
   }
 
+  /// Sign in by a QR a signed-in phone approves, then a yes here to the account it names.
+  Future<void> loginWithPhone() async {
+    final client = cliLogin;
+    if (_disposed || signingIn || signingOut || signOutError != null || client is! PhoneSignInClient) return;
+    final wasGuest = isGuest;
+    final revision = _invalidateAuthWork();
+    previousAccountEmail = currentUser?.email;
+    _closedHistory.clear();
+    _monitorHarnesses.clear();
+    _lastError = null;
+    status = AppStatus.bootstrapping;
+    signingIn = true;
+    pendingAuthorizeUrl = null;
+    _clearPhoneSignIn();
+    notifyListeners();
+    try {
+      if (_workspaceCleanup case final cleanup?) {
+        await cleanup;
+        if (!_authWorkCurrent(revision)) return;
+      }
+      await (client as PhoneSignInClient).loginWithPhone(
+        onQr: (link, _) {
+          if (!_authWorkCurrent(revision) || pendingQrLink == link) return;
+          pendingQrLink = link;
+          notifyListeners();
+        },
+        onConfirm: (email) {
+          if (!_authWorkCurrent(revision)) return Future.value(false);
+          final answer = _phoneConfirm = Completer<bool>();
+          pendingConfirmEmail = email;
+          notifyListeners();
+          return answer.future;
+        },
+      );
+      if (!_authWorkCurrent(revision)) return;
+      _loginAuthorized = true;
+      _clearPhoneSignIn();
+      notifyListeners();
+      signedIn = true;
+      await _finishBootstrapSignedIn();
+      if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) return;
+      _guestDeskRestorePending = false;
+    } catch (error) {
+      if (!_authWorkCurrent(revision)) return;
+      status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
+      _lastError = error.toString();
+      _lastErrorRetryable = true;
+      if (wasGuest && _guestDeskRestorePending && !signedIn) {
+        unawaited(_becomeGuest(revision: revision));
+      }
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        _loginAuthorized = false;
+        _clearPhoneSignIn();
+        signingIn = false;
+      }
+    }
+    if (_authWorkCurrent(revision)) notifyListeners();
+  }
+
+  /// The person's answer to "Sign in as [pendingConfirmEmail]?".
+  void confirmPhoneSignIn(bool yes) {
+    final answer = _phoneConfirm;
+    _phoneConfirm = null;
+    pendingConfirmEmail = null;
+    if (answer != null && !answer.isCompleted) answer.complete(yes);
+    notifyListeners();
+  }
+
+  void _clearPhoneSignIn() {
+    pendingQrLink = null;
+    pendingConfirmEmail = null;
+    final answer = _phoneConfirm;
+    _phoneConfirm = null;
+    if (answer != null && !answer.isCompleted) answer.complete(false);
+  }
+
   void _resetLoginBrowser() {
     ++_loginBrowserRevision;
     openingLoginBrowser = false;
@@ -4581,6 +4675,7 @@ class AppNotifier extends ChangeNotifier {
     final revision = _invalidateAuthWork();
     signingIn = false;
     pendingAuthorizeUrl = null;
+    _clearPhoneSignIn();
     status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
     _lastError = null;
     _lastErrorRetryable = false;
@@ -5638,9 +5733,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// How this app names itself in the account's devices.
   String _deviceLabel() {
+    // A browser has no computer name to give: "Chrome on macOS". An existing "Browser" entry is
+    // renamed to this on its next sync (`viewer/device_log_sync.dart`).
+    if (kIsWeb) return browserLabel();
     final host = localHostnameOrNull();
-    if (host != null && host.isNotEmpty) return host;
-    return kIsWeb ? 'Browser · ${defaultTargetPlatform.name}' : 'Desktop app';
+    return host != null && host.isNotEmpty ? host : 'Desktop app';
   }
 
   DateTime? _deviceLogReadAt;
@@ -5745,7 +5842,7 @@ class AppNotifier extends ChangeNotifier {
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
     try {
-      final label = localHostnameOrNull() ?? 'Desktop';
+      final label = _deviceLabel();
       final GroupSyncOutcome outcome = await links.syncGroup(
         machineId,
         label: label,

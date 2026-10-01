@@ -153,6 +153,7 @@ describe('harness auth status --json', () => {
       machineId: 'm_seeded',
       autonomousEnv: 'prod',
       expiresAt: expect.any(Number),
+      method: 'sso',
     })
   })
 
