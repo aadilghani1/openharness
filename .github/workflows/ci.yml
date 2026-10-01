@@ -147,6 +147,11 @@ jobs:
       - name: Real tmux question polling and answer routing
         working-directory: cli
         run: node --import tsx scripts/question-poll-native.ts "$RUNNER_TEMP/question-poll.json"
+      - name: Real tmux byte streaming, paste and resize
+        working-directory: cli
+        env:
+          RUN_REAL_TMUX_STREAM: '1'
+        run: npx vitest run src/lib/tmuxStream.real.spec.ts
       - name: Release unit tests
         run: cargo test --locked --release
       - name: Build static Linux binary
