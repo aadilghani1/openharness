@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { digest } from './admission.js'
 import type { Database } from './database.js'
 import { visibleEvidenceSql } from './visibility.js'
-import { parse, type MemoryAccess, type MemoryRecord, type RecallPacket, type RecallRequest } from './types.js'
+import { MemoryError, parse, type MemoryAccess, type MemoryRecord, type RecallPacket, type RecallRequest } from './types.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 const bindingSchema = z.object({ engine: z.enum(['claude', 'codex']), sessionId: id, projectId: id.nullable(),
@@ -25,6 +25,14 @@ export interface RecallReceipt {
   items: Array<{ id: string; revision: number; current: boolean }>
 }
 export interface PreparedRecall { packet: RecallPacket; receipt: RecallReceipt | null }
+export type RecallFeedbackValue = 'helpful' | 'unhelpful' | null
+export interface RecallFeedback { value: RecallFeedbackValue; version: number; updatedAt: number | null }
+/** Owner-only context. It must never be included in an agent recall packet or receipt. */
+export interface MemoryRecallUse {
+  receiptId: string; revision: number; engine: MemoryDeliveryBinding['engine']; projectId: string | null
+  route: MemoryDeliveryBinding['route']; preparedAt: number; emittedAt: number | null; delivery: 'unverified'
+  feedback: RecallFeedback
+}
 interface Deps {
   db: Database; profileId: string; now(): number
   transaction<T>(run: () => T): T
@@ -47,6 +55,18 @@ export const RECEIPT_SCHEMA = `
     memory_id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(receipt_id,memory_id)
   );
   CREATE INDEX IF NOT EXISTS memory_receipt_revisions ON memory_receipt_items(memory_id,revision);
+  CREATE TABLE IF NOT EXISTS memory_receipt_context (
+    receipt_id TEXT PRIMARY KEY REFERENCES memory_receipts(id) ON DELETE CASCADE,
+    context_key TEXT NOT NULL, session_key TEXT NOT NULL, engine TEXT NOT NULL, project_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS memory_receipt_session ON memory_receipt_context(session_key);
+  CREATE TABLE IF NOT EXISTS memory_recall_feedback (
+    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+    context_key TEXT NOT NULL, receipt_id TEXT NOT NULL REFERENCES memory_receipt_context(receipt_id) ON DELETE CASCADE,
+    value TEXT CHECK(value IN ('helpful','unhelpful')), version INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY(memory_id,revision,context_key)
+  );
+  CREATE INDEX IF NOT EXISTS memory_feedback_receipt ON memory_recall_feedback(receipt_id);
 `
 
 export class MemoryReceipts {
@@ -82,6 +102,12 @@ export class MemoryReceipts {
         queryDigest, contextDigest, packetDigest, bytes, packet.estimatedTokens)
       for (const item of packet.items) this.deps.db.prepare('INSERT INTO memory_receipt_items VALUES(?,?,?)')
         .run(receiptId, item.id, item.revision)
+      // A one-way session key lets privacy changes remove owner-visible activity without storing
+      // another copy of native session identity. Route-independent context prevents duplicate votes.
+      this.deps.db.prepare('INSERT INTO memory_receipt_context VALUES(?,?,?,?,?)').run(receiptId,
+        digest([this.deps.profileId, binding.engine, binding.sessionId, binding.projectId,
+          access.taskId ?? null, access.branchId ?? null, request.conditions ?? {}]),
+        this.sessionKey(binding.engine, binding.sessionId), binding.engine, binding.projectId)
       this.prune()
       return { packet, receipt: { id: receiptId, route: binding.route, preparedAt, emittedAt: null, delivery: 'unverified',
         queryDigest, contextDigest, packetDigest, bytes, estimatedTokens: packet.estimatedTokens,
@@ -121,6 +147,59 @@ export class MemoryReceipts {
     }))
   }
 
+  /** The caller has already verified the owner and current memory's source visibility. */
+  forMemory(memoryId: string, revision: number): MemoryRecallUse[] {
+    // Receiver privacy applies before deduplication and the limit. Old receipts with no recorded
+    // receiver context stay unavailable; migration must not guess their authority from a hash.
+    return this.deps.transaction(() => this.deps.db.prepare(`WITH recent AS (
+      SELECT r.id,r.route,r.prepared_at,r.emitted_at,c.context_key,c.engine,c.project_id,
+        ROW_NUMBER() OVER (PARTITION BY c.context_key ORDER BY r.prepared_at DESC,r.rowid DESC) AS position
+      FROM memory_receipts r JOIN memory_receipt_context c ON c.receipt_id=r.id
+      JOIN memory_receipt_items i ON i.receipt_id=r.id
+      WHERE i.memory_id=? AND i.revision=? AND r.prepared_at>?
+        AND c.session_key NOT IN (SELECT value FROM json_each(?))
+        AND (c.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.included=1)))
+      SELECT r.*,f.value,f.version,f.updated_at FROM recent r LEFT JOIN memory_recall_feedback f
+        ON f.memory_id=? AND f.revision=? AND f.context_key=r.context_key
+        AND EXISTS (SELECT 1 FROM memory_receipts rated WHERE rated.id=f.receipt_id AND rated.prepared_at>?)
+      WHERE r.position=1 ORDER BY r.prepared_at DESC,r.id DESC LIMIT 10`)
+      .all(memoryId, revision, this.deps.now() - RETENTION_MS, this.privateSessionKeys(),
+        memoryId, revision, this.deps.now() - RETENTION_MS).map(row => ({
+        receiptId: String(row.id), revision, engine: row.engine as MemoryDeliveryBinding['engine'],
+        projectId: row.project_id === null ? null : String(row.project_id), route: row.route as MemoryDeliveryBinding['route'],
+        preparedAt: Number(row.prepared_at), emittedAt: row.emitted_at === null ? null : Number(row.emitted_at),
+        delivery: 'unverified', feedback: feedbackFrom(row),
+      })))
+  }
+
+  /** Called only by the owner preview/apply path. A rating is neither truth support nor delivery proof. */
+  feedback(memoryId: string, revision: number, receiptId: string, value: RecallFeedbackValue, expected: number): RecallFeedback {
+    const context = this.deps.db.prepare(`SELECT c.context_key FROM memory_receipt_context c
+      JOIN memory_receipts r ON r.id=c.receipt_id JOIN memory_receipt_items i ON i.receipt_id=r.id
+      WHERE r.id=? AND i.memory_id=? AND i.revision=? AND r.prepared_at>?
+        AND c.session_key NOT IN (SELECT value FROM json_each(?))
+        AND (c.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.included=1))`)
+      .get(receiptId, memoryId, revision, this.deps.now() - RETENTION_MS, this.privateSessionKeys())
+    if (!context) throw new MemoryError('recall_unavailable')
+    const previous = feedbackFrom(this.deps.db.prepare(`SELECT f.value,f.version,f.updated_at FROM memory_recall_feedback f
+      JOIN memory_receipts r ON r.id=f.receipt_id
+      WHERE f.memory_id=? AND f.revision=? AND f.context_key=? AND r.prepared_at>?`)
+      .get(memoryId, revision, context.context_key, this.deps.now() - RETENTION_MS))
+    if (previous.version !== expected) throw new MemoryError('feedback_changed')
+    if (previous.value === value) return previous
+    const next = { value, version: previous.version + 1, updatedAt: this.deps.now() }
+    this.deps.db.prepare(`INSERT INTO memory_recall_feedback(memory_id,revision,context_key,receipt_id,value,version,updated_at)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(memory_id,revision,context_key) DO UPDATE SET
+        receipt_id=excluded.receipt_id,value=excluded.value,version=excluded.version,updated_at=excluded.updated_at`)
+      .run(memoryId, revision, context.context_key, receiptId, value, next.version, next.updatedAt)
+    return next
+  }
+
+  /** Keep opaque withdrawal receipts, but remove receiver activity and its feedback permanently. */
+  withholdSession(engine: string, sessionId: string): void {
+    this.deps.db.prepare('DELETE FROM memory_receipt_context WHERE session_key=?').run(this.sessionKey(engine, sessionId))
+  }
+
   prune(): void {
     this.deps.db.prepare('DELETE FROM memory_receipts WHERE prepared_at<=?').run(this.deps.now() - RETENTION_MS)
     this.deps.db.prepare(`DELETE FROM memory_receipts WHERE id IN
@@ -142,6 +221,18 @@ export class MemoryReceipts {
   }
 
   private key(binding: MemoryDeliveryBinding): string { return digest([this.deps.profileId, binding]) }
+  private sessionKey(engine: string, sessionId: string): string { return digest([this.deps.profileId, engine, sessionId]) }
+  private privateSessionKeys(): string {
+    // Read the original policy, including changes made by an earlier daemon version that does
+    // not know about receipt context. This check and the activity read share a SQLite snapshot.
+    return JSON.stringify(this.deps.db.prepare('SELECT engine,session_id FROM memory_session_policy WHERE included=0').all()
+      .map(row => this.sessionKey(String(row.engine), String(row.session_id))))
+  }
+}
+
+function feedbackFrom(row?: Record<string, unknown>): RecallFeedback {
+  return { value: (row?.value ?? null) as RecallFeedbackValue, version: Number(row?.version ?? 0),
+    updatedAt: row?.updated_at == null ? null : Number(row.updated_at) }
 }
 
 function empty(status: RecallPacket['status']): RecallPacket { return { status, items: [], text: '', estimatedTokens: 0 } }

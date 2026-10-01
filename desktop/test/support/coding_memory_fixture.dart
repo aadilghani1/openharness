@@ -3,6 +3,30 @@ import 'dart:convert';
 
 import 'package:harness/companions/coding_memory_connection.dart';
 
+Map<String, dynamic> syntheticRecall({
+  String id = 'synthetic-receipt',
+  String? value,
+}) => {
+  'receiptId': id,
+  'revision': 1,
+  'engine': 'codex',
+  'route': 'prompt_hook',
+  'delivery': 'unverified',
+  'preparedAt': 1790762400000,
+  'emittedAt': 1790762401000,
+  'canFeedback': true,
+  'project': {
+    'id': 'synthetic-project',
+    'name': 'editor',
+    'location': '/synthetic/work/editor',
+  },
+  'feedback': {
+    'value': value,
+    'version': value == null ? 0 : 1,
+    'updatedAt': value == null ? null : 1790762402000,
+  },
+};
+
 Map<String, dynamic> syntheticMemory({
   int revision = 1,
   String? claim,
@@ -62,6 +86,7 @@ class MemoryFixture extends CodingMemoryConnection {
     },
   ];
   final scopeChanges = <Map<String, dynamic>>[];
+  final recalls = <Map<String, dynamic>>[];
 
   Map<String, dynamic>? get project => projects
       .where((p) => p['id'] == (record['scope'] as Map)['projectId'])
@@ -72,8 +97,13 @@ class MemoryFixture extends CodingMemoryConnection {
     calls.add(
       Map<String, dynamic>.from(jsonDecode(jsonEncode(payload)) as Map),
     );
-    if (handle != null) return handle!(payload);
-    return respond(payload);
+    // Match the real connection's refusal of replies from an obsolete owner or
+    // connection. The production transport captures this after initial connect.
+    final start = epoch;
+    final result = handle != null ? await handle!(payload) : respond(payload);
+    if (!valid) throw const CodingMemoryFailure('OWNER_CHANGED');
+    if (start != epoch) throw const CodingMemoryFailure('CONNECTION_CHANGED');
+    return result;
   }
 
   Map<String, dynamic> respond(Map<String, dynamic> payload) {
@@ -107,6 +137,7 @@ class MemoryFixture extends CodingMemoryConnection {
                 'support': null,
                 'project': project,
                 'scopeChanges': scopeChanges,
+                'recalls': recalls,
                 'sources': [
                   {
                     'id': 'source-fixture',
@@ -166,6 +197,14 @@ class MemoryFixture extends CodingMemoryConnection {
                       (p) => p['id'] == previewed!['projectId'],
                     ),
                   }
+                : previewed!['kind'] == 'feedback'
+                ? {
+                    'feedback': {
+                      'value': previewed!['value'],
+                      'version': (previewed!['expected'] as int) + 1,
+                      'updatedAt': 1790762600000,
+                    },
+                  }
                 : {
                     'record': {...record, ...previewed!['fields'] as Map},
                   },
@@ -193,6 +232,15 @@ class MemoryFixture extends CodingMemoryConnection {
             'changedAt': 1790762400000,
             'actor': 'owner',
           });
+        } else if (previewed!['kind'] == 'feedback') {
+          final recall = recalls.singleWhere(
+            (r) => r['receiptId'] == previewed!['receiptId'],
+          );
+          recall['feedback'] = {
+            'value': previewed!['value'],
+            'version': (previewed!['expected'] as int) + 1,
+            'updatedAt': 1790762600000,
+          };
         } else {
           record = {
             ...record,

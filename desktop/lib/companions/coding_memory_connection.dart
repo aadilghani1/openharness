@@ -133,6 +133,8 @@ String codingMemoryError(Object error) => switch (error) {
   CodingMemoryFailure(code: 'PREVIEW_REQUIRED' || 'CONNECTION_CHANGED') => 'This preview expired or the connection changed. Review it again before applying.',
   CodingMemoryFailure(code: 'NOT_FOUND') =>
     'This memory was removed or is no longer available.',
+  CodingMemoryFailure(code: 'FEEDBACK_CHANGED') => 'Your feedback changed elsewhere. Refresh recent recall before changing it again.',
+  CodingMemoryFailure(code: 'RECALL_UNAVAILABLE') => 'That recall is no longer available. Refresh recent recall to see the current history.',
   CodingMemoryFailure(code: 'PROJECT_UNAVAILABLE') =>
     'That project is no longer available for memory. Choose another project.',
   CodingMemoryFailure(code: 'SCOPE_NARROWING_ONLY' || 'MEMORY_NOT_ACTIVE') => 'This memory can no longer be limited this way. Go back and refresh its details.',

@@ -10,6 +10,7 @@ import '../widgets/desktop_prompt_surface.dart';
 import 'coding_memory_connection.dart';
 import 'coding_memory_library.dart';
 import 'coding_memory_project_picker.dart';
+import 'coding_memory_recall_history.dart';
 
 /// The collection's owner library; it does not send chat or terminal input.
 class CodingMemoryView extends StatefulWidget {
@@ -547,6 +548,26 @@ class _MemoryDialogState extends State<_MemoryDialog> {
       Navigator.of(context).pop();
     }
   });
+  Future<void> _feedback(Map<String, dynamic> recall, String? value) =>
+      _run(() async {
+        final snapshot = library.changes;
+        final id = record['id'];
+        final prepared = await library.preview({
+          'kind': 'feedback',
+          'id': id,
+          'revision': record['revision'],
+          'receiptId': recall['receiptId'],
+          'value': value,
+          'expected': memoryMap(recall['feedback'])['version'],
+        });
+        if (!mounted || !library.valid || snapshot != library.changes) return;
+        // The explicit rating click is the user action. Spend the bound
+        // capability once; do not retry writes after an uncertain response.
+        await library.apply(prepared);
+        final result = await library.detail(id as String);
+        if (!mounted || !library.valid || snapshot != library.changes) return;
+        detail = result;
+      });
   void _close() {
     if (!busy) Navigator.of(context).pop();
   }
@@ -747,6 +768,15 @@ class _MemoryDialogState extends State<_MemoryDialog> {
             'You limited where this memory applies on ${_date(context, memoryMap((detail!['scopeChanges'] as List).first)['changedAt'])}. Its evidence is unchanged.',
             small: true,
           ),
+        if (detail!['recalls'] is List) ...[
+          const SizedBox(height: 20),
+          CodingMemoryRecallHistory(
+            recalls: (detail!['recalls'] as List).map(memoryMap).toList(),
+            busy: busy,
+            onFeedback: _feedback,
+            onRefresh: () => unawaited(_load()),
+          ),
+        ],
         const SizedBox(height: 20),
         Text(
           'Retained evidence',

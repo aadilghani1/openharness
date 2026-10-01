@@ -299,6 +299,7 @@ export class CodingMemoryStore {
         last_error='session_privacy_changed', updated_at=? WHERE stream_id IN
         (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ${TERMINAL_JOB_STATES}`)
         .run(this.now(), engine, sessionId)
+      if (!included) this.receipts.withholdSession(engine, sessionId)
       // Derived input can belong to a different stream while retaining this session's source roots.
       if (!included) this.cancelHiddenSources()
       else this.reconcileVisibleConflicts()
@@ -569,7 +570,9 @@ export class CodingMemoryStore {
       ORDER BY revision DESC LIMIT 20`).all(id).map(row => ({ revision: Number(row.revision),
         from: JSON.parse(String(row.from_scope)), to: JSON.parse(String(row.to_scope)), changedAt: Number(row.changed_at), actor: 'owner' }))
     return { record, sources, support: this.support(id, access), scopeChanges,
-      project: record.scope.projectId ? this.projectLabel(record.scope.projectId) : null }
+      project: record.scope.projectId ? this.projectLabel(record.scope.projectId) : null,
+      recalls: this.receipts.forMemory(record.id, record.revision).map(({ projectId, ...recall }) => ({ ...recall,
+        project: projectId ? this.projectLabel(projectId) : null, canFeedback: record.state === 'active' && this.current(record) })) }
   }
 
   libraryProjects(owner: string, input: LibraryProjectQuery = {}): LibraryProjects {
@@ -677,6 +680,13 @@ export class CodingMemoryStore {
       case 'correct': return { record: summarize(this.libraryCorrect(owner, command.id, command.revision, command.fields, command.supersede)) }
       case 'forget': return this.libraryForget(owner, command.id, command.revision)
       case 'narrow': return this.libraryNarrow(owner, command.id, command.revision, command.projectId)
+      case 'feedback': {
+        const access = this.ownerRecordAccess(command.id)
+        if (!access) throw new MemoryError('not_found')
+        const record = this.requireRecord(command.id, command.revision, access)
+        if (record.state !== 'active' || !this.current(record)) throw new MemoryError('recall_unavailable')
+        return { feedback: this.receipts.feedback(record.id, record.revision, command.receiptId, command.value, command.expected) }
+      }
       case 'configure': return { preferences: this.changePreferences(command.preferences, command.expected, enabled) }
     }
   }
