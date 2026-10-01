@@ -322,8 +322,8 @@ pub struct Tab {
     /// automatic-rename off: the window has had the name tmux gives one when it is made
     /// (default_window_name: a shell by its command), and keeps it.
     pub first_named: bool,
-    /// The desk's layout document for this tab, kept whole: a preset chosen here updates its entry
-    /// and leaves the sizes other windows saved alone.
+    /// The desk's complete layout document. An explicit edit replaces the
+    /// current count's normalized slots, retaining other counts' saved layouts.
     pub layout: Value,
     /// Last layout observed on the desk, separate from the local edit awaiting its reply.
     pub desk_layout: Value,
@@ -331,6 +331,9 @@ pub struct Tab {
     desk_panes: Vec<(String, String)>,
     /// A named choice awaiting publication, separate from the last observed desk document.
     desk_preset: Option<(usize, &'static str)>,
+    /// Unrounded shared slots and their local pane identities, independent of
+    /// tmux pane numbering and the current terminal dimensions.
+    shared_geometry: Option<crate::desk_layout::Geometry>,
 }
 
 impl Tab {
@@ -342,7 +345,23 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
+    }
+    fn fit_layout(&mut self, size: (u16, u16), status: layout::Status) -> bool {
+        let Some(root) = self.root.as_mut() else { return false };
+        let changed = root.size() != size || root.status != status;
+        root.status = status;
+        if changed && !self.shared_geometry.as_mut().is_some_and(|g| g.fit(root, size.0, size.1, status)) {
+            root.resize(size.0, size.1);
+        }
+        changed
+    }
+
+    fn read_shared_layout(&mut self, ids: &[u64], w: u16, h: u16) {
+        let preset = preset_from_desk(crate::desk_layout::preset_id(&self.layout, ids.len()), ids.len());
+        let (root, geometry) = desk_geometry(&self.layout, preset, ids, w, h).unzip();
+        self.root = root;
+        self.shared_geometry = geometry;
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -1984,9 +2003,8 @@ impl App {
             if !own && tab.size.is_none() { return }
             let status = app.pane_status(tab);
             let size = tab.size.unwrap_or(default);
-            let Some(root) = tab.root.as_mut() else { return };
-            root.status = status;
-            if root.size() != size { root.resize(size.0, size.1) }
+            tab.fit_layout(size, status);
+            let Some(root) = tab.root.as_ref() else { return };
             let area = Rect::new(0, 0, size.0, size.1);
             let mut out = Vec::new();
             match tab.focus.filter(|_| tab.zoomed) { Some(f) => out.push((f, area)), None => root.rects(area, &mut out) }
@@ -2034,10 +2052,9 @@ impl App {
             let size = if manual { self.tabs[i].size.or_else(|| self.tabs[i].root.as_ref().map(|r| r.size())) }
                 else if creating && self.tabs[i].size.is_some() { self.tabs[i].size }
                 else { self.tabs[i].size = None; (onscreen && i == self.active).then_some((body.width, body.height)) };
-            if let Some(root) = self.tabs[i].root.as_mut() {
-                root.status = status;
-                if let Some(size) = size { if root.size() != size { root.resize(size.0, size.1); resized.push(i) } }
-            }
+            if let Some(size) = size {
+                if self.tabs[i].fit_layout(size, status) { resized.push(i) }
+            } else if let Some(root) = self.tabs[i].root.as_mut() { root.status = status; }
         }
         for i in resized {
             let id = self.tabs[i].id.clone();
@@ -4587,11 +4604,24 @@ impl App {
     pub fn layout_changed(&mut self, t: usize) {
         // A desk window's layout changed here: every terminal lays it out so (sent once the
         // loop comes round).
-        if self.session_desk { if let Some(tab) = self.tabs.get(t).filter(|t| t.on_desk) { self.desk_layouts.insert(tab.id.clone()); } }
+        if self.session_desk { if let Some(tab) = self.tabs.get_mut(t).filter(|t| t.on_desk) {
+            if let Some(root) = &tab.root {
+                if !tab.shared_geometry.as_ref().is_some_and(|g| g.matches(root)) {
+                    tab.shared_geometry = Some(crate::desk_layout::Geometry::capture(root));
+                }
+            }
+            self.desk_layouts.insert(tab.id.clone());
+        } }
+        self.view_layout_changed(t)
+    }
+
+    /// Zoom, theme and viewport dimensions affect this client only.
+    pub fn view_layout_changed(&mut self, t: usize) {
         crate::commands::notify(self, "window-layout-changed", Some(t), None)
     }
 
-    /// The desk windows whose layout changed here: their tmux layout to the desk (tab.layout).
+    /// Publish explicit geometry and its matching pane-reference order together.
+    /// The tmux string remains as a fallback for older hn clients.
     pub fn send_desk_layouts(&mut self) {
         if self.desk_layouts.is_empty() || !self.session_desk { return }
         let mut ops = Vec::new();
@@ -4601,6 +4631,11 @@ impl App {
             if !tab.layout.is_object() { tab.layout = json!({}) }
             let before = tab.layout.clone();
             tab.layout["tmux"] = json!(root.to_tmux());
+            let geometry = tab.shared_geometry.get_or_insert_with(|| crate::desk_layout::Geometry::capture(root));
+            // Shell panes are local; do not assign their slots to remote harnesses.
+            let shared = geometry.slots.iter().all(|(id, _)| self.panes.get(id)
+                .is_some_and(|p| !crate::local::is_local(&p.machine_id)));
+            if shared { geometry.write(&mut tab.layout); }
             // C-b Space and select-layout use this path too. Keep the desktop's
             // corresponding shape current, instead of leaving an older preset behind.
             if let Some((count, preset)) = tab.desk_preset.take() {
@@ -4608,9 +4643,9 @@ impl App {
                 tab.layout["presets"][count.to_string()] = json!(preset);
             }
             if tab.layout != before { ops.push(json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout })); }
-            // Desktop uses the shared list in screen order, not our stable pane numbers.
-            // Publish both together, including swaps, rotations and mirrored layouts.
-            let panes: Vec<_> = desk_pane_ids(root).iter().filter_map(|id| self.panes.get(id))
+            // The slot order and the shared reference order must agree, even
+            // for non-spatial desktop splits or mirrored tmux layouts.
+            let panes: Vec<_> = geometry.slots.iter().filter_map(|(id, _)| self.panes.get(id))
                 .filter(|p| !crate::local::is_local(&p.machine_id))
                 .map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
             if panes != tab.desk_panes {
@@ -4958,10 +4993,9 @@ impl App {
     fn fit_panes_of(&mut self, tab: usize) -> bool {
         let body = self.body();
         let status = self.tabs.get(tab).map(|t| self.pane_status(t)).unwrap_or_default();
-        match self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) {
-            Some(root) => { root.status = status; if root.size() != (body.width, body.height) { root.resize(body.width, body.height) } true }
-            None => false,
-        }
+        let Some(tab) = self.tabs.get_mut(tab).filter(|t| t.root.is_some()) else { return false };
+        tab.fit_layout((body.width, body.height), status);
+        true
     }
 
     /// resize-pane -x/-y: the pane made that many cells wide or lines tall (its title row, when
@@ -5086,11 +5120,23 @@ impl App {
         self.arrange_tab(index, layout::Named::ALL[at]);
     }
 
-    pub fn apply_preset(&mut self, preset: Preset) { let i = self.active; self.apply_preset_at(i, preset) }
-
-    /// select-layout -t: that window's panes in that shape.
-    pub fn apply_preset_at(&mut self, index: usize, preset: Preset) {
-        self.arrange_tab(index, layout::Named::of(preset));
+    /// The same concrete choices as the desktop palette. Native select-layout
+    /// and C-b Space keep tmux's own catalogue and publish their exact geometry.
+    pub fn apply_shared_preset(&mut self, id: &str) {
+        let ids = self.tab().panes();
+        let Some(preset) = crate::desk_layout::choices(ids.len()).into_iter().find(|p| *p == id) else { return };
+        let Some(tiles) = crate::desk_layout::preset_tiles(preset, ids.len()) else { return };
+        let body = self.body();
+        let status = self.pane_status(self.tab());
+        let Some((root, geometry)) = crate::desk_layout::Geometry::from_tiles(tiles, &ids, body.width, body.height, status) else { return };
+        let tab = self.tab_mut();
+        tab.root = Some(root);
+        tab.shared_geometry = Some(geometry);
+        tab.zoomed = false;
+        tab.layout_at = None;
+        tab.desk_preset = Some((ids.len(), preset));
+        self.fit_panes();
+        self.layout_changed(self.active);
     }
 
     /// `tui.toml`'s `[look]` table: set each choice as a global option, so `hn show` reflects it
@@ -5151,7 +5197,7 @@ impl App {
                     let _ = self.options.set("@hn-theme", None, &unset, "", 0);
                     self.sync_accent();
                     let i = self.active;
-                    self.layout_changed(i);
+                    self.view_layout_changed(i);
                     self.persist_look();
                     return "theme: the terminal's own".into();
                 }
@@ -5175,7 +5221,7 @@ impl App {
         // (The bar and the frames change the panes' room: every program is told its size.)
         if matches!(knob, "status_bar" | "border_style") { self.redraw_all = true; self.fit_panes() }
         let i = self.active;
-        self.layout_changed(i);
+        self.view_layout_changed(i);
         self.persist_look();
         message
     }
@@ -5270,7 +5316,6 @@ impl App {
             seen.push(id.clone());
             let name = row.get("name").and_then(Value::as_str).unwrap_or("tab").to_string();
             let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false);
-            let preset = preset_from_desk(row.pointer(&format!("/layout/presets/{}", panes.len())).and_then(Value::as_str).unwrap_or(""), panes.len());
             let layout_doc = row.get("layout").cloned().unwrap_or(json!({}));
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
@@ -5300,13 +5345,23 @@ impl App {
                         let ids: Vec<u64> = panes.iter().filter_map(|key| have.iter().find(|(_, k)| k == key).map(|(id, _)| *id)).collect();
                         if relayout {
                             let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                            tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                            tab.read_shared_layout(&ids, w, h);
                             if reordered { tab.order = ids; }
                         } else if reordered {
                             // A desktop drag changes only the sequence. Keep our exact
                             // split sizes and the focused harness while changing places.
                             if let Some(root) = &mut tab.root {
-                                if desk_pane_ids(root) != ids { desk_reorder(root, &ids); tab.order = ids; }
+                                if let Some(tiles) = tab.shared_geometry.as_ref().map(|g| g.slots.iter().map(|(_, t)| *t).collect())
+                                    .or_else(|| crate::desk_layout::saved_tiles(&tab.layout, ids.len())) {
+                                    if let Some((next, geometry)) = crate::desk_layout::Geometry::from_tiles(tiles, &ids, root.size().0, root.size().1, root.status) {
+                                        *root = next;
+                                        tab.shared_geometry = Some(geometry);
+                                    }
+                                } else {
+                                    desk_reorder(root, &ids);
+                                    tab.shared_geometry = Some(crate::desk_layout::Geometry::capture(root));
+                                }
+                                tab.order = ids;
                             }
                         }
                         continue;
@@ -5324,7 +5379,7 @@ impl App {
                     }).collect();
                     let tab = &mut self.tabs[index];
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.read_shared_layout(&ids, w, h);
                     tab.order = ids.clone();
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
@@ -5337,13 +5392,14 @@ impl App {
                     let have = tab.panes();
                     let ids: Vec<_> = panes.iter().filter_map(|(m, a)| have.iter().copied().find(|id|
                         self.panes.get(id).is_some_and(|p| &p.machine_id == m && &p.agent_id == a))).collect();
-                    if ids.len() == have.len() && ids.len() == panes.len() {
-                        if let Some(root) = &mut tab.root { desk_reorder(root, &ids); }
-                        tab.order = ids;
-                    }
                     tab.desk_panes = panes.clone();
                     tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
+                    if ids.len() == have.len() && ids.len() == panes.len() {
+                        let (w, h) = tab.root.as_ref().unwrap().size();
+                        tab.read_shared_layout(&ids, w, h);
+                        tab.order = ids;
+                    }
                     if named { tab.name = name; tab.named = true }
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -5360,7 +5416,7 @@ impl App {
                     tab.desk_layout = layout_doc.clone();
                     tab.layout = layout_doc;
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = desk_root(&tab.layout, preset, &ids, w, h);
+                    tab.read_shared_layout(&ids, w, h);
                     tab.order = ids.clone();
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
@@ -5767,13 +5823,29 @@ pub const DESK_MAIN: (&str, &str) = ("50%", "50%");
 
 /// A desk tab's panes laid out: as another terminal left them (its tmux layout, fitted to this
 /// one's size), else its preset for that many panes.
+#[cfg(test)]
 fn desk_root(doc: &Value, preset: Preset, ids: &[u64], w: u16, h: u16) -> Option<Node> {
-    let mut root = doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
-        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))?;
+    desk_geometry(doc, preset, ids, w, h).map(|(root, _)| root)
+}
+
+fn desk_geometry(doc: &Value, preset: Preset, ids: &[u64], w: u16, h: u16) -> Option<(Node, crate::desk_layout::Geometry)> {
+    use crate::desk_layout::{self, Geometry};
+    let status = layout::Status::Top;
+    if let Some(geometry) = desk_layout::saved_tiles(doc, ids.len())
+        .and_then(|tiles| Geometry::from_tiles(tiles, ids, w, h, status)) { return Some(geometry) }
+    if let Some(mut root) = doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h)) {
+        desk_reorder(&mut root, ids);
+        let geometry = Geometry::capture(&root);
+        return Some((root, geometry));
+    }
+    if let Some(geometry) = desk_layout::preset_tiles(desk_layout::preset_id(doc, ids.len()), ids.len())
+        .and_then(|tiles| Geometry::from_tiles(tiles, ids, w, h, status)) { return Some(geometry) }
+    let mut root = layout::arrange(layout::Named::of(preset), ids, w, h, status, DESK_MAIN, ("0", "0"))?;
     // Numeric pane IDs belong to one hn server. The desk's ordered identities are
     // authoritative even if a saved native layout has stale or coincidentally matching IDs.
     desk_reorder(&mut root, ids);
-    Some(root)
+    let geometry = Geometry::capture(&root);
+    Some((root, geometry))
 }
 
 /// Desktop numbers its tiles across the top, then down; tmux tree traversal and
@@ -5803,15 +5875,19 @@ fn preset_from_desk(id: &str, count: usize) -> Preset {
     }
 }
 
-/// Native layouts take precedence when present. Their omission by a desktop save
-/// is not an instruction to reset the terminal; only a changed current-count preset is.
+/// Compare only this pane count's consumed geometry. Normalized slots take
+/// precedence; native strings and presets support clients predating them.
 fn desk_layout_changed(before: &Value, after: &Value, count: usize) -> bool {
+    let tiles = |doc| crate::desk_layout::saved_tiles(doc, count);
+    if tiles(after).is_some() { return tiles(before) != tiles(after) }
     if let Some(native) = after.get("tmux").and_then(Value::as_str) {
         return before.get("tmux").and_then(Value::as_str) != Some(native);
     }
-    let path = format!("/presets/{count}");
-    let preset = |doc: &Value| preset_from_desk(doc.pointer(&path).and_then(Value::as_str).unwrap_or(""), count);
-    preset(before) != preset(after)
+    // Older desktop versions can omit sizes/tmux on an unrelated save. Only
+    // their changed preset is an edit; new clients send geometry for resets too.
+    let shape = |doc: &Value| doc.get("presets").and_then(|p| p.get(count.to_string()))
+        .and_then(Value::as_str).and_then(|id| crate::desk_layout::preset_tiles(id, count));
+    shape(before) != shape(after)
 }
 
 /// Desktop presets with the same split topology. Unsupported shapes retain their
@@ -6300,5 +6376,84 @@ mod desk_layout_tests {
         app.desk_layouts.clear();
         app.apply_desk(&desk(4, json!({"presets":{"3":"columns"}})));
         assert_ne!(geometry(&app), chosen);
+    }
+
+    #[test]
+    fn desktop_manual_slot_order_survives_resize_focus_zoom_and_remote_moves() {
+        let mut app = fixture();
+        app.tabs[0].focus = Some(2);
+        app.tabs[0].zoomed = true;
+        // Splitting the first column makes slots 1 and 2 vertical siblings;
+        // slot 3 is on the right. Index order is not screen reading order.
+        let tiles = json!([[0.0,0.0,0.3,0.7],[0.0,0.7,0.3,1.0],[0.3,0.0,1.0,1.0]]);
+        let layout = json!({"presets":{"3":"cols3"},"sizes":{"3:manual":tiles},"tmux":"obsolete"});
+        let mut update = desk(2, layout.clone());
+        app.apply_desk(&update);
+        let original = geometry(&app);
+        assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), [1, 3, 2]);
+        assert_eq!(app.tabs[0].focus, Some(2));
+        assert!(app.tabs[0].zoomed);
+        for size in [(80, 24), (240, 80), (100, 30), (120, 36)] {
+            app.size = size;
+            app.fit_panes();
+            app.notify_changes();
+        }
+        assert_eq!(geometry(&app), original);
+        assert!(app.desk_layouts.is_empty());
+        assert_eq!(app.tabs[0].layout, layout);
+        update["revision"] = json!(3);
+        update["tabs"][0]["panes"].as_array_mut().unwrap().swap(0, 1);
+        app.apply_desk(&update);
+        assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), [2, 3, 1]);
+        assert_eq!(app.tabs[0].focus, Some(2));
+        assert!(app.panes.values().all(|p| matches!(p.phase, Phase::Live)));
+    }
+
+    #[test]
+    fn exact_local_preset_survives_queued_resize_and_old_snapshot() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read;
+        app.apply_shared_preset("mainRight");
+        app.size = (83, 27);
+        app.fit_panes();
+        app.apply_desk(&desk(2, json!({"presets":{"3":"rows"}})));
+        app.send_desk_layouts();
+        assert_eq!(app.tabs[0].layout["presets"]["3"], "mainRight");
+        assert_eq!(crate::desk_layout::saved_tiles(&app.tabs[0].layout, 3), crate::desk_layout::preset_tiles("mainRight", 3));
+        assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), [1, 2, 3]);
+        let sent = app.tabs[0].layout.clone();
+        app.apply_desk(&desk(3, sent.clone()));
+        app.apply_desk(&desk(4, json!({"presets":{"3":"mainRight"},"sizes":{}})));
+        // Old desktop metadata cannot reset the exact cut. An explicit new
+        // desktop divider edit, even with the same preset, still applies.
+        let mut resized = sent;
+        resized["sizes"]["3:manual"] = json!([[0.0,0.0,0.2,0.6],[0.2,0.0,1.0,1.0],[0.0,0.6,0.2,1.0]]);
+        app.apply_desk(&desk(5, resized));
+        assert_eq!(app.tabs[0].shared_geometry.as_ref().unwrap().slots[0].1[2], 0.2);
+    }
+
+    #[test]
+    fn zoom_and_local_chrome_never_publish_layouts() {
+        let mut app = fixture();
+        crate::input::run(&mut app, "zoom");
+        assert!(app.tabs[0].zoomed);
+        app.view_layout_changed(0);
+        assert!(app.desk_layouts.is_empty());
+        crate::input::run(&mut app, "zoom");
+        assert!(!app.tabs[0].zoomed);
+        assert!(app.desk_layouts.is_empty());
+    }
+
+    #[test]
+    fn an_explicit_remote_default_replaces_a_read_only_clients_local_choice() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Read;
+        app.tabs[0].layout = json!({});
+        app.tabs[0].desk_layout = json!({});
+        app.apply_shared_preset("rows");
+        app.send_desk_layouts();
+        app.apply_desk(&desk(2, json!({"presets":{"3":"cols3"}})));
+        let slots = app.tabs[0].shared_geometry.as_ref().unwrap();
+        assert!(slots.slots.iter().all(|(_, tile)| tile[1] == 0.0 && tile[3] == 1.0));
     }
 }

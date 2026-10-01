@@ -12344,6 +12344,44 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// Freeze a shared tab's geometry once. Window dimensions, font size and
+  /// zoom only scale/scroll these slots; they never choose a new arrangement.
+  /// A preset choice clears the current count's sizes and resolves here again.
+  void _freezeDeskLayouts() {
+    if (!_desk.enabled) return;
+    for (final swarm in swarms) {
+      final count = swarm.panes.length;
+      // Viewers and drafts are local. Their slots cannot be assigned to the
+      // desk's agent-only pane list. The desk currently accepts up to 9 panes.
+      if (!_deskTracks(swarm) ||
+          count < 2 ||
+          count > 9 ||
+          swarm.panes.any((pane) => pane.agentId == null)) {
+        continue;
+      }
+      final manual = swarm.manualLayout;
+      if (manual != null) {
+        final filled = manual.fillRowEnds();
+        if (!identical(filled, manual)) {
+          swarm.savePaneSizes('$count:manual', filled);
+        }
+        continue;
+      }
+      final preset = swarm.presets[count] ?? PanePreset.defaultFor(count)!;
+      final rendered = swarm.arranged?.tiles.length == count
+          ? swarm.arranged
+          : null;
+      final saved = swarm.paneSizes.entries
+          .where((e) => e.key.startsWith('$count:${preset.id}:'))
+          .map((e) => e.value)
+          .firstOrNull;
+      final arrangement =
+          (rendered ?? saved ?? PaneArrangement(preset.tilesFor(count)))
+              .fillRowEnds();
+      swarm.savePaneSizes('$count:manual', arrangement);
+    }
+  }
+
   /// The desk's layout for a tab, made this window's: presets the shape
   /// supports, arrangements whose tile count matches their key. Replaces
   /// what was there — a layout is one thing, not a merge of two.
@@ -12570,7 +12608,7 @@ class AppNotifier extends ChangeNotifier {
   /// Make `swarms` say what [target] says, and no more: tabs the desk closed go
   /// (their streams released unless another tab still shows them), tabs it
   /// opened arrive as intent and attach as their machines answer, names the
-  /// person chose follow, order follows. Focus, zoom, sizes, pins, viewers and
+  /// person chose follow, order follows. Focus, zoom, pins, viewers and
   /// this window's own local-only tabs are left exactly where they were.
   ///
   /// [believed] is the desk as this window last knew it. A tab's pane order is
@@ -12823,6 +12861,7 @@ class AppNotifier extends ChangeNotifier {
     });
     _layoutRevision++;
     _announceOpenPanesToDial();
+    _freezeDeskLayouts();
     _deskQueueDiff();
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
     if (saved.isEmpty) return;

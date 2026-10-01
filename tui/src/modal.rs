@@ -9,7 +9,6 @@ use serde_json::Value;
 use crate::app::App;
 use crate::terminal_themes::TERMINAL_THEMES;
 use crate::fleet::{ago, Reach, State};
-use crate::layout::Preset;
 use crate::picker::{Picker, Row};
 use crate::theme::{self, engine_label, engine_mark, fg, state_mark};
 
@@ -669,8 +668,9 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
     }).collect()
 }
 
-pub fn layout_rows() -> Vec<Row> {
-    Preset::ALL.iter().enumerate().map(|(i, (_, name, detail))| Row::new(i.to_string(), *name).detail(vec![span(*detail, fg(theme::MUTED))])).collect()
+pub fn layout_rows(count: usize) -> Vec<Row> {
+    crate::desk_layout::choices(count).into_iter()
+        .map(|id| Row::new(id, crate::desk_layout::label(id))).collect()
 }
 
 /// `hn theme`: every choice in the config file's `[look]` table, one per row, the current value

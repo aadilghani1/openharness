@@ -33,6 +33,7 @@ mod fzf;
 mod terminal_themes;
 mod input;
 mod layout;
+mod desk_layout;
 mod local;
 mod modal;
 mod new_harness;

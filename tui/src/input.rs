@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::app::{App, Placement};
 use crate::commands;
 use crate::keys;
-use crate::layout::{Dir, Preset, Toward};
+use crate::layout::{Dir, Toward};
 use crate::modal::{self, Filter, Modal, PickerKind, Prompt, PromptKind, What};
 use crate::pane::{encode_key, encode_mouse, Phase};
 use crate::picker::Picker;
@@ -693,7 +693,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.status = format!("{up}/{} connected", app.fleet.visible_machines().count());
             picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("M-l", "link")];
         }
-        PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
+        PickerKind::Layout => { picker.keep_order = true; picker.set_rows(modal::layout_rows(app.tab().panes().len())); picker.hints = vec![("enter", "apply")] }
         PickerKind::Theme => {
             picker.keep_order = true;
             picker.theme_in = None;
@@ -915,9 +915,9 @@ pub fn run(app: &mut App, command: &str) {
         "close-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
         "zoom" => {
             let tab = app.tab_mut();
-            if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed; app.fit_panes(); let t = app.active; app.layout_changed(t) } else { app.fit_panes() }
+            if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed; app.fit_panes(); let t = app.active; app.view_layout_changed(t) } else { app.fit_panes() }
         }
-        "equalize" => { if let Some(f) = app.focused() { if let Some(root) = app.tab_mut().root.as_mut() { root.spread_out(f) } } app.fit_panes() }
+        "equalize" => { if let Some(f) = app.focused() { if let Some(root) = app.tab_mut().root.as_mut() { root.spread_out(f) } } app.fit_panes(); app.layout_changed(app.active) }
         "pane-tab" => {
             let Some(f) = app.focused() else { return };
             if app.tab().panes().len() < 2 { return }
@@ -2773,7 +2773,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             });
         }
         PickerKind::Layout => {
-            if let Some(index) = id.and_then(|i| i.parse::<usize>().ok()) { app.apply_preset(Preset::ALL[index].0) }
+            if let Some(id) = id { app.apply_shared_preset(&id) }
         }
         PickerKind::Theme => {
             if choice == Choice::Enter {

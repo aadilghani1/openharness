@@ -23,6 +23,29 @@ class PaneArrangement {
 
   late final List<PaneDivider> dividers = _findDividers();
 
+  /// Older lattice presets left an empty tail in the last row. A shared split
+  /// canvas has no empty panes: let that row's last pane use the remaining room.
+  /// Existing cuts and the identity/order of every slot stay intact.
+  PaneArrangement fillRowEnds() {
+    var changed = false;
+    final filled = <Rect>[];
+    for (final tile in tiles) {
+      final emptyTail =
+          tile.right < 1 - _epsilon &&
+          !tiles.any(
+            (other) =>
+                other.left >= tile.right - _epsilon &&
+                other.top < tile.bottom - _epsilon &&
+                other.bottom > tile.top + _epsilon,
+          );
+      changed |= emptyTail;
+      filled.add(
+        emptyTail ? Rect.fromLTRB(tile.left, tile.top, 1, tile.bottom) : tile,
+      );
+    }
+    return changed ? PaneArrangement(filled) : this;
+  }
+
   PaneArrangement? split(
     int index,
     PaneResizeAxis axis, {

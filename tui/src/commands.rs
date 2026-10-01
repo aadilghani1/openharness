@@ -2056,7 +2056,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 // that window made current by nothing (tmux zooms it where it is).
                 if w != app.active {
                     app.tabs[w].set_active(p);
-                    if app.tabs[w].panes().len() > 1 { app.tabs[w].zoomed = !app.tabs[w].zoomed; app.fit_panes(); app.layout_changed(w) }
+                    if app.tabs[w].panes().len() > 1 { app.tabs[w].zoomed = !app.tabs[w].zoomed; app.fit_panes(); app.view_layout_changed(w) }
                     return;
                 }
                 if app.focused() != Some(p) { app.focus_pane(w, p) }
@@ -2898,7 +2898,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.tabs[w].size = Some(size);
             app.options.windows.entry(app.tabs[w].id.clone()).or_default().insert("window-size".into(), "manual".into());
             app.fit_panes();
-            if app.headless && old != size { app.layout_changed(w) }
+            if app.headless && old != size { app.view_layout_changed(w) }
         }
         "respawn-window" => {
             // tmux's respawn-window: refused while anything runs in the window, unless -k.
