@@ -31,7 +31,5 @@ bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_m
  * this build has no mark for; an unknown engine gets no badge rather than a wrong one.
  */
 bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink);
-// Where the last home face drew the engine's mark (a tap there talks to the agent), for ui_habitat.c.
-extern ht_rect_t ht_focus_mark_target;
 // The engine's index into ht_icon_engine20 / ht_icon_engine28 (the LVGL firmware's own marks), or -1.
 int ht_focus_engine_index(const char *engine);

@@ -7,13 +7,13 @@
  * THE FOCUS FACE — the agent screen, laid out like the octopus's (owner, 2026-10-01).
  *
  * The session's name curves along the top edge in the octopus's own arc (ht_arc_title, GeistMono 24);
- * the engine's mark stands where the octopus does, 92 px (focus_marks.c); under it the recap in a card
+ * the engine's mark stands where the octopus does, 56 px (focus_marks.c); under it the recap in a card
  * that always holds four lines of geist_med_28 — as many as the octopus reads — a shorter recap centred
- * in it; or, with no card, the working line on the card's first line, or "No activity yet" centred in
- * the card's place. Nothing
- * moves with the text: the mark and the card stand where they stand. There is no
- * tab pill and no microphone: a tap on the mark talks to the agent, a hold on the face opens the
- * tabs, a tap on the name opens the panes (ui_habitat.c registers all three).
+ * in it. With no recap there is no card: the working line, or a resting line ("Let's build it", …),
+ * is centred on the glass. In every state the mark stands halfway between the name and what is under
+ * it, so the gap above it equals the gap below. There is no tab pill and no microphone: a tap anywhere
+ * on the face talks to the agent, a hold opens the tabs, a tap on the name opens the panes
+ * (ui_habitat.c).
  *
  * The fonts are the LVGL firmware's (assets/lvgl/SPEC.md), laid out by ht_lv_label — LVGL's own wrap,
  * centring and LONG_DOT.
@@ -22,13 +22,13 @@
  *
  * ht_damage() diffs run index against run index and repaints the whole 466x466 the moment the count
  * or the order changes (terminal.c). So the home face emits the SAME TEN RUNS IN THE SAME ORDER on
- * every frame — name, mark, card, recap ×4, status, "no activity" ×2 — each empty where it has
+ * every frame — name, mark, card, recap ×4, status, resting line ×2 — each empty where it has
  * nothing to say. Do not make one conditional.
  */
 // The card is the old Focus card (radius 28, padded 18 x 19) grown to four lines: 384 x 192 at
 // (41, 179), ending at y 371, above the bell at 400; its rounded bottom corners stay inside r 230.
-// The mark stands 16 px above it.
-enum { MARK_SIZE = 92, MARK_TOP = 71, CARD_X = 41, CARD_Y = 179, CARD_W = 384, CARD_H = 192,
+// TITLE_BOTTOM is the foot of the arc's cells at the top of the curve, where the mark is measured from.
+enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, CARD_X = 41, CARD_Y = 179, CARD_W = 384, CARD_H = 192,
        CARD_R = 28, CARD_PAD_H = 18, CARD_PAD_V = 19, BODY_W = CARD_W - 2 * CARD_PAD_H - 2,
        RECAP_LINES = 4, EMPTY_W = 276 };
 #define FOCUS_CARD     0x23252fu
@@ -36,6 +36,23 @@ enum { MARK_SIZE = 92, MARK_TOP = 71, CARD_X = 41, CARD_Y = 179, CARD_W = 384, C
 #define FOCUS_FG      0xeaeaf0u
 #define FOCUS_EMPTY   0x585863u
 #define FOCUS_VOICE   0x00ff2fu
+
+/*
+ * WHAT AN AGENT WITH NOTHING YET SAYS, in place of "No activity yet" (owner, 2026-10-01): an
+ * invitation rather than a report. One per agent, picked by its name, so the line does not change
+ * every time the face is drawn but two agents side by side read differently. Each fits two lines of
+ * geist_reg_38 at EMPTY_W.
+ */
+static const char *const RESTING[] = {
+    "Let's build it", "Do anything", "What's next?", "Ready when you are",
+    "Tap to talk", "Say the word", "Make it happen", "Start something",
+};
+static const char *resting_line(const char *name)
+{
+    uint32_t h = 2166136261u;   // FNV-1a
+    for (const char *p = name ? name : ""; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+    return RESTING[h % (sizeof RESTING / sizeof RESTING[0])];
+}
 
 /*
  * THE ENGINE'S OWN MARK.
@@ -291,8 +308,6 @@ static void recap_cut(char *out, size_t cap, const char *recap, const ht_font_t 
     if (clipped) strcat(out, "\xe2\x80\xa6");
 }
 
-ht_rect_t ht_focus_mark_target;
-
 void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
                    const char *recap)
 {
@@ -311,8 +326,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     else if (retry) snprintf(status, sizeof status, "%s", f->status);
     bool empty = !has_recap && !status[0];
 
-    // The body, laid out first: a recap or "No activity yet" is centred in the card's place; the
-    // working line is not — it reads straight under the mark, where the card's first line would be.
+    // The body, laid out first: a recap is centred in its card; without one the line is centred on
+    // the glass.
     ht_lv_label_t body;
     int body_h = 0;
     if (has_recap) {
@@ -324,10 +339,13 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         ht_lv_label(&body, sf, status, CARD_W, 1, true);   // no card around it: the full width
         body_h = sf->height;
     } else {
-        int n = ht_lv_label(&body, ef, "No activity yet", EMPTY_W, 2, false);
+        int n = ht_lv_label(&body, ef, resting_line(f->recipient), EMPTY_W, 2, false);
         body_h = (n < 2 ? n : 2) * ef->height;
     }
-    int body_y = status[0] ? CARD_Y + 1 + CARD_PAD_V : CARD_Y + (CARD_H - body_h) / 2;
+    int body_y = has_recap ? CARD_Y + (CARD_H - body_h) / 2 : HT_HEIGHT / 2 - body_h / 2;
+    // The mark halfway between the name and the card, or the line: equal gaps above and below.
+    int below = has_recap ? CARD_Y : body_y;
+    int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.
     ht_arc_title(s, ht_rgb(FOCUS_FG), f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6");
@@ -335,9 +353,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     // The engine's mark, where the octopus stands. An unknown engine leaves the place empty.
     int engine = ht_focus_engine_index(f->engine);
     int mark_x = (HT_WIDTH - MARK_SIZE) / 2;
-    if (engine >= 0) ht_icon(s, mark_x, MARK_TOP, &ht_icon_engine92[engine]);
+    if (engine >= 0) ht_icon(s, mark_x, mark_top, &ht_icon_engine56[engine]);
     else no_text(s, rf);
-    ht_focus_mark_target = (ht_rect_t){(int16_t)mark_x, MARK_TOP, MARK_SIZE, MARK_SIZE};
 
     // The card only holds a recap; its lines are drawn on its fill.
     uint16_t card = ht_rgb(FOCUS_CARD);
@@ -353,7 +370,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                    ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE), s->background);
     else no_text(s, sf);
 
-    // Nothing yet: said in the resting grey, where the recap would be.
+    // Nothing yet: said in the resting grey.
     if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
                           ht_rgb(FOCUS_EMPTY), s->background);
     else { no_text(s, ef); no_text(s, ef); }

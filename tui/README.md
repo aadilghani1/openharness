@@ -170,7 +170,11 @@ beside the focused pane when needed. Lowercase `C-b n` remains next window.
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
 compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
 machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
-a path. Task opens an editor in the same panel: Enter accepts, Alt-Enter inserts a newline,
+a path. Project search includes the 50 most recently active distinct folders per machine;
+duplicate sessions in one folder count once. Combine a machine name and folder, such as
+`office harness` or `m2 harness`, in either order. The local machine's actual
+name remains searchable when its label says `local`.
+Task opens an editor in the same panel: Enter accepts, Alt-Enter inserts a newline,
 and pasted tasks retain line breaks. Escape preserves the task in the draft. Supported agents
 receive it as their first message; an unavailable first task or one exceeding the daemon's
 2,000-character limit is explained before launch. A blank task starts an ordinary session.

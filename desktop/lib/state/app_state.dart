@@ -5818,7 +5818,8 @@ class AppNotifier extends ChangeNotifier {
     systemNotifications.postNotice(
       id: 'harness-device:${notice.pub}',
       title: 'New device on your account',
-      body: '${notice.sentence} Not yours? Remove it in Settings ▸ Devices.',
+      body: '${notice.sentence} Not yours? Remove it in Settings ▸ Your devices.',
+      devicePub: notice.pub,
     );
     notifyListeners();
   }
@@ -13442,7 +13443,8 @@ class AppNotifier extends ChangeNotifier {
         if (viewer == null) {
           final pub = payload['pub'], label = payload['label'], kind = payload['kind'];
           if (pub is String && kind is String) {
-            _announceDevice(NewDeviceNotice(pub: pub, label: label is String ? label : '', kind: kind));
+            final fp = payload['fingerprint'];
+            _announceDevice(NewDeviceNotice(pub: pub, label: label is String ? label : '', kind: kind, frameFingerprint: fp is String ? fp : null));
           }
         }
         break;

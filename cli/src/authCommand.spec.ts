@@ -1,14 +1,16 @@
 import { spawn, spawnSync } from 'child_process'
 import { createServer, type Server } from 'http'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs'
-import { tmpdir } from 'os'
+import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { b64d, b64e, fingerprint, newIdentity } from './lib/e2ee/core.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
 const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const FP = /^[0-9A-F]{4}(·[0-9A-F]{4}){3}$/
 const dirs: string[] = []
 const servers: Server[] = []
 
@@ -136,6 +138,32 @@ function later<T>(ms: number, value: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms))
 }
 
+const identityFile = (root: string): string => join(root, 'data', 'e2e', 'identity.json')
+
+/** This machine's device key, as the daemon would have written it; returns its fingerprint. */
+function seedIdentity(root: string): { pub: string; fp: string } {
+  const id = newIdentity()
+  mkdirSync(join(root, 'data', 'e2e'), { recursive: true })
+  writeFileSync(identityFile(root), JSON.stringify({ priv: b64e(id.priv), pub: b64e(id.pub) }))
+  return { pub: b64e(id.pub), fp: fingerprint(id.pub) }
+}
+
+/** The fingerprint of whatever identity.json holds now. */
+function fingerprintOnDisk(root: string): string {
+  const raw = JSON.parse(readFileSync(identityFile(root), 'utf8')) as { pub: string }
+  return fingerprint(b64d(raw.pub))
+}
+
+/** The account's device log as this machine verified it: `active` and `removed` pubs only. */
+function seedDevLog(root: string, active: string[], removed: string[]): void {
+  mkdirSync(join(root, 'data', 'e2e'), { recursive: true })
+  const member = (pub: string) => ({ pub, kind: 'machine', machineId: 'm_seeded', label: 'box', addedAt: Date.now() - 86_400_000, seq: 1 })
+  writeFileSync(join(root, 'data', 'e2e', 'devlog.json'), JSON.stringify({
+    state: { acct: 'acct', head: { seq: 1, hash: 'h' }, hashes: ['h'], active: Object.fromEntries(active.map((p) => [p, member(p)])), removed },
+    recent: [], frozen: null, notifiedUpTo: 1,
+  }))
+}
+
 describe('harness auth status --json', () => {
   it('reports loggedIn:false with no saved session, and never touches the network', () => {
     const root = tempRoot()
@@ -179,6 +207,99 @@ describe('harness auth status --json', () => {
     const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
     expect(result.status).toBe(0)
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, offline: true, machineId: 'm_seeded' })
+  })
+
+  it('carries this machine\'s fingerprint when its key is on disk', () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { fp } = seedIdentity(root)
+    const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, fingerprint: fp })
+    expect(fp).toMatch(FP)
+  })
+
+  it('leaves fingerprint out without a key, and never makes one by asking', () => {
+    const root = tempRoot()
+    const signedOut = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+    expect(JSON.parse(signedOut.stdout.trim())).not.toHaveProperty('fingerprint')
+    seedSession(root)
+    const signedIn = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+    expect(JSON.parse(signedIn.stdout.trim())).not.toHaveProperty('fingerprint')
+    expect(existsSync(identityFile(root))).toBe(false)
+  })
+})
+
+describe('harness status — device row', () => {
+  const deviceLine = (stdout: string): string | undefined => stdout.split('\n').find((l) => /^\s+device\s/.test(l))
+
+  it('says the key is in the account when the device log holds it', () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { pub, fp } = seedIdentity(root)
+    seedDevLog(root, [pub], [])
+    const result = runSync(root, ['status'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('○ stopped')
+    expect(deviceLine(result.stdout)).toBe(`   device     ${fp}  (in your account)`)
+    // After `machine` (when named) and before `version`.
+    const lines = result.stdout.split('\n')
+    expect(lines.findIndex((l) => l.includes('device     '))).toBeLessThan(lines.findIndex((l) => /^\s+version\s/.test(l)))
+  })
+
+  it('says the key was removed when the log took it out', () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { pub, fp } = seedIdentity(root)
+    seedDevLog(root, [], [pub])
+    expect(deviceLine(runSync(root, ['status']).stdout)).toBe(`   device     ${fp}  (removed — run harness login)`)
+  })
+
+  it('says not registered yet with a key and no device log', () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { fp } = seedIdentity(root)
+    expect(deviceLine(runSync(root, ['status']).stdout)).toBe(`   device     ${fp}  (not registered yet)`)
+  })
+
+  it('says removed with only a retired key on disk, and makes no new one', () => {
+    const root = tempRoot()
+    seedSession(root)
+    mkdirSync(join(root, 'data', 'e2e'), { recursive: true })
+    writeFileSync(join(root, 'data', 'e2e', 'identity.json.removed-1'), '{}')
+    expect(deviceLine(runSync(root, ['status']).stdout)).toBe('   device     (removed — run harness login)')
+    expect(existsSync(identityFile(root))).toBe(false)
+  })
+
+  it('prints no device row with no key at all, and makes no new one', () => {
+    const root = tempRoot()
+    seedSession(root)
+    const result = runSync(root, ['status'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('○ stopped')
+    expect(deviceLine(result.stdout)).toBeUndefined()
+    expect(existsSync(identityFile(root))).toBe(false)
+  })
+
+  it('says removed after being removed from the account, which also signed this machine out', () => {
+    // The daemon spends the key (identity.json → .removed-*) and clears the session in one go.
+    const root = tempRoot()
+    mkdirSync(join(root, 'data', 'e2e'), { recursive: true })
+    writeFileSync(join(root, 'data', 'e2e', 'identity.json.removed-1'), '{}')
+    const result = runSync(root, ['status'])
+    expect(result.status).toBe(0)
+    expect(deviceLine(result.stdout)).toBe('   device     (removed — run harness login)')
+    expect(existsSync(identityFile(root))).toBe(false)
+  })
+
+  it('says nothing about the account once signed out, even if the last account\'s log is still on disk', () => {
+    // logout leaves devlog.json behind; reading it as "in your account" would be false.
+    const root = tempRoot()
+    const { pub } = seedIdentity(root)
+    seedDevLog(root, [pub], [])
+    const result = runSync(root, ['status'])
+    expect(result.status).toBe(0)
+    expect(deviceLine(result.stdout)).toBeUndefined()
   })
 })
 
@@ -287,7 +408,7 @@ describe('harness login --json', () => {
     expect(await login.next()).toMatchObject({ type: 'qr' })
     expect(await login.next()).toEqual({ type: 'confirm', email: 'dee@example.com' })
     login.child.stdin.end('yes\n')
-    expect(await login.next()).toEqual({ type: 'result', status: 'success', email: 'dee@example.com' })
+    expect(await login.next()).toEqual({ type: 'result', status: 'success', email: 'dee@example.com', fingerprint: expect.stringMatching(FP) })
     expect(await login.exit).toBe(0)
     const session = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
     expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr' })
@@ -304,7 +425,7 @@ describe('harness login --json', () => {
     })
     const login = jsonChild(root, base, ['login', '--json'])
     login.child.stdin.end()
-    expect(await login.next()).toEqual({ type: 'result', status: 'success', alreadySignedIn: true })
+    expect(await login.next()).toEqual({ type: 'result', status: 'success', alreadySignedIn: true, fingerprint: expect.stringMatching(FP) })
     expect(await login.exit).toBe(0)
     expect(await login.rest()).toEqual([])
   }, 15_000)
@@ -321,7 +442,7 @@ describe('harness login --json', () => {
     const lines = result.stdout.trim().split('\n').map((l) => JSON.parse(l))
     // Harness only: grid is an add-on, signed in the first time a grid feature is used — so the line
     // says nothing about grid, and not one `grid` command ran, though a `grid` was right there.
-    expect(lines).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    expect(lines).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true, fingerprint: expect.stringMatching(FP) }])
     expect(existsSync(gridCalls)).toBe(false)
   })
 
@@ -373,7 +494,42 @@ describe('harness login --json', () => {
     // Drain any trailing buffered line after exit.
     if (stdout.trim()) lines.push(JSON.parse(stdout.trim()))
     // Same contract as the already-signed-in line: a fresh Harness sign-in signs in to Harness alone.
-    expect(lines[1]).toEqual({ type: 'result', status: 'success' })
+    expect(lines[1]).toEqual({ type: 'result', status: 'success', fingerprint: expect.stringMatching(FP) })
+    expect(lines[1].fingerprint).toBe(fingerprintOnDisk(root))
     expect(existsSync(gridCalls)).toBe(false)
   }, 15_000)
+
+  it('already signed in with no key yet: makes the key and reports its fingerprint', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { base } = await fakeBackend({ resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }) })
+    expect(existsSync(identityFile(root))).toBe(false)
+    const result = await runAsync(root, ['login', '--json'], base)
+    expect(result.status).toBe(0)
+    const [line] = result.stdout.trim().split('\n').map((l) => JSON.parse(l))
+    expect(line.fingerprint).toBe(fingerprintOnDisk(root))
+  })
+
+  it('already signed in with a key: reports that key, not a new one', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { fp } = seedIdentity(root)
+    const { base } = await fakeBackend({ resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }) })
+    const result = await runAsync(root, ['login', '--json'], base)
+    const [line] = result.stdout.trim().split('\n').map((l) => JSON.parse(l))
+    expect(line).toEqual({ type: 'result', status: 'success', alreadySignedIn: true, fingerprint: fp })
+    expect(fingerprintOnDisk(root)).toBe(fp)
+  })
+})
+
+describe('harness login (human)', () => {
+  it('already signed in: names this machine and its key code, then the start hint', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { fp } = seedIdentity(root)
+    const { base } = await fakeBackend({ resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }) })
+    const result = await runAsync(root, ['login'], base)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain(`  ✓ Already signed in — this machine is "${hostname().slice(0, 60)}" · ${fp}\n    Run \`harness start\` to connect this computer.`)
+  })
 })

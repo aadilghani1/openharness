@@ -7,6 +7,10 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/viewer/device_log_sync.dart';
 
+import 'device_detail_page.dart';
+import 'device_rows.dart';
+import 'fingerprint_text.dart';
+import 'phone_navigation.dart' show phoneRoute;
 import 'phone_sheet.dart';
 import 'settings_row.dart';
 import 'tty.dart';
@@ -29,8 +33,11 @@ class _DevicesPageState extends State<DevicesPage> {
   Map<String, int> _seen = const {};
   bool _removingUnused = false;
   int _revision = -1;
-  final Set<String> _removing = {};
   String? _error;
+
+  /// The devices that were new when this page opened: they keep their `New` badge for the visit,
+  /// though opening the page clears the banner that announced them.
+  late final Set<String> _newPubs;
 
   AppNotifier get _app => widget.notifier;
 
@@ -38,6 +45,7 @@ class _DevicesPageState extends State<DevicesPage> {
   void initState() {
     super.initState();
     _app.addListener(_changed);
+    _newPubs = {for (final m in _app.newDevices) m.pub};
     unawaited(_load());
     // Looking at the list IS reviewing the new devices: the banner that pointed here is done.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -57,38 +65,28 @@ class _DevicesPageState extends State<DevicesPage> {
 
   Future<void> _load() async {
     _revision = _app.devicesRevision;
-    final listing = await _app.deviceLog?.list();
+    final listing = await _app.deviceListing();
     final seen = await _app.devicesLastSeen();
     if (!mounted) return;
     setState(() {
-      _listing = listing ?? DeviceLogListing.empty;
+      _listing = listing;
       _seen = seen;
     });
   }
 
-  Future<void> _remove(DeviceLogRow row) async {
-    final name = row.member.label.isEmpty ? 'this device' : row.member.label;
-    final confirmed = await confirmPhoneAction(
-      context,
-      title: 'Remove $name?',
-      message:
-          'It stops reaching your machines on every device, and is signed out. '
-          'Signing in on it again adds it back as a new device.',
-      confirmLabel: 'Remove',
-      icon: LucideIcons.shieldOff300,
-    );
-    if (!confirmed || !mounted) return;
-    setState(() {
-      _removing.add(row.member.pub);
-      _error = null;
-    });
-    final error = await _app.removeDevice(row.member.pub);
-    if (!mounted) return;
-    setState(() {
-      _removing.remove(row.member.pub);
-      _error = error == null ? null : "Couldn't remove $name. Try again.";
-    });
-  }
+  void _open(DeviceLogRow row) => unawaited(
+    Navigator.of(context).push(
+      phoneRoute(
+        (_) => DeviceDetailPage(
+          notifier: _app,
+          row: row,
+          lastSeen: _seen[row.member.pub],
+          isNew: _newPubs.contains(row.member.pub),
+          onMine: () => setState(() => _newPubs.remove(row.member.pub)),
+        ),
+      ),
+    ),
+  );
 
   /// Apps not seen in 90 days: most likely a browser whose data was cleared, which never signs its
   /// own removal. Never this phone, never a computer, never one the backend has no record of.
@@ -238,31 +236,43 @@ class _DevicesPageState extends State<DevicesPage> {
             const SizedBox(height: 12),
             if (listing == null)
               const SizedBox.shrink()
-            else
+            else ...[
+              if (selfRow(listing.members) case final self?) ...[
+                SettingsGroup(
+                  children: [
+                    _ThisDeviceCard(
+                      key: const Key('account-device-this'),
+                      row: self,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
               SettingsGroup(
                 children: [
-                  for (final row in listing.members)
+                  for (final row in orderDeviceRows(
+                    listing.members,
+                    _seen,
+                    _newPubs,
+                  ))
                     SettingsRow(
                       key: ValueKey('account-device-${row.member.pub}'),
-                      title:
-                          '${row.member.label.isEmpty ? 'Unnamed device' : row.member.label}'
-                          '${row.self ? ' (this phone)' : ''}',
-                      detail:
-                          '${row.member.kind == 'machine' ? 'Computer' : 'App'}'
-                          '${_seen[row.member.pub] != null ? ' · last seen ${_date(_seen[row.member.pub]!)}' : ''}'
-                          ' · ${row.fingerprint}',
-                      destructive: !row.self,
-                      value: row.self
-                          ? null
-                          : (_removing.contains(row.member.pub)
-                                ? 'Removing…'
-                                : 'Remove'),
-                      onTap: row.self || _removing.contains(row.member.pub)
-                          ? null
-                          : () => unawaited(_remove(row)),
+                      title: row.member.label.trim().isEmpty
+                          ? 'Unnamed device'
+                          : row.member.label,
+                      detail: deviceDetailLine(
+                        row,
+                        _seen[row.member.pub],
+                        DateTime.now(),
+                        sameName: sharedNames(listing.members)
+                            .contains(row.member.label.trim()),
+                      ),
+                      value: _newPubs.contains(row.member.pub) ? 'New' : null,
+                      onTap: () => _open(row),
                     ),
                 ],
               ),
+            ],
           ],
         ),
       ),
@@ -270,8 +280,49 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 }
 
-String _date(int ms) {
-  final at = DateTime.fromMillisecondsSinceEpoch(ms);
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${at.year}-${two(at.month)}-${two(at.day)}';
+/// This phone's own name and key code, copyable, with what it is for: the code the other devices
+/// show for this one.
+class _ThisDeviceCard extends StatelessWidget {
+  const _ThisDeviceCard({super.key, required this.row});
+
+  final DeviceLogRow row;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final name = row.member.label.trim().isEmpty
+        ? 'Unnamed device'
+        : row.member.label;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This device · $name',
+            style: TextStyle(
+              color: AppPalette.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          FingerprintBlock(
+            row.fingerprint,
+            large: false,
+            copyKey: const Key('this-device-copy'),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'This is the code your other devices show for this device.',
+            style: TextStyle(
+              color: AppPalette.textSecondary,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

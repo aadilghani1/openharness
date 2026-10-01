@@ -63,8 +63,8 @@ typedef struct { uint16_t w, h; const uint16_t *px; const uint8_t *a; } ht_icon_
 // The engines' marks in focus.c's ENGINES order: 20 px as the inbox drew them, and 27 px — LVGL's
 // own 28/20 scaling of the same 20 px art, as the header drew it. And the microphone.
 extern const ht_icon_t ht_icon_engine20[14], ht_icon_engine28[14], ht_icon_mic;
-// The Focus face's 92 px marks (focus_marks.c, scripts/gen_focus_marks.py), in the same order.
-extern const ht_icon_t ht_icon_engine92[14];
+// The Focus face's 56 px marks (focus_marks.c, scripts/gen_focus_marks.py), in the same order.
+extern const ht_icon_t ht_icon_engine56[14];
 // Precomputed curved-label and larger inbox navigation glyphs.
 extern const ht_font_t ht_open_20, ht_nav_32;
 extern const ht_font_t ht_open_24, ht_right_24, ht_bell_24;

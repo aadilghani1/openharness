@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 
+import '../settings/sections/account_device_detail.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -57,15 +58,18 @@ class NewDeviceNotice extends StatelessWidget {
                 const SizedBox(width: 6),
                 OutlinedButton(
                   key: const Key('new-device-review'),
+                  // One new device goes straight to its key code; several go to the list, where each is a row.
                   onPressed: () => unawaited(
-                    showSettingsScreen(
-                      context,
-                      notifier,
-                      initialSection: SettingsSection.accountDevices,
-                      source: 'new-device-notice',
-                    ),
+                    more == 0
+                        ? showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true)
+                        : showSettingsScreen(
+                            context,
+                            notifier,
+                            initialSection: SettingsSection.accountDevices,
+                            source: 'new-device-notice',
+                          ),
                   ),
-                  child: const Text('Review devices'),
+                  child: Text(more == 0 ? 'Review' : 'Review devices'),
                 ),
               ],
             ),

@@ -28,6 +28,9 @@ export interface DevLogFile {
   frozen: DevLogFreeze | null
   /** Entries up to this seq have been announced ("New device: X") — never twice. */
   notifiedUpTo: number
+  /** When THIS machine first applied each key's add. The entry's own `at` is picked by the adding
+   *  device, so "new" cannot rest on it; absent for keys already in the log at first read. */
+  firstSeen?: Record<string, number>
 }
 
 const empty = (): DevLogFile => ({ state: null, recent: [], frozen: null, notifiedUpTo: 0 })
@@ -43,6 +46,7 @@ export class DeviceLogStore {
         recent: Array.isArray(raw.recent) ? raw.recent : [],
         frozen: raw.frozen && typeof raw.frozen === 'object' ? raw.frozen : null,
         notifiedUpTo: typeof raw.notifiedUpTo === 'number' ? raw.notifiedUpTo : 0,
+        firstSeen: raw.firstSeen && typeof raw.firstSeen === 'object' ? raw.firstSeen : undefined,
       }
     } catch { return empty() }
   }

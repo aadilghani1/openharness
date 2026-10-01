@@ -1,7 +1,7 @@
 /** Observe native login identity without retaining or returning credentials. No network or refresh. */
 import { createHash } from 'node:crypto'
 import { open } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 
@@ -13,7 +13,11 @@ export function memoryCodexHome(selected?: string | null, home = homedir(), envi
 /** Only native login files select the extraction account; ambient keys cannot override it. */
 export function nativeMemoryEnvironment(): NodeJS.ProcessEnv {
   const parent = oneShotParentEnv()
-  return { PATH: parent.PATH, HOME: homedir(), TMPDIR: tmpdir(), LANG: parent.LANG || 'en_US.UTF-8', TERM: 'dumb' }
+  // Claude's native credential lookup needs the OS login name on macOS. Omitting it reports
+  // signed-out despite an existing login. Bind it to the OS user, not a caller's USER/LOGNAME.
+  const username = userInfo().username
+  return { PATH: parent.PATH, HOME: homedir(), USER: username, LOGNAME: username,
+    TMPDIR: tmpdir(), LANG: parent.LANG || 'en_US.UTF-8', TERM: 'dumb' }
 }
 
 export async function memoryAccountIdentity(input: { engine: string; codexHome?: string | null },

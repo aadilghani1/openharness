@@ -950,17 +950,6 @@ static void render_home(ht_scene_t *f)
     } else if (visit.available) {
         footer_control(f, 113, 240, "[ return ]", A_RETURN, s.connected && !visit.pending);
     }
-    /*
-     * ON FOCUS THE ENGINE'S MARK IS THE MICROPHONE (owner, 2026-10-01). A creature skin talks when the
-     * creature is tapped; Focus has no creature, and its mark stands in the creature's place, so a tap
-     * on the mark talks to the agent. The target is the mark's square and 16 px around it, registered
-     * before A_PET so the face's hold-for-tabs does not swallow it. Artwork still owns no action.
-     */
-    if (focus_face && !carry.active && !carry.error[0] && !visit.available) {
-        ht_rect_t m = ht_focus_mark_target;
-        s.hits[s.hit_count++] = (hit_t){{(int16_t)(m.x - 16), (int16_t)(m.y - 16), (int16_t)(m.w + 32),
-            (int16_t)(m.h + 32)}, A_VOICE, 0, s.connected && !s.loading && a != NULL};
-    }
     if (!carry.active && !carry.error[0] && !visit.available) {
         // Both phases of the caption open the pane picker — on Focus too, whose name is on the same
         // curve. The tab list is a hold on the face (A_PET below), on every skin.
@@ -974,8 +963,10 @@ static void render_home(ht_scene_t *f)
     // The badge's own target follows it, at the bottom on every skin.
     if (bell) s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
     // The bell and the creature never share a target, even when the bell is
-    // hidden or its count changes under a finger. Centre always starts voice (on Focus, the mark does).
-    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
+    // hidden or its count changes under a finger. Centre always starts voice. On Focus the whole face
+    // below the name does, down to the bottom edge; the bell's target, registered above, wins there.
+    s.hits[s.hit_count++] = focus_face ? (hit_t){{0, 66, HT_WIDTH, HT_HEIGHT - 66}, A_PET, 0, true}
+                                       : (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
 }
 /*
  * FOCUS'S LISTS SPEAK THE AGENT SCREEN'S TYPE (owner, 2026-09-30): Geist and Montserrat from the
@@ -2712,6 +2703,21 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (result == HT_TOUCH_TAP || (on_target && now - s.touch_started < 1800))
                 dispatch(pressed_action);
             change();
+        } else if (surface && character.id == HT_CHARACTER_FOCUS && pressed_action.kind == A_PET &&
+                   !gesture.guarded && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
+            /*
+             * ON FOCUS A TOUCH ANYWHERE ON THE FACE TALKS (owner, 2026-10-01), and it is a THUMB's
+             * touch, not an idealised tap. ht_gesture_end() calls a contact a tap only inside 12 px
+             * (1.20 mm on this glass) and 350 ms; a real press drifts past both, which is the fault
+             * the old microphone button had (21 presses in 49). So the face answers what a button
+             * answers: a contact that did not scroll, came up within 24 px of where it went down,
+             * and let go before the 650 ms that opens the tabs.
+             */
+            ht_gesture_guard(&gesture, now);
+            if (s.connected && !s.loading && active()) {
+                ESP_LOGI("habitat", "focus touch: start voice");
+                dispatch((action_t){.kind = A_VOICE});
+            }
         } else if (result == HT_TOUCH_TAP && pressed_action.kind == A_PET &&
                    (surface || s.view == VOICE || s.view == SELECTION)) {
             ht_gesture_guard(&gesture, now);
@@ -2719,12 +2725,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 ESP_LOGI("habitat", "gesture tap: finish voice");
                 dispatch((action_t){.kind = A_VOICE_STOP});
             } else if (character.id == HT_CHARACTER_FOCUS && s.view != SELECTION) {
-                /*
-                 * On Focus the engine's mark starts speech and nothing else does. A creature skin has
-                 * no button — the creature IS the affordance, so the middle of the glass has to be
-                 * one. On Focus the middle is the recap somebody is reading: a tap there opening the
-                 * mic surprised people, and the mark is its own target (A_VOICE).
-                 */
+                // Focus's face answers its touches in the branch above; nothing more here.
             } else if (s.connected && !s.loading && pressed_action.id[0]) {
                 ESP_LOGI("habitat", "gesture tap: start voice");
                 pressed_action.kind = A_VOICE;

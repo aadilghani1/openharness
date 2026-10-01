@@ -44,6 +44,19 @@ it('routes bounded project search through the verified current owner', async () 
   expect(await request({ action: 'projects', query: { limit: 500 } })).toMatchObject({ error: 'INVALID_INPUT' })
 })
 
+it('requires the same owner capability for per-recall feedback and accepts no agent or rating authority', async () => {
+  const feedback = { kind: 'feedback', id: 'memory', revision: 1, receiptId: 'receipt', value: 'helpful', expected: 0 }
+  expect(await request({ action: 'preview', command: feedback, token: 'agent' })).toMatchObject({ error: 'PERSON_ONLY' })
+  expect(await request({ action: 'preview', command: { ...feedback, confirmed: true } })).toMatchObject({ error: 'INVALID_INPUT' })
+  expect(await request({ action: 'preview', command: { ...feedback, value: 'verified_used' } })).toMatchObject({ error: 'INVALID_INPUT' })
+  verify.mockResolvedValue({ ok: false, error: 'INSIDE_HARNESS', detail: 'agent' })
+  expect(await request({ action: 'preview', command: feedback })).toMatchObject({ error: 'INSIDE_HARNESS' })
+  expect(runtime.libraryPreview).not.toHaveBeenCalled()
+  verify.mockResolvedValue({ ok: true, pid: 300 })
+  expect(await request({ action: 'preview', command: feedback })).toMatchObject({ ok: true })
+  expect(runtime.libraryPreview).toHaveBeenCalledExactlyOnceWith('owner', feedback)
+})
+
 it('binds a one-use capability to the exact owner, process, connection and server-held command', async () => {
   const prepared = await request({ action: 'preview', command })
   expect(prepared).toMatchObject({ ok: true, preview, capability: expect.any(String) })

@@ -1746,8 +1746,8 @@ int main(int argc, char **argv) {
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait(dir, "focus-skin");
     /*
      * THE DOORS on Focus (owner, 2026-10-01), laid out like the octopus: a tap on the curved name opens
-     * the pane list, a hold on the face the tab list, and a tap on the engine's mark talks. There is
-     * no tab pill and no microphone any more.
+     * the pane list, a hold on the face the tab list, and a tap anywhere else talks. There is no tab
+     * pill and no microphone any more.
      */
     workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     ui_project_emit(s.agents[0].id, "sess", "summary", "Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks pass.",
@@ -1763,23 +1763,36 @@ int main(int argc, char **argv) {
     habitat_touch(true, 233, 300, 2000); habitat_touch(true, 233, 300, 2700);
     assert(s.view == TABS && !starts);
     habitat_touch(false, 233, 300, 2800); assert(s.view == TABS && !starts);
-    // A tap on the recap is reading, not talking; a tap on the mark talks — every corner of it.
-    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
-    ui_project_emit(s.agents[0].id, "sess", "summary", "Retry queue shipped.", "Retry queue shipped.");
-    scene_take(); tap(1000, 233, 330); assert(!starts && s.view == HOME);
+    // A tap ANYWHERE on the face below the name talks (owner, 2026-10-01): the recap, the mark, the
+    // empty glass around them, and the bottom edge where the microphone used to be.
     {
-        ht_rect_t m = ht_focus_mark_target;
-        assert(m.w == 92 && m.h == 92);
-        const int xs[] = {m.x - 12, m.x + m.w / 2, m.x + m.w + 12}, ys[] = {m.y - 12, m.y + m.h / 2, m.y + m.h + 12};
-        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+        const int at[][2] = {{233, 110}, {233, 260}, {120, 300}, {346, 200}, {233, 360}, {233, 410}, {233, 440}};
+        for (unsigned k = 0; k < sizeof at / sizeof at[0]; k++) {
             workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
             ui_project_emit(s.agents[0].id, "sess", "summary", "Retry queue shipped.", "Retry queue shipped.");
-            scene_take(); tap(1000, xs[i], ys[j]); assert(starts == 1);
+            scene_take(); tap(1000, at[k][0], at[k][1]); assert(starts == 1 && s.view == VOICE);
         }
     }
-    // Where the microphone was is no button now.
+    // And on a face with nothing yet to say.
     workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
-    tap(1000, 233, 410); assert(!starts);
+    tap(1000, 233, 233); assert(starts == 1);
+    /*
+     * A THUMB, not an idealised tap: it drifts 10 px and stays down up to 600 ms, which
+     * ht_gesture_end() calls no tap at all. On the Focus face it still talks. A contact that travels
+     * 20 px up or down has scrolled the terminal, and belongs to the scroll.
+     */
+    for (int drift = 0; drift <= 10; drift += 5) for (int held = 120; held <= 600; held += 240) {
+        workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
+        ui_project_emit(s.agents[0].id, "sess", "summary", "Retry queue shipped.", "Retry queue shipped.");
+        scene_take();
+        habitat_touch(true, 233, 260, 1000);
+        habitat_touch(true, 233 + drift / 2, 260 + drift, 1000 + held / 2);
+        habitat_touch(false, 233 + drift / 2, 260 + drift, 1000 + held);
+        assert(starts == 1 && s.view == VOICE);
+    }
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take();
+    habitat_touch(true, 233, 260, 1000); habitat_touch(true, 233, 300, 1100); habitat_touch(false, 233, 300, 1200);
+    assert(!starts);   // 40 px is a drag, not a touch
     /*
      * THE BELL DOES NOT COUNT THE AGENT ON THE FACE. Standing on "a", its question arrives: it shows in
      * the recap's place and the bell stays dark — a +1 there read as another agent asking. Move to

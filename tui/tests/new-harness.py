@@ -28,7 +28,8 @@ ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') i
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            RUST_BACKTRACE='1',
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
-           HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_NEW_UI='1')
+           HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_NEW_UI='1',
+           MOCK_PROJECT_SEARCH='1')
 OUTPUT = Path(os.environ['HN_NEW_UI_OUTPUT']) if os.environ.get('HN_NEW_UI_OUTPUT') else None
 if OUTPUT: OUTPUT.mkdir(parents=True, exist_ok=True)
 
@@ -153,6 +154,10 @@ try:
     before = create_count()
     input_before = len(state('reconnect')['inputs'])
     keys('Right'); assert create_count() == before, 'Right on New Harness must not launch'
+    field('Project'); type_text('office ml-lab'); keys('Enter'); shows('ml-lab @ office')
+    field('Project'); type_text('m2 webapp'); keys('Enter'); shows('webapp @ local')
+    assert create_count() == before, 'searching projects across machines only changes the draft'
+    print('PASS New Harness: short local machine name and remote folders after a large local history', flush=True)
     # The chooser opens in the form's place (the panel stays put), once you go into it.
     keys('Down'); assert 'Search agents and harnesses' not in screen(), 'moving over Agent keeps the form'
     keys('Tab'); shows('Search agents and harnesses')
@@ -160,7 +165,7 @@ try:
     snapshot('new-harness-agent')
     type_text('codex'); keys('Escape')
     shows('Approvals'); field('Agent'); type_text('codex'); keys('Enter')
-    field('Project'); shows('Clone Repository'); snapshot('new-harness-project')
+    field('Project'); shows('Search projects'); snapshot('new-harness-project')
     type_text('clone'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('GitHub URL')
     raw('\x1b[200~autonomous-ai/openharness\x1b[201~'); keys('Enter')
     shows('Clone: autonomous-ai/')

@@ -53,6 +53,13 @@ it('captures, learns, recalls, and forgets through the bundled worker across res
   const page = await reopened.request('libraryPage', ['owner'])
   expect(page.items[0].id).toBe(packet.items[0].id)
   await expect(reopened.request('libraryDetail', ['foreign', packet.items[0].id])).rejects.toThrow('scope_denied')
+  const prepared = await reopened.request('prepareRecall', [{ query: 'bug', conditions: { taskType: 'debugging' } },
+    { engine: 'codex', sessionId: 'receiving', projectId: 'project', route: 'prompt_hook' }, { ...access, includeProfile: true }])
+  const rating = await reopened.request('libraryPreview', ['owner', { kind: 'feedback', id: packet.items[0].id,
+    revision: 1, receiptId: prepared.receipt!.id, value: 'helpful', expected: 0 }])
+  await reopened.request('libraryApply', ['owner', rating.command, rating.version, true])
+  expect((await reopened.request('libraryDetail', ['owner', packet.items[0].id]))?.recalls[0].feedback.value).toBe('helpful')
+  expect((await reopened.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access)).items[0]).not.toHaveProperty('feedback')
   const preview = await reopened.request('libraryPreview', ['owner', { kind: 'forget', id: packet.items[0].id, revision: packet.items[0].revision }])
   expect((await reopened.request('libraryDetail', ['owner', packet.items[0].id]))?.record.id).toBe(packet.items[0].id)
   await reopened.request('libraryApply', ['owner', preview.command, preview.version, true])

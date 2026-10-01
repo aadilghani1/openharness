@@ -14,6 +14,9 @@ class _RecordingNotices implements SystemNotices {
   final opened = ValueNotifier<AgentRef?>(null);
 
   @override
+  final openedDevice = ValueNotifier<String?>(null);
+
+  @override
   Future<void> requestPermission() async {}
 
   @override

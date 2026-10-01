@@ -37,19 +37,22 @@ export async function runClaudeMemoryInference(options: MemoryInferenceOptions):
       return {}
     }
     if (event.type === 'assistant') {
+      if (event.error) return { error: event.error === 'rate_limit' ? 'inference_usage_limit' : 'inference_unavailable' }
       const content = (event.message as { content?: Array<{ type?: string }> } | undefined)?.content
       return !Array.isArray(content) || content.some(part => !['text', 'thinking', 'redacted_thinking'].includes(part.type ?? ''))
         ? { error: 'inference_tool_or_error' } : {}
     }
     if (event.type === 'result') {
-      if (event.is_error || event.subtype !== 'success') return { error: /rate.?limit|quota|usage limit/i.test(JSON.stringify(event.errors))
+      if (event.is_error || event.subtype !== 'success') return { error: /rate.?limit|quota|usage limit|hit.{0,20}limit|limit reached/i.test(JSON.stringify([event.errors, event.result]))
         ? 'inference_usage_limit' : 'inference_unavailable' }
       return typeof event.result === 'string' ? { text: event.result, completed: true,
         observation: { usage: nativeMemoryUsage(event.usage),
           ...(typeof event.total_cost_usd === 'number' && Number.isFinite(event.total_cost_usd) && event.total_cost_usd >= 0
             ? { reportedCostUsd: event.total_cost_usd } : {}) } } : { error: 'invalid_inference_output' }
     }
-    if (event.type === 'rate_limit_event') return {}
+    if (event.type === 'rate_limit_event') return {
+      ...((event.rate_limit_info as { status?: string } | undefined)?.status === 'rejected' ? { error: 'inference_usage_limit' } : {}),
+    }
     return { error: 'inference_protocol_changed' }
   })
 }
