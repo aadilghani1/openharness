@@ -25,12 +25,13 @@ there are live sessions to inspect.
 The left side has three independent scopes: a global count of running harnesses,
 hardware for the computer running the app, and subscription allowance used per
 account.
-Use one space between each title and value, and three spaces between complete
+Use one space between each title and value, and 2.5 character cells between complete
 parts, including the harness count. Put the title before the value. Do not pad
 numbers to a fixed width. No dots, decimal percentages or `+` suffixes. Adjacent controls each
-contribute one space of horizontal padding plus one extra space between controls,
-matching the three-space group gap inside each control. The shared
-`workspaceBarGroupSeparator` sets this spacing in Flutter and native views.
+contribute one cell of horizontal padding plus half a cell between controls,
+matching the group gap inside each control. The shared
+`workspaceBarGroupGapCells` sets this spacing in Flutter and native views.
+Keep the plain-text separator readable; measure and render its precise width.
 Use neutral workspace ink at every usage level. The context on the right still
 follows the focused pane; it may identify a remote machine while hardware remains
 local.

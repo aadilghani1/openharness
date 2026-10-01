@@ -238,7 +238,7 @@ void main() {
         );
         final metricText = tester
             .widgetList<Text>(find.byType(Text))
-            .map((w) => w.data ?? '')
+            .map((w) => w.data ?? w.textSpan?.toPlainText() ?? '')
             .join();
         if (width == 500) expect(metricText, contains('GPU'));
         if (width == 120) expect(metricText, 'CPU 20%');

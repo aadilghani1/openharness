@@ -351,7 +351,7 @@ Titles stay quiet when several panes are visible. Do not repeat branches in pane
 headers, or model/effort in the footer. Context honors the selected status face,
 fields, colors and shell/Powerline treatment. Recent-harness context uses its
 monochrome presentation.
-Use whole percentages, one space between title and value, and three between parts:
+Use whole percentages, one space between title and value, and 2.5 character cells between parts:
 `Harnesses 118   CPU 20%   RAM 50%   GPU 10%   Claude 100%   Codex 90%`.
 All labels and numbers use neutral readable ink;
 no severity color, dot separators, trailing plus or decimal figures. Subscription

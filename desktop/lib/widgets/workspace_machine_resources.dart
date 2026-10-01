@@ -19,7 +19,8 @@ class WorkspaceMachineResources extends StatelessWidget {
           monitor.metricsLabel(),
           monitor.metricsLabel(gpu: false),
         ]) {
-          if (workspaceBarTextSizeOf(context, candidate).width + cell * 2 <=
+          if (workspaceBarTextSizeOf(context, candidate, grouped: true).width +
+                  cell * 2 <=
               constraints.maxWidth) {
             label = candidate;
             break;
@@ -38,8 +39,8 @@ class WorkspaceMachineResources extends StatelessWidget {
                 height: workspaceBarControlHeight(context),
                 child: Center(
                   widthFactor: 1,
-                  child: Text(
-                    label,
+                  child: Text.rich(
+                    workspaceBarGroupTextSpan(label, cellWidth: cell),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: workspaceBarTextStyle(),

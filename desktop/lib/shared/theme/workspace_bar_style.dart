@@ -8,9 +8,39 @@ import '../../terminal/terminal_typography.dart';
 /// SF Mono on macOS, with the platform's monospace stack elsewhere.
 const workspaceBarFontSize = 13.0;
 
-/// One space inside a label–value pair, three between complete components.
+/// One space inside a label–value pair, 2.5 cells between complete components.
 /// Neighboring controls already contribute one padded cell on either side.
+const workspaceBarGroupGapCells = 2.5;
+
+/// Text retains ordinary spaces; rendering uses the measured group gap above.
 const workspaceBarGroupSeparator = '   ';
+
+TextSpan workspaceBarGroupTextSpan(
+  String text, {
+  required double cellWidth,
+  TextStyle? style,
+}) {
+  final groups = text.split(workspaceBarGroupSeparator);
+  return TextSpan(
+    style: style,
+    children: [
+      for (var i = 0; i < groups.length; i++) ...[
+        if (i > 0)
+          TextSpan(
+            text: workspaceBarGroupSeparator,
+            style: TextStyle(
+              letterSpacing:
+                  cellWidth *
+                  (workspaceBarGroupGapCells -
+                      workspaceBarGroupSeparator.length) /
+                  workspaceBarGroupSeparator.length,
+            ),
+          ),
+        TextSpan(text: groups[i]),
+      ],
+    ],
+  );
+}
 
 TextStyle workspaceBarTextStyle({Color? color, bool emphasized = false}) =>
     TextStyle(
@@ -34,16 +64,26 @@ Size workspaceBarCellSizeOf(BuildContext context) {
 double workspaceBarControlHeight(BuildContext context) =>
     math.max(28, workspaceBarCellSizeOf(context).height);
 
-Size workspaceBarTextSizeOf(BuildContext context, String text) {
+Size workspaceBarTextSizeOf(
+  BuildContext context,
+  String text, {
+  bool grouped = false,
+}) {
   // Reserve both weights, including fallback glyphs, so hover never resizes a
   // control or moves a neighboring segment.
   var size = Size.zero;
   for (final emphasized in [false, true]) {
     final painter = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: workspaceBarTextStyle(emphasized: emphasized),
-      ),
+      text: grouped
+          ? workspaceBarGroupTextSpan(
+              text,
+              cellWidth: workspaceBarCellSizeOf(context).width,
+              style: workspaceBarTextStyle(emphasized: emphasized),
+            )
+          : TextSpan(
+              text: text,
+              style: workspaceBarTextStyle(emphasized: emphasized),
+            ),
       textDirection: TextDirection.ltr,
       textScaler: MediaQuery.textScalerOf(context),
       maxLines: 1,

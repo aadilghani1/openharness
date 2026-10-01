@@ -1782,7 +1782,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'family': barStyle.fontFamily,
         'fallback': barStyle.fontFamilyFallback,
         'size': workspaceBarFontSize,
-        'groupGapCells': workspaceBarGroupSeparator.length,
+        'groupGapCells': workspaceBarGroupGapCells,
         'foreground': terminalTheme.foreground.toARGB32(),
         'selection': terminalTheme.selection.toARGB32(),
       },
@@ -7016,7 +7016,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final download = kIsWeb && !_compact(context);
       final downloadWidth = download ? available * .16 : 0.0;
       final usage = _subscriptionUsage;
-      final resourceGap = cell.width * (workspaceBarGroupSeparator.length - 2);
+      final resourceGap = cell.width * (workspaceBarGroupGapCells - 2);
       final resourceBudget = math.max(
         0.0,
         available -
@@ -7146,8 +7146,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     foreground: theme.foreground,
                                     surface: grid.AppPalette.swarmField,
                                   ))
-                                    TextSpan(
-                                      text: part.text,
+                                    workspaceBarGroupTextSpan(
+                                      part.text,
+                                      cellWidth: cell.width,
                                       style: TextStyle(color: part.foreground),
                                     ),
                                 ],

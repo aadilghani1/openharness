@@ -977,6 +977,8 @@ private func workspaceBarTextWidth(_ text: String, font: NSFont) -> CGFloat {
     (text as NSString).size(withAttributes: [.font: workspaceBarEmphasisFont(font)]).width)
 }
 
+private let workspaceBarGroupSeparator = "   "
+
 /// Plain toolbar icons emphasize the glyph without a button well.
 private class SwarmPlainIconButton: SwarmIconButton {
   var foreground = NSColor.white { didSet { needsDisplay = true } }
@@ -1259,6 +1261,7 @@ private final class SwarmContextButton: SwarmIconButton {
   private var text = ""
   var textAlignment: NSTextAlignment = .right
   var contentPadding: CGFloat = 0
+  var groupGapCells: CGFloat?
   private var detail: String?
   private var iconAsset: String?
   private var iconColor = NSColor.white
@@ -1275,9 +1278,14 @@ private final class SwarmContextButton: SwarmIconButton {
   fileprivate var actionURL: String?
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
+  private var groupSpacingAdjustment: CGFloat {
+    guard let groupGapCells else { return 0 }
+    return cellWidth * (groupGapCells - CGFloat(workspaceBarGroupSeparator.count))
+  }
   private var naturalWidths: [CGFloat] {
     segments.enumerated().map { index, segment in
       workspaceBarTextWidth(segment.text, font: textFont) + (segment.branchSymbol ? cellWidth * 2 : 0)
+        + CGFloat(segment.text.components(separatedBy: workspaceBarGroupSeparator).count - 1) * groupSpacingAdjustment
         + (index == 0 ? iconWidth : 0)
     }
   }
@@ -1385,11 +1393,22 @@ private final class SwarmContextButton: SwarmIconButton {
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = field == "branch" ? .byTruncatingMiddle : .byTruncatingTail
     paragraph.alignment = alignment
-    return NSAttributedString(string: value, attributes: [
+    let line = NSMutableAttributedString(string: value, attributes: [
       .font: isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
         ? workspaceBarEmphasisFont(textFont) : textFont,
       .foregroundColor: color, .paragraphStyle: paragraph,
     ])
+    if groupGapCells != nil {
+      let text = value as NSString
+      var search = NSRange(location: 0, length: text.length)
+      while search.length > 0 {
+        let range = text.range(of: workspaceBarGroupSeparator, options: [], range: search)
+        if range.location == NSNotFound { break }
+        line.addAttribute(.kern, value: groupSpacingAdjustment / CGFloat(range.length), range: range)
+        search = NSRange(location: NSMaxRange(range), length: text.length - NSMaxRange(range))
+      }
+    }
+    return line
   }
   private func branchAttachment(_ color: NSColor) -> NSAttributedString {
     let width = cellWidth, height = textFont.pointSize * 0.84
@@ -1766,7 +1785,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let storeButton = SwarmStoreButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-  private var resourceGroupGapCells: CGFloat = 1
+  private var resourceGroupGapCells: CGFloat = 2.5
   private let navigationFont = NSFont.systemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
   private var daemonArt = SwarmDaemonArt()
@@ -2033,8 +2052,7 @@ private final class SwarmTabStrip: NSView {
       barFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
-      // Each adjacent control already supplies one padded character cell.
-      resourceGroupGapCells = CGFloat(max(0, ((style["groupGapCells"] as? NSNumber)?.doubleValue ?? 3) - 2))
+      resourceGroupGapCells = CGFloat(max(2, (style["groupGapCells"] as? NSNumber)?.doubleValue ?? 2.5))
     }
     for control in [newButton] {
       control.font = navigationFont
@@ -2052,6 +2070,7 @@ private final class SwarmTabStrip: NSView {
     subscriptionUsageButton.font = barFont
     subscriptionUsageButton.foreground = terminalForeground
     subscriptionUsageButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
+    subscriptionUsageButton.groupGapCells = resourceGroupGapCells
     subscriptionUsageState = state["subscriptionUsage"] as? [String: Any]
     subscriptionUsageButton.update(subscriptionUsageState, enabled: actionsEnabled)
     hasSubscriptionUsage = subscriptionUsageState != nil
@@ -2064,6 +2083,7 @@ private final class SwarmTabStrip: NSView {
     machineResourcesLabel.font = barFont
     machineResourcesLabel.foreground = terminalForeground
     machineResourcesLabel.contentPadding = harnessMonitorButton.contentPadding
+    machineResourcesLabel.groupGapCells = resourceGroupGapCells
     machineResourcesLabel.update(machineResourcesState, enabled: false)
     machineResourcesLabel.isHidden = machineResourcesState == nil
     contextButton.font = barFont
@@ -2298,7 +2318,8 @@ private final class SwarmTabStrip: NSView {
   }
   private func layoutStatusBar() {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
-    let resourceGap = ("m" as NSString).size(withAttributes: [.font: barFont]).width * resourceGroupGapCells
+    // Each adjacent control already supplies one padded character cell.
+    let resourceGap = ("m" as NSString).size(withAttributes: [.font: barFont]).width * (resourceGroupGapCells - 2)
     let height = workspaceBarControlHeight(barFont)
     let y = (statusBar.bounds.height - height) / 2
     let available = max(0, statusBar.bounds.width - cell * 2)
