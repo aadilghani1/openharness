@@ -1822,15 +1822,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'label': _machineResources.detail,
         'detail': _machineResources.detail,
         'segments': [
-          {'text': _machineResources.scopeName},
           {'text': _machineResources.metricsLabel()},
         ],
         'compactSegments': [
-          {'text': _machineResources.scopeName},
           {'text': _machineResources.metricsLabel(gpu: false)},
         ],
         'minimalSegments': [
-          {'text': _machineResources.scopeName},
+          {'text': _machineResources.metricsLabel(ram: false, gpu: false)},
         ],
         'interactive': _shortcutsEnabled,
       },

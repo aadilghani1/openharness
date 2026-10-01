@@ -14,7 +14,7 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-118 harnesses  M2  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%
+Harnesses 118  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%
                                                      M2 > project > branch > #439
 ```
 
@@ -23,24 +23,27 @@ footer; pane headers do not repeat it. An empty New Tab keeps the footer when
 there are live sessions to inspect.
 
 The left side has three independent scopes: a global count of running harnesses,
-hardware for one named machine, and subscription allowance used per account.
+hardware for the computer running the app, and subscription allowance used per
+account.
 Use one space between each title and value, and two spaces between complete
-parts, including the harness count and machine name. Do not pad numbers to a
-fixed width. No dots, decimal percentages or `+` suffixes. Adjacent controls each
+parts, including the harness count. Put the title before the value. Do not pad
+numbers to a fixed width. No dots, decimal percentages or `+` suffixes. Adjacent controls each
 contribute one space of horizontal padding, matching the two-space group gap.
 Use neutral workspace ink at every usage level. The context on the right still
-follows the focused pane, even when a hardware scope is pinned elsewhere.
+follows the focused pane; it may identify a remote machine while hardware remains
+local.
 
-`118 harnesses` opens the existing session manager, filtered to live sessions.
+`Harnesses 118` opens the existing session manager, filtered to live sessions.
 Include running sessions on connected owned machines even when none of this
 window's tabs show them. Saved history remains in All and Saved. Its RAM and CPU
 columns can be sorted highest first; tokens reuse existing agent updates.
 
-The plain, clickable machine name groups CPU, RAM and GPU; it has no arrow. Default to
-the focused pane's machine, falling back to the selected/local connected machine
-when no pane is focused. Clicking opens an anchored popover: one owned machine
-per row, with CPU/RAM/GPU columns. Selecting a row pins that machine for this
-window; `Follow focused pane` restores automatic scope. Arrow keys select rows;
+CPU, RAM and GPU always describe the local computer, independently of pane focus
+or machine selection. Never substitute a remote host if local readings are
+unavailable. The dock has no machine name or filter. Hover identifies the source.
+Clicking opens an anchored comparison:
+one owned machine per row, with CPU/RAM/GPU columns. Selecting a row only inspects
+its details inside the popover; it never changes the dock's scope. Arrow keys select rows;
 Escape or outside click dismisses and returns focus. Never open a pane, switch
 the focused harness, connect an offline machine or start an engine to inspect it.
 Shared machines do not expose host telemetry.
@@ -59,11 +62,11 @@ invented from RAM usage. macOS uses IORegistry GPU counters; Linux/Windows use
 NVIDIA driver telemetry where available. Unsupported/expired/invalid readings
 show a single `-`, including older daemons' missing fields. Keep the pair
 visible so unavailable data is distinct from 0%; do not hide it when a reading
-temporarily disappears. Preserve valid zero. An offline pinned machine keeps
-its name with unknown values, never another host's
-cached readings. Hardware freshness expires after 45 seconds.
+temporarily disappears. Preserve valid zero. An offline or missing local machine
+shows unknown values, never another host's cached readings. Hardware freshness
+expires after 45 seconds.
 
-Sample only the selected host every 15 seconds with the popover closed; sample
+Sample only the local host every 15 seconds with the popover closed; sample
 connected owned hosts every three seconds while open. Coalesce daemon requests
 for two seconds. Clear hardware readings and stop polling when the app is hidden;
 refresh on return. Session process-tree sampling runs only while its own monitor

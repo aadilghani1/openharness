@@ -54,11 +54,10 @@ class HarnessMonitor extends ChangeNotifier {
     return 'Shared Codex servers · ${formatHarnessMemory(known.isEmpty ? null : memory)}${known.isNotEmpty && known.length < rows.length ? '+' : ''} RAM';
   }
 
-  String get label =>
-      '${live.length} ${live.length == 1 ? 'harness' : 'harnesses'}';
+  String get label => 'Harnesses ${live.length}';
 
   String get detail =>
-      '$label running across connected machines. Click to view harnesses.\n'
+      '${live.length} running across connected machines. Click to view harnesses.\n'
       '${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the session monitor.'}';
 
   void start() {

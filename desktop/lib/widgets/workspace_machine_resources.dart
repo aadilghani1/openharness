@@ -20,18 +20,14 @@ class WorkspaceMachineResources extends StatelessWidget {
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final cell = workspaceBarCellSizeOf(context).width;
-        var metrics = '';
+        var label = monitor.metricsLabel(ram: false, gpu: false);
         for (final candidate in [
           monitor.metricsLabel(),
           monitor.metricsLabel(gpu: false),
         ]) {
-          if (workspaceBarTextSizeOf(
-                    context,
-                    monitor.scopeName + candidate,
-                  ).width +
-                  cell * 2 <=
+          if (workspaceBarTextSizeOf(context, candidate).width + cell * 2 <=
               constraints.maxWidth) {
-            metrics = candidate;
+            label = candidate;
             break;
           }
         }
@@ -43,23 +39,14 @@ class WorkspaceMachineResources extends StatelessWidget {
             padding: EdgeInsets.symmetric(horizontal: cell),
             child: SizedBox(
               height: workspaceBarControlHeight(context),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      monitor.scopeName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: workspaceBarTextStyle(emphasized: emphasized),
-                    ),
-                  ),
-                  if (metrics.isNotEmpty)
-                    Text(
-                      metrics,
-                      style: workspaceBarTextStyle(emphasized: emphasized),
-                    ),
-                ],
+              child: Center(
+                widthFactor: 1,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: workspaceBarTextStyle(emphasized: emphasized),
+                ),
               ),
             ),
           ),

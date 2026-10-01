@@ -341,17 +341,19 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — global harness count, explicitly scoped CPU/RAM/GPU,
+**Focused workspace footer** — global harness count, local CPU/RAM/GPU,
 then subscription allowance used at the left; focused machine, project, branch
 and PR at the right. Each context field keeps its existing action. The hardware
-scope follows the focused pane until pinned in its popover. Never sum percentages
+scope always stays on the computer running the app, even when a remote pane is
+focused. The dock has no machine filter; a popover
+row selects details only and cannot change that scope. Never sum percentages
 across machines. Keep disk capacity, swap and memory pressure in that popover.
 Titles stay quiet when several panes are visible. Do not repeat branches in pane
 headers, or model/effort in the footer. Context honors the selected status face,
 fields, colors and shell/Powerline treatment. Recent-harness context uses its
 monochrome presentation.
 Use whole percentages, one space between title and value, and two between parts:
-`CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%`.
+`Harnesses 118  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%`.
 All labels and numbers use neutral readable ink;
 no severity color, dot separators, trailing plus or decimal figures. Subscription
 figures mean allowance used. Preserve Models' deduplicated accounts, limiting

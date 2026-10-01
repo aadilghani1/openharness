@@ -8,7 +8,7 @@ import '../state/app_state.dart';
 import '../state/machine_resource_monitor.dart';
 import 'desktop_chrome.dart';
 
-/// An anchored, read-only comparison; choosing a row pins the footer's scope.
+/// An anchored, read-only comparison. Inspecting a row never changes the footer.
 class MachineResourcePanel extends StatefulWidget {
   const MachineResourcePanel({
     super.key,
@@ -25,6 +25,13 @@ class MachineResourcePanel extends StatefulWidget {
 class _MachineResourcePanelState extends State<MachineResourcePanel> {
   final _scroll = ScrollController();
   final _rows = <String, GlobalKey>{};
+  String? _inspectedMachineId;
+
+  MachineState? get _selected =>
+      widget.monitor.machines
+          .where((state) => state.machine.machineId == _inspectedMachineId)
+          .firstOrNull ??
+      widget.monitor.localMachine;
 
   @override
   void dispose() {
@@ -45,12 +52,12 @@ class _MachineResourcePanelState extends State<MachineResourcePanel> {
         : event.logicalKey == LogicalKeyboardKey.arrowUp
         ? -1
         : 0;
-    final monitor = widget.monitor, machines = widget.monitor.machines;
+    final machines = widget.monitor.machines;
     if (direction == 0 || machines.isEmpty) return KeyEventResult.ignored;
-    final current = machines.indexWhere((m) => identical(m, monitor.selected));
+    final current = machines.indexWhere((m) => identical(m, _selected));
     final next = (current + direction).clamp(0, machines.length - 1);
     final id = machines[next].machine.machineId;
-    monitor.selectMachine(id);
+    setState(() => _inspectedMachineId = id);
     final context = _rows[id]?.currentContext;
     if (context != null) Scrollable.ensureVisible(context);
     return KeyEventResult.handled;
@@ -69,8 +76,7 @@ class _MachineResourcePanelState extends State<MachineResourcePanel> {
             builder: (context, constraints) {
               final monitor = widget.monitor,
                   machines = widget.monitor.machines;
-              final selected = monitor.selected,
-                  reading = monitor.reading(selected);
+              final selected = _selected, reading = monitor.reading(selected);
               final scale = MediaQuery.textScalerOf(context).scale(13) / 13;
               final compact = constraints.maxWidth < 420 * scale;
               final width = 58.0 * scale;
@@ -134,32 +140,6 @@ class _MachineResourcePanelState extends State<MachineResourcePanel> {
                                 width,
                               ),
                           ],
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 4,
-                      ),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          key: const ValueKey('resource-follow-focus'),
-                          onPressed: () => monitor.selectMachine(null),
-                          style: TextButton.styleFrom(side: BorderSide.none),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Flexible(
-                                child: Text('Follow focused pane'),
-                              ),
-                              if (monitor.followsFocus) ...[
-                                const SizedBox(width: 8),
-                                const Icon(AppIcons.check, size: 16),
-                              ],
-                            ],
-                          ),
                         ),
                       ),
                     ),
@@ -275,7 +255,7 @@ class _MachineResourcePanelState extends State<MachineResourcePanel> {
             '${state.machine.displayName}${monitor.available(state) ? '' : ' — Disconnected'}',
         child: TextButton(
           key: _rows.putIfAbsent(id, GlobalKey.new),
-          onPressed: () => monitor.selectMachine(id),
+          onPressed: () => setState(() => _inspectedMachineId = id),
           style: ButtonStyle(
             side: const WidgetStatePropertyAll(BorderSide.none),
             alignment: Alignment.centerLeft,

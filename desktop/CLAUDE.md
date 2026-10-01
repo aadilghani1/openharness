@@ -261,22 +261,23 @@ there is no title or deferred-close button. Cancel is the default. Previously qu
 plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 
-`HarnessMonitor` drives the bottom-left resource summary. It samples connected owned sessions
-every 15 seconds and never while the app is hidden. Clicking it opens the reusable
-`autonomous/harness-monitor` DSH tab through `HarnessMonitorController`, with its viewer full width
-and the assistant terminal revealed only on request. The DSH table shares the daemon's resource
-sampler and adds opt-in activity metadata to `agents_list`. RAM is process-tree RSS; CPU is interval use, with 100% representing one core. Unknown
-readings remain unknown. Shared Codex servers are listed separately and included once in totals;
-token counts reuse existing agent data. The monitor never resumes sessions or scans transcripts.
+`HarnessMonitor` supplies the global running-harness count without process sampling
+in the footer. Clicking it opens the reusable `autonomous/harness-monitor` DSH tab
+through `HarnessMonitorController`, with its viewer full width and the assistant
+terminal revealed only on request. The DSH table shares the daemon's resource sampler
+and adds opt-in activity metadata to `agents_list`. RAM is process-tree RSS; CPU is
+interval use, with 100% representing one core. Unknown readings remain unknown.
+Shared Codex servers are listed separately and included once; token counts reuse
+existing agent data. The monitor never resumes sessions or scans transcripts.
 
-`MachineResourceMonitor` separately scopes host CPU/RAM/GPU to the focused
-pane's machine or a user-pinned owned machine. It samples the selected host every 15 seconds,
-all connected owned hosts every three seconds while the hardware popover is open, and none
-while hidden. Readings expire in 45 seconds and clear on disconnect, replacement or hide.
-CPU is normalized host utilization; RAM excludes reclaimable cache where available. GPU is
-the busiest reported device, with individual devices in the popover alongside pressure,
-swap and disk free. Missing telemetry is `-`. Additive `machine_resources` RPC fields allow
-mixed old/new CLIs. See `design/workspace-status-bar.md` for the complete scope/format contract.
+`MachineResourceMonitor` always scopes CPU/RAM/GPU to this computer, even when the
+focused pane is remote. Hardware is passive text, with no filter or popover. It
+samples only the local host every 15 seconds while foreground. Readings expire in
+45 seconds and clear on disconnect, replacement or hide. CPU is normalized host
+utilization; RAM excludes reclaimable cache where available. GPU is the busiest
+reported device. Missing telemetry is `-`. Additive `machine_resources` RPC fields
+allow mixed old/new CLIs. See `design/workspace-status-bar.md` for the complete
+scope and format contract.
 
 ### Command dock
 

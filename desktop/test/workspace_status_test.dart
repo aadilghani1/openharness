@@ -458,6 +458,7 @@ void main() {
             subscription('codex', 'bbbbbb', 13),
           ];
         final app = createApp();
+        app.machineStates['m']!.localOnly = true;
         final pane = app.adoptSessionForTest(terminal('a0', []));
         addTearDown(app.dispose);
         addTearDown(subscriptions.dispose);
@@ -518,7 +519,11 @@ void main() {
         if (native) {
           expect(
             updates.last['machineResources']['text'],
-            contains('Test host'),
+            'CPU -  RAM -  GPU -',
+          );
+          expect(
+            updates.last['machineResources']['detail'],
+            startsWith('Test host'),
           );
           final done = Completer<void>();
           messenger.handlePlatformMessage(

@@ -6,20 +6,19 @@ import '../core/machine_resources.dart';
 import '../core/models.dart';
 import 'app_state.dart';
 
-/// Hardware has a machine scope. Session counts and subscription allowances do
-/// not. Closed: sample the selected machine. Open: sample the owned inventory.
+/// The footer always describes this computer, independently of pane focus.
+/// Closed: sample the local machine. Open: sample the owned inventory.
 /// These optional reads never connect a machine or launch a harness.
 class MachineResourceMonitor extends ChangeNotifier {
   MachineResourceMonitor(this.app);
   final AppNotifier app;
   final _samples = <String, (MachineState, MachineResources, DateTime)>{};
   Timer? _timer;
-  String? _pinnedMachineId, _lastScope;
+  String? _lastScope;
   bool _started = false, _disposed = false, _busy = false, _again = false;
   bool _expanded = false;
   int _revision = 0;
 
-  bool get followsFocus => _pinnedMachineId == null;
   List<MachineState> get machines =>
       app.machineStates.values
           .where((state) => !state.machine.isShared)
@@ -30,16 +29,13 @@ class MachineResourceMonitor extends ChangeNotifier {
           ),
         );
 
-  MachineState? get selected {
-    final id =
-        _pinnedMachineId ?? app.focusedPane?.machineId ?? app.selectedMachineId;
-    if (id != null) {
-      final state = app.stateOf(id);
-      if (state != null) return state.machine.isShared ? null : state;
-    }
-    return machines.where((m) => m.isLocalMachine).firstOrNull ??
-        machines.where(available).firstOrNull ??
-        machines.firstOrNull;
+  MachineState? get localMachine => app.machineStates.values
+      .where((state) => state.isLocalMachine && !state.machine.isShared)
+      .firstOrNull;
+
+  String get _scopeIdentity {
+    final state = localMachine;
+    return '${state?.machine.machineId}/${state != null && available(state)}';
   }
 
   bool available(MachineState state) =>
@@ -57,35 +53,23 @@ class MachineResourceMonitor extends ChangeNotifier {
         : null;
   }
 
-  String get scopeName => selected?.machine.displayName ?? 'Resources';
-  String metricsLabel({bool gpu = true}) {
-    final value = reading(selected);
-    return '  CPU ${resourcePercent(value?.cpuPercent)}'
-        '  RAM ${resourcePercent(value?.memoryPercent)}'
+  String get scopeName => localMachine?.machine.displayName ?? 'This computer';
+  String metricsLabel({bool ram = true, bool gpu = true}) {
+    final value = reading(localMachine);
+    return 'CPU ${resourcePercent(value?.cpuPercent)}'
+        '${ram ? '  RAM ${resourcePercent(value?.memoryPercent)}' : ''}'
         '${gpu ? '  GPU ${resourcePercent(value?.busiestGpu?.utilizationPercent)}' : ''}';
   }
 
-  String get label {
-    return '$scopeName${metricsLabel()}';
-  }
+  String get label => metricsLabel();
 
   String get detail {
-    final state = selected, value = reading(state);
-    return '$label\n'
-        '${followsFocus ? 'Follows the focused pane.' : 'Pinned to $scopeName.'} '
-        'CPU and RAM show this machine’s usage, including other apps.\n'
+    final state = localMachine, value = reading(state);
+    return '$scopeName  $label\n'
+        'This computer’s CPU and RAM usage, including other apps.\n'
         '${value?.busiestGpu == null ? 'GPU reading unavailable.' : 'GPU shows the busiest device: ${value!.busiestGpu!.name}.'}\n'
         '${state != null && !available(state) ? 'Machine disconnected. ' : ''}'
         'Click to compare machines. Unavailable readings use a dash.';
-  }
-
-  void selectMachine(String? id) {
-    if (id != null && !machines.any((m) => m.machine.machineId == id)) return;
-    if (_pinnedMachineId == id) return;
-    _pinnedMachineId = id;
-    _revision++;
-    _lastScope = null;
-    _inventoryChanged();
   }
 
   void start() {
@@ -105,9 +89,6 @@ class MachineResourceMonitor extends ChangeNotifier {
   }
 
   void _inventoryChanged() {
-    if (_pinnedMachineId != null && app.stateOf(_pinnedMachineId!) == null) {
-      _pinnedMachineId = null;
-    }
     final removed = _samples.keys.where((id) {
       final state = app.stateOf(id);
       return state == null ||
@@ -118,9 +99,7 @@ class MachineResourceMonitor extends ChangeNotifier {
       _samples.remove(id);
     }
     if (removed.isNotEmpty) _revision++;
-    final state = selected;
-    final scope =
-        '${state?.machine.machineId}/${state == null ? false : available(state)}';
+    final scope = _scopeIdentity;
     final changed = scope != _lastScope;
     _lastScope = scope;
     notifyListeners();
@@ -131,6 +110,7 @@ class MachineResourceMonitor extends ChangeNotifier {
     _revision++;
     _timer?.cancel();
     _samples.clear();
+    _lastScope = _scopeIdentity;
     notifyListeners();
     if (app.foreground.value) unawaited(refresh());
   }
@@ -144,7 +124,7 @@ class MachineResourceMonitor extends ChangeNotifier {
     _timer?.cancel();
     _busy = true;
     final revision = _revision;
-    final scope = selected;
+    final scope = localMachine;
     final targets = (_expanded ? machines : [?scope]).where(available).toList();
     try {
       await Future.wait(

@@ -103,7 +103,7 @@ void main() {
       },
     ];
     await monitor.refresh();
-    expect(monitor.label, '1 harness');
+    expect(monitor.label, 'Harnesses 1');
     expect(monitor.sharedLabel, 'Shared Codex servers · 600 MB RAM');
     expect(monitor.detail, contains('included once'));
     ((connection.reply['harnesses'] as Map)['shared'] as List).first.remove(
@@ -111,9 +111,9 @@ void main() {
     );
     await monitor.refresh();
     expect(monitor.sharedLabel, 'Shared Codex servers · — RAM');
-    expect(monitor.label, '1 harness');
+    expect(monitor.label, 'Harnesses 1');
     app.machineStates['m']!.agents = [];
-    expect(monitor.label, '0 harnesses');
+    expect(monitor.label, 'Harnesses 0');
     expect(monitor.sharedLabel, isNull);
   });
 
@@ -150,12 +150,12 @@ void main() {
       expect(connection.calls, [
         {'type': 'machine_resources', 'harnesses': true},
       ]);
-      expect(monitor.label, '2 harnesses');
+      expect(monitor.label, 'Harnesses 2');
       expect(monitor.reading(monitor.live.first)!.processCount, 3);
       expect(app.allPanes, isEmpty);
       connection.reply = {};
       await monitor.refresh();
-      expect(monitor.label, '2 harnesses');
+      expect(monitor.label, 'Harnesses 2');
     },
   );
 
@@ -218,12 +218,12 @@ void main() {
         ];
       connection.pending!.complete(connection.reply);
       await pending;
-      expect(monitor.label, '1 harness');
+      expect(monitor.label, 'Harnesses 1');
       app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
       final before = connection.calls.length;
       await monitor.refresh();
       expect(connection.calls.length, before);
-      expect(monitor.label, '0 harnesses');
+      expect(monitor.label, 'Harnesses 0');
     },
   );
 

@@ -50,6 +50,7 @@ class _App extends AppNotifier {
       ),
     )..connectionStatus = ConnectionStatus.connected;
     selectedMachineId = 'm';
+    machineStates['m']!.localOnly = true;
   }
   final calls = <String>[];
   final values = <String, MachineResources?>{
@@ -105,46 +106,53 @@ void main() {
   });
 
   testWidgets(
-    'scope follows the focused pane; choosing a machine pins it without navigation',
+    'local hardware stays fixed when focus and selection move to remote harnesses',
     (tester) async {
       final app = _App();
       final monitor = MachineResourceMonitor(app);
       app.activeSwarm.panes.addAll([
         TerminalPane(id: 1, machineId: 'm', agentId: 'a'),
         TerminalPane(id: 2, machineId: 'o', agentId: 'b'),
+        TerminalPane(id: 3, machineId: 'r', agentId: 'c'),
       ]);
-      app.focusedPaneId = 1;
+      app.focusedPaneId = 2;
       monitor.start();
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.label, 'M2  CPU 20%  RAM 50%  GPU 10%');
+      expect(monitor.label, 'CPU 20%  RAM 50%  GPU 10%');
+      expect(monitor.detail, startsWith('M2  CPU 20%'));
       app.focusedPaneId = 2;
+      app.selectedMachineId = 'o';
       app.changed();
-      await tester.pump();
-      expect(monitor.scopeName, 'office');
-      monitor.selectMachine('r');
-      await tester.pump();
-      expect(monitor.followsFocus, isFalse);
-      expect(
-        monitor.reading(monitor.selected)!.busiestGpu!.utilizationPercent,
-        80,
-      );
-      expect(app.focusedPaneId, 2);
-      app.focusedPaneId = 1;
-      app.changed();
-      expect(monitor.scopeName, '4090 Rig');
-      monitor.selectMachine(null);
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.followsFocus, isTrue);
-      expect(app.allPanes, hasLength(2));
+      expect(monitor.label, 'CPU 20%  RAM 50%  GPU 10%');
+      app.focusedPaneId = 3;
+      app.changed();
+      await tester.pump();
+      expect(
+        monitor.reading(monitor.localMachine)!.busiestGpu!.utilizationPercent,
+        10,
+      );
+      expect(app.focusedPaneId, 3);
+      app.focusedPaneId = 1;
+      app.changed();
+      await tester.pump();
+      expect(monitor.scopeName, 'M2');
+      expect(app.calls, ['m']);
+      expect(app.allPanes, hasLength(3));
+      app.machineStates.remove('m');
+      app.changed();
+      await tester.pump();
+      expect(monitor.localMachine, isNull);
+      expect(monitor.label, 'CPU -  RAM -  GPU -');
       monitor.dispose();
       app.dispose();
     },
   );
 
   testWidgets(
-    'polls only the selected host at rest, all owned hosts when open, none while hidden',
+    'polls only the local host at rest, all owned hosts when open, none while hidden',
     (tester) async {
       final app = _App();
       final monitor = MachineResourceMonitor(app)..start();
@@ -160,7 +168,7 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(app.calls, hasLength(8));
       app.appLifecycleChanged(AppLifecycleState.hidden);
-      expect(monitor.reading(monitor.selected), isNull);
+      expect(monitor.reading(monitor.localMachine), isNull);
       await tester.pump(const Duration(minutes: 2));
       expect(app.calls, hasLength(8));
       app.appLifecycleChanged(AppLifecycleState.resumed);
@@ -186,14 +194,12 @@ void main() {
       final app = _App();
       final monitor = MachineResourceMonitor(app)..start();
       await tester.pump();
-      expect(monitor.reading(monitor.selected), isNotNull);
-      monitor.selectMachine('m');
-      await tester.pump();
+      expect(monitor.reading(monitor.localMachine), isNotNull);
       app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
       app.changed();
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.reading(monitor.selected), isNull);
+      expect(monitor.reading(monitor.localMachine), isNull);
       expect(monitor.detail, contains('Machine disconnected'));
       final before = app.calls.length;
       await monitor.refresh();
@@ -203,16 +209,16 @@ void main() {
       app.changed();
       await tester.pump();
       app.machineStates['m'] = MachineState(app.machineStates['m']!.machine)
+        ..localOnly = true
         ..connectionStatus = ConnectionStatus.connected;
       app.pending!.complete(const MachineResources(cpuPercent: 99));
       await tester.pump();
-      expect(monitor.reading(monitor.selected), isNull);
+      expect(monitor.reading(monitor.localMachine), isNull);
       app.pending = null;
       app.machineStates.remove('m');
       app.changed();
       await tester.pump();
-      expect(monitor.followsFocus, isTrue);
-      expect(monitor.selected!.machine.machineId, isNot('m'));
+      expect(monitor.localMachine, isNull);
       expect(monitor.machines.any((s) => s.machine.isShared), isFalse);
       monitor.dispose();
       app.dispose();
@@ -275,11 +281,12 @@ void main() {
         debugDisableShadows = shadows;
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pump();
-        expect(monitor.scopeName, 'office');
-        expect(monitor.followsFocus, isFalse);
-        await tester.tap(find.byKey(const ValueKey('resource-follow-focus')));
+        expect(find.text('48 GB / 64 GB'), findsOneWidget);
+        expect(monitor.scopeName, 'M2');
+        expect(find.text('Follow focused pane'), findsNothing);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
         await tester.pump();
-        expect(monitor.followsFocus, isTrue);
+        expect(find.text('16 GB / 32 GB'), findsOneWidget);
         expect(monitor.scopeName, 'M2');
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         expect(closed, isTrue);
@@ -316,7 +323,7 @@ void main() {
         );
         await tester.pump();
         expect(tester.takeException(), isNull);
-        expect(find.text('M2'), findsOneWidget);
+        expect(find.text('M2'), findsNothing);
         expect(
           tester.widget<Tooltip>(find.byType(Tooltip).first).message,
           contains('GPU 10%'),
@@ -326,7 +333,7 @@ void main() {
             .map((w) => w.data ?? '')
             .join();
         if (width == 500) expect(metricText, contains('GPU'));
-        if (width == 120) expect(metricText, isNot(contains('CPU')));
+        if (width == 120) expect(metricText, 'CPU 20%');
       }
       await tester.pumpWidget(const SizedBox());
     },
