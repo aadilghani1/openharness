@@ -2,6 +2,8 @@
 import { z } from 'zod'
 import { conditionsSchema, draftSchema, type MemoryRecord, type MemoryScope, type MemorySupport, type SourceEvent } from './types.js'
 import type { MemoryRecallUse, RecallFeedback } from './receipts.js'
+import type { NotebookState } from './notebook.js'
+import type { TopicPage } from './types.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 export const libraryQuerySchema = z.object({
@@ -9,6 +11,7 @@ export const libraryQuerySchema = z.object({
   limit: z.number().int().min(1).max(50).optional(),
   scope: z.enum(['all', 'personal', 'project']).optional(),
   projectId: id.optional(),
+  topicId: id.optional(),
   state: z.enum(['active', 'tentative', 'needs_verification', 'superseded', 'archived']).optional(),
 }).strict()
 export type LibraryQuery = z.infer<typeof libraryQuerySchema>
@@ -20,6 +23,22 @@ export const libraryProjectQuerySchema = z.object({
 export type LibraryProjectQuery = z.infer<typeof libraryProjectQuerySchema>
 export interface LibraryProject { id: string; name: string; location: string | null }
 export interface LibraryProjects { items: LibraryProject[]; nextBefore: number | null }
+export const notebookQuerySchema = z.object({
+  projectId: id.optional(), cursor: z.string().max(2_000).optional(), limit: z.number().int().min(1).max(20).optional(),
+}).strict()
+export type NotebookQuery = z.infer<typeof notebookQuerySchema>
+export interface NotebookSummary {
+  id: string; title: string; scope: MemoryScope; project: LibraryProject
+  state: NotebookState; updatedAt: number | null
+  activeRecords: number; unresolvedRecords: number; supportingRecords: number
+}
+export interface NotebookIndex {
+  items: NotebookSummary[]; nextCursor: string | null; version: LibraryPage['version']
+}
+export interface NotebookDetail {
+  summary: NotebookSummary; explanation: TopicPage | null
+  supporting: MemorySummary[]; memories: LibraryPage
+}
 
 export type MemorySummary = Pick<MemoryRecord,
   'id' | 'revision' | 'state' | 'scope' | 'kind' | 'facet' | 'assertionType' | 'claim' | 'evidenceClass' | 'createdAt' | 'updatedAt'>

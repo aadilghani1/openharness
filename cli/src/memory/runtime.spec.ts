@@ -100,6 +100,8 @@ it('lets the explicit owner inspect and change saved preferences with watching o
   context.watching = false
   expect(runtime.ownerKey()).toBe('owner_a')
   expect((await runtime.libraryPage('owner_a')).items).toEqual([])
+  expect((await runtime.libraryNotebooks('owner_a')).items).toEqual([])
+  expect(await runtime.libraryNotebook('owner_a', 'missing')).toBeNull()
   const preview = await runtime.libraryPreview('owner_a', { kind: 'configure', preferences: { learn: false, recall: true }, expected: { learn: true, recall: true } })
   expect(await runtime.libraryApply('owner_a', preview)).toMatchObject({ preferences: { learn: false, recall: true } })
   const status = await runtime.libraryStatus('owner_a')
@@ -112,12 +114,14 @@ it('lets the explicit owner inspect and change saved preferences with watching o
   expect(check.learning.status().capturedStreams).toBe(0)
 })
 
-it('drops an owner-library read when the account changes during the worker request', async () => {
+it.each(['libraryPage', 'libraryNotebooks', 'libraryNotebook'])('drops an owner %s read when the account changes during the worker request', async action => {
   await learn()
-  intercept = async operation => { if (operation === 'libraryPage') context.profileId = 'replacement' }
-  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+  intercept = async operation => { if (operation === action) context.profileId = 'replacement' }
+  const read = () => action === 'libraryNotebook' ? runtime.libraryNotebook('owner_a', 'missing')
+    : action === 'libraryNotebooks' ? runtime.libraryNotebooks('owner_a') : runtime.libraryPage('owner_a')
+  await expect(read()).rejects.toThrow('owner_changed')
   expect(create).toHaveBeenCalledTimes(1)
-  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+  await expect(read()).rejects.toThrow('owner_changed')
 })
 
 it('shares one inspection worker while watching is off and bounds concurrent owner requests', async () => {

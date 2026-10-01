@@ -8,7 +8,7 @@ import { MemoryLearner, type LearningOutcome, type MemoryInference } from './lea
 import { locateProject, type ProjectContext } from './project.js'
 import type { Arguments, MemoryPort, Operation, Result } from './operations.js'
 import type { MemoryPreferences } from './store.js'
-import type { LibraryQuery, LibraryProjectQuery, LibraryCommand, LibraryPreview } from './library.js'
+import type { LibraryQuery, LibraryProjectQuery, LibraryCommand, LibraryPreview, NotebookQuery } from './library.js'
 import type { PreparedRecall, RecallReceipt } from './receipts.js'
 import { conditionsSchema, MemoryError, parse, type RecallPacket, type RecallRequest } from './types.js'
 
@@ -127,6 +127,14 @@ export class CodingMemoryRuntime {
 
   async libraryProjects(owner: string, query: LibraryProjectQuery = {}) {
     return this.withOwner(owner, port => port.request('libraryProjects', [owner, query]))
+  }
+
+  async libraryNotebooks(owner: string, query: NotebookQuery = {}) {
+    return this.withOwner(owner, port => port.request('libraryNotebooks', [owner, query]))
+  }
+
+  async libraryNotebook(owner: string, id: string) {
+    return this.withOwner(owner, port => port.request('libraryNotebook', [owner, id]))
   }
 
   async libraryPreview(owner: string, command: LibraryCommand) {

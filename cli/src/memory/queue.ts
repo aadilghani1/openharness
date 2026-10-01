@@ -1,7 +1,7 @@
 /** Durable episode intake and inference leases. No provider calls or raw transcripts in job metadata. */
-import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { digest } from './admission.js'
+import { memoryCallAllowance, reserveMemoryCall, MEMORY_CALL_PURPOSE_SCHEMA } from './budget.js'
 import type { Database } from './database.js'
 import { MemoryError, parse, sourceSchema, type MemoryAccess, type MemoryDraft, type MemoryRecord, type SourceEvent } from './types.js'
 
@@ -34,6 +34,7 @@ export const QUEUE_SCHEMA = `
     PRIMARY KEY(call_id, job_id)
   );
   CREATE TABLE IF NOT EXISTS memory_queue_totals (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+  ${MEMORY_CALL_PURPOSE_SCHEMA}
 `
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 const cursor = z.string().min(1).max(256)
@@ -82,7 +83,6 @@ interface QueueDeps {
 
 const HOUR = 3_600_000
 const LEASE_MS = 120_000
-const MAX_CALLS_PER_HOUR = 6
 export const MAX_EPISODES_PER_CALL = 4
 const MAX_REVIEW_SOURCES = 128
 const MAX_REVIEW_SOURCE_BYTES = 96_000
@@ -190,9 +190,9 @@ export class MemoryQueue {
         this.release(jobId, 'waiting_for_model', target.state === 'unsupported' ? 'model_unsupported' : 'model_unavailable', now() + 60_000)
         return { state: 'waiting_for_model' as const }
       }
-      const usage = db.prepare('SELECT COUNT(*) AS count, MIN(started_at) AS first FROM memory_inference_calls WHERE started_at > ?').get(now() - HOUR)!
-      if (Number(usage.count) >= MAX_CALLS_PER_HOUR) {
-        const retryAt = Number(usage.first) + HOUR + 1
+      const usage = memoryCallAllowance(db, now())
+      if (usage.retryAt !== null) {
+        const retryAt = usage.retryAt
         this.release(jobId, 'budget_deferred', 'hourly_budget', retryAt)
         return { state: 'budget_deferred' as const, retryAt }
       }
@@ -220,13 +220,12 @@ export class MemoryQueue {
         sources = combined
       }
       const contextKey = digest(target.key)
-      const token = randomUUID()
+      const token = reserveMemoryCall(db, now(), contextKey, 'extraction')
       const until = now() + LEASE_MS
       const access: MemoryAccess = { profileId: this.deps.profileId,
         projectIds: job.project_id === null ? [] : [String(job.project_id)], includeProfile: true,
         ...scope,
       }
-      db.prepare('INSERT INTO memory_inference_calls(id, started_at, context_key) VALUES(?, ?, ?)').run(token, now(), contextKey)
       group.forEach((member, ordinal) => {
         db.prepare(`UPDATE memory_jobs SET state='reviewing', lease_token=?, lease_until=?, generation=?, context_key=?, source_digest=?,
           attempts=attempts+1, updated_at=?, last_error=NULL WHERE id=?`)
