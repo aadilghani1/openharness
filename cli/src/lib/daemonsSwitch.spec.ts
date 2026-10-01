@@ -440,14 +440,16 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
   })
 
   it('arms the pair\'s timers only inside onDaemonsChanged, and starts the switch once all of it is wired', () => {
-    const timers = [...source.matchAll(/setInterval\(\(\) => \{ (void pairLearner|daemons\.recheck\(\))/g)]
+    // Track the owned registrations, independent of the optional feature guards in their callbacks.
+    const timers = [...source.matchAll(/(?:learnTick|pairConfigTick)\s*\?\?=\s*setInterval\([^\n]+/g)]
     expect(timers).toHaveLength(2)
     for (const timer of timers) expect(onChanged).toContain(timer[0])
     expect(onChanged).toContain('clearInterval(learnTick)')
     expect(onChanged).toContain('clearInterval(pairConfigTick)')
     expect(onChanged).toContain('zooTurnReporter.clear()')
     expect(onChanged).toContain('pairHarness.off()')
-    expect(onChanged).toContain('if (daemons.on()) codingMemory?.start()')
+    expect(onChanged).toContain('if (daemons.on() && codingMemoryPreview()) codingMemory?.start()')
+    expect(onChanged).toContain('if (!codingMemoryPreview()) void pairLearner?.tick()')
     expect(onChanged).toContain('codingMemory?.pause()')
     expect(at('daemons.start()')).toBeGreaterThan(at('pairBrain = new PairBrain({'))
     expect(at('daemons.start()')).toBeGreaterThan(at('onDaemonsChanged = (on) => {'))
