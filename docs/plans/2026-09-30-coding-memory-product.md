@@ -169,6 +169,16 @@ Experiments preserve the question, evaluator, baseline, candidate, conditions, s
 
 Add a maintained coding notebook to Project knowledge. It synthesizes supported records into short explanations of how the project works and why, with evidence and open questions available on demand. Pages are derived from versioned records, not an independent biography or editable policy file. Corrections, forgetting, and exclusions invalidate affected pages before recall; stale synthesis must not survive a corrected source. Saving an agent's answer never creates independent confirmation of that answer.
 
+The current notebook prototype groups each topic within its exact project/task/branch scope. The owner
+can open a page, read its source memories and their conditions, and use the existing correction or
+forget controls. **Individual memories** remains available while explanations are queued, learning is
+paused, an older service is connected, or an older store has not yet been indexed. Pages show their
+coverage and unresolved-record count; a generated explanation is not a complete account of a project.
+The companion's selected model prepares explanations inside the existing six-call hourly allowance,
+with at most 24 records and 48 KB of input per page. Browsing does not invoke a model. Mechanical
+provenance and lifecycle checks pass; faithful synthesis and improved coding outcomes still require
+real-model evaluation.
+
 ## Experience in the coding companion
 
 In the review build, enable **Settings → Experimental → Coding memory**, then open **Companions → Memories**.
@@ -200,6 +210,6 @@ Extend the existing evaluation set with usage-versus-preference, team-versus-per
 
 Use matched tasks to test different reasoning and feedback preferences with the same requirements, repository, engine/model, and budget. Require the expected change in approach and a correct result. Include a preference that should be challenged, a failed approach whose conditions have changed, and a user who has not stated a style. Grade observable actions and artifacts; do not infer success from an agent saying that it remembered.
 
-Within those first workflows, include current workspace guidance and evidence attached to the actual revision. The next slice adds maintained notebook pages with correction/forget controls. Richer experiment automation remains optional follow-up; the research does not require expanding the initial product beyond coding on one machine in Claude and Codex.
+Within those first workflows, include current workspace guidance and evidence attached to the actual revision. Maintained notebook pages now have a development implementation with source correction/forget controls; task/session navigation and comparative usefulness remain unfinished. Richer experiment automation remains optional follow-up; the research does not require expanding the initial product beyond coding on one machine in Claude and Codex.
 
 The quality question is whether the agent makes a better engineering decision and the developer has to repeat less context. A richer-looking profile is not sufficient evidence.

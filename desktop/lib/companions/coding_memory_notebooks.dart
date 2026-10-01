@@ -67,14 +67,14 @@ class CodingMemoryNotebooks extends ChangeNotifier {
     await refresh();
   }
 
-  void back() {
+  Future<void> back() async {
     ++_generation;
     busy = false;
     selectedId = null;
     page = null;
     error = null;
     _notify();
-    if (items.isEmpty) unawaited(refresh());
+    if (items.isEmpty) await refresh();
   }
 
   Future<void> refresh({bool more = false}) async {
@@ -113,10 +113,53 @@ class CodingMemoryNotebooks extends ChangeNotifier {
       if (failure is CodingMemoryFailure && failure.code == 'UNSUPPORTED') {
         available = false;
       } else {
-        error = failure is CodingMemoryFailure && failure.code == 'NOT_FOUND'
-            ? 'This notebook is no longer available. Return to project notebooks.'
-            : codingMemoryError(failure);
+        error = _notebookError(failure);
       }
+    } finally {
+      if (!_disposed && generation == _generation) {
+        busy = false;
+        _notify();
+      }
+    }
+  }
+
+  Future<void> moreMemories() async {
+    final current = page, id = selectedId;
+    final memories = memoryMap(current?['memories']);
+    final cursor = memories['nextCursor'];
+    if (!valid ||
+        busy ||
+        library.busy ||
+        current == null ||
+        id == null ||
+        cursor is! String) {
+      return;
+    }
+    final generation = ++_generation;
+    busy = true;
+    error = null;
+    _notify();
+    try {
+      final result = await library.notebookMemories(id, cursor);
+      if (!valid || generation != _generation) return;
+      final entries = (result['items'] as List).map(memoryMap).toList();
+      if (entries.any((entry) => entry['id'] is! String)) {
+        throw const CodingMemoryFailure('PAGE_CHANGED');
+      }
+      page = {
+        ...current,
+        'memories': {
+          ...result,
+          'items': [...memories['items'] as List, ...entries],
+        },
+      };
+    } catch (failure) {
+      if (!valid || generation != _generation) return;
+      // Paging cannot keep a page from a now-private or corrected snapshot.
+      page = null;
+      items = [];
+      nextCursor = null;
+      error = _notebookError(failure);
     } finally {
       if (!_disposed && generation == _generation) {
         busy = false;
@@ -134,3 +177,12 @@ class CodingMemoryNotebooks extends ChangeNotifier {
     super.dispose();
   }
 }
+
+String _notebookError(Object failure) => switch (failure) {
+  CodingMemoryFailure(code: 'NOT_FOUND') =>
+    'This notebook is no longer available. Return to project notebooks.',
+  CodingMemoryFailure(code: 'PAGE_CHANGED') => 'The saved memories changed. Refresh this notebook to read the current version.',
+  CodingMemoryFailure(code: 'TIMEOUT') =>
+    'The local memory service did not reply. Refresh to try again.',
+  _ => codingMemoryError(failure),
+};

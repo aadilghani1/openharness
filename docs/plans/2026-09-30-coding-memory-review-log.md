@@ -288,3 +288,60 @@ At the user's request, the earlier review build and matching local CLI were inst
 The first PR #539 CI run passed 8,001 CLI tests but failed the existing `cli.ts` source-wiring check: its timer regex only recognized a callback beginning directly with `void pairLearner`, and its startup assertion predated the dynamic preview guard. The check now locates the two owned timer registrations independently of callback formatting, still requires both inside the master-switch handler, and checks the new preview gates alongside the existing shutdown assertions. No runtime behavior or test was disabled for that correction. The PR records the subsequent checks on the updated commit.
 
 The permitted local full run completed with **8,043 passed, 6 failed and 38 skipped**. One failure was that timer assertion; all **61 checks across the switch, runtime, settings and local settings-route files** passed after its correction. The remaining five failures were the installed OpenCode TUI's missing `--auto`/`--agent` flags; the OpenCode implementation and flag tests are unchanged in this PR. The full local run is recorded as failed, not relabeled by focused rechecks. Native OpenCode compatibility and the memory model-quality gates are separate from the opt-in setting's validation.
+
+PR #539 merged as `7be7ae16afca5ee44da03a8bc14c1effead6eebd` after all four jobs in
+[its final CI run](https://github.com/autonomous-ai/openharness/actions/runs/36857274078) passed on
+head `a20f41d86aa3d09a3c7f26f9f64f6cf2683b3b4e`. No release was published.
+
+## Round twenty: maintain inspectable project notebooks
+
+Applying the published-programmer council's workspace, evidence and feedback-loop criteria, this
+round adds a project notebook as a derived reading aid. This is our source-informed review; none of
+the practitioners participated in or endorsed it. Each topic stays inside its exact project, task
+and branch scope. Only current active records enter a generated explanation; possible or conflicted
+memories remain visible as unresolved records. Statements cite exact source revisions and material
+fields. Source conditions, exceptions and validity are inherited independently of the generated prose.
+These structural checks cannot establish whether an LLM paraphrase is faithful.
+
+The durable background job shares the existing six-call hourly allowance with extraction. Completed
+episodes normally go first; one existing slot can serve a waiting notebook so continuous intake cannot
+starve every explanation. Input is bounded to 24 records and 48 KB, while coverage counts include
+omitted records. Owner browsing paginates the originals independently. No new inference budget or model
+selection was added. Leases bind source snapshot, privacy generation and selected companion context;
+interruption, account/model changes and stale results cannot publish. Correction, forgetting,
+exclusion and validity boundaries clear or hide stale pages. Forgetting the last record removes its
+derived index entry. An older writer's invalidated page can be rebuilt before its next validity deadline.
+
+Older stores are indexed in batches of 50 records while learning is enabled. Migration does not copy
+source prose or make a model call. Individual memories remain available before indexing and while
+learning is off. Owner-only notebook routes retain verified caller and identity rechecks; agent tokens
+cannot browse them. Tests exercise a bundled worker from capture through extraction, notebook
+publication, owner reading and forgetting, plus owner changes during pending reads.
+
+**Project knowledge** now opens a [notebook index](../research/2026-10-01-memory-notebooks/notebooks-dark-1.0x.png).
+A [page](../research/2026-10-01-memory-notebooks/notebook-light-1.0x.png) names its project and scope,
+shows partial coverage, and links every statement to its source memory. Conditions and exceptions stay
+visible alongside the explanation. Source links reuse the existing evidence, correction and forget
+dialog. Read-only navigation cannot send terminal input or start inference. Late page/paging replies
+cannot reopen a dismissed page or restore another account's content. After an invalidated index is
+refetched, Back restores the list position and initiating control's keyboard focus.
+
+Validation so far passed **335 backend checks across 26 files**, then **22 notebook checks** including
+three new record/byte-limit and old-store migration cases. **67 desktop checks across six files** pass.
+The first viewer run failed two synthetic fixture assumptions (a missing query map and an overly narrow
+inferred map type); both fixtures were corrected. Navigation review found an early scroll restoration;
+the delayed-index regression now covers awaiting the read before restoring focus and position. Type
+checking passed. Scoped Flutter analysis found only missing braces on the new multiline guards; those
+were corrected. The final navigation change rebuilt successfully as a normal macOS debug app with the
+Apple Silicon renderer and local signature. The full local CLI
+suite is in progress and has reproduced the installed OpenCode flag failures; its final outcome and
+exact-commit CI must be recorded before merge.
+
+Synthetic renders cover normal and 200% text in both appearances, including narrow windows and long
+project paths. The [enlarged page](../research/2026-10-01-memory-notebooks/notebook-light-2.0x.png) and
+[source conditions](../research/2026-10-01-memory-notebooks/notebook-sources-dark-2.0x.png) were visually
+inspected. These do not verify physical native IME or VoiceOver. The open review app was left alone;
+no synthetic memories were written into the user's store and no native model was called. At the last
+UI observation, the selected Claude account still had no weekly allowance. Real extraction and
+notebook quality, cross-framework task benefit, usefulness-based ranking, task/session navigation,
+legacy lesson migration and the held-out rollout gates remain unfinished. The feature stays opt-in.

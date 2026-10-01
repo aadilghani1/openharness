@@ -134,4 +134,64 @@ void main() {
     expect(notebooks.error, isNull);
     expect(notebooks.page, isNull);
   });
+
+  test('more source memories stay bound to their notebook and discard a stale cursor', () async {
+    final first = syntheticNotebook(syntheticMemory(project: true));
+    (first['summary'] as Map)['id'] = 'notebook:storage';
+    (first['memories'] as Map)['nextCursor'] = 'page-two';
+    connection.handle = (p) async =>
+        p['action'] == 'notebook' ? first : reply(p);
+    await notebooks.open('notebook:storage');
+    connection.handle = (p) async => p['action'] == 'list'
+        ? {
+            'ok': true,
+            'items': [
+              {'id': 'third-memory', 'claim': 'A later investigation.'},
+            ],
+            'nextCursor': 'page-three',
+          }
+        : reply(p);
+    await notebooks.moreMemories();
+    expect(connection.calls.last, {
+      'action': 'list',
+      'query': {
+        'topicId': 'notebook:storage',
+        'cursor': 'page-two',
+        'limit': 20,
+      },
+    });
+    expect((notebooks.page!['memories'] as Map)['items'], hasLength(3));
+    connection.handle = (_) async => {'ok': false, 'error': 'PAGE_CHANGED'};
+    await notebooks.moreMemories();
+    expect(notebooks.page, isNull);
+    expect(notebooks.error, contains('changed'));
+  });
+
+  test(
+    'Back discards a pending source page without reopening the notebook',
+    () async {
+      final first = syntheticNotebook(syntheticMemory(project: true));
+      (first['summary'] as Map)['id'] = 'notebook:storage';
+      (first['memories'] as Map)['nextCursor'] = 'page-two';
+      connection.handle = (p) async =>
+          p['action'] == 'notebook' ? first : reply(p);
+      await notebooks.refresh();
+      await notebooks.open('notebook:storage');
+      final hold = Completer<Map<String, dynamic>>();
+      connection.handle = (_) => hold.future;
+      final paging = notebooks.moreMemories();
+      notebooks.back();
+      hold.complete({
+        'ok': true,
+        'items': [
+          {'id': 'late'},
+        ],
+        'nextCursor': null,
+      });
+      await paging;
+      expect(notebooks.page, isNull);
+      expect(notebooks.selectedId, isNull);
+      expect(notebooks.items, [summary]);
+    },
+  );
 }

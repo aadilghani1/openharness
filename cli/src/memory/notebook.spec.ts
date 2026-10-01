@@ -197,6 +197,62 @@ it('offers one existing budget slot to a waiting notebook during continuous epis
   expect(store.learning.status().callsLastHour).toBe(6)
 })
 
+it.each([false, true])('bounds notebook input without hiding omitted coverage (large Unicode records: %s)', large => {
+  for (let index = 0; index < 35; index++) remember({
+    conflictKey: `decision_${index}`,
+    ...(large ? {
+      details: { reference: { notes: '示例说明'.repeat(1_000) } },
+      evidence: [{ ...draft.evidence[0], paths: [...draft.evidence[0].paths, '/details'] }],
+    } : {}),
+  })
+  const lease = claim()
+  expect(lease.input.total).toBe(35)
+  expect(lease.input.records.length).toBeLessThanOrEqual(24)
+  expect(lease.input.records.length).toBeGreaterThan(0)
+  expect(lease.input.records.reduce((bytes, record) => bytes + Buffer.byteLength(JSON.stringify(record)), 0)).toBeLessThanOrEqual(48_000)
+  if (large) expect(lease.input.records.length).toBeLessThan(24)
+  else expect(lease.input.records).toHaveLength(24)
+  store.notebookFinish(lease, page(lease), target)
+  const detail = store.libraryNotebook('owner', lease.id)!
+  expect(detail.summary).toMatchObject({ activeRecords: 35, supportingRecords: 1 })
+  const second = store.libraryPage('owner', { topicId: lease.id, cursor: detail.memories.nextCursor!, limit: 20 })
+  expect([...detail.memories.items, ...second.items]).toHaveLength(35)
+  expect(second.nextCursor).toBeNull()
+})
+
+it('indexes older stores in bounded chunks only while learning, keeping individual records available', () => {
+  for (let index = 0; index < 55; index++) remember({ facet: `topic_${index}`, conflictKey: `decision_${index}` })
+  store.setControls({ learn: false, recall: false })
+  store.close()
+  const Database = builtinSqlite()!
+  const db = new Database(join(directory, 'memory.sqlite'), { readOnly: false }) as unknown as MemoryDatabase
+  try {
+    db.exec('DROP TABLE memory_notebook_jobs; DROP TABLE memory_inference_purpose;')
+  } finally { db.close() }
+  const opened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => now })
+  if (!opened.ok) throw new Error(opened.reason)
+  store = opened.store
+  expect(store.notebookPending()).toEqual({ state: 'learning_off', prefer: false })
+  expect(store.libraryNotebooks('owner').items).toEqual([])
+  expect(store.libraryPage('owner', { limit: 50 }).items).toHaveLength(50)
+  const notebookIds = (): string[] => {
+    const ids: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = store.libraryNotebooks('owner', { limit: 20, cursor })
+      ids.push(...page.items.map(item => item.id))
+      cursor = page.nextCursor ?? undefined
+    } while (cursor)
+    return ids
+  }
+  store.setControls({ learn: true, recall: false })
+  expect(store.notebookPending().state).toBe('indexing')
+  expect(notebookIds()).toHaveLength(50)
+  expect(store.notebookPending().state).toBe('ready')
+  expect(new Set(notebookIds()).size).toBe(55)
+  expect(store.learning.status().callsLastHour).toBe(0)
+})
+
 it('rebuilds a page invalidated by an older writer before its future validity boundary', () => {
   remember({ validity: { ...draft.validity, validUntil: now + 60_000 } })
   const first = claim()
