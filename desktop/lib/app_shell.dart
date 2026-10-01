@@ -211,12 +211,16 @@ class _RootShellState extends ConsumerState<RootShell>
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
+    final app = ref.read(appStateProvider);
+    // A sign-in still waiting on the browser or a phone ends with the app: its
+    // CLI would otherwise wait on, holding the lock the next sign-in needs.
+    if (app.canCancelLogin) app.cancelLogin();
     // Save the final arrangement, with a bound so an unavailable disk cannot
     // trap the user in the app. Input and tab switching never wait for disk.
-    await ref
-        .read(appStateProvider)
-        .flushPaneLayout()
-        .timeout(const Duration(seconds: 1), onTimeout: () {});
+    await app.flushPaneLayout().timeout(
+      const Duration(seconds: 1),
+      onTimeout: () {},
+    );
     return AppExitResponse.exit;
   }
 

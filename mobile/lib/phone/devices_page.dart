@@ -191,7 +191,7 @@ class _DevicesPageState extends State<DevicesPage> {
             const SizedBox(height: 8),
             TtyText(
               'Every computer and app signed in to your account. Each reaches your machines '
-              'end to end encrypted, with no password. Remove one you do not recognise.',
+              'end to end encrypted. Remove one you do not recognise.',
               color: tty.dim,
             ),
             if (frozen) ...[

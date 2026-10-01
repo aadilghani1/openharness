@@ -369,9 +369,14 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
 fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let focus = app.focused();
     let surfaces = app.options.pane_look();
+    // A theme chosen in Appearance is the panes' too, as a terminal's theme is: their default text
+    // and background, and the sixteen colours programs name (None: the terminal's own).
+    let themed = chosen_theme(app);
     if surfaces {
         crate::term_out::clear_extras(body);
         buf.set_style(body, Style::default().bg(Color::Reset));
+    } else if let Some(t) = themed {
+        buf.set_style(body, Style::default().bg(theme::depth_fit(rgb(t.background))));
     }
     let rects = app.rects.clone();
     let mut cursor = None;
@@ -380,9 +385,15 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         let content = app.content_of(app.tab(), *rect);
         // tmux's window-style / window-active-style: the default colours a pane's cells fall back to.
         // tty_default_colours: the active pane's window-active-style where it sets a colour, else
-        // window-style (both the pane's own, its window's or the global ones).
+        // window-style (both the pane's own, its window's or the global ones) — else the theme's.
         let (a, w) = (app.style_of("window-active-style", app.active, Some(*id)), app.style_of("window-style", app.active, Some(*id)));
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
+        // (A style's `default` is Reset: the terminal's colour, which the theme stands in for.)
+        let set = |c: Option<Color>| c.filter(|c| *c != Color::Reset);
+        let window = match themed {
+            Some(t) => (set(window.0).or(Some(theme::depth_fit(rgb(t.foreground)))), set(window.1).or(Some(theme::depth_fit(rgb(t.background))))),
+            None => window,
+        };
         if surfaces {
             let f = crate::pane_frame::frame(*rect, app.window_area(app.tab()), app.box_inner(app.tab()), app.pane_status(app.tab()));
             // Single and zoomed panes also sit directly on the terminal background.
@@ -409,6 +420,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             if let Some(pos) = pane_body(buf, pane, content, active, window) { cursor = Some(pos) }
             pane.dirty = false;
         }
+        if let Some(t) = themed { theme_ansi(buf, content, t) }
         // `@hn-dim on`: a pane you are not in, a little quieter (with one pane, nothing to set apart).
         if !active && rects.len() > 1 && app.options.dim_others() {
             let pal = theme::pane_palette();
@@ -663,6 +675,34 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         buf.set_line(x, y, line, area.width.saturating_sub(x - area.x));
     }
     themed_home(buf, area);
+}
+
+// ── a theme over the panes ──
+
+fn rgb(c: [u8; 3]) -> Color { Color::Rgb(c[0], c[1], c[2]) }
+
+/// The theme chosen in Appearance (`@hn-theme`), where one is and colour is on.
+fn chosen_theme(app: &App) -> Option<&'static crate::terminal_themes::TerminalTheme> {
+    if theme::no_color() { return None }
+    let name = app.options.get("@hn-theme", "", None).filter(|n| !n.is_empty())?;
+    crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == name)
+}
+
+/// The sixteen colours a program names (red, bright green…), in [area], as [t] has them — what a
+/// terminal with that theme would show. Colours a program gives exactly (256-colour, RGB) stay.
+fn theme_ansi(buf: &mut Buffer, area: Rect, t: &crate::terminal_themes::TerminalTheme) {
+    let ansi = |c: Color| -> Color {
+        let i = match c {
+            Color::Black => 0, Color::Red => 1, Color::Green => 2, Color::Yellow => 3, Color::Blue => 4, Color::Magenta => 5, Color::Cyan => 6, Color::Gray => 7,
+            Color::DarkGray => 8, Color::LightRed => 9, Color::LightGreen => 10, Color::LightYellow => 11, Color::LightBlue => 12, Color::LightMagenta => 13, Color::LightCyan => 14, Color::White => 15,
+            Color::Indexed(i) if i < 16 => i as usize,
+            other => return other,
+        };
+        theme::depth_fit(rgb(t.palette[i]))
+    };
+    for y in area.y..area.bottom() { for x in area.x..area.right() {
+        if let Some(c) = buf.cell_mut((x, y)) { c.fg = ansi(c.fg); c.bg = ansi(c.bg); }
+    } }
 }
 
 /// With a theme chosen (Settings → Theme), the home screen stands on the theme's background where
@@ -2917,6 +2957,22 @@ mod theme_render_tests {
         }
         crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert!(outside(&mut app).is_empty(), "{:?}", outside(&mut app));
+    }
+
+    /// A chosen theme is the panes' too: the sixteen colours a program names take the theme's
+    /// palette (red is Dracula's red), and a colour given exactly stays as it was.
+    #[test]
+    fn a_theme_gives_the_panes_its_sixteen_colours() {
+        let t = crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == "Dracula").unwrap();
+        let area = Rect::new(0, 0, 3, 1);
+        let mut buf = Buffer::empty(area);
+        buf[(0, 0)].set_fg(Color::Red);
+        buf[(1, 0)].set_fg(Color::Indexed(12)).set_bg(Color::Black);
+        buf[(2, 0)].set_fg(Color::Rgb(1, 2, 3));
+        theme_ansi(&mut buf, area, t);
+        assert_eq!(buf[(0, 0)].fg, theme::depth_fit(rgb(t.palette[1])));
+        assert_eq!((buf[(1, 0)].fg, buf[(1, 0)].bg), (theme::depth_fit(rgb(t.palette[12])), theme::depth_fit(rgb(t.palette[0]))));
+        assert_eq!(buf[(2, 0)].fg, Color::Rgb(1, 2, 3));
     }
 
     /// The home screen follows a chosen theme: the wordmark in its accent, the screen on its

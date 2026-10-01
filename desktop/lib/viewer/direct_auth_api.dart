@@ -132,6 +132,50 @@ class DirectAuthApi {
         (throw const DirectAuthException('Sign-in returned no access token.'));
   }
 
+  // -- signing in by a QR a signed-in phone approves (backend routes/qrSignIn.ts) --
+
+  Future<({String code, String pollToken, int expiresIn})> qrStart({required String label}) async {
+    final data = unwrapApiResponse(
+      await _dio.post('/api/auth/qr/start', data: {'label': label, 'kind': 'viewer'}),
+    );
+    final code = data is Map ? data['code'] : null, poll = data is Map ? data['pollToken'] : null;
+    final expiresIn = data is Map ? data['expiresIn'] : null;
+    if (code is! String || poll is! String || expiresIn is! int) {
+      throw const DirectAuthException('Sign-in by phone is not available here.');
+    }
+    return (code: code, pollToken: poll, expiresIn: expiresIn);
+  }
+
+  /// `pending`, `denied`, `expired`, or `approved` with the account's email.
+  Future<({String status, String? email})> qrPoll(String pollToken) async {
+    final data = unwrapApiResponse(await _dio.post('/api/auth/qr/poll', data: {'pollToken': pollToken}));
+    final status = data is Map ? data['status'] : null, email = data is Map ? data['email'] : null;
+    return (status: status is String ? status : 'expired', email: email is String ? email : null);
+  }
+
+  /// The same code, alive a while longer; null when it can live no longer.
+  Future<int?> qrExtend(String pollToken) async {
+    try {
+      final data = unwrapApiResponse(await _dio.post('/api/auth/qr/extend', data: {'pollToken': pollToken}));
+      final expiresIn = data is Map ? data['expiresIn'] : null;
+      return expiresIn is int ? expiresIn : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<IssuedTokens> qrClaim(String pollToken) async {
+    final data = unwrapApiResponse(await _dio.post('/api/auth/qr/claim', data: {'pollToken': pollToken}));
+    return IssuedTokens.fromData(data) ??
+        (throw const DirectAuthException('Sign-in returned no access token.'));
+  }
+
+  Future<void> qrCancel(String pollToken) async {
+    try {
+      await _dio.post('/api/auth/qr/cancel', data: {'pollToken': pollToken});
+    } catch (_) {}
+  }
+
   /// authSession.ts `refreshRequest`, down to its one subtle rule: only a 401 or
   /// `REFRESH_TOKEN_INVALID` means the session is dead. An unusable refresh token and a real outage
   /// both come back as the same 503, and reading that as dead would delete a refresh token nothing

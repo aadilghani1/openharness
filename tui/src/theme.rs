@@ -437,10 +437,13 @@ pub fn accent_of(bg: [u8; 3], colours: &[(usize, [u8; 3])]) -> [u8; 3] {
         if mx == 0.0 { 0.0 } else { (mx - mn) / mx }
     };
     let bg_lum = lum(bg);
+    // (Colour 7 is the palette's white: never an accent, or a dark theme's focused border is just
+    // its text colour. The rest: as far from the background as it is vivid, both 0 to 1.)
+    let hues: Vec<[u8; 3]> = colours.iter().filter(|(i, _)| (1..=6).contains(i)).map(|(_, c)| *c).collect();
     let mut best = colours.iter().find(|(i, _)| *i == 6).or(colours.first()).map(|(_, c)| *c).unwrap_or([95, 215, 230]);
     let mut best_score = f64::MIN;
-    for (_, p) in colours {
-        let score = (lum(*p) - bg_lum).abs() * 0.7 + chroma(*p) * 0.3;
+    for p in &hues {
+        let score = (lum(*p) - bg_lum).abs() / 255.0 + chroma(*p);
         if score > best_score { best_score = score; best = *p; }
     }
     best
@@ -1473,5 +1476,14 @@ mod accent_theme_tests {
         assert!(a.len() == 7 && a.starts_with('#'));
         let b = theme_accent_hex("Gruvbox Dark").expect("known theme has an accent");
         assert_ne!(a, b);
+        // A colour, never the theme's white or its text: Dracula's focused border is not #f8f8f2.
+        for name in ["Dracula", "Atom One Dark", "Gruvbox Dark", "Adwaita", "Nord"] {
+            let Some(t) = crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == name) else { continue };
+            let c = theme_accent_rgb(t);
+            assert_ne!(c, t.foreground, "{name}");
+            assert_ne!(c, t.palette[7], "{name}");
+            let (mx, mn) = (c.iter().max().copied().unwrap_or(0) as f64, c.iter().min().copied().unwrap_or(0) as f64);
+            assert!(mx > 0.0 && (mx - mn) / mx > 0.25, "{name}: {c:?} is a colour");
+        }
     }
 }

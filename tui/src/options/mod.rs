@@ -291,13 +291,12 @@ impl Store {
     /// blurred surfaces alike. Off unless chosen.
     pub fn dim_others(&self) -> bool { self.get("@hn-dim", "", None).as_deref() == Some("on") }
 
-    /// `@hn-border` as chosen — or, not chosen, `box` except under `@hn-look classic` (a look
-    /// from before boxes, whose panes keep their lines until you choose).
+    /// `@hn-border` as chosen — `box` unless it says `line`. (`@hn-look classic` is not a choice
+    /// of lines: hn wrote it into every `[look]` it saved, a theme picked or a status bar moved.)
     pub fn border_style(&self) -> &'static str {
         match self.get("@hn-border", "", None).as_deref() {
             Some("line") => "line",
-            Some(_) => "box",
-            None => if self.get("@hn-look", "", None).as_deref() == Some("classic") { "line" } else { "box" },
+            _ => "box",
         }
     }
 

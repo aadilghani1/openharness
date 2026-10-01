@@ -366,11 +366,15 @@ retain their meaning. Read-only loading/error views use the same hierarchy.
 
 **macOS notification menu** — one Notifications section with up to five unread
 session rows and a route to the full inbox. Use a 13-point semibold session title,
-12-point status and tab/machine context, and a 13-point message preview capped
-at two lines. Retain the full text in accessibility and tooltips. Questions
-precede results; each kind is newest first. Mark all read belongs beside the
-heading. Working is a collapsed disclosure with compact title/context rows
-and observed elapsed time. The unread count excludes work in progress. Use
+13-point message preview capped at two lines, and quiet 12-point timestamps.
+The name and message are the content hierarchy. Use the same Harness activity
+marks and theme colors as tabs and panes; do not add status captions or unread
+dots beside them. Tab/machine context, full text and status descriptions remain
+in accessibility and tooltips. Questions precede results; each kind is newest
+first. Mark all read is the shared close icon in a 32-point target beside the
+heading. Working starts expanded, with 28-point name/status/elapsed rows, and
+is absent when empty. Its shared Braille clock only runs while the menu is
+open and expanded, respecting Reduce Motion. The unread count excludes work in progress. Use
 native menu selection and system colors; no inner cards or decorative borders.
 Settings stays in the application menu; this menu ends with Show Harness and Quit.
 Pane-resize guidance is app navigation: use the shared popover surface, system

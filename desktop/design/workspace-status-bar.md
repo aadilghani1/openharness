@@ -221,25 +221,31 @@ adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed
 above 99 with the exact count in its tooltip and accessibility
 value. The native menu has one Notifications section, with questions first,
 then failures and completed results, newest first within each kind. Each row
-shows a title, status, up to two lines of the actual question or notified recap,
-and tab/machine context. Its age is when this app received the notification.
+shows a semibold harness name, up to two lines of the actual question or notified
+recap, and a quiet timestamp. Status uses the same `?`, `✗`, `✓` activity marks
+and theme colors as tabs and panes, without a second status caption or unread
+dot. Its age is when this app received the notification.
 The recap stays bound to that unread receipt; later transcript text cannot
 replace it. Show at most five notifications and a View all route to the full
 inbox. A session in multiple tabs appears once, preferring the active tab,
 then the first containing it. Machine profiles do not hide notifications.
-Project context remains in tooltips. Blue dots mark unread rows; unavailable
+Tab, machine, project and full status descriptions remain in tooltips and
+accessibility text. Unavailable
 rows remain visible and disabled. An empty inbox says “No unread notifications.”
 
-Working is a collapsed inline disclosure. It shows active, known sessions that
+Working starts expanded and disappears when empty. It shows active, known sessions that
 are not already in Notifications, with elapsed time only when the app observed
 their turn start. Exclude idle shells, paused/offline sessions, and waiting
-questions. Show five compact rows, with additional sessions in a submenu.
+questions. Show five compact name/elapsed rows, with additional sessions in a
+submenu. Reuse the tab's native activity renderer and 100ms Braille clock;
+the menu clock stops when closed or collapsed, and with Reduce Motion.
 Working never adds to the badge. Both sections keep their snapshot while open;
 opening the disclosure must not insert new notifications under the pointer.
 Keyboard Left/Right and Return/Space toggle the disclosure. Rows use native
 selection, type-select, accessibility, and existing navigation receipts.
 
-Mark all read sits beside the Notifications heading. New Harness and Open
+Mark all read is the close icon beside the Notifications heading, with a
+32-point target, explicit tooltip and accessibility label. New Harness and Open
 Harness use the existing creation/session pickers and effective shortcut hints.
 Show Harness and Quit finish the menu; Settings stays in the application menu.
 Show Harness stays available while workspace actions are disabled. The window's

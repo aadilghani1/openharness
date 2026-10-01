@@ -59,7 +59,7 @@ import { awakeTimeout } from './lib/sleepAware.js'
 import {
   BIND_WAIT_MS, connectFailure, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady,
 } from './lib/daemonLaunch.js'
-import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
+import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { stopDaemonProcess } from './lib/daemonStop.js'
 import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
@@ -70,6 +70,10 @@ import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from
 import { ZooLessonReporter } from './lib/zooLessons.js'
 import { DAEMONS_OFF, DAEMONS_OFF_DETAIL, DaemonsSwitch, localKillSwitch, zooPassthrough, type ZooRead } from './lib/daemonsSwitch.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
+import { qrSignIn } from './lib/qrSignIn.js'
+import { pickSignInMethod } from './lib/signInMethodPicker.js'
+import { watchJsonDriver, type JsonDriver } from './lib/jsonDriver.js'
+import { terminalQr } from './lib/terminalQr.js'
 import { ensureGridInstalled } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
@@ -397,8 +401,10 @@ ${PROCESS_ENGINES.map((engine) => `  ${ENGINE_CLI_COMMANDS[engine]}`).join('\n')
 A launcher that hands the pane to one of these works the same — "ori claude" is a Claude Code agent.
 
 Machine:
-  harness login                sign in with SSO and save this computer's session
-  harness login --force        stop the daemon and sign in with a different SSO account
+  harness login                sign in (asks: SSO in your browser, or scan a QR with your phone)
+  harness login --sso          sign in with SSO in your browser, without asking
+  harness login --qr           sign in by scanning a QR with Harness on your phone, without asking
+  harness login --force        stop the daemon and sign in with a different account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
   harness auth status --json   print {loggedIn,...} for this computer's saved session
@@ -704,9 +710,15 @@ async function authStatusCommand(json: boolean): Promise<void> {
     machineId: latest?.machineId,
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
+    method: latest?.method ?? 'sso',
   }
   if (json) console.log(JSON.stringify(payload))
-  else console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}\n`)
+  else {
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    // A session a phone approved is Harness's own: the Autonomous services behind billing and grid
+    // do not take it. Say so where the person looks, not only when one of them refuses.
+    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing and grid need an SSO sign-in: harness login --force --sso\n')
+  }
 }
 
 /**
@@ -725,6 +737,16 @@ type SignInOutcome =
   | { signedIn: true; alreadySignedIn: boolean }
   /** Refused. Under `--json` its own coded result line has already been emitted. */
   | { signedIn: false }
+
+/** What the `--json` client and the sign-in itself tell each other beyond the result line. */
+interface SignInHooks {
+  /** The --json client's answers. */
+  driver?: JsonDriver | null
+  /** The QR exists: how to take it back. */
+  onStarted?: (cancel: () => Promise<void>) => void
+  /** The person said yes / the browser came back: finish the sign-in, do not abandon it. */
+  onCommitted?: () => void
+}
 
 /**
  * The account's private grid exists — its name minted or read, then the grid itself created if it is
@@ -763,22 +785,71 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean; entryPoint?: string } = {},
+  opts: { chained?: boolean; entryPoint?: string; method?: 'sso' | 'qr' | 'ask' } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
   // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
   // command and says so with `--entry-point=desktop`. Analytics only — it names no privilege.
   const entryPoint = opts.entryPoint ?? 'cli'
-  const emit = (line: Record<string, unknown>): void => { if (json) console.log(JSON.stringify(line)) }
+  // Once the sign-in has been abandoned nothing more is written: the reader is gone, and a late line
+  // would only meet a closed pipe.
+  let abandoned = false
+  const emit = (line: Record<string, unknown>): void => { if (json && !abandoned) console.log(JSON.stringify(line)) }
   // Harness only. Grid is an add-on: this computer is signed in to it the first time a grid feature is
   // used (`ensureGrid` in the daemon, `lib/gridAttach.ts`) — with this session's token, no second
   // browser — and never as a side effect of signing in to Harness.
-  const succeed = async (alreadySignedIn: boolean): Promise<SignInOutcome> => {
+  const succeed = async (alreadySignedIn: boolean, email?: string): Promise<SignInOutcome> => {
     if (opts.chained) return { signedIn: true, alreadySignedIn }
-    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true } : { type: 'result', status: 'success' })
+    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true } : { type: 'result', status: 'success', ...(email ? { email } : {}) })
     else if (alreadySignedIn) console.log('\n  ✓ Already signed in. Run `harness start` to connect this computer.\n')
-    else console.log('\n  ✓ Signed in. Run `harness start` to connect this computer.\n')
+    else console.log(`\n  ✓ Signed in${email ? ` as ${email}` : ''}. Run \`harness start\` to connect this computer.\n`)
     return { signedIn: true, alreadySignedIn }
+  }
+  // SSO in the browser, or a QR the phone scans. Asked only of a person at a terminal with no flag; a
+  // client driving --json says `--qr` or gets the browser, as before.
+  let method: 'sso' | 'qr' = opts.method === 'qr' ? 'qr' : 'sso'
+  // The app driving --json: its answers, and its going away. A sign-in it left behind (the app quit
+  // or restarted) would otherwise wait on — minutes, holding the daemon spawn lock — and the app's
+  // next sign-in would sit behind it with nothing on screen. So while it waits on a person it takes
+  // its QR back and stops. Once the person has said yes the sign-in finishes instead: the session
+  // write is quick, and cancelling the code then would race its claim.
+  const driver = json ? watchJsonDriver() : null
+  const GONE = 'Sign-in stopped: the app that started it has gone.'
+  let takeBack: (() => Promise<void>) | null = null
+  let waiting = false
+  let driverGone = false
+  const abandon = async (message: string): Promise<void> => {
+    if (abandoned) return
+    emit({ type: 'result', status: 'error', code: 'CANCELLED', message })
+    abandoned = true
+    await Promise.race([takeBack?.() ?? Promise.resolve(), new Promise((r) => setTimeout(r, 3_000))])
+    process.exit(1)
+  }
+  // An app that went away before the wait began (during the lock wait) is acted on the moment it does.
+  const setWaiting = (on: boolean): void => {
+    waiting = on
+    if (on && driverGone) void abandon(GONE)
+  }
+  if (driver) {
+    // EPIPE once the app has gone: `gone` handles that. Left unhandled it would crash the process
+    // before the QR is taken back.
+    process.stdout.on('error', () => {})
+    void driver.gone.then(() => {
+      driverGone = true
+      if (waiting) void abandon(GONE)
+    })
+    // The app's Cancel / quit sends SIGTERM — the code goes back with it. Otherwise exit as SIGTERM
+    // would, with the spawn-lock exit hook still run.
+    process.on('SIGTERM', () => { if (waiting) void abandon('Sign-in was cancelled.'); else process.exit(143) })
+  }
+  const signIn = async (): Promise<SignInOutcome> => {
+    try {
+      return method === 'qr'
+        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
+        : await browserSignIn(json, emit, () => succeed(false), entryPoint, { onCommitted: () => setWaiting(false) })
+    } finally {
+      setWaiting(false)
+    }
   }
   if (readAuthSession() && !force) {
     // Guarded exactly like the identical call after the exchange below. Unguarded, a hiccup on
@@ -800,7 +871,17 @@ async function loginCommand(
     }
     return await succeed(true)
   }
-  if (!force) return await browserSignIn(json, emit, () => succeed(false), entryPoint)
+  if (opts.method === 'ask') {
+    const picked = await askSignInMethod()
+    if (!picked) {
+      console.error('\n  ✗ Not signed in.\n')
+      process.exitCode = 1
+      return { signedIn: false }
+    }
+    method = picked
+  }
+  setWaiting(true)
+  if (!force) return await signIn()
   // A forced login may intentionally switch SSO accounts. The old daemon must not keep streaming
   // under its existing socket while this process replaces the durable session — and no NEW daemon
   // may come up on the old session in the meantime. The desktop app re-runs `harness start` whenever
@@ -817,11 +898,17 @@ async function loginCommand(
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
       if (readAuthSession()) await stopDaemonProcess()
-      return await browserSignIn(json, emit, () => succeed(false), entryPoint)
+      return await signIn()
     }, {
-      onWaiting: (owner) => console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
+      onWaiting: (owner) => {
+        // On stdout too, for the app: stderr is a developer's, and a sign-in that shows nothing while
+        // it waits looks broken.
+        emit({ type: 'waiting', message: describeSpawnLockWaitPlainly(owner) })
+        console.error(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`)
+      },
     })
   } catch (err) {
+    setWaiting(false)
     if (!(err instanceof SpawnLockBusyError)) throw err
     // A holder that outlived the wait is not something a sign-in can override the way `stop` does:
     // signing in AROUND it is the race above. Say so and stop. The person gets what Harness is still
@@ -840,6 +927,90 @@ async function loginCommand(
   }
 }
 
+/** `harness login` at a terminal, with no flag: which way to sign in. Enter is SSO, as it always was. */
+async function askSignInMethod(): Promise<'sso' | 'qr' | null> {
+  const method = await pickSignInMethod({ input: process.stdin, output: process.stdout })
+  if (method) console.log(`  (next time: harness login --${method})`)
+  return method
+}
+
+/** One line from standard input — the person at the terminal, or the app driving `--json`. */
+function askLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, ...(question ? { output: process.stdout } : {}) })
+    let done = false
+    const finish = (line: string): void => { if (done) return; done = true; rl.close(); resolve(line) }
+    rl.on('close', () => finish(''))
+    if (question) rl.question(question, finish)
+    else rl.once('line', finish)
+  })
+}
+
+/**
+ * The QR half of a sign-in (lib/qrSignIn.ts): show a QR, wait for a signed-in phone to approve it,
+ * ask the person here whether to sign in as the account that approved, then save the session.
+ * Under --json the QR is an event (`{"type":"qr"}`) and the question is one too
+ * (`{"type":"confirm","email"}`), answered with a `yes` or `no` line on standard input.
+ */
+async function qrSignInCommand(
+  json: boolean,
+  emit: (line: Record<string, unknown>) => void,
+  succeed: (email: string) => Promise<SignInOutcome>,
+  hooks: SignInHooks = {},
+): Promise<SignInOutcome> {
+  const fail = (code: string, message: string): SignInOutcome => {
+    if (json) emit({ type: 'result', status: 'error', code, message })
+    else console.error(`\n  ✗ ${message}\n`)
+    process.exitCode = 1
+    return { signedIn: false }
+  }
+  let shown = false
+  const result = await qrSignIn({
+    post: (path, body) => postJson(path, body),
+    ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
+    label: hostname().slice(0, 80),
+    computerId: computerId(),
+    show: (link, expiresIn) => {
+      if (json) { emit({ type: 'qr', url: link, expiresIn }); return }
+      if (shown) return
+      shown = true
+      console.log('\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer, and scan:\n')
+      console.log(terminalQr(link).split('\n').map((l) => `    ${l}`).join('\n'))
+      console.log('\n  Waiting for your phone…')
+    },
+    confirm: async (email) => {
+      if (json) {
+        emit({ type: 'confirm', email })
+        const yes = ((hooks.driver ? await hooks.driver.nextLine() : await askLine('')) ?? '').trim().toLowerCase() === 'yes'
+        if (yes) hooks.onCommitted?.()
+        return yes
+      }
+      const answer = await askLine(`\n  Your phone approved this sign-in for ${email}.\n  Sign in as ${email}? [Y/n] `)
+      const yes = !/^n/i.test(answer.trim())
+      if (yes) hooks.onCommitted?.()
+      return yes
+    },
+  })
+  if (!result.ok) return fail(result.code, result.message)
+  const { tokens } = result
+  writeAuthSession({
+    version: 1,
+    accessToken: tokens.token,
+    ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
+    ...(tokens.expiresIn ? { expiresAt: Date.now() + tokens.expiresIn * 1000 } : {}),
+    autonomousEnv: tokens.autonomousEnv ?? env.AUTONOMOUS_ENV,
+    computerId: computerId(),
+    method: 'qr',
+    updatedAt: Date.now(),
+  })
+  try {
+    await resolveComputerMachine()
+  } catch (err) {
+    return fail('BACKEND_ERROR', (err as Error).message)
+  }
+  return await succeed(tokens.email)
+}
+
 /**
  * The browser half of a sign-in: a loopback callback server, the SSO page, the code exchange, and
  * the new session — machine id included — on disk. Under --json every failure is a result line and
@@ -851,6 +1022,7 @@ async function browserSignIn(
   emit: (line: Record<string, unknown>) => void,
   succeed: () => Promise<SignInOutcome>,
   entryPoint: string,
+  hooks: Pick<SignInHooks, 'onCommitted'> = {},
 ): Promise<SignInOutcome> {
   const callback = createServer()
   await new Promise<void>((resolve, reject) => {
@@ -897,6 +1069,8 @@ async function browserSignIn(
     } finally {
       manual?.cancel()
     }
+    // The browser came back: from here the exchange and the session write run to the end.
+    hooks.onCommitted?.()
     let exchanged: { token?: string; refreshToken?: string; expiresIn?: number; autonomousEnv?: 'prod' | 'stag' }
     try {
       exchanged = await postJson<{ token?: string; refreshToken?: string; expiresIn?: number; autonomousEnv?: 'prod' | 'stag' }>('/api/auth/exchange', {
@@ -7840,7 +8014,7 @@ async function groupCommand(sub: string | undefined, arg: string | undefined, js
       console.log('\n  No trust group yet. Link another machine (`harness link connect <machineId>`) or a phone to start one.\n')
       process.exit(0)
     }
-    console.log('\n  Trust group — each of these reaches every other without a password:\n')
+    console.log('\n  Trust group — each of these reaches every other:\n')
     members.forEach((m, i) => {
       const id = m.kind === 'machine' ? m.machineId : 'viewer app'
       console.log(`   ${String(i + 1).padStart(2)}. ${m.label}  ${id}  ${m.fingerprint}`)
@@ -8248,7 +8422,10 @@ switch (cmd) {
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), { entryPoint: entryPointFlag() })
+    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
+      entryPoint: entryPointFlag(),
+      method: flags.includes('--qr') ? 'qr' : flags.includes('--sso') || flags.includes('--json') || !process.stdin.isTTY ? 'sso' : 'ask',
+    })
       .then((outcome) => outcome.signedIn ? restartDaemonForIdentity() : undefined)
       .catch(onError)
     break

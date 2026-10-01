@@ -21,6 +21,18 @@ enum HarnessActivity {
   final String label;
 }
 
+/// The same status vocabulary for native tabs and the menu bar overview.
+/// Callers supply the pane's theme color, including the monochrome preference.
+Map<String, Object> nativeActivityPayload(
+  HarnessActivity activity, {
+  int? color,
+}) => {
+  'mark': activity.mark,
+  'label': activity.label,
+  'working': activity == HarnessActivity.working,
+  'color': ?color,
+};
+
 const activitySpinnerFrames = [
   '⠋',
   '⠙',

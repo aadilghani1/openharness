@@ -21,7 +21,6 @@ WorkspaceChrome webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
   viewMachineCloses: true,
   showsShareStatus: true,
   scrollsTabsByArrows: true,
-  attachesFiles: true,
   compactTabs: (context, commands) =>
       WebTabSwitcher(app: app, commands: commands),
   compactFooter: (context, footer) => WebFooterBar(footer: footer),

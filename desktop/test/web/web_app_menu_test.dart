@@ -86,7 +86,7 @@ void main() {
     await tester.pump();
     expect(find.byType(WorkspaceMachinePrompt), findsNothing);
     expect(find.byType(NewHarnessForm), findsOneWidget);
-    // The browser attaches files to a new harness; desktop's box has no 📎.
+    // A new harness takes files: 📎 and drops on its box.
     expect(find.byKey(const ValueKey('new-harness-attach')), findsOneWidget);
     expect(find.byKey(const ValueKey('new-harness-drop')), findsOneWidget);
     expect(tester.takeException(), isNull);

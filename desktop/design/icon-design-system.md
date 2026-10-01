@@ -85,6 +85,13 @@ These are content or identities, not a second action-icon library:
 - `AppRatingStar` uses a rounded outline and proportional fill to encode a
   number. Layout thumbnails use the real pane geometry. Connection dots,
   progress indicators and activity marks encode state.
+- Harness activity has one vocabulary in `harness_activity.dart`: `?`, `✗`,
+  `✓`, the ten-frame Braille spinner, `◌`, `||`, `⊘`, and unmarked idle. Native
+  tabs and menu notifications share `HarnessNativeActivity`; Dart pane headers
+  share `ActivityMark`. Bridge payloads use `nativeActivityPayload` and the
+  same `activityColor`, including the monochrome preference. Do not substitute
+  SF Symbols or add status pills to a different Harness surface. A notification
+  mark describes its unread receipt; a tab/pane mark describes current activity.
 - QR codes, companion artwork, explanatory diagrams, wallpaper, terminal
   output and user-selected status/Powerline artwork are content. Keep their
   function and authorship; do not round QR modules or replace terminal glyphs.

@@ -16,6 +16,7 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
+import 'approve_sign_in.dart';
 import 'devices_page.dart';
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
@@ -171,6 +172,13 @@ class _Body extends StatelessWidget {
           ),
           // Every device signed in to the account — each trusted by the others because of that, so
           // this is where one that is not yours is seen and taken out.
+          // A computer showing its sign-in QR (`harness login`, or the desktop app's "Scan with your
+          // phone"): this phone approves it with its own account.
+          SettingsRow(
+            key: const Key('settings-sign-in-computer'),
+            title: 'Sign in a computer',
+            onTap: () => unawaited(signInAComputer(context, notifier)),
+          ),
           SettingsRow(
             title: 'Your devices',
             value: notifier.newDevices.isEmpty ? null : '${notifier.newDevices.length} new',

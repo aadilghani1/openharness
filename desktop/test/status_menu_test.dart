@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/notification_inbox.dart';
 import 'package:harness/state/status_menu.dart';
 import 'package:harness/state/terminal_pane.dart';
@@ -173,6 +174,7 @@ void main() {
       });
       var rows = statusMenuEntries(app);
       expect(rows.map((r) => r['agentId']), ['a1', 'a2', 'a0']);
+      expect(rows.map((r) => (r['activity'] as Map)['mark']), ['?', '✗', '✓']);
       expect(rows.first['message'], 'Keep the shell running?');
       expect(
         rows.first['receivedAt'],
@@ -199,6 +201,12 @@ void main() {
         reason: 'Live text cannot replace unread news',
       );
       expect(rows.last['readToken'], done['readToken']);
+      expect(
+        rows.last['activity'],
+        nativeActivityPayload(HarnessActivity.done),
+        reason:
+            'The mark describes the unread receipt, even during a newer turn',
+      );
       await app.handleEventForTest('m', {
         'type': 'turn_summary',
         'agentId': 'a0',
@@ -258,6 +266,10 @@ void main() {
       reason: 'No invented elapsed time on reconnect',
     );
     expect(working.every((r) => r['unread'] == false), isTrue);
+    expect(
+      working.every((r) => (r['activity'] as Map)['working'] == true),
+      isTrue,
+    );
     expect(statusMenuEntries(app).map((r) => r['agentId']), ['a1', 'a3']);
     var changes = 0;
     app.addListener(() => changes++);
@@ -381,6 +393,17 @@ void main() {
       );
       expect(rows(), hasLength(2));
       expect(updates.last['unread'], rows().length);
+      Map tabActivityFor(String id) =>
+          (updates.last['tabs'] as List).cast<Map>().singleWhere(
+                (tab) => tab['id'] == id,
+              )['activity']
+              as Map;
+      expect(
+        rows().singleWhere((row) => row['agentId'] == 'a8')['activity'],
+        tabActivityFor(resultTab),
+        reason:
+            'Menu and tab share the exact status glyph, label and theme ink',
+      );
       final stale = rows().singleWhere((r) => r['agentId'] == 'a8');
       app.agentUnread.mark('m', 'a8', AlertKind.failed, fresh: true);
       await tester.pump();
@@ -447,6 +470,7 @@ void main() {
           .single;
       expect(work['agentId'], 'a8');
       expect(work['unread'], isFalse);
+      expect(work['activity'], tabActivityFor(originalTab));
       expect(updates.last['unread'], 0);
       await select('openStatusHarness', work);
       expect(app.focusedPane, same(result));

@@ -79,7 +79,6 @@ class WorkspaceChrome {
     this.viewMachineCloses = false,
     this.showsShareStatus = false,
     this.scrollsTabsByArrows = false,
-    this.attachesFiles = false,
     this.compactTabs,
     this.compactFooter,
     this.compactBelow = 0,
@@ -109,9 +108,6 @@ class WorkspaceChrome {
 
   /// True puts arrows either side of a tab list too long for the bar.
   final bool scrollsTabsByArrows;
-
-  /// True lets New Harness take files — a button and drops on its box.
-  final bool attachesFiles;
 
   /// Below [compactBelow] of window width the workspace goes compact: this
   /// replaces the tab list (the Store button steps aside), and only the focused

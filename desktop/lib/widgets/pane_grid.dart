@@ -1672,6 +1672,18 @@ class _PaneContent extends StatelessWidget {
         onClose: close,
       );
     }
+    // The daemon is still on its first scan, so an agent missing from the list may simply not have
+    // been reached yet — say "loading", not "gone" (owner, 2026-10-01). It attaches on its own.
+    if (agentName == null && (machine.localEndpoint?.scanning ?? false)) {
+      return _PaneStatus(
+        activity: activityMark,
+        title: kUntitledPane,
+        icon: AppIcons.hourglass,
+        message: 'Loading harnesses on ${machine.machine.displayName}…',
+        busy: true,
+        onClose: close,
+      );
+    }
     if (agentName == null) {
       return _PaneStatus(
         activity: activityMark,

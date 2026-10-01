@@ -1740,6 +1740,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       terminalThemeStore.value,
     );
     final barStyle = workspaceBarTextStyle();
+    int activityInk(HarnessActivity activity) =>
+        activityColor(activity, terminalTheme, color: prefs.color).toARGB32();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'reduceMotion': _reduceMotion,
@@ -1867,8 +1869,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
           },
       ],
       'attention': _attention,
-      if (_native) 'statusMenuEntries': statusMenuEntries(app),
-      if (_native) 'statusMenuWorkingEntries': statusMenuWorkingEntries(app),
+      if (_native)
+        'statusMenuEntries': statusMenuEntries(
+          app,
+          colorForActivity: activityInk,
+        ),
+      if (_native)
+        'statusMenuWorkingEntries': statusMenuWorkingEntries(
+          app,
+          colorForActivity: activityInk,
+        ),
       // The fallback bell and the macOS menu use the same unread ledger.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
@@ -1924,16 +1934,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 )
                 .length,
             if (tabActivity(app, swarm) case final activity?)
-              'activity': {
-                'mark': activity.mark,
-                'label': activity.label,
-                'working': activity == HarnessActivity.working,
-                'color': activityColor(
-                  activity,
-                  terminalTheme,
-                  color: prefs.color,
-                ).toARGB32(),
-              },
+              'activity': nativeActivityPayload(
+                activity,
+                color: activityInk(activity),
+              ),
           },
       ],
     };
@@ -2616,14 +2620,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
-  Future<void> _addPhone() => _dialog(
-    () => showAddPhoneDialog(
-      context,
-      app,
-      keymap: _keymap,
-      onConnectMachine: () => unawaited(_openMachines()),
-    ),
-  );
+  Future<void> _addPhone() async {
+    // "Manage devices…" pops the dialog and asks for Settings, but this
+    // [_dialog] is still open until the pop lands — a [_settings] made from
+    // the callback would be refused. So it is remembered, and opened after.
+    var manageDevices = false;
+    await _dialog(
+      () => showAddPhoneDialog(
+        context,
+        app,
+        keymap: _keymap,
+        onConnectMachine: () => unawaited(_openMachines()),
+        onManageDevices: () => manageDevices = true,
+      ),
+    );
+    if (manageDevices && mounted) {
+      await _settings(SettingsSection.accountDevices);
+    }
+  }
 
   /// Settings, by section, as rows of the box: `> usage` goes straight to
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
@@ -2972,9 +2986,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       swarmId: swarmId,
       split: split,
       placement: placement,
-      attachments: widget.chrome?.attachesFiles == true
-          ? HarnessAttachments(onDeliveryProblem: _showPaneActionHint)
-          : null,
+      attachments: HarnessAttachments(onDeliveryProblem: _showPaneActionHint),
     );
     _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
     _newHarnessDevicePort = DeviceFormPort();

@@ -172,7 +172,7 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
     return SectionScaffold(
       title: 'Your devices',
       subtitle: 'Every computer and app signed in to your account. Each one reaches your machines '
-          'end to end encrypted — no password. Remove one you do not recognise.',
+          'end to end encrypted. Remove one you do not recognise.',
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

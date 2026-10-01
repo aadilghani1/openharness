@@ -167,7 +167,9 @@ impl Look {
         let preset = self.preset.as_deref().unwrap_or("classic");
         // `@hn-look` tells structure which bundle is on; `@hn-focus` (from the preset or an
         // explicit `focus`) tells how panes are drawn. Both are options, so `hn show` sees them.
-        let mut out: Vec<(String, String)> = vec![("@hn-look".into(), preset.to_string())];
+        // (Only a preset the file names: none named is hn's own look, not one written back as
+        // `classic` the next time a setting is saved.)
+        let mut out: Vec<(String, String)> = self.preset.iter().map(|p| ("@hn-look".to_string(), p.clone())).collect();
         // A preset's `@hn-focus` is its default; an explicit `focus` knob overrides it, so do not
         // emit the preset's when the file named one (the later assignment would win anyway).
         for (n, v) in Self::look_preset(preset) {
