@@ -121,8 +121,10 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.0 (48)` | 2026-09-26 | TestFlight. Paste in the terminal's ⋯ sheet: the clipboard's text as one paste, or, with no text, its image as an attachment (iOS and Android, #321 by jaylfc). The pager no longer counts an agent it is about to close against its cap of open streams, so the page ahead attaches after a swipe |
 | `1.0.0 (49)` | 2026-09-28 | TestFlight upload accepted; processing started. Phone polish and cleanup, full recent-first Agent picker, Project/Find search autofocus, collapsed Options with separate Branch/Worktree controls and Model choices, and trusted-device group sync from main. 1,643 offline tests pass; analyzer clean outside existing third-party infos. |
 | `1.0.0 (50)` | 2026-09-30 | TestFlight. Light mode, with Dark and Light terminal schemes (#248); an agent's question is answered by tapping its lines; Find gets a tab filter, recaps for the rows on screen, and machine status drawn like harness rows; a new project and its agent are named after the first task (#94). Terminals open over the relay without waiting for p2p, picking an agent redials a machine that had backed off, and the home agent stays while its machine is briefly offline. Camera access that is off links to Settings; analytics are gone. Built from `feat/mobile-ios-android` |
+| `1.0.1 (51)` | 2026-10-01 | TestFlight. First build on the 1.0.1 train — 1.0.0 was approved and its train closed, so ASC refused 1.0.0 (51). Faster launch to the first session; tabs named as on the desktop; Find recaps fold behind a chevron; device key log (#518). First upload from an unsigned archive signed on export (`release-ios.sh`, Xcode account). Built from `feat/mobile-ios-android` |
+| `1.0.1 (52)` | 2026-10-01 | TestFlight. The launch terminal opens before the agent list; the desktop app, web and CLI sign in by scanning a QR with the phone (#519). Built from `feat/mobile-ios-android` after merging `main` |
 
-`pubspec.yaml` is now at `1.0.0+50`, the next build number. Build 49 is already uploaded; do not
+`pubspec.yaml` is now at `1.0.1+53`, the next build number. Build 52 is already uploaded; do not
 upload it again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
