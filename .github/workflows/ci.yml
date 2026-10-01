@@ -155,6 +155,11 @@ jobs:
         env:
           RUN_REAL_TMUX_STREAM: '1'
         run: npx vitest run src/lib/tmuxStream.real.spec.ts
+      - name: Codex startup timeout recovery and cancellation
+        working-directory: cli
+        env:
+          RUN_REAL_TMUX_CODEX_STARTUP: '1'
+        run: npx vitest run src/lib/codexStartupRetry.real.spec.ts --maxWorkers=1
       - name: Release unit tests
         run: cargo test --locked --release
       - name: Build static Linux binary
