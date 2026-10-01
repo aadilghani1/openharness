@@ -20,6 +20,14 @@ guidance appears only when the app is unavailable.
 
 ## Trial status
 
+Current development lives on **`dev/firmware-pro`**, separate from Diego's
+production firmware and `dev/firmware-round`. The new development Pro ending
+**64:67** adds **Menu → Voice**: 16 offline ElevenLabs recordings, Params notes,
+Play/Stop, Previous/Next and live volume buttons starting at 80%.
+See [the sample library](voice-samples/README.md) for controls, model parameters,
+storage and checks. This menu does not change the desktop voice configuration.
+The installation history below describes the earlier Pro ending 64:61.
+
 Source base: `59ce00535b5fd6ecb06e3bc0b41e46c8ae0e76a3`. Work is isolated on
 `prototype/pro-concepts-20260929`. A separate illustrated Tim adapter is documented in
 [the round artwork prototype](../tim-illustrated/README.md).
@@ -279,6 +287,9 @@ python3 devices/harness-device/firmware/test/test_pro_power.py
 python3 devices/harness-device/firmware/test/test_pro_canvas.py
 python3 devices/harness-device/firmware/test/test_pro_controls.py
 python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
+python3 devices/harness-device/firmware/test/test_pro_voice_samples.py
+python3 devices/harness-device/firmware/test/test_audio_speech.py
+python3 devices/harness-device/firmware/test/test_cable_speech.py
 python3 devices/harness-device/firmware/test/test_pro_visual.py
 python3 devices/harness-device/firmware/test/test_pro_daemon_registry.py
 python3 devices/harness-device/firmware/test/test_pro_appearance_preferences.py

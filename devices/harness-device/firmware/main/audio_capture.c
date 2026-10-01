@@ -392,6 +392,16 @@ bool audio_speech_begin(uint32_t id, uint32_t rate, uint8_t volume)
     if (accept) xTaskNotifyGive(s_speech_task);
     return accept;
 }
+bool audio_speech_set_volume(uint32_t id, uint8_t volume)
+{
+    if (!s_speech_task || !id || volume > 100) return false;
+    portENTER_CRITICAL(&s_speech_mux);
+    bool accept = s_speech.id == id && s_speech.active;
+    if (accept) s_speech_volume = volume;
+    portEXIT_CRITICAL(&s_speech_mux);
+    if (accept) xTaskNotifyGive(s_speech_task);
+    return accept;
+}
 static bool speech_rejected(const char *stage, uint32_t id, uint32_t offset, size_t length)
 {
     // Preserve the reason before the transport aborts a rejected stream. Never
@@ -565,7 +575,15 @@ static void play_speech(void)
         size_t bytes = s_speech.received-offset;
         bool ended = s_speech.ended;
         int64_t last_data = s_speech_last_data;
+        uint8_t next_volume = s_speech_volume;
         portEXIT_CRITICAL(&s_speech_mux);
+        if (next_volume != volume) {
+            if (esp_codec_dev_set_out_vol(s_spk, next_volume) != ESP_CODEC_DEV_OK) {
+                error = AUDIO_SPEECH_ERROR_CODEC;
+                break;
+            }
+            volume = next_volume;
+        }
         if (bytes > sizeof block) bytes = sizeof block;
         if (bytes) {
             size_t at = offset % AUDIO_SPEECH_CAPACITY;

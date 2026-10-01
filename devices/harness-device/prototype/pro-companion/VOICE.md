@@ -1,5 +1,11 @@
 # A voice for the Field companion
 
+For quick speaker comparisons, **Menu → Voice** now provides 16 saved recordings
+with emotion/parameter notes, Play/Stop and live volume controls starting at 80%.
+It works without the desktop or provider connection. See
+[the on-device sample library](voice-samples/README.md). Its volume and voice
+selection affect auditions only; the conversational path below remains separate.
+
 Octo has a bright, playful, curious voice with clear emotion in everyday replies.
 The user rejected the first restrained voice as boring and explicitly requested
 emotional delivery. Routine speech now uses playful curiosity; good news has

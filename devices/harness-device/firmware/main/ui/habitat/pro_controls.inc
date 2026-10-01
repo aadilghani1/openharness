@@ -17,7 +17,8 @@ static void pro_control(ht_scene_t *f, int x, int y, int w, int h, const char *l
     int hit = pro_hit(x, y, w, h, action, value, enabled);
     bool pressed = hit >= 0 && hit == s.pressed;
     bool primary = action == A_ANSWER || action == A_DRAFT_SEND || action == A_FORM_MAIN ||
-                   action == A_CHOICE || action == A_NOTICE || action == A_CARRY || action == A_APPEAR_USE;
+                   action == A_CHOICE || action == A_NOTICE || action == A_CARRY || action == A_APPEAR_USE ||
+                   action == A_SAMPLE_PLAY;
     uint16_t fill = enabled && (pressed || primary) ? ACCENT : SEL;
     if (enabled && action == A_STOP_YES) fill = color(0xa44343);
     uint16_t ink = !enabled ? DIM : pressed || primary || action == A_STOP_YES ?
@@ -78,6 +79,7 @@ static void pro_row(ht_scene_t *f, int y, const char *name, const char *detail,
 static void pro_launcher(ht_scene_t *f)
 {
     pro_heading(f, "Menu", A_HOME);
+    pro_control(f, 32, 132, 656, 70, "Voice  /  Try voices and volume", A_VOICE_SAMPLES, 0, true);
     static const struct { const char *title, *detail; action_kind_t action; } items[] = {
         {"Panes", "Choose who to talk to", A_AGENTS},
         {"Tabs", "Change your workspace", A_TABS},
@@ -89,16 +91,82 @@ static void pro_launcher(ht_scene_t *f)
         {"Controls", "Make it yours", A_SETTINGS},
     };
     for (int i = 0; i < 8; i++) {
-        int x = 32 + (i % 2) * 336, y = 141 + (i / 2) * 129;
+        int x = 32 + (i % 2) * 336, y = 218 + (i / 2) * 112;
         bool enabled = items[i].action == A_INBOX || items[i].action == A_SETTINGS ||
                        items[i].action == A_DAEMONS || items[i].action == A_SCENES ||
                        (s.connected && (items[i].action != A_READER || active()));
-        int hit = pro_hit(x, y, 320, 112, items[i].action, 0, enabled);
+        int hit = pro_hit(x, y, 320, 100, items[i].action, 0, enabled);
         bool pressed = hit >= 0 && hit == s.pressed;
-        ht_pro_rect(f, x, y, 320, 112, 28, pressed ? SEL : color(0xfcfbf4));
+        ht_pro_rect(f, x, y, 320, 100, 28, pressed ? SEL : color(0xfcfbf4));
         ht_pro_text(f, x + 22, y + 9, 276, &ht_pro_32, enabled ? FG : DIM, items[i].title);
         ht_pro_wrap(f, x + 22, y + 58, 276, 1, 0, &ht_pro_24, DIM, items[i].detail);
     }
+}
+
+static void pro_voice_samples(ht_scene_t *f)
+{
+    pro_heading(f, "Voice", A_LAUNCHER);
+    pro_control(f, 534, 28, 154, 64, "Params", A_SAMPLE_PARAMS, 0, true);
+    const pro_voice_sample_t *sample = pro_voice_sample(s.voice_sample);
+    if (!sample) return;
+    pro_voice_progress_t progress = pro_voice_sample_progress();
+    if (progress.sample != s.voice_sample) progress = (pro_voice_progress_t){0};
+    bool playing = progress.phase == PRO_VOICE_STARTING || progress.phase == PRO_VOICE_PLAYING;
+    char text[160];
+    snprintf(text, sizeof text, "%02u / %02u    %s", s.voice_sample + 1, pro_voice_sample_count(), sample->voice);
+    ht_pro_text(f, 32, 132, 656, &ht_pro_32, ACCENT, text);
+    ht_pro_text(f, 32, 178, 656, &ht_pro_42, FG, sample->title);
+    snprintf(text, sizeof text, "%s  /  [%s]", sample->model, sample->tag);
+    ht_pro_text(f, 32, 237, 656, &ht_pro_24, DIM, text);
+    ht_pro_rect(f, 32, 281, 656, 137, 24, color(0xfcfbf4));
+    ht_pro_wrap(f, 52, 292, 616, 3, 0, &ht_pro_32, FG, sample->caption);
+    snprintf(text, sizeof text, "Stability %u.%02u    Similarity %u.%02u", sample->stability / 100,
+             sample->stability % 100, sample->similarity / 100, sample->similarity % 100);
+    ht_pro_text(f, 32, 435, 656, &ht_pro_24, DIM, text);
+    const char *status = progress.phase == PRO_VOICE_ERROR ? progress.error :
+                         progress.phase == PRO_VOICE_STARTING ? "Starting..." :
+                         progress.phase == PRO_VOICE_PLAYING ? "Playing" :
+                         progress.phase == PRO_VOICE_DONE ? "Finished. Tap Play to hear it again." :
+                         "Saved on this device. Tap Play.";
+    ht_pro_text(f, 32, 475, 656, &ht_pro_24, progress.phase == PRO_VOICE_ERROR ? ERROR : DIM, status);
+    uint32_t total = sample->samples * 2u;
+    uint32_t position = progress.total == total ? progress.consumed : 0;
+    if (position > total) position = total;
+    ht_pro_rect(f, 32, 519, 656, 5, 2, SEL);
+    if (position && total) ht_pro_rect(f, 32, 519, (int)((uint64_t)position * 656 / total), 5, 2, ACCENT);
+    pro_control(f, 32, 543, 100, 64, "-", A_SAMPLE_VOLUME, -10, s.sample_volume > 0);
+    snprintf(text, sizeof text, "Volume %u%%", s.sample_volume);
+    ht_pro_center(f, 557, &ht_pro_32, FG, text);
+    pro_control(f, 588, 543, 100, 64, "+", A_SAMPLE_VOLUME, 10, s.sample_volume < 100);
+    pro_control(f, 32, 627, 160, 68, "Previous", A_SAMPLE_PREVIOUS, 0, s.voice_sample > 0);
+    pro_control(f, 216, 627, 288, 68, playing ? "Stop" : "Play", A_SAMPLE_PLAY, 0, true);
+    pro_control(f, 528, 627, 160, 68, "Next", A_SAMPLE_NEXT, 0, s.voice_sample + 1 < pro_voice_sample_count());
+}
+
+static void pro_voice_params(ht_scene_t *f)
+{
+    pro_heading(f, "Voice parameters", A_VOICE_SAMPLES);
+    const pro_voice_sample_t *sample = pro_voice_sample(s.voice_sample);
+    if (!sample) return;
+    char text[160];
+    snprintf(text, sizeof text, "%s / %s", sample->voice, sample->title);
+    ht_pro_text(f, 32, 134, 656, &ht_pro_32, ACCENT, text);
+    ht_pro_text(f, 32, 184, 656, &ht_pro_24, FG, sample->model);
+    snprintf(text, sizeof text, "Voice ID: %s", sample->voice_id);
+    ht_pro_text(f, 32, 222, 656, &ht_pro_24, DIM, text);
+    snprintf(text, sizeof text, "stability: %u.%02u   similarity: %u.%02u", sample->stability / 100,
+             sample->stability % 100, sample->similarity / 100, sample->similarity % 100);
+    ht_pro_text(f, 32, 262, 656, &ht_pro_24, FG, text);
+    snprintf(text, sizeof text, "Audio tag: [%s]", sample->tag);
+    ht_pro_text(f, 32, 302, 656, &ht_pro_24, FG, text);
+    if (sample->seed < 0) snprintf(text, sizeof text, "Seed: provider default");
+    else snprintf(text, sizeof text, "Seed: %ld (best effort)", (long)sample->seed);
+    ht_pro_text(f, 32, 342, 656, &ht_pro_24, DIM, text);
+    ht_pro_wrap(f, 32, 389, 656, 3, 0, &ht_pro_32, FG, sample->note);
+    ht_pro_text(f, 32, 514, 656, &ht_pro_24, DIM, "16 kHz mono / saved IMA ADPCM / soft gain 4x");
+    ht_pro_text(f, 32, 552, 656, &ht_pro_24, DIM, "v4: no speed, style, speaker boost or SSML.");
+    ht_pro_text(f, 32, 590, 656, &ht_pro_24, DIM, "Tags guide delivery; results can vary.");
+    pro_control(f, 216, 634, 288, 64, "Back to playback", A_VOICE_SAMPLES, 0, true);
 }
 
 static void pro_appearance(ht_scene_t *f)
@@ -484,6 +552,8 @@ static bool pro_render_controls(ht_scene_t *f)
 {
     switch (s.view) {
     case LAUNCHER: pro_launcher(f); return true;
+    case VOICE_SAMPLES: pro_voice_samples(f); return true;
+    case VOICE_PARAMS: pro_voice_params(f); return true;
     case DAEMONS: case SCENES: pro_appearance(f); return true;
     case AGENTS: pro_agents(f); return true;
     case TABS: pro_tabs(f); return true;

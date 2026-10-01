@@ -45,6 +45,9 @@ static ht_gallery_t gallery;
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <assert.h>
+#ifdef DEVICE_PRO_COMPANION
+#include "../../pro_voice_samples.h"
+#endif
 
 #define NOTICES 24
 #define QUESTION_MAX 4
@@ -60,7 +63,7 @@ typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
     LAUNCHER,
-    DAEMONS, SCENES,
+    DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS,
 #endif
     AGENTS,
     AGENT,
@@ -90,6 +93,8 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
+    A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
+    A_SAMPLE_VOLUME, A_SAMPLE_PARAMS,
 #endif
     A_AGENTS,
     A_AGENT,
@@ -220,6 +225,10 @@ static EXT_RAM_BSS_ATTR struct {
         bool playing, pending;
     } speech;
     uint32_t speech_error_until;
+    unsigned voice_sample;
+    uint8_t sample_volume;
+    bool sample_volume_set;
+    uint32_t sample_poll_due;
 #endif
     bool muted;
     int pet_pose;
@@ -572,6 +581,9 @@ static void view(view_t v)
         !(v == VOICE && s.voice_open && s.voice_return == DRAFT)) return;
     if (s.voice_open && v != VOICE)
         return;
+#ifdef DEVICE_PRO_COMPANION
+    if (v != VOICE_SAMPLES && v != VOICE_PARAMS) pro_voice_sample_stop();
+#endif
     if (carry.pending && v != SELECTION) ht_carry_close(&carry);
     if (selection.active && v != SELECTION && v != VOICE) ht_selection_close(&selection);
     if (s.view == INBOX && v != INBOX) s.opening_notice[0] = 0;
@@ -896,7 +908,8 @@ static void pro_speech_cancel(bool any)
 {
     // abort is a metadata update plus worker notification, never codec I/O.
     // Cancelling even the not-yet-presented session closes the begin/DOWN race.
-    if (any || s.speech.id) audio_speech_abort(any ? 0 : s.speech.id);
+    if (s.speech.id) audio_speech_abort(s.speech.id);
+    else if (any && !pro_voice_sample_owns_audio()) audio_speech_abort(0);
     if (s.speech.id) { memset(&s.speech, 0, sizeof s.speech); change(); }
 }
 bool ui_companion_speech_begin(uint32_t id, const char *agent_id,
@@ -1041,6 +1054,16 @@ static uint32_t status_wake_ms(uint32_t now)
 static void surface_tick(uint32_t now)
 {
 #ifdef DEVICE_PRO_COMPANION
+    if (s.view == VOICE_SAMPLES || s.view == VOICE_PARAMS) {
+        if (s.locked || display_is_asleep()) pro_voice_sample_stop();
+        if ((int32_t)(now - s.sample_poll_due) >= 0) {
+            pro_voice_progress_t before = pro_voice_sample_progress();
+            pro_voice_sample_tick(now);
+            pro_voice_progress_t after = pro_voice_sample_progress();
+            if (before.phase != after.phase || before.consumed != after.consumed) change();
+            s.sample_poll_due = now + 20;
+        }
+    }
     pro_speech_tick(now);
     if (pro_appearance_view() && !s.locked && !display_is_asleep()) {
         ht_character_tick(&s.preview_character, now, HT_CHARACTER_IDLE, s.quiet, true,
@@ -2046,6 +2069,8 @@ bool habitat_scene_take(ht_scene_t *f)
     case LAUNCHER:
     case DAEMONS:
     case SCENES:
+    case VOICE_SAMPLES:
+    case VOICE_PARAMS:
         break; // Handled by the Pro controls sheet above.
 #endif
     case FORM:
@@ -2337,6 +2362,43 @@ static void dispatch(action_t a)
     case A_LAUNCHER:
         view(LAUNCHER);
         break;
+    case A_VOICE_SAMPLES:
+        if (!s.sample_volume_set) { s.sample_volume = 80; s.sample_volume_set = true; }
+        view(VOICE_SAMPLES);
+        break;
+    case A_SAMPLE_PARAMS:
+        if (s.view == VOICE_SAMPLES) view(VOICE_PARAMS);
+        break;
+    case A_SAMPLE_PREVIOUS:
+    case A_SAMPLE_NEXT:
+        if (s.view != VOICE_SAMPLES) break;
+        pro_voice_sample_stop();
+        if (a.kind == A_SAMPLE_NEXT && s.voice_sample + 1 < pro_voice_sample_count()) s.voice_sample++;
+        if (a.kind == A_SAMPLE_PREVIOUS && s.voice_sample) s.voice_sample--;
+        change();
+        break;
+    case A_SAMPLE_PLAY: {
+        if (s.view != VOICE_SAMPLES) break;
+        pro_voice_progress_t progress = pro_voice_sample_progress();
+        if (progress.phase == PRO_VOICE_STARTING || progress.phase == PRO_VOICE_PLAYING) pro_voice_sample_stop();
+        else pro_voice_sample_play(s.voice_sample, s.sample_volume, ms());
+        s.sample_poll_due = ms();
+        change();
+        break;
+    }
+    case A_SAMPLE_VOLUME: {
+        if (s.view != VOICE_SAMPLES || (a.value != -10 && a.value != 10)) break;
+        int volume = (int)s.sample_volume + a.value;
+        if (volume < 0) volume = 0;
+        if (volume > 100) volume = 100;
+        s.sample_volume = (uint8_t)volume;
+        s.sample_volume_set = true;
+        // Applies on the codec worker's next block, without restarting the clip.
+        pro_voice_sample_volume(s.sample_volume);
+        s.sample_poll_due = ms();
+        change();
+        break;
+    }
     case A_DAEMONS:
         pro_appearance_open(DAEMONS);
         break;
@@ -3320,6 +3382,10 @@ uint32_t habitat_next_wake_ms(void)
     if (!s.ready)
         return delay;
 #ifdef DEVICE_PRO_COMPANION
+    if ((s.view == VOICE_SAMPLES || s.view == VOICE_PARAMS) && pro_voice_sample_owns_audio()) {
+        int32_t left = (int32_t)(s.sample_poll_due - now);
+        delay = left > 0 ? (uint32_t)left : 1;
+    }
     if (!s.locked && !display_is_asleep() && pro_appearance_view())
         delay = pro_visual_next_wake_ms(&s.preview_character, HT_CHARACTER_IDLE, now, s.quiet, false);
     if (!s.locked && !display_is_asleep() && (s.view == HOME || s.view == AGENT || s.view == VOICE)) {

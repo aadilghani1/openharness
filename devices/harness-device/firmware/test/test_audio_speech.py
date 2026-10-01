@@ -81,6 +81,7 @@ static atomic_uint s_rx_overruns, notifications, codec_held, in_write;
 static atomic_bool open_entered, allow_open;
 static atomic_llong clock_us;
 static unsigned opens,closes,writes,mic_opens,mic_closes,beep_writes,volume_set;
+static bool change_volume;
 static unsigned allocations, frees, task_creates, notify_inits;
 static bool muted, alloc_fail, task_fail, speaker_fail, open_fail, volume_fail, write_fail;
 static bool short_write, no_progress, abort_copy, feed_wrap, feed_limit, end_on_write, replace_on_write, hold_open;
@@ -158,6 +159,7 @@ static esp_err_t i2s_channel_write(int device,const void *pcm,size_t bytes,size_
     assert(device==s_tx && atomic_load(&codec_held)==1 && !critical_depth);
     assert(bytes>0 && bytes<=640 && !(bytes&1) && timeout==20);
     writes++; atomic_store(&in_write,1);
+    if(change_volume && writes==2) { assert(audio_speech_set_volume(100,80));assert(!audio_speech_set_volume(101,20));assert(!audio_speech_set_volume(100,101)); }
     if (real_write_delay) pause_ms(real_write_delay);
     *written=0;
     if (write_fail) return ESP_FAIL;
@@ -222,7 +224,7 @@ static void reset(void) {
     atomic_store(&s_capture_requested,false); atomic_store(&s_speech_requested,false);
     atomic_store(&clock_us,0); atomic_store(&notifications,0); atomic_store(&in_write,0);
     atomic_store(&open_entered,false); atomic_store(&allow_open,false); hold_open=false;
-    s_open=false; muted=open_fail=volume_fail=write_fail=short_write=no_progress=false;
+    change_volume=false; s_open=false; muted=open_fail=volume_fail=write_fail=short_write=no_progress=false;
     abort_copy=feed_wrap=feed_limit=end_on_write=replace_on_write=false;
     abort_after=capture_after=real_write_delay=0;
     opens=closes=writes=mic_opens=mic_closes=beep_writes=volume_set=0; sink_length=0;
@@ -278,6 +280,7 @@ static void stream_wrap_and_short_writes(void) {
     reset(); begin_bytes(640,true); register_read_fail=true; play_speech(); complete(640);
 }
 static void mute_volume_and_tail(void) {
+    reset();begin_bytes(6400,true);change_volume=true;play_speech();complete(6400);assert(volume_set==80&&opens==1&&writes==10);
     reset(); muted=true; begin_bytes(640,true); play_beep(); assert(!opens && !beep_writes);
     play_speech(); complete(640); assert(volume_set==60);
     assert(esp_timer_get_time()>=150000); // 20ms audio plus the interruptible DMA drain.

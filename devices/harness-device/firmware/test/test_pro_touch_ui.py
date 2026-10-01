@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 
+from native_voice import voice_assets
 from native_shapes import defines, typedef
 
 HERE = Path(__file__).resolve().parent
@@ -41,6 +42,7 @@ code = r'''
 #include "draft.h"
 #include "character.h"
 #include "pro_canvas.h"
+#include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "pro_art.h"
 #include "../../audio_speech.h"
@@ -93,6 +95,12 @@ static bool drawn_compact;
 static ht_character_mood_t drawn_mood;
 static unsigned drawn_level, drawn_emotion;
 static ht_rect_t drawn_portrait;
+static bool native_voice_available = true;
+bool audio_speech_available(void) { return native_voice_available; }
+bool audio_speech_begin(uint32_t id, uint32_t rate, uint8_t volume) { (void)rate;(void)volume;speech_audio=(audio_speech_state_t){.id=id,.active=true,.pending=true};return true; }
+bool audio_speech_push(uint32_t id,uint32_t offset,const void *pcm,size_t bytes) { (void)id;(void)offset;(void)pcm;(void)bytes;return true; }
+bool audio_speech_end(uint32_t id,uint32_t bytes) { (void)id;(void)bytes;return true; }
+bool audio_speech_set_volume(uint32_t id,uint8_t volume) { (void)id;(void)volume;return true; }
 static uint32_t ms(void) { return now; }
 static void change(void) { changes++; }
 static void display_lock(void) {}
@@ -167,12 +175,15 @@ for name in ("copy", "find", "is_question", "pro_speech_allowed", "pro_speech_vi
     code += function(name)
 workspace_actions = SOURCE.split("    case A_TABS:", 1)[1].split("    case A_MACHINE:", 1)[0]
 code += "static void workspace_action(action_t a) { switch(a.kind) { case A_TABS:" + workspace_actions + "default: break; } }\n"
+sample_actions = SOURCE.split("    case A_VOICE_SAMPLES:", 1)[1].split("    case A_DAEMONS:", 1)[0]
+code += "static bool sample_action(action_t a) { switch(a.kind) { case A_VOICE_SAMPLES:" + sample_actions + "default: return false; } return true; }\n"
 code += function("ht_character_select", (NATIVE / "character.c").read_text())
 code += r'''
 const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definition(id)->name; }
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
+    if (sample_action(action)) return;
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -225,6 +236,7 @@ void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_m
 '''
 controls = (NATIVE / "pro_controls.inc").read_text()
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
+code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls)
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -232,6 +244,7 @@ static void hit(action_kind_t kind, int value, int x, int y, int w, int h) {
     s.hits[s.hit_count++] = (hit_t){{x,y,w,h},kind,value,true};
 }
 static void reset(void) {
+    pro_voice_sample_stop();
     memset(&s,0,sizeof s); memset(&gesture,0,sizeof gesture); memset(&scroll,0,sizeof scroll);
     memset(&workspace,0,sizeof workspace); memset(&tab_carousel,0,sizeof tab_carousel);
     memset(&selection,0,sizeof selection); memset(&carry,0,sizeof carry); memset(&visit,0,sizeof visit);
@@ -756,7 +769,7 @@ static void speech_playback_caption(void) {
 static void speech_touch_interrupts(void) {
     reset();speech_start("warm");speech_audio.playing=true;speech_audio.pending=false;surface_tick(now);
     render_actual();sample(true,360,340,2000);
-    assert(!s.speech.id && !speech_audio.active && speech_aborts==1 && aborted_id==0 && !starts);
+    assert(!s.speech.id && !speech_audio.active && speech_aborts==1 && aborted_id==23 && !starts);
     sample(false,360,340,2075);assert(starts==1 && s.view==VOICE);
     // DOWN can arrive after the empty audio session starts but before UI begin.
     reset();empty_speaker();sample(true,360,340,2000);
@@ -863,9 +876,38 @@ static void appearance_interrupted(void) {
     }
 }
 typedef void (*test_fn)(void);
+
+static void voice_sample_controls(void) {
+    reset();s.connected=false;s.loading=true;native_voice_available=true;
+    s.view=LAUNCHER;s.hit_count=0;ht_scene_t frame;ht_scene_clear(&frame,BG);pro_launcher(&frame);
+    const hit_t *entry=action_hit(A_VOICE_SAMPLES);assert(entry&&entry->enabled);
+    tap(entry->rect.x+40,entry->rect.y+30,75);
+    assert(s.view==VOICE_SAMPLES&&s.sample_volume==80&&!starts&&!recording);
+    s.hit_count=0;ht_scene_clear(&frame,BG);pro_voice_samples(&frame);
+    const hit_t *play=action_hit(A_SAMPLE_PLAY);assert(play&&play->enabled);
+    tap(play->rect.x+40,play->rect.y+30,75);
+    assert(pro_voice_sample_owns_audio());
+    unsigned index=s.voice_sample;
+    dispatch((action_t){.kind=A_SAMPLE_VOLUME,.value=-10});assert(s.sample_volume==70&&s.voice_sample==index);
+    for(int n=0;n<20;n++)dispatch((action_t){.kind=A_SAMPLE_VOLUME,.value=-10});
+    assert(s.sample_volume==0);
+    for(int n=0;n<20;n++)dispatch((action_t){.kind=A_SAMPLE_VOLUME,.value=10});
+    assert(s.sample_volume==100);
+    dispatch((action_t){.kind=A_SAMPLE_PARAMS});assert(s.view==VOICE_PARAMS&&pro_voice_sample_owns_audio());
+    dispatch((action_t){.kind=A_VOICE_SAMPLES});assert(s.view==VOICE_SAMPLES&&s.sample_volume==100);
+    unsigned aborted=speech_aborts;ui_focus_project("b");assert(speech_aborts==aborted&&pro_voice_sample_owns_audio());
+    dispatch((action_t){.kind=A_SAMPLE_NEXT});assert(s.voice_sample==index+1&&!pro_voice_sample_owns_audio());
+    dispatch((action_t){.kind=A_SAMPLE_PLAY});assert(pro_voice_sample_owns_audio());
+    dispatch((action_t){.kind=A_LAUNCHER});assert(s.view==LAUNCHER&&!pro_voice_sample_owns_audio());
+    assert(!starts&&!recording);
+    reset();native_voice_available=false;dispatch((action_t){.kind=A_VOICE_SAMPLES});
+    dispatch((action_t){.kind=A_SAMPLE_PLAY});assert(pro_voice_sample_progress().phase==PRO_VOICE_ERROR);
+    native_voice_available=true;
+}
+
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
+        {"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
         {"thumb_drift",thumb_drift},{"panes",panes},{"pane_after_diagonal_start",pane_after_diagonal_start},
         {"scroll_output",scroll_output},
         {"congested_scroll",congested_scroll},{"diagonal",diagonal},{"hold_launcher",hold_launcher},
@@ -909,7 +951,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-touch-") as directory:
                "-fsanitize=" + os.environ.get("SANITIZERS", "undefined,bounds"),
                "-DHT_FACE_PX=720", "-DDEVICE_PRO_COMPANION=1", "-I", str(NATIVE), "-I", str(generated_assets),
                str(generated), *[str(NATIVE / f"{module}.c") for module in modules],
-               str(generated_assets / "pro_fonts.c"), "-o", str(executable)]
+               str(generated_assets / "pro_fonts.c"), *voice_assets(directory), "-o", str(executable)]
     subprocess.run(command, check=True)
     names = re.findall(r'\{"([a-z_]+)",[a-z_]+\}', code)
     failures = []

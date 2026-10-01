@@ -39,6 +39,8 @@ bool audio_speech_available(void);
 // still-closing session. volume is explicitly requested 0..100, independent of
 // notification mute. The caller should normally use 60.
 bool audio_speech_begin(uint32_t id, uint32_t rate, uint8_t volume);
+// Metadata only: the codec worker applies the new volume at its next short block.
+bool audio_speech_set_volume(uint32_t id, uint8_t volume);
 // Mono signed PCM16LE, even offset/length, strict received-byte offset, max 30 s.
 // False includes backpressure/concurrent producer: no bytes were accepted. Retry
 // at the same offset after credit; malformed/stale packets must not be retried.
@@ -52,6 +54,8 @@ static inline bool audio_speech_init(void) { return false; }
 static inline bool audio_speech_available(void) { return false; }
 static inline bool audio_speech_begin(uint32_t id, uint32_t rate, uint8_t volume)
 { (void)id; (void)rate; (void)volume; return false; }
+static inline bool audio_speech_set_volume(uint32_t id, uint8_t volume)
+{ (void)id; (void)volume; return false; }
 static inline bool audio_speech_push(uint32_t id, uint32_t offset, const void *pcm, size_t length)
 { (void)id; (void)offset; (void)pcm; (void)length; return false; }
 static inline bool audio_speech_end(uint32_t id, uint32_t total_bytes)

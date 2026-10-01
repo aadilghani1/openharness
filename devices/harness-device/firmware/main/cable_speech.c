@@ -12,6 +12,7 @@
 #define WIRE_WINDOW 8192u
 static audio_speech_state_t reported;
 static int64_t reported_at;
+static uint32_t remote_id; // Local Menu -> Voice auditions own a separate session.
 
 static bool uint_of(const cJSON *p, const char *key, uint32_t *out)
 {
@@ -58,7 +59,7 @@ void cable_speech_tick(void)
 {
     if (!cable_client_is_connected()) return;
     audio_speech_state_t state; audio_speech_snapshot(&state);
-    if (!state.id) return;
+    if (!remote_id || state.id != remote_id) return;
     int64_t now = esp_timer_get_time();
     // Receipts and codec readiness unblock host writes, so they cannot wait for
     // the 40 ms progress throttle. Consumption-only updates remain throttled.
@@ -71,8 +72,11 @@ void cable_speech_tick(void)
 }
 void cable_speech_disconnect(void)
 {
-    audio_speech_abort(0);
-    ui_companion_speech_clear(0);
+    if (remote_id) {
+        audio_speech_abort(remote_id);
+        ui_companion_speech_clear(remote_id);
+    }
+    remote_id = 0;
     memset(&reported, 0, sizeof reported); reported_at = 0;
 }
 bool cable_speech_message(const char *type, const cJSON *p)
@@ -92,8 +96,10 @@ bool cable_speech_message(const char *type, const cJSON *p)
         if (!ui_companion_speech_begin(id, agent, caption, string_of(p, "emotion"))) {
             audio_speech_abort(id); reject(id, 101); return true;
         }
+        remote_id = id;
         cable_speech_tick(); return true;
     }
+    if (id != remote_id) { reject(id, 100); return true; }
     if (!strcmp(type, "speech.end")) {
         uint32_t bytes;
         if (!uint_of(p, "bytes", &bytes) || !audio_speech_end(id, bytes)) {
@@ -114,6 +120,7 @@ void cable_speech_pcm(const uint8_t *p, size_t n)
 {
     if (!cable_client_is_connected() || n < 10) return;
     uint32_t id = little32(p), offset = little32(p + 4);
+    if (!remote_id || id != remote_id) { reject(id, 100); return; }
     if (!audio_speech_push(id, offset, p + 8, n - 8)) {
         // Credit already prevents ordinary backpressure. A gap, overflow or stale
         // packet cannot be repaired by playing whatever bytes happen to follow.

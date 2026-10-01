@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 
 from native_shapes import defines, typedef
+from native_voice import voice_assets
 
 HERE = Path(__file__).resolve().parent
 NATIVE = (HERE / "../main/ui/habitat").resolve()
@@ -27,6 +28,7 @@ def function(name):
 code = r'''
 #include "runtime.h"
 #include "pro_canvas.h"
+#include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "../../cable_features.h"
 #include "../../cable_machines.h"
@@ -58,6 +60,15 @@ static ht_carry_t carry;
 static ht_visit_t visit;
 static ht_form_t form;
 static ht_draft_t draft;
+static bool native_voice_available = true;
+bool audio_speech_available(void) { return native_voice_available; }
+bool audio_speech_begin(uint32_t id, uint32_t rate, uint8_t volume) { (void)id;(void)rate;(void)volume;return true; }
+bool audio_speech_push(uint32_t id,uint32_t offset,const void *pcm,size_t bytes) { (void)id;(void)offset;(void)pcm;(void)bytes;return true; }
+bool audio_speech_end(uint32_t id,uint32_t bytes) { (void)id;(void)bytes;return true; }
+bool audio_speech_set_volume(uint32_t id,uint8_t volume) { (void)id;(void)volume;return true; }
+#include "../../audio_speech.h"
+void audio_speech_snapshot(audio_speech_state_t *out) { memset(out,0,sizeof *out); }
+void audio_speech_abort(uint32_t id) { (void)id; }
 static uint32_t ms(void) { return 1000; }
 const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definition(id)->name; }
 void pro_visual_background(ht_scene_t *f, pro_scene_id_t scene, ht_character_id_t id) {
@@ -89,6 +100,7 @@ static void reset(bool stress) {
     memset(&s,0,sizeof s); memset(&form,0,sizeof form); memset(&draft,0,sizeof draft);
     memset(&selection,0,sizeof selection); memset(&carry,0,sizeof carry); memset(&visit,0,sizeof visit);
     s.connected=s.ready=true; s.active=0; s.pressed=-1; s.brightness=75;
+    s.sample_volume=80; s.sample_volume_set=true;
     s.count=7; s.tab_count=3; s.machine_count=3; s.model_count=3;
     for(int i=0;i<s.count;i++) {
         snprintf(s.agents[i].id,sizeof s.agents[i].id,"agent-%d",i);
@@ -190,7 +202,7 @@ static void portrait(const ht_scene_t *f,const char *dir,const char *name) {
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     static const struct { view_t view;const char *name; } screens[]={
-        {LAUNCHER,"launcher"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
+        {LAUNCHER,"launcher"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},
         {QUESTION,"question"},{CHOICE,"choices"},{ANSWER_REVIEW,"answer"},{SELECTION,"selection"},
         {FORM,"form"},{DRAFT,"draft"},{DRAFT_OPTIONS,"draft-options"},{STOP,"stop"},{MESSAGE,"message"},
@@ -200,6 +212,11 @@ int main(int argc,char **argv) {
         assert(pro_render_controls(&scene));inspect(&scene,screens[i].name);
         if(s.view==INBOX)assert(s.notice_frame==123&&action_count(A_NOTICE,false)==1);
         if(!stress)portrait(&scene,dir,screens[i].name);
+    }
+    for(unsigned sample=0;sample<pro_voice_sample_count();sample++) {
+        reset(false);s.voice_sample=sample;s.view=VOICE_SAMPLES;ht_scene_t voice;ht_scene_clear(&voice,BG);
+        assert(pro_render_controls(&voice));inspect(&voice,"voice sample");
+        s.view=VOICE_PARAMS;ht_scene_clear(&voice,BG);assert(pro_render_controls(&voice));inspect(&voice,"voice params");
     }
     reset(false);s.view=SETTINGS;s.offset=7;ht_scene_t scene;ht_scene_clear(&scene,BG);
     assert(pro_render_controls(&scene));inspect(&scene,"controls-more");portrait(&scene,dir,"controls-more");
@@ -245,7 +262,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-controls-") as d:
         str(FONTS), str(NATIVE / "terminal.c"), str(NATIVE / "fonts.c"),
         str(NATIVE / "workspace.c"), str(NATIVE / "selection.c"),
         str(NATIVE / "pro_daemon.c"), str(NATIVE / "character_motion.c"),
-        "-o", str(build / "controls"),
+        *voice_assets(build), "-o", str(build / "controls"),
     ], check=True)
     args = [str(build / "controls")]
     if os.environ.get("HABITAT_PRO_PREVIEW_DIR"):

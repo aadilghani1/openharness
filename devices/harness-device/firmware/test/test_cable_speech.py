@@ -78,7 +78,7 @@ code = code.replace("#define ID_MAX 48", defines("ID_MAX").strip())
 code += SOURCE[SOURCE.index("#define WIRE_WINDOW"):].rsplit("#endif", 1)[0]
 code += r'''
 static void reset(void) {
-    audio=(audio_speech_state_t){0}; reported=(audio_speech_state_t){0}; reported_at=0; now=1000000;
+    audio=(audio_speech_state_t){0}; reported=(audio_speech_state_t){0}; reported_at=0; remote_id=0; now=1000000;
     connected=ui_accept=audio_accept=wire_accept=true; ui_id=0;
     begins=pushes=ends=aborts=ui_begins=ui_clears=sends=0;
     wire[0]=caption_seen[0]=agent_seen[0]=0; fail_at=0;
@@ -139,24 +139,24 @@ static void begin_bounds(void) {
 static void put32(uint8_t *out,uint32_t n) { for(unsigned i=0;i<4;i++)out[i]=(uint8_t)(n>>(8*i)); }
 static void pcm_and_sessions(void) {
     reset(); uint8_t p[20]={0}; put32(p,100); p[8]=0x9a;
-    audio=(audio_speech_state_t){.id=100,.active=true,.pending=true}; ui_id=100;
+    audio=(audio_speech_state_t){.id=100,.active=true,.pending=true}; ui_id=100; remote_id=100;
     for(size_t size=0;size<10;size++)cable_speech_pcm(p,size);
     assert(!pushes && !sends);
     cable_speech_pcm(p,10); assert(pushes==1 && pushed_id==100 && pushed_offset==0 && pushed_bytes==2 && first_pcm==0x9a);
     assert(audio.received==2);
     put32(p+4,2); cable_speech_pcm(p,11);
     assert(pushes==2 && aborts==1 && !audio.active && !ui_id && number("error")==100);
-    reset(); audio=(audio_speech_state_t){.id=200,.active=true,.received=100,.queued=100}; ui_id=200;
+    reset(); audio=(audio_speech_state_t){.id=200,.active=true,.received=100,.queued=100}; ui_id=200; remote_id=200;
     put32(p,100); put32(p+4,0); cable_speech_pcm(p,10);
-    assert(aborts==1 && audio.active && audio.id==200 && ui_id==200 && number("id")==100);
+    assert(aborts==0 && audio.active && audio.id==200 && ui_id==200 && number("id")==100);
     reset(); connected=false; cable_speech_pcm(p,20); assert(!pushes && !aborts);
-    reset(); audio=(audio_speech_state_t){.id=0x87654321,.active=true};
+    reset(); audio=(audio_speech_state_t){.id=0x87654321,.active=true}; remote_id=0x87654321;
     put32(p,0x87654321); put32(p+4,0x12345678); cable_speech_pcm(p,10);
     assert(pushed_id==0x87654321 && pushed_offset==0x12345678);
     assert(!audio.active && number("error")==100);
 }
 static void terminal_lifecycle(void) {
-    reset(); audio=(audio_speech_state_t){.id=100,.active=true,.received=640,.queued=640}; ui_id=100;
+    reset(); audio=(audio_speech_state_t){.id=100,.active=true,.received=640,.queued=640}; ui_id=100; remote_id=100;
     cJSON *p=cJSON_Parse("{\"id\":100,\"bytes\":640}"); assert(p);
     assert(cable_speech_message("speech.end",p) && ends==1 && end_id==100 && end_bytes==640);
     assert(audio.active && audio.ended && ui_id==100 && !aborts); // captions survive the DMA drain.
@@ -165,11 +165,11 @@ static void terminal_lifecycle(void) {
     cJSON_SetNumberValue(cJSON_GetObjectItemCaseSensitive(p,"id"),100);
     assert(cable_speech_message("speech.abort",p) && !audio.active && !ui_id);
     cJSON_Delete(p);
-    reset(); audio=(audio_speech_state_t){.id=200,.active=true}; ui_id=200;
+    reset(); audio=(audio_speech_state_t){.id=200,.active=true}; ui_id=200; remote_id=200;
     p=cJSON_CreateObject(); assert(!cable_speech_message("agent.focus",p) && !aborts);
     assert(!cable_speech_message("fw.offer",p) && aborts==1 && !audio.active && !ui_id);
     cJSON_Delete(p);
-    reset(); audio=(audio_speech_state_t){.id=300,.active=true}; ui_id=300;
+    reset(); audio=(audio_speech_state_t){.id=300,.active=true}; ui_id=300; remote_id=300;
     cable_speech_disconnect(); assert(aborts==1 && !audio.active && !ui_id && !reported.id);
 }
 static void credit_and_report_retry(void) {
@@ -193,7 +193,7 @@ static void credit_and_report_retry(void) {
         assert(credit<=AUDIO_SPEECH_MAX_BYTES && credit>=audio.received);
         assert(credit==audio.received+(AUDIO_SPEECH_MAX_BYTES-audio.received<8192 ? AUDIO_SPEECH_MAX_BYTES-audio.received : 8192));
     }
-    reset(); audio=(audio_speech_state_t){.id=100,.active=true,.pending=true}; wire_accept=false;
+    reset(); audio=(audio_speech_state_t){.id=100,.active=true,.pending=true}; wire_accept=false; remote_id=100;
     cable_speech_tick(); assert(sends==1 && !reported.id);
     wire_accept=true; cable_speech_tick(); assert(sends==2 && reported.id==100);
     // Receipt ACKs unblock the very next frame, including a burst within 40 ms.
@@ -220,9 +220,19 @@ static void allocation_failure_is_atomic(void) {
     }
     wire_accept=false; assert(!report(&audio,0) && !live);
 }
+static void local_audition_is_independent(void) {
+    reset(); audio=(audio_speech_state_t){.id=0x564f0001,.active=true,.playing=true};
+    cable_speech_tick(); assert(!sends);
+    cable_speech_disconnect(); assert(!aborts && audio.active && !ui_clears);
+    cJSON *p=cJSON_Parse("{\"id\":1448017921}");assert(p);
+    assert(cable_speech_message("speech.abort",p));assert(!aborts && audio.active);
+    cJSON_Delete(p);
+    remote_id=100;ui_id=100;
+    cable_speech_disconnect();assert(aborts==1&&audio.active&&ui_id==0);
+}
 int main(void) {
     const cJSON_Hooks hooks={allocate,release}; cJSON_InitHooks((cJSON_Hooks *)&hooks);
-    uint_validation(); begin_bounds(); pcm_and_sessions(); terminal_lifecycle();
+    local_audition_is_independent(); uint_validation(); begin_bounds(); pcm_and_sessions(); terminal_lifecycle();
     credit_and_report_retry(); allocation_failure_is_atomic(); assert(!live);
     puts("Pro speech protocol: uint32/JSON bounds, caption limits, LE packet routing, stale-session isolation, end/drain lifecycle, bounded credit, throttling/retry and every report allocation failure PASS (offline)");
 }
