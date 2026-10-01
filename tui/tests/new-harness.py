@@ -51,11 +51,19 @@ def state(route='dial'):
         return result.get('data', result)
 
 def screen(): return tmux('capture-pane', '-p', '-t', 'test')
+def form_bounds(lines):
+    width, height = max(map(len, lines), default=0), len(lines) - 1
+    form_w, form_h = min(60, max(0, width - 4)), min(17, max(5, height - 2))
+    return (width - form_w) // 2, max(0, (height - form_h) // 2), form_w, form_h
+def form_screen():
+    lines = screen().splitlines()
+    left, top, width, height = form_bounds(lines)
+    return '\n'.join(line[left:left+width] for line in lines[top:top+height])
 def settle_ui():
     # Wait for chooser content to redraw, not just tmux send-keys returning,
     # before taking mouse coordinates.
-    # The panel is borderless; crop inside its central 90% surface so animated
-    # working panes around it cannot keep it unsettled.
+    # The panels are borderless; crop around the centered form and right-hand chooser
+    # so animated working panes around them cannot keep the fixture unsettled.
     previous, changed = None, time.monotonic()
     deadline = changed + 3
     while time.monotonic() < deadline:
@@ -64,8 +72,16 @@ def settle_ui():
         if not any('›' in line for line in lines):
             return
         width = max(map(len, lines), default=0)
-        padx, pady = width // 20 + 2, len(lines) // 20 + 2
-        signature = tuple(line[padx:width-padx] for line in lines[pady:len(lines)-pady])
+        height = len(lines) - 1  # hn's bottom status line
+        left, top, form_w, form_h = form_bounds(lines)
+        side = width - (left + form_w) - 4 >= 32
+        signature = tuple(line[left:left+form_w] for line in lines[top:top+form_h])
+        child_left = left + form_w + 2
+        header = lines[top+2][child_left+2:].lstrip() if top + 2 < len(lines) else ''
+        if side and (header.startswith('›') or header.startswith('Task (optional)')):
+            child_right = child_left + min(60, width - left - form_w - 4)
+            bottom = min(height - 1, top + 22)
+            signature += tuple(line[child_left:child_right] for line in lines[top:bottom])
         if signature != previous:
             previous, changed = signature, time.monotonic()
         elif time.monotonic() - changed >= .15:
@@ -73,6 +89,10 @@ def settle_ui():
         time.sleep(.025)
     raise AssertionError('popup did not settle\n' + screen())
 def keys(*args):
+    # Crossterm coalesces adjacent ESC bytes into one event; exercise separate back presses.
+    if len(args) > 1 and 'Escape' in args:
+        for key in args: keys(key)
+        return
     tmux('send-keys', '-t', 'test', *args)
     settle_ui()
 def type_text(text): tmux('send-keys', '-l', '-t', 'test', text)
@@ -97,16 +117,20 @@ def click(x, y):
 def field_at(label):
     # A field's label: after a space, the pointer or an edge (the form is a borderless panel).
     return r'(?<![^\s│›])(' + label + r')(?= {2,}|$)'
+def field_position(label):
+    lines = screen().splitlines()
+    left, top, width, height = form_bounds(lines)
+    for y, line in enumerate(lines[top:top+height], top):
+        # Labels begin at the field column; "Harness" in the dialog title is not a field.
+        m = re.match(r'^[ ›]{3}(' + re.escape(label) + r')(?= {2,}|$)', line[left:left+width])
+        if m: return left + m.start(1), y
 def field(label):
-    def find():
-        for y, line in enumerate(screen().splitlines()):
-            m = re.search(field_at(re.escape(label)), line)
-            if m: return m.start(1), y
-    wait(find, f'field {label}')
-    click(*find())
+    wait(lambda: field_position(label), f'field {label}')
+    click(*field_position(label))
 def choose_field(label, query):
-    field(label); type_text(query); keys('Enter'); shows('New Harness')
-def form_visible(): return re.search(field_at('Task'), screen()) is not None
+    field(label); type_text(query); keys('Enter')
+    wait(lambda: re.search(r'› Start ', form_screen()), 'choice accepted; launch action focused')
+def form_visible(): return re.search(field_at('Task'), form_screen()) is not None
 def new_form():
     keys('C-b', 'N'); wait(form_visible, 'New Harness form')
 def placement():
@@ -150,6 +174,7 @@ try:
     keys('C-b', 'n')
     wait(lambda: hn('display-message', '-p', '#{window_id}') != first_window, 'lowercase n remains next-window')
     keys('C-b', 'p'); new_form()
+    anchor = field_position('Task')
     snapshot('new-harness-form')
     before = create_count()
     input_before = len(state('reconnect')['inputs'])
@@ -158,13 +183,17 @@ try:
     field('Project'); type_text('m2 webapp'); keys('Enter'); shows('webapp @ local')
     assert create_count() == before, 'searching projects across machines only changes the draft'
     print('PASS New Harness: short local machine name and remote folders after a large local history', flush=True)
-    # The chooser opens in the form's place (the panel stays put), once you go into it.
-    keys('Down'); assert 'Search agents and harnesses' not in screen(), 'moving over Agent keeps the form'
+    # Moving over a field previews its choices beside the stationary form.
+    keys('Down'); shows('Search agents and harnesses')
+    assert field_position('Task') == anchor, 'a preview must not move or hide the form'
+    assert any(line.find('Search agents and harnesses') > anchor[0] + 50 for line in screen().splitlines())
     keys('Tab'); shows('Search agents and harnesses')
+    assert field_position('Task') == anchor, 'entering a chooser keeps the form visible'
     assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
     snapshot('new-harness-agent')
     type_text('codex'); keys('Escape')
-    shows('Approvals'); field('Agent'); type_text('codex'); keys('Enter')
+    shows('Approvals'); keys('Right'); shows('Search agents and harnesses')
+    keys('Escape'); type_text('codex'); keys('Enter'); shows('Start Codex')
     field('Project'); shows('Search projects'); snapshot('new-harness-project')
     type_text('clone'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('GitHub URL')
     raw('\x1b[200~autonomous-ai/openharness\x1b[201~'); keys('Enter')
@@ -173,10 +202,11 @@ try:
     field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
     type_text('fail-once'); keys('Enter'); shows('New Folder: fail-once')
     shows('Approvals'); shows('Model'); shows('Profile')
-    assert not re.search(field_at('Options|Machine'), screen()), 'settings are direct fields; machine belongs in Project'
+    assert not re.search(field_at('Options|Machine'), form_screen()), 'settings are direct fields; machine belongs in Project'
     choose_field('Approvals', 'read only'); shows('Read only')
     task_text = 'Fix café login.\n\nKeep 界 and 🦀 intact.\nAdd a regression test.'
     field('Task'); shows('Task (optional)')
+    assert field_position('Task') == anchor, 'the task editor keeps the form visible and fixed'
     raw('\x1b[200~Fix café login.\r\n\r\nKeep 界 and 🦀 intact.\x1b[201~')
     shows('Keep 界 and 🦀 intact.')
     keys('M-Enter'); type_text('Add a regression test.'); keys('Enter')
@@ -220,15 +250,16 @@ try:
     assert 'codexHome' not in request, request
     print('PASS New Harness: machine-scoped profiles and explicit model routes', flush=True)
 
-    # (Blender asks for its coding agent next, in the form's place.)
+    # Blender asks for its coding agent next in the same side chooser.
     new_form(); field('Agent'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
     submit(before + 6)
     assert state()['created'][-1]['dsh'] == 'example/blender'
     new_form(); choose_field('Harness', 'Terminal')
-    assert not re.search(field_at('Model|Approvals|Profile'), screen()), 'Terminal omits irrelevant settings'
+    snapshot('new-harness-terminal')
+    assert not re.search(field_at('Model|Approvals|Profile'), form_screen()), 'Terminal omits irrelevant settings\n' + screen()
     # Return focus to the action without accepting any of the disabled Git rows.
     before_terminal = placement()
-    field('New Harness')
+    field('Start Terminal')
     wait(lambda: create_count() == before + 7 and not form_visible(), 'terminal launch')
     placed_in_current_window(before_terminal)
     request = state()['created'][-1]
@@ -256,7 +287,7 @@ try:
     keys('C-l', 'C-a', 'C-k'); type_text('/home/dev/autonomous-harness'); keys('Enter')
     shows('Use this folder'); keys('Enter')
     shows('autonomous-harness @ local'); shows('[x]')
-    tmux('resize-window', '-t', 'test', '-x', '100', '-y', '26'); settle_ui()
+    tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     snapshot('new-harness-flat')
     field('Task'); shows('Task (optional)')
     raw('\x1b[200~Improve the New Harness keyboard flow.\nKeep the launch settings visible.\x1b[201~')
@@ -266,10 +297,10 @@ try:
     tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24'); settle_ui()
     snapshot('new-harness-flat-narrow')
     # Clearing the task allows an unsupported engine; it must never silently discard one.
-    choose_field('Agent', 'Terminal'); field('New Harness'); shows('This agent cannot start with a task')
+    choose_field('Agent', 'Terminal'); field('Start Terminal'); shows('This agent cannot start with a task')
     assert create_count() == count, 'an unsupported task is rejected before creating a harness'
     field('Task'); keys('C-a', 'C-k', 'Enter'); choose_field('Agent', 'claude')
-    field('Task'); type_text('x' * 2001); keys('Enter'); field('New Harness'); shows('Task is too long')
+    field('Task'); type_text('x' * 2001); keys('Enter'); field('Start Claude Code'); shows('Task is too long')
     assert create_count() == count, 'an overlong task is rejected before creating a harness'
     field('Task'); keys('C-a', 'C-k', 'Enter')
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()

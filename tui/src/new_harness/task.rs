@@ -1,4 +1,4 @@
-//! The optional first task, edited in the same panel as the form's other choices.
+//! The optional first task, edited beside the form (in its place on narrow terminals).
 use super::*;
 
 // Keep these aligned with cli/src/lib/engineLaunch.ts and desktop/lib/core/first_task.dart.
@@ -112,11 +112,12 @@ pub(super) fn move_vertical(picker: &mut Picker, delta: isize, width: usize) {
 
 fn text_area(r: Rect) -> Rect {
     let top = if r.height >= 8 { 4 } else { 1 };
+    let footer = if r.width < 43 && r.height >= 9 { 3 } else { 2 };
     Rect::new(
         r.x + 3,
         r.y + top,
         r.width.saturating_sub(6).max(1),
-        r.height.saturating_sub(top + 2).max(1),
+        r.height.saturating_sub(top + footer).max(1),
     )
 }
 
@@ -135,6 +136,7 @@ pub(super) fn draw(
     panel: Rect,
     picker: &mut Picker,
     error: &str,
+    active: bool,
     base: Style,
     muted: Style,
     accent: Style,
@@ -178,14 +180,26 @@ pub(super) fn draw(
         }
     }
     let y = r.y + (row - picker.scroll) as u16;
-    view::put(buf, panel.x + 1, y, 1, "›", accent);
+    if active {
+        view::put(buf, panel.x + 1, y, 1, "›", accent);
+    }
+    let short_footer = panel.width < 43 && panel.height >= 9;
+    if error.is_empty() && short_footer && active {
+        view::put(buf, panel.x + 2, panel.bottom() - 3, panel.width - 4, "Alt-Enter newline", muted);
+    }
     view::put(
         buf,
         panel.x + 2,
         panel.bottom() - if panel.height >= 5 { 2 } else { 1 },
         panel.width.saturating_sub(4),
         if error.is_empty() {
-            "Enter done · Alt-Enter newline · Esc back"
+            if !active {
+                "Enter or → to edit"
+            } else if short_footer {
+                "Enter done · Esc back"
+            } else {
+                "Enter done · Alt-Enter newline · Esc back"
+            }
         } else {
             error
         },
