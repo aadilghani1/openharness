@@ -1761,6 +1761,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
+        final showsHints = KeyHints.visibleOf(context);
         final actions = [
           if (desktop || !_isManagement)
             Padding(
@@ -1768,11 +1769,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                 cell.width * 2,
                 cell.height,
                 cell.width * 2,
-                0,
+                // The hints line is the gap under the buttons; without it
+                // they would sit on the panel's edge.
+                showsHints ? 0 : cell.height,
               ),
               child: _actionButtons(),
             ),
-          if (KeyHints.visibleOf(context)) _controlHints(),
+          if (showsHints) _controlHints(),
         ];
         return LayoutBuilder(
           builder: (context, constraints) => Column(

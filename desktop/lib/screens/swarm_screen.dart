@@ -3891,6 +3891,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: ValueKey('companion-home:${_zoo.scope}'),
     face: _face,
     brain: _brain,
+    openMemoryConnection: _zoo.isPreview
+        ? null
+        : app.openCodingMemoryConnection,
     onHatch: _hatch,
     onOpenControls: _openCompanionControls,
     onSelectEngine: _zoo.isPreview || !_brain.active || _zoo.paired == null
@@ -5540,14 +5543,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       onClose: _dismissSearch,
       onRefocus: _focusSearch,
       previewBuilder: preview,
-      hostBar: widget.chrome?.pickerBar?.call(
-        context,
-        WorkspacePicker(
-          search: search,
-          focus: _focusSearch,
-          close: _dismissSearch,
-        ),
-      ),
+      showsBack: widget.chrome?.pickerShowsBack ?? false,
     );
     final scoped = Semantics(
       scopesRoute: true,
@@ -7085,7 +7081,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   SizedBox(width: cell.width),
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: downloadWidth),
-                    child: const WebDownloadButton(),
+                    // One filled action in the bar: Share when it is on.
+                    child: WebDownloadButton(prominent: !_showShareButton),
                   ),
                 ],
                 if (_showShareButton) ...[

@@ -30,6 +30,7 @@ import 'package:harness/state/workspace_status.dart';
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
 import 'support/real_fonts.dart';
+import 'support/coding_memory_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 import 'swarm_screen_test.dart' show terminal;
 
@@ -139,6 +140,7 @@ void main() {
     Size size = const Size(1400, 950),
     Brightness brightness = Brightness.dark,
     double scale = 1,
+    MemoryFixture? codingMemory,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -261,6 +263,9 @@ void main() {
                 companionViewer: (_) => CompanionHome(
                   face: face,
                   brain: brain,
+                  openMemoryConnection: codingMemory == null
+                      ? null
+                      : () => codingMemory,
                   onHatch: (_) {},
                   onOpenControls: (_) {},
                   onSelectEngine: (_) {},
@@ -349,6 +354,35 @@ void main() {
       expect(
         remote.batches.expand((b) => b).where((o) => o['op'] == 'zoo.pair'),
         hasLength(1),
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'coding library opens inside the DSH viewer without terminal input or history replay',
+    (tester) async {
+      final memory = MemoryFixture();
+      await mount(tester, codingMemory: memory);
+      await tester.tap(find.byKey(const ValueKey('companion-nav-Memories')));
+      brain.receive('pair_result', {
+        'requestId': sent.single.$2['requestId'],
+        'ok': true,
+        'lessons': [],
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Your coding memory'), findsOneWidget);
+      expect(
+        find.text('For regression fixes, start with a small failing test.'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('memory-review-recent')), findsNothing);
+      expect(find.byType(TerminalPanel), findsOneWidget);
+      expect(input, isEmpty);
+      expect(
+        memory.calls.where((c) => ['apply', 'preview'].contains(c['action'])),
+        isEmpty,
       );
       await tester.pumpWidget(const SizedBox());
     },

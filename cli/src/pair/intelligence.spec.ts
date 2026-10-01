@@ -90,4 +90,61 @@ describe('the collection DSH supplies its intelligence', () => {
     expect(await result).toBeNull()
     expect(w.run.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
   })
+
+  it('binds extraction to the selected runtime and rejects a changed observed account', async () => {
+    const w = world()
+    w.set({ ...w.get(), accountKey: 'first-account' })
+    const before = w.brain.status().contextKey
+    let finish!: (result: { text: string }) => void
+    w.run.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const contextKey = (await w.brain.extractionStatus()).contextKey!
+    const pending = w.brain.extract('coding evidence only', { timeoutMs: 1000, signal: new AbortController().signal, contextKey })
+    await vi.waitFor(() => expect(w.run).toHaveBeenCalledWith('claude', expect.objectContaining({ prompt: 'coding evidence only', model: 'opus', effort: 'high' })))
+    w.set({ ...w.get(), accountKey: 'second-account' })
+    expect(w.brain.status().contextKey).not.toBe(before)
+    finish({ text: 'result from the previous account' })
+    expect(await pending).toBeNull()
+  })
+
+  it('rechecks native account metadata after extraction, including a new login at the same path', async () => {
+    const w = world()
+    let account: string | null = 'native-account-1'
+    const brain = new CompanionIntelligence({ ...w.deps, accountIdentity: async () => account })
+    const before = (await brain.extractionStatus()).contextKey
+    let finish!: (result: { text: string }) => void
+    w.run.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const pending = brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal, contextKey: before! })
+    await vi.waitFor(() => expect(w.run).toHaveBeenCalledOnce())
+    account = 'native-account-2'
+    expect((await brain.extractionStatus()).contextKey).not.toBe(before)
+    finish({ text: 'answer from old account' })
+    expect(await pending).toBeNull()
+    account = null
+    expect((await brain.extractionStatus()).state).toBe('waiting')
+    expect(await brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal, contextKey: before! })).toBeNull()
+    expect(w.run).toHaveBeenCalledOnce()
+  })
+
+  it('cancels while the native account lookup is pending without launching extraction', async () => {
+    const w = world()
+    let finish!: (value: string) => void
+    const account = new Promise<string>(resolve => { finish = resolve })
+    const brain = new CompanionIntelligence({ ...w.deps,
+      accountIdentity: () => account })
+    const pending = brain.extract('synthetic evidence', { timeoutMs: 1000, signal: new AbortController().signal, contextKey: 'cancelled-before-binding' })
+    brain.cancel()
+    finish('account-before-cancellation')
+    expect(await pending).toBeNull()
+    expect(w.run).not.toHaveBeenCalled()
+  })
+
+  it('does not send a leased prompt after the selected extraction context changes', async () => {
+    const w = world()
+    w.set({ ...w.get(), accountKey: 'first-account' })
+    const contextKey = (await w.brain.extractionStatus()).contextKey!
+    w.set({ ...w.get(), accountKey: 'replacement-account' })
+    const options = { timeoutMs: 1000, signal: new AbortController().signal, contextKey }
+    await expect(w.brain.extract('synthetic evidence from the original lease', options)).rejects.toThrow('inference_context_changed')
+    expect(w.run).not.toHaveBeenCalled()
+  })
 })

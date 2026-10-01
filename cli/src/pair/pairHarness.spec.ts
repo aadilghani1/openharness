@@ -49,7 +49,7 @@ describe('the package', () => {
     expect(args[0]).toBe('--mcp-config')
     expect(JSON.parse(args[1]!)).toEqual({ mcpServers: { harnessd: { type: 'stdio', command: '/usr/local/bin/node',
       args: ['/opt/harness/cli.js', 'pair', 'mcp', '--token-file', '/data/pair/token'] } } })
-    expect(args[2]).toBe('--allowedTools=mcp__harnessd__list_machines,mcp__harnessd__list_harnesses,mcp__harnessd__read_harness,mcp__harnessd__brief,mcp__harnessd__say')
+    expect(args[2]).toBe('--allowedTools=mcp__harnessd__list_machines,mcp__harnessd__list_harnesses,mcp__harnessd__read_harness,mcp__harnessd__brief,mcp__harnessd__recall_memory,mcp__harnessd__say')
     expect(args.join(' ')).not.toMatch(/dangerously|bypass|--permission-mode/)
   })
 

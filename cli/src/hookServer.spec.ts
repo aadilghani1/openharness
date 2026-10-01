@@ -79,10 +79,59 @@ describe('process-owned hook server', () => {
       expect(onPromptContext).not.toHaveBeenCalled()
       resolveHookAgent.mockResolvedValue(entry)
       expect(await (await submit()).json()).toEqual({ ok: true, additionalContext: 'Companions collection context' })
-      expect(onPromptContext).toHaveBeenCalledExactlyOnceWith('agent-scope')
+      expect(onPromptContext).toHaveBeenCalledExactlyOnceWith('agent-scope', 'ask a peer\nfor evidence')
       expect(onPromptSubmitted).toHaveBeenCalledExactlyOnceWith('agent-scope', 'ask a peer\nfor evidence')
     } finally { registration.mockRestore() }
   })
+  it.each(['claude', 'codex'] as const)('awaits bounded optional memory on a verified %s user prompt only', async engine => {
+    const entry = { engine, agentId: 'memory_agent', sessionId: 'memory_session', runtimes: [{ backend: 'tmux', paneId: '%41' }] } as RegisteredSession
+    const registration = vi.spyOn(registry, 'register').mockReturnValue({ entry, isNew: false, evicted: null, rebound: null, orphaned: null })
+    const context = { additionalContext: 'Historical coding memory', memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }
+    const onPromptContext = vi.fn(async () => context)
+    try {
+      const { base, headers } = await start({ resolveHookAgent: async () => entry, onPromptContext })
+      const submit = async (hookEvent: string) => (await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+        body: JSON.stringify({ engine, sessionId: entry.sessionId, tmuxPane: '%41', hookEvent, prompt: 'Fix the coding bug.' }) })).json()
+      expect(await submit('SessionStart')).toEqual({ ok: true })
+      expect(onPromptContext).not.toHaveBeenCalled()
+      expect(await submit('UserPromptSubmit')).toEqual({ ok: true, ...context })
+    } finally { registration.mockRestore() }
+  })
+
+  it.each(['failed', 'hung', 'oversized'] as const)('continues the prompt when optional recall is %s', async mode => {
+    const entry = { engine: 'claude', agentId: 'memory_agent', sessionId: 'memory_session' } as RegisteredSession
+    const registration = vi.spyOn(registry, 'register').mockReturnValue({ entry, isNew: false, evicted: null, rebound: null, orphaned: null })
+    const onPromptContext = async (): Promise<string> => {
+      if (mode === 'failed') throw new Error('Private provider error must not be returned.')
+      if (mode === 'hung') return new Promise(() => {})
+      return '🪴'.repeat(2_100)
+    }
+    try {
+      const { base, headers } = await start({ resolveHookAgent: async () => entry, onPromptContext })
+      const started = performance.now()
+      const response = await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+        body: JSON.stringify({ engine: 'claude', sessionId: entry.sessionId, tmuxPane: '%41', hookEvent: 'UserPromptSubmit' }) })
+      expect(await response.json()).toEqual({ ok: true })
+      expect(performance.now() - started).toBeLessThan(1_000)
+    } finally { registration.mockRestore() }
+  })
+
+  it('accepts emitted receipts only from a hook bound to the same live native session', async () => {
+    const entry = { engine: 'codex', agentId: 'memory_agent', sessionId: 'memory_session' } as RegisteredSession
+    const resolveHookAgent = vi.fn(async () => entry)
+    const onMemoryContextEmitted = vi.fn(async () => true)
+    const { base, headers } = await start({ resolveHookAgent, onMemoryContextEmitted })
+    const body = { engine: 'codex', sessionId: entry.sessionId, tmuxPane: '%41', memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }
+    const submit = (value = body, authenticated = true) => fetch(`${base}/api/hook/memory-emitted`, {
+      method: 'POST', headers: authenticated ? headers : { 'content-type': 'application/json' }, body: JSON.stringify(value) })
+    expect((await submit(body, false)).status).toBe(401)
+    expect((await submit({ ...body, sessionId: 'old_session' })).status).toBe(403)
+    expect((await submit({ ...body, memoryReceiptId: 'fabricated' })).status).toBe(400)
+    expect(onMemoryContextEmitted).not.toHaveBeenCalled()
+    expect(await (await submit()).json()).toEqual({ ok: true, recorded: true, delivery: 'unverified' })
+    expect(onMemoryContextEmitted).toHaveBeenCalledExactlyOnceWith(entry.agentId, body.memoryReceiptId)
+  })
+
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })

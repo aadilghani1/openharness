@@ -127,7 +127,7 @@ class User:
 
     def form(self, engine=None):
         self.keys('C-b', 'N')
-        self.wait('Options')
+        self.wait('Task')
         if engine:
             self.choose('Agent', engine, 'Search agents')
 
@@ -147,7 +147,7 @@ class User:
             self.wait('Folder name' if action == 'new folder' else 'GitHub URL')
             self.text(value)
             self.keys('Enter')
-        self.wait('Options')
+        self.wait('Task')
 
     def launch(self, engine, label, double_enter=False, click_create=False):
         before = {s['id'] for s in self.status()['sessions']}
@@ -158,7 +158,7 @@ class User:
         added = self.check(lambda: [s for s in self.status()['sessions'] if s['id'] not in before],
                            'A new harness should become available', 180)
         assert len(added) == 1 and added[0]['engine'] == engine, added
-        self.check(lambda: not re.search(r'(?<![^\s│›])Options {2,}', self.screen()), 'Form closes after launch')
+        self.check(lambda: not re.search(r'(?<![^\s│›])Task {2,}', self.screen()), 'Form closes after launch')
         self.zoom()
         markers = {'codex': ['Welcome to Codex'],
                    'claude': ['Choose the text style', 'Select login method'],

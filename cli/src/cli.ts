@@ -44,6 +44,7 @@ import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
 import { CableFleet } from './cable/cableFleet.js'
+import { DialVerdicts } from './cable/dialPortVerdicts.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivity } from './cable/terminalActivity.js'
 
@@ -98,6 +99,11 @@ import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClie
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
+import { CodingMemoryRuntime } from './memory/runtime.js'
+import { MemoryControl } from './memory/control.js'
+import { isOwnerProcess } from './memory/ownerProcess.js'
+import { hasMemoryForegroundActivity, MemorySessionRoster } from './memory/hostSessions.js'
+import { companionMemoryInference } from './memory/companion.js'
 import { CompanionStartupProfile } from './pair/startupProfile.js'
 import { ConversationReview } from './pair/learn/conversationReview.js'
 import { individualName, pairedIndividual } from './pair/individuals.js'
@@ -118,7 +124,7 @@ import { LessonUsage } from './pair/learn/usage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
@@ -358,6 +364,13 @@ const ROUTE_CLASSIFY_APP_MS = 20_000
  * installed, and cost most of a morning proving otherwise.
  */
 let appPaneAgents: string[] = []
+/**
+ * The window's tabs, kept for the same reason: a window can connect while this daemon is still
+ * booting (the app no longer waits for its first scan), and an `app_swarms` that lands before the
+ * cable host exists was dropped — the dial then had no tab, drew "Choose a pane" and took no swipe
+ * or voice until the window happened to send its tabs again (measured 2026-10-01: 80 s).
+ */
+let appSwarmsLatest: Parameters<DaemonCableHost['setSwarms']>[0] = null
 /** Module scope for the same reason cableRef is: shutdown() has to release the socket. */
 let deviceLinkRef: DeviceLink | null = null
 
@@ -1864,6 +1877,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // further down (onDaemonsChanged, onZooRead), and it starts once all of that is wired.
   let onDaemonsChanged: (on: boolean) => void = () => {}
   let onZooRead: (read: ZooRead) => void = () => {}
+  // Provenance stays local to the exact response object; no account identifier is added to a wire body.
+  const memoryZooOwners = new WeakMap<ZooRead, string>()
+  const memoryOwnerBindings = new WeakMap<ZooRead, Promise<string | null>>()
   const daemonsKilled = localKillSwitch({ file: pairConfigPath() })
   const daemons = new DaemonsSwitch({
     read: () => proxyBackend('GET', '/api/zoo'),
@@ -1896,6 +1912,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   let companionPromptContext: (agentId: string) => string | null = () => null
   let companionProfileChanged: () => void = () => {}
+  // Development rollout only until the memory viewer, delivery receipts and migration are reviewed.
+  const codingMemoryPreview = process.env.HARNESS_CODING_MEMORY === '1'
+  let codingMemory: CodingMemoryRuntime | null = null
+  let memoryPause = Promise.resolve()
+  let refreshMemoryIdentity: () => Promise<void> = async () => {}
   let isCollectionAgent: (agentId: string) => boolean = () => false
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
   const pairConfig = new PairConfigFile(pairConfigPath())
@@ -3201,6 +3222,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
+    if (hasMemoryForegroundActivity(events, opts) && !isSubagentSession(sessionId)) codingMemory?.activity()
     const usageSession = registry.bySession(sessionId)
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const [eventIndex, event] of events.entries()) {
@@ -3281,7 +3303,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // pair chats, sub-agents and replay stay excluded. Tool-free background reviews
     // never register as agents, so they cannot feed their own results back in here.
     const learnFrom = registry.bySession(sessionId)
-    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
+    if (!codingMemoryPreview && learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
       (!isPairHarnessSession(sessionId) || isCollectionAgent(learnFrom.agentId))) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
@@ -3292,6 +3314,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
+    if (codingMemoryPreview && daemons.on() && !opts?.resumed && !opts?.replay) void codingMemory?.tick()
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
@@ -3888,7 +3911,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${why}). Check the connection and try again.`)
     }
     const json = await res.json().catch(() => ({})) as Record<string, unknown>
-    return { status: res.status, body: json }
+    const result = { status: res.status, body: json }
+    if (latest?.accessToken === accessToken && latest.memoryOwner) memoryZooOwners.set(result, latest.memoryOwner.key)
+    if (codingMemoryPreview && daemons.on() && method === 'GET' && path === '/api/auth/me' && res.status === 200 && json?.success === true) {
+      const userId = (json.data as { user?: { id?: unknown } } | undefined)?.user?.id
+      if (typeof userId === 'string') {
+        const binding = auth.bindMemoryOwner(userId, accessToken, latest?.autonomousEnv ?? env.AUTONOMOUS_ENV).catch(() => null)
+        memoryOwnerBindings.set(result, binding)
+      }
+    }
+    return result
   }
 
   // PAIRING IS ON only while daemons are on (lib/daemonsSwitch.ts) and the account's zoo has a paired daemon
@@ -3905,6 +3937,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const plates = new PlateService({ dir: join(env.ADAPTER_DATA_DIR, 'pair', 'plates') })
   const companionZoo = new CompanionZoo()
   let zooPair: { known: boolean; pair: string | null; name: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
+  let zooMemoryOwner: string | null = null
   let guestPair: string | null = null
   let guestCompanion: CompanionIdentity | null = null
   let guestAutonomy: Autonomy | null = null
@@ -3927,6 +3960,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   onZooRead = (result) => {
     if (result.status === 200) {
+      zooMemoryOwner = memoryZooOwners.get(result) ?? null
       const zoo = (result.body.data as { zoo?: { autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
       companionZoo.observe(zoo, Date.now(), (result.body.data as { revision?: number } | undefined)?.revision)
       // The zoo holds individuals and `paired` names one by uid; the brain speaks as its species.
@@ -3941,10 +3975,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A uid not seen before is a hatch: its art is drawn now, before a window asks (idle while daemons are off).
       plates.observeZoo(zoo)
     } else if (result.status === 401) {
+      zooMemoryOwner = null
       companionZoo.reset()
       zooPair = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
     }
     applyPair()
+    void refreshMemoryIdentity()
+    void codingMemory?.tick()
   }
   // Only a server with the zoo on sends it: the switch asks at once, whatever it had cached.
   backend.onZooChanged = () => daemons.zooChanged()
@@ -3955,7 +3992,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.daemonsOn = () => daemons.on()
   // An open question the watcher already announced before pairing came on is announced again, so the
   // sensor hears it too (clients dedupe a repeated push by requestId).
-  onPairToggled = (on) => { if (on) questionWatcher.reset(); pairBrain?.refresh() }
+  onPairToggled = (on) => {
+    if (on) questionWatcher.reset()
+    pairBrain?.refresh()
+    void refreshMemoryIdentity()
+    void codingMemory?.tick()
+  }
 
   // Built HERE rather than beside the cable stack that also uses it (further down), because the hook
   // server starts long before that point and agent restore can sit between the two. A cache bound late
@@ -4064,7 +4106,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    onPromptContext: (agentId) => companionPromptContext(agentId),
+    onPromptContext: async (agentId, prompt) => {
+      const persona = companionPromptContext(agentId)
+      const recalled = await codingMemory?.preparePromptRecall(agentId, { query: prompt })
+      return { additionalContext: [persona, recalled?.packet.text].filter(Boolean).join('\n\n'),
+        ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
+    },
+    onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4432,6 +4480,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           ...(tmuxBackend ? [{ backend: 'tmux', instance: 'default', state: 'configured' }] : []),
         ],
         dormantAgents: registry.list().filter((session) => !session.active).length,
+        ...(codingMemoryPreview ? { codingMemory: codingMemory?.status() ?? { state: 'off' } } : {}),
         dataDir: tildify(env.ADAPTER_DATA_DIR),
         port: daemonPort(),
       },
@@ -4720,6 +4769,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     processes: () => processRows(),
     harnessPanePids: async () => { const inventory = await listTmuxPanes(); return inventory.ok ? inventory.panes.map((pane) => pane.rootPid) : null },
   })
+  const memoryControl = new MemoryControl({ runtime: () => codingMemory, verify: async connId => {
+    const verdict = await verifyLessonCaller(connId)
+    if (!verdict.ok) return verdict
+    if (!await isOwnerProcess(verdict.pid)) return { ok: false, error: 'UNVERIFIED', detail: 'The memory library requires a verified process belonging to this computer’s owner.' }
+    return verdict
+  } })
   const pairControl = new PairControl({
     owner: pairOwner,
     fleet: pairFleet,
@@ -4739,6 +4794,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
     lessonReview: async (connId, id) => pairBrain?.reviewLesson(connId, id) ?? { ok: false, error: 'UNSUPPORTED' },
+    memory: (payload, connId) => memoryControl.local(payload, connId),
+    recallMemory: async payload => {
+      const agentId = pairHarness.agentId()
+      if (!codingMemory || !agentId) return { ok: false, error: 'UNSUPPORTED' }
+      return codingMemory.recallCollection(agentId, payload)
+    },
     person: { verify: verifyLessonCaller, nonces: lessonNonces },
     now: Date.now,
     newId: () => randomUUID(),
@@ -4823,6 +4884,46 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
   })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
+  if (codingMemoryPreview) {
+    const roster = new MemorySessionRoster(homedir())
+    const guestProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
+    codingMemory = new CodingMemoryRuntime({
+      directory: join(env.ADAPTER_DATA_DIR, 'coding-memory'),
+      context: () => {
+        const current = readAuthSession()
+        const profileId = current ? current.memoryOwner?.key ?? null : guestProfile
+        return { experimental: daemons.on(), profileId,
+          watching: !!pairSensor.pairedDaemon() && (current
+            ? !!profileId && zooMemoryOwner === profileId && zooPair.consent : guestConsent) }
+      },
+      sessions: () => roster.refresh(registry.advertised(), id => mirror.isBusy(id), isSubagentSession, pairHarness.agentId()),
+      inference: companionMemoryInference(companionIntelligence, agentId => {
+        const session = registry.advertised().find(candidate => candidate.agentId === agentId)
+        return !!session?.sessionId && mirror.isBusy(session.sessionId)
+      }),
+    })
+    let refreshing: Promise<void> | null = null
+    let lastAttempt = -Infinity
+    refreshMemoryIdentity = () => {
+      const current = readAuthSession()
+      if (!daemons.on() || !current || (current.memoryOwner?.key && zooMemoryOwner === current.memoryOwner.key)) return Promise.resolve()
+      if (refreshing) return refreshing
+      if (Date.now() - lastAttempt < 30_000) return Promise.resolve()
+      lastAttempt = Date.now()
+      refreshing = (async () => {
+        if (!current.memoryOwner) {
+          const response = await proxyBackend('GET', '/api/auth/me')
+          await memoryOwnerBindings.get(response)
+        }
+        // Re-read watching consent under the newly bound owner. An old account's cached zoo cannot
+        // authorize capture for the new account, even if both accounts use the same companion avatar.
+        const latest = readAuthSession()
+        if (daemons.on() && latest?.memoryOwner && zooMemoryOwner !== latest.memoryOwner.key) daemons.zooChanged()
+        await codingMemory?.tick()
+      })().catch(() => {}).finally(() => { refreshing = null })
+      return refreshing
+    }
+  }
   // The collection's DSH supplies learning and triage with its observed model. The
   // experiment and watching consent still gate everything; there is no second model switch.
   const lessonProjects = (): string[] =>
@@ -4949,11 +5050,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // everything off within the tick (before the rest of the file is read), and any other change asks for
       // the person's yes soon.
       pairRulesConfig()
-      learnTick ??= setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
-      learnTick.unref?.()
-      pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) pairRulesConfig() }, 30_000)
+      if (!codingMemoryPreview) {
+        learnTick ??= setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
+        learnTick.unref?.()
+      }
+      void memoryPause.then(() => { if (daemons.on()) codingMemory?.start() })
+      void refreshMemoryIdentity()
+      pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) { pairRulesConfig(); void refreshMemoryIdentity() } }, 30_000)
       pairConfigTick.unref?.()
     } else {
+      memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
       if (learnTick) { clearInterval(learnTick); learnTick = null }
       if (pairConfigTick) { clearInterval(pairConfigTick); pairConfigTick = null }
       zooTurnCounter.clear()
@@ -5049,6 +5155,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the agent and offers the rest — and, through setSwarms, what makes the desk strict: a present
     // window with an empty swarm is an empty carousel, not the whole machine.
     onAppSwarms: (swarms) => {
+      appSwarmsLatest = swarms
       cableHostRef?.setSwarms(swarms)
       void cableRef?.syncSwarms()
       void cableRef?.syncAgents()
@@ -6829,6 +6936,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     daemonBoot.updater?.stop()
     daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
+    await codingMemory?.close()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
     clearInterval(paneTitleSyncTimer)
@@ -6940,6 +7048,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     daemonBoot.updater?.stop()
     daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
+    await codingMemory?.close()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
     clearInterval(paneTitleSyncTimer)
@@ -7133,6 +7242,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   cableHostRef = cableHost
   // Anything the window said while this was still being built.
   cableHost.setDesk(appPaneAgents)
+  cableHost.setSwarms(appSwarmsLatest)
   // The dial's log now lives with the app's, one file a day — see dialLog.ts. The old unbounded
   // `cli/data/dial.log` is cut down to a pointer, for anyone with a bookmark.
   const legacyDialLog = join(env.ADAPTER_DATA_DIR, 'dial.log')
@@ -7140,7 +7250,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     try { writeFileSync(legacyDialLog, `moved to ${join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log')}\n`) } catch { /* best effort */ }
   }
   const cable = new CableFleet(CableSession, cableHost, env.HARNESS_LOGS_DIR, DialLog,
-    { serials: process.env.HARNESS_DIAL_SERIALS?.split(',').map(s => s.trim()).filter(Boolean) })
+    { serials: process.env.HARNESS_DIAL_SERIALS?.split(',').map(s => s.trim()).filter(Boolean),
+      verdicts: new DialVerdicts(join(env.ADAPTER_DATA_DIR, 'dial-ports.json')) })
   cableRef = cable
 
   const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,

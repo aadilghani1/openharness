@@ -3144,7 +3144,14 @@ class _TerminalHeader extends StatelessWidget {
       // The header itself does NOT change — the whole tile fades instead, in
       // _PaneCell, so what dims is the thing that is moving rather than one
       // strip of it.
-      child: strip,
+      //
+      // OPAQUE TO THE POINTER across its whole width. The strip is a SizedBox
+      // of a Row, so only its words and icons hit-test; a press on the empty
+      // space between them — most of the strip, and where a hand reaches to
+      // carry a pane — never reached this Draggable, and dragging a pane by its
+      // title did nothing (owner, 2026-10-01). The buttons on it still take
+      // their own clicks first.
+      child: ColoredBox(color: Colors.transparent, child: strip),
     );
   }
 }

@@ -68,6 +68,8 @@ class WebFooterBar extends StatelessWidget {
     if (position == null) return;
     final choice = await showPaneMenu<WorkspaceFooterItem>(
       context: context,
+      // Opened by a click: no row is lit until the pointer picks one.
+      focusFirst: false,
       position: position,
       minWidth: 260,
       maxWidth: 360,

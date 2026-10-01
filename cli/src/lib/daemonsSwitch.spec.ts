@@ -440,20 +440,23 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
   })
 
   it('arms the pair\'s timers only inside onDaemonsChanged, and starts the switch once all of it is wired', () => {
-    const timers = [...source.matchAll(/setInterval\(\(\) => \{ (void pairLearner|daemons\.recheck\(\); if \(daemons\.on\(\)\) pairRulesConfig)/g)]
+    const timers = [...source.matchAll(/setInterval\(\(\) => \{ (void pairLearner|daemons\.recheck\(\))/g)]
     expect(timers).toHaveLength(2)
     for (const timer of timers) expect(onChanged).toContain(timer[0])
     expect(onChanged).toContain('clearInterval(learnTick)')
     expect(onChanged).toContain('clearInterval(pairConfigTick)')
     expect(onChanged).toContain('zooTurnReporter.clear()')
     expect(onChanged).toContain('pairHarness.off()')
+    expect(onChanged).toContain('if (daemons.on()) codingMemory?.start()')
+    expect(onChanged).toContain('codingMemory?.pause()')
     expect(at('daemons.start()')).toBeGreaterThan(at('pairBrain = new PairBrain({'))
     expect(at('daemons.start()')).toBeGreaterThan(at('onDaemonsChanged = (on) => {'))
   })
 
   it('tells the windows already attached: the switch, pairing and the zoo\'s pair and dial all refresh the brain', () => {
     expect(onChanged).toMatch(/applyPair\(\)\s+pairBrain\?\.refresh\(\)\s+\}$/)
-    expect(source).toContain('onPairToggled = (on) => { if (on) questionWatcher.reset(); pairBrain?.refresh() }')
+    const pairToggled = source.match(/onPairToggled = \(on\) => \{([\s\S]*?)\n  \}/)?.[1] ?? ''
+    expect(pairToggled).toMatch(/if \(on\) questionWatcher\.reset\(\)[\s;]+pairBrain\?\.refresh\(\)/)
     expect(source).toMatch(/pairSensor\.setPair\(pairing\.pair, [^\n]+\)\n(\s+\/\/[^\n]*\n)*\s+pairBrain\?\.refresh\(\)\n\s+\}/)
   })
 

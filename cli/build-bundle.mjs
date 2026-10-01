@@ -14,6 +14,7 @@ import { readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
+import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 
@@ -26,6 +27,7 @@ const dshRegistry = JSON.stringify(readDshRegistry(new URL('../store', import.me
 // The plate worker, bundled on its own (src/pair/plateService.ts): harnessd starts it from this string,
 // since the release is this one file.
 const plateWorker = await plateWorkerSource({ minify: true })
+const memoryWorker = await memoryWorkerSource({ minify: true })
 
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
 rmSync('dist', { recursive: true, force: true })
@@ -43,6 +45,7 @@ await esbuild.build({
     __DSH_REGISTRY__: JSON.stringify(dshRegistry),
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
     __PLATE_WORKER__: JSON.stringify(plateWorker),
+    __MEMORY_WORKER__: JSON.stringify(memoryWorker),
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,

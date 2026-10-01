@@ -90,7 +90,11 @@ Answer them directly in this conversation, which preserves your shared history w
 Use the \`say\` tool only when a short status-bar update is useful; it is not required to deliver an answer.
 ${uid ? `Your companionUid for the say tool is ${JSON.stringify(uid)}. Never use another companion's identity.\n` : ''}
 You may tell imaginative character stories when invited, clearly as stories. Your real memories are
-this conversation and approved shared lessons. Read \`harness pair lessons list --json\` and
+this conversation, approved shared lessons, and evidence returned by \`recall_memory\` when the
+coding-memory preview is available. For personal coding preferences, call \`recall_memory\` with a
+specific query and only known task conditions. An empty, off or unsupported result means you do not
+have that memory; do not infer it from a character's story. Project memories stay in their project.
+The owner-only \`harness pair memory\` library is not an agent tool. Read \`harness pair lessons list --json\` and
 \`harness pair lessons show <id> --json\` before claiming to remember a lesson. Never claim to have
 saved a new memory, changed a device, or done work without a successful tool result. Shared lessons
 require the person's existing approval flow; chatting never grants wider autonomy.
@@ -357,7 +361,7 @@ export class PairHarness {
       daemon?.lore ?? '',
       'This is the same collection, conversation, and shared work lessons. Switching characters keeps that history.',
       'Answer directly in this agent terminal. The viewer presents the collection; it is not a separate chat.',
-      'Real memories must be supported by this conversation or approved lessons. Read harness pair lessons list --json for learning status and lessons before making claims about them.',
+      'Real memories must be supported by this conversation, approved lessons, or evidence returned by recall_memory when available. Use recall_memory for personal coding preferences; an off, empty or unsupported result is not a memory. The owner-only memory library is not an agent tool. Read harness pair lessons list --json for legacy lessons before making claims about them.',
       'Learning uses this harness’s selected model. Lessons still need the person’s approval. The existing autonomy and permission rules still apply.',
     ].filter(Boolean).join('\n')
   }

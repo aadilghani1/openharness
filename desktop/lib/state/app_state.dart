@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart'
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/model_manager_controller.dart';
+import '../companions/coding_memory_connection.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
@@ -651,6 +652,42 @@ class AppNotifier extends ChangeNotifier {
     return false;
   }
 
+  final _ownerMemoryConnections = <LocalCodingMemoryConnection>{};
+
+  /// Only the already-discovered daemon on this computer. Inspecting memories
+  /// never provisions a service, connects a remote machine or launches an agent.
+  CodingMemoryConnection? openCodingMemoryConnection() {
+    if (_disposed || viewer != null || kIsWeb) return null;
+    final machine = machineStates.values
+        .where((m) => m.usesLocalTransport)
+        .firstOrNull;
+    final endpoint = machine?.localEndpoint;
+    if (machine == null || endpoint == null) return null;
+    final auth = _authRevision, owner = currentUser?.id;
+    final id = machine.machine.machineId;
+    late final LocalCodingMemoryConnection connection;
+    connection = LocalCodingMemoryConnection(
+      endpoint: endpoint,
+      machineId: id,
+      isCurrent: () =>
+          _authWorkCurrent(auth) &&
+          currentUser?.id == owner &&
+          machineStates[id]?.localEndpoint?.wsUri == endpoint.wsUri &&
+          machineStates[id]?.localEndpoint?.protocolVersion ==
+              endpoint.protocolVersion,
+      onClosed: () => _ownerMemoryConnections.remove(connection),
+    );
+    _ownerMemoryConnections.add(connection);
+    return connection;
+  }
+
+  void _closeOwnerMemories() {
+    for (final connection in _ownerMemoryConnections.toList()) {
+      connection.invalidate();
+    }
+    _ownerMemoryConnections.clear();
+  }
+
   Stream<void> get modelsRequests => _modelsRequests.stream;
   final LocalManualFixture? localManualFixture;
   final Duration turnActivityTimeout;
@@ -849,6 +886,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
     _sessionExpired = false;
@@ -916,6 +954,7 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? _currentUser;
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
+    if (_currentUser?.id != profile?.id) _closeOwnerMemories();
     _currentUser = profile;
     final id = profile?.id;
     experimentalFeatures.bind(
@@ -13856,6 +13895,7 @@ class AppNotifier extends ChangeNotifier {
     if (cliLogin case final CliLogin cli) {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
+    _closeOwnerMemories();
     experimentalFeatures.dispose();
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
