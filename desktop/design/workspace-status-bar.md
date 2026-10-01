@@ -26,7 +26,7 @@ manager above it, filtered to live sessions. RAM and CPU can be sorted highest
 first; tokens use the counts already carried by agent updates. Include live
 sessions on connected owned machines even when none of this window's tabs show
 them. Discovery must not open panes or start an engine. Saved history remains
-in the All and Paused views.
+in the All and Saved views.
 
 Each owning daemon takes one process snapshot for the whole list. Count nested
 registered engines once, retain process birth identities, and report missing
