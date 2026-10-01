@@ -268,13 +268,19 @@ describe('harness auth status --json', () => {
     expect(fp).toMatch(FP)
   })
 
-  it('leaves fingerprint out without a key, and never makes one by asking', () => {
+  // Each source-CLI startup gets its own test deadline. Combining two launches
+  // under one five-second limit repeatedly timed out on the shared CI runner.
+  it.each([
+    { state: 'signed out', signedIn: false },
+    { state: 'signed in', signedIn: true },
+  ])('leaves fingerprint out and never creates a key while $state', ({ signedIn }) => {
     const root = tempRoot()
-    const signedOut = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
-    expect(JSON.parse(signedOut.stdout.trim())).not.toHaveProperty('fingerprint')
-    seedSession(root)
-    const signedIn = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
-    expect(JSON.parse(signedIn.stdout.trim())).not.toHaveProperty('fingerprint')
+    if (signedIn) seedSession(root)
+    const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+    expect(result.status).toBe(0)
+    const body = JSON.parse(result.stdout.trim())
+    expect(body.loggedIn).toBe(signedIn)
+    expect(body).not.toHaveProperty('fingerprint')
     expect(existsSync(identityFile(root))).toBe(false)
   })
 })
