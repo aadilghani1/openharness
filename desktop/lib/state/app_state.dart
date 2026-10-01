@@ -43,6 +43,7 @@ import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
+import '../core/harness_resources.dart';
 import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
 import '../core/git_worktree.dart';
@@ -6742,6 +6743,21 @@ class AppNotifier extends ChangeNotifier {
   /// A visible Machines panel uses the existing connection; it never dials a
   /// disconnected/unlinked host just to obtain optional system readings.
   Future<MachineResources?> readMachineResources(String machineId) async {
+    final reply = await _readResourceSnapshot(machineId);
+    return reply == null ? null : MachineResources.fromJson(reply);
+  }
+
+  Future<MachineHarnessResources?> readHarnessResources(
+    String machineId,
+  ) async {
+    final reply = await _readResourceSnapshot(machineId, harnesses: true);
+    return MachineHarnessResources.parse(reply?['harnesses']);
+  }
+
+  Future<Map<String, dynamic>?> _readResourceSnapshot(
+    String machineId, {
+    bool harnesses = false,
+  }) async {
     final machine = machineStates[machineId];
     if (_disposed ||
         machine == null ||
@@ -6759,6 +6775,7 @@ class AppNotifier extends ChangeNotifier {
       if (!connection.isReady) return null;
       final reply = await connection.request(
         'machine_resources',
+        payload: harnesses ? const {'harnesses': true} : const {},
         timeout: const Duration(seconds: 3),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision) ||
@@ -6768,7 +6785,7 @@ class AppNotifier extends ChangeNotifier {
           reply['error'] != null) {
         return null;
       }
-      return MachineResources.fromJson(reply);
+      return reply;
     } catch (_) {
       // Older daemons and temporarily unavailable readings leave the stats blank.
       return null;
@@ -7799,7 +7816,9 @@ class AppNotifier extends ChangeNotifier {
         // place rather than reopening a tile.
         for (final pane in viewers) {
           changed =
-              changed || pane.url != url || pane.viewerError != agent.viewerError;
+              changed ||
+              pane.url != url ||
+              pane.viewerError != agent.viewerError;
           pane.url = url;
           pane.viewerError = agent.viewerError;
         }

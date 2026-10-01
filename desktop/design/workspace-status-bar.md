@@ -14,11 +14,32 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-Claude 0%  Codex 50%                      M2 > openharness > branch-name > #439
+10 live · 1.4 GB · 12% CPU               M2 > openharness > branch-name > #439
 ```
 
 The context follows the focused pane. The branch stays clickable in the
-footer; pane headers do not repeat it. Empty New Tabs have no footer.
+footer; pane headers do not repeat it. An empty New Tab keeps the footer when
+there are live sessions to inspect.
+
+Harness Monitor sits at the bottom left. Its counter opens the existing session
+manager above it, filtered to live sessions. RAM and CPU can be sorted highest
+first; tokens use the counts already carried by agent updates. Include live
+sessions on connected owned machines even when none of this window's tabs show
+them. Discovery must not open panes or start an engine. Saved history remains
+in the All and Paused views.
+
+Each owning daemon takes one process snapshot for the whole list. Count nested
+registered engines once, retain process birth identities, and report missing
+readings as unknown. RAM is estimated resident memory including child processes;
+CPU measures the interval, with 100% representing one core. A `+` after a total
+means some session readings are unavailable. The tooltip explains these limits.
+Do not show GPU use, disk activity or token cost inferred from unrelated totals.
+
+The footer samples every 15 seconds while the app is foreground; an open monitor
+uses three seconds. Requests coalesce in the daemon. Hidden apps run no monitor
+polling, and inspecting tokens never starts another transcript scan. The native
+and Flutter controls share labels and behavior. Subscription usage remains
+beside the monitor in wide windows and accessible through Models at every size.
 
 The optional Experimental creature sits after Store in a fixed 44pt slot.
 Tim and eggs use bundled bitmap art; hovering opens a full-size preview without

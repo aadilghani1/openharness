@@ -48,6 +48,7 @@ import '../widgets/linux_menu_bar.dart'
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
+import '../state/harness_monitor.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
 import '../state/harness_placement.dart';
@@ -571,6 +572,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceNavigationAllowed = _allowDeviceNavigation;
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
+    _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -697,6 +699,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app.modelManager.start();
         // Subscription usage is read ahead, so opening a menu shows it without waiting.
         _modelsMenu!.start();
+        _harnessMonitor.start();
       });
     }
     if (_menuHost) {
@@ -758,6 +761,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _harnessMonitor.dispose();
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
@@ -1462,6 +1466,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
+  late final HarnessMonitor _harnessMonitor;
+  void _monitorChanged() {
+    if (!mounted) return;
+    if (_menuHost) _syncNative();
+  }
+
   WorkspaceSubscriptionUsage get _subscriptionUsage =>
       WorkspaceSubscriptionUsage.fromRows(_modelsMenu?.rows ?? const []);
 
@@ -1772,6 +1782,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
             )
             .map((part) => part.toJson())
             .toList(),
+        'interactive': _shortcutsEnabled,
+      },
+      'harnessMonitor': {
+        'text': _harnessMonitor.label,
+        'label': _harnessMonitor.detail,
+        'detail': _harnessMonitor.detail,
+        'segments': [{'text': _harnessMonitor.label}],
         'interactive': _shortcutsEnabled,
       },
       'footerCovered':
@@ -2094,8 +2111,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
       return;
     }
-    if (call.method == 'harnessControls') {
-      _toggleHarnessControls();
+    if (call.method == 'harnessControls' || call.method == 'resourceMonitor') {
+      _toggleHarnessControls(liveOnly: call.method == 'resourceMonitor');
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -4915,7 +4932,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  void _toggleHarnessControls() {
+  void _toggleHarnessControls({bool liveOnly = false}) {
     if (_harnessesOverlay != null) {
       _closeHarnessControls();
       return;
@@ -4941,8 +4958,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ),
             ),
             Positioned(
-              top: (_native ? 0.0 : _tabBarHeight) + 8,
-              right: 10,
+              bottom: _statusBarHeight + 8,
+              left: 10,
               width: (constraints.maxWidth - 20).clamp(0, 640),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
@@ -4956,6 +4973,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   keymap: _keymap,
                   child: HarnessSessionManager(
                     app: app,
+                    monitor: _harnessMonitor,
+                    initialFilter: liveOnly
+                        ? SessionFilter.running
+                        : SessionFilter.all,
                     introduction: _onboarding.next == OnboardingStep.harnesses
                         ? OnboardingCard(
                             title: 'Run your first harness',
@@ -4993,6 +5014,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
     );
     overlay.insert(_harnessesOverlay!);
+    _harnessMonitor.setExpanded(true);
     _unregisterHarnesses = registerTransientMenu(
       () => _closeHarnessControls(restoreFocus: false),
     );
@@ -5007,6 +5029,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _harnessesOverlay?.remove();
     _harnessesOverlay?.dispose();
     _harnessesOverlay = null;
+    _harnessMonitor.setExpanded(false);
     if (!mounted) return;
     if (_menuHost) _syncNative();
     setState(() {});
@@ -6879,6 +6902,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   // halfway between the pane edge and window bottom. Pane height is unchanged.
   bool get _showWorkspaceFooter =>
       !newHarnessOpensInBox ||
+      _harnessMonitor.live.isNotEmpty ||
       app.panes.isNotEmpty ||
       app.activeSwarm.isStore ||
       app.activeSwarm.isOrchestrator ||
@@ -6986,16 +7010,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final download = kIsWeb && !_compact(context);
       final downloadWidth = download ? available * .16 : 0.0;
       final usage = _subscriptionUsage;
-      final usageWidth =
-          math.max(
-            0.0,
-            available -
-                shareWidth -
-                downloadWidth -
-                (!kIsWeb && _slotShown ? 44 : 0) -
-                cell.width * 5,
-          ) *
-          .45;
+      final resourceBudget = math.max(0.0, available - shareWidth - downloadWidth -
+          (!kIsWeb && _slotShown ? 44 : 0) - cell.width * 5);
+      final monitorWidth = resourceBudget * .55;
+      final usageWidth = constraints.maxWidth < 1050
+          ? 0.0
+          : math.max(
+                  0.0,
+                  available -
+                      shareWidth -
+                      downloadWidth -
+                      (!kIsWeb && _slotShown ? 44 : 0) -
+                      cell.width * 5,
+                ) *
+                .22;
       final paneContext = Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -7043,45 +7071,70 @@ class _SwarmScreenState extends State<SwarmScreen> {
             child: Row(
               children: [
                 ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: usageWidth),
-                  child: WorkspaceBarControl(
-                    key: const ValueKey('workspace-subscription-usage'),
-                    label: usage.detail,
-                    tooltip: usage.detail,
-                    onPressed: _shortcutsEnabled
-                        ? () =>
-                              _toggleModels(initialTab: ModelsTab.subscriptions)
-                        : null,
-                    builder: (context, emphasized) => Padding(
-                      padding: EdgeInsets.symmetric(horizontal: cell.width),
-                      child: SizedBox(
-                        height: workspaceBarControlHeight(context),
-                        child: Center(
-                          widthFactor: 1,
-                          child: Text.rich(
-                            TextSpan(
-                              children: [
-                                for (final part in usage.paintSegments(
-                                  foreground: theme.foreground,
-                                  surface: grid.AppPalette.swarmField,
-                                ))
-                                  TextSpan(
-                                    text: part.text,
-                                    style: TextStyle(color: part.foreground),
-                                  ),
-                              ],
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: workspaceBarTextStyle(
-                              emphasized: emphasized,
+                  constraints: BoxConstraints(maxWidth: monitorWidth),
+                  child: ListenableBuilder(
+                    listenable: _harnessMonitor,
+                    builder: (context, _) => WorkspaceBarControl(
+                      key: const ValueKey('workspace-harness-monitor'),
+                      label: _harnessMonitor.detail,
+                      tooltip: _harnessMonitor.detail,
+                      onPressed: _shortcutsEnabled
+                          ? () => _toggleHarnessControls(liveOnly: true)
+                          : null,
+                      builder: (context, emphasized) => Padding(
+                        padding: EdgeInsets.symmetric(horizontal: cell.width),
+                        child: Text(
+                          _harnessMonitor.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: workspaceBarTextStyle(emphasized: emphasized),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (usageWidth > 0)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: usageWidth),
+                    child: WorkspaceBarControl(
+                      key: const ValueKey('workspace-subscription-usage'),
+                      label: usage.detail,
+                      tooltip: usage.detail,
+                      onPressed: _shortcutsEnabled
+                          ? () => _toggleModels(
+                              initialTab: ModelsTab.subscriptions,
+                            )
+                          : null,
+                      builder: (context, emphasized) => Padding(
+                        padding: EdgeInsets.symmetric(horizontal: cell.width),
+                        child: SizedBox(
+                          height: workspaceBarControlHeight(context),
+                          child: Center(
+                            widthFactor: 1,
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  for (final part in usage.paintSegments(
+                                    foreground: theme.foreground,
+                                    surface: grid.AppPalette.swarmField,
+                                  ))
+                                    TextSpan(
+                                      text: part.text,
+                                      style: TextStyle(color: part.foreground),
+                                    ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: workspaceBarTextStyle(
+                                emphasized: emphasized,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 SizedBox(width: cell.width * 2),
                 if (!kIsWeb && _slotShown) _daemonTabButton(),
                 if (download) ...[

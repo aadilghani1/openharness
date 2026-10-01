@@ -471,7 +471,7 @@ void main() {
     (tester) async {
       await open(tester);
       expect(find.byType(HarnessSessionManager), findsOneWidget);
-      expect(find.text('Harnesses'), findsOneWidget);
+      expect(find.text('Harness Monitor'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
       expect(find.text('Paused 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);

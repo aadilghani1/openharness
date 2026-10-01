@@ -9,6 +9,8 @@ import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
+import '../state/harness_monitor.dart';
+import '../core/harness_resources.dart';
 import '../state/swarm_navigation.dart';
 import '../core/models.dart';
 import '../usage/ledger/usage_overview.dart' show formatTokens;
@@ -27,6 +29,7 @@ class HarnessSessionManager extends StatefulWidget {
     required this.onOpen,
     this.initialFilter = SessionFilter.all,
     this.introduction,
+    this.monitor,
   });
   final AppNotifier app;
   final List<String> recent;
@@ -34,6 +37,7 @@ class HarnessSessionManager extends StatefulWidget {
   final Future<bool> Function(HarnessSession) onOpen;
   final SessionFilter initialFilter;
   final Widget? introduction;
+  final HarnessMonitor? monitor;
 
   @override
   State<HarnessSessionManager> createState() => _HarnessSessionManagerState();
@@ -60,6 +64,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
     _filter = widget.initialFilter;
     _clock = Timer.periodic(const Duration(minutes: 1), (_) => _changed());
     widget.app.addListener(_changed);
+    widget.monitor?.addListener(_changed);
     // Its own notifier — marking one agent must not rebuild the workspace — so
     // this list asks for its own redraw while it is open.
     widget.app.agentUnread.addListener(_changed);
@@ -72,6 +77,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   @override
   void dispose() {
     widget.app.removeListener(_changed);
+    widget.monitor?.removeListener(_changed);
     widget.app.agentUnread.removeListener(_changed);
     _clock?.cancel();
     _search.dispose();
@@ -81,7 +87,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   }
 
   List<HarnessSession> get _sessions {
-    final rows = {for (final row in harnessSessions(widget.app)) row.id: row};
+    final rows = {
+      for (final row in widget.monitor?.sessions ?? harnessSessions(widget.app))
+        row.id: row,
+    };
     // Keep the row steady while a confirmed pause refreshes the saved roster.
     for (final row in _pending.values) {
       rows.putIfAbsent(row.id, () => row);
@@ -175,6 +184,16 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
       filter: _filter,
       sort: _sort,
       recent: widget.recent,
+      memory: {
+        for (final row in all)
+          if (widget.monitor?.reading(row)?.memoryBytes case final value?)
+            row.id: value,
+      },
+      cpu: {
+        for (final row in all)
+          if (widget.monitor?.reading(row)?.cpuPercent case final value?)
+            row.id: value,
+      },
     );
     final running = all.where((row) => row.running).length;
     final paused = all.where((row) => row.agent.isStopped).length;
@@ -206,6 +225,9 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
     double heightFor(HarnessSession row) =>
         rowHeight +
         (row.agent.hasMonitorStats
+            ? (scale.scale(AppType.captionSize) * 1.35).ceilToDouble() + 6
+            : 0) +
+        (widget.monitor != null
             ? (scale.scale(AppType.captionSize) * 1.35).ceilToDouble() + 6
             : 0);
     return FocusScope(
@@ -278,7 +300,9 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 DesktopDialogHeader(
-                  title: 'Harnesses',
+                  title: widget.monitor == null
+                      ? 'Harnesses'
+                      : 'Harness Monitor',
                   onClose: widget.onClose,
                 ),
                 if (widget.introduction != null) widget.introduction!,
@@ -387,7 +411,12 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                         onOpen: () => setState(() {}),
                         onClose: () => setState(() {}),
                         menuChildren: [
-                          for (final sort in SessionSort.values)
+                          for (final sort in SessionSort.values.where(
+                            (sort) =>
+                                widget.monitor != null ||
+                                (sort != SessionSort.memory &&
+                                    sort != SessionSort.cpu),
+                          ))
                             AppMenuItem(
                               label: sort.label,
                               selected: _sort == sort,
@@ -493,6 +522,9 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                   () => GlobalKey(),
                                 ),
                                 row: row,
+                                resourceLabel: widget.monitor == null
+                                    ? null
+                                    : '${row.status} · ${widget.monitor!.reading(row)?.label ?? const HarnessResources().label}',
                                 height: heightFor(row),
                                 now: now,
                                 showQuestion: showingQuestions,
@@ -554,6 +586,7 @@ class _SessionRow extends StatelessWidget {
     required this.onToggle,
     required this.onAnswer,
     this.error,
+    this.resourceLabel,
   });
   final HarnessSession row;
   final double height;
@@ -567,6 +600,7 @@ class _SessionRow extends StatelessWidget {
 
   final VoidCallback onOpen, onSelect, onToggle, onAnswer;
   final String? error;
+  final String? resourceLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -680,6 +714,7 @@ class _SessionRow extends StatelessWidget {
                           row.project?.shownBranch,
                           row.question?.prompt,
                           activity,
+                          resourceLabel,
                           if (row.agent.tokensUsed case final count?)
                             '$count tokens used',
                           if (row.agent.outputStats case final stats?) ...[
@@ -801,6 +836,24 @@ class _SessionRow extends StatelessWidget {
                                           );
                                         },
                                       ),
+                                      if (resourceLabel != null) ...[
+                                        const SizedBox(height: 6),
+                                        Tooltip(
+                                          message: HarnessResources.explanation,
+                                          child: Text(
+                                            resourceLabel!,
+                                            key: ValueKey(
+                                              'session-resources:${row.id}',
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: AppType.caption(
+                                              color: secondary,
+                                              height: 1.35,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                       if (row.agent.hasMonitorStats) ...[
                                         const SizedBox(height: 6),
                                         _MonitorStats(

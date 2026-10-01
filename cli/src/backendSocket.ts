@@ -51,6 +51,7 @@ import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, Nam
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
+import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
@@ -755,6 +756,7 @@ export class BackendSocket {
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
+  harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
    *  that lands meanwhile. */
   private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
@@ -2070,7 +2072,9 @@ export class BackendSocket {
       switch (type) {
         case 'machine_resources':
           // Sampling CPU must not hold up typing or other machine requests.
-          void readMachineResources()
+          void (payload.harnesses === true
+            ? this.harnessResourcesReader().then(harnesses => ({ harnesses }))
+            : readMachineResources())
             .then(resources => reply(type, requestId, { ...resources }))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return

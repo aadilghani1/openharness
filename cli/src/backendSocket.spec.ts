@@ -1174,6 +1174,27 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('serves per-session resource readings without blocking input or sampling system totals', async () => {
+    const system = vi.spyOn(machineResources, 'readMachineResources')
+    const socket = new BackendSocket('token')
+    let finish!: (value: { sampledAt: string; agents: [] }) => void
+    socket.harnessResourcesReader = vi.fn(() => new Promise(resolve => { finish = resolve }))
+    socket.runtimeModelsProvider = async () => []
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:monitor', {
+      sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
+    })
+    socket.handleLocalFrame('local:monitor', { type: 'machine_resources', payload: { requestId: 'resources', harnesses: true } })
+    socket.handleLocalFrame('local:monitor', { type: 'models_list', payload: { requestId: 'models' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'models_list_result', payload: { requestId: 'models', models: [] } }))
+    expect(system).not.toHaveBeenCalled()
+    const reading = { sampledAt: '2026-09-30T12:00:00Z', agents: [] as [] }
+    finish(reading)
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'machine_resources_result', payload: { requestId: 'resources', harnesses: reading } }))
+    await socket.unregisterLocalClient('local:monitor')
+    await socket.stop()
+  })
+
   it('rejects unpaired plaintext stats requests before sampling the machine', async () => {
     const read = vi.spyOn(machineResources, 'readMachineResources')
     const socket = new BackendSocket('token')

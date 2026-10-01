@@ -1756,6 +1756,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let newButton = SwarmPlainIconButton()
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let subscriptionUsageButton = SwarmContextButton()
+  fileprivate let harnessMonitorButton = SwarmContextButton()
   private var subscriptionUsageState: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
   fileprivate let shareButton = SwarmShareButton()
@@ -1824,6 +1825,13 @@ private final class SwarmTabStrip: NSView {
     subscriptionUsageButton.setAccessibilityLabel("Remaining subscription usage")
     subscriptionUsageButton.isHidden = true
     statusBar.addSubview(subscriptionUsageButton)
+    harnessMonitorButton.isBordered = false
+    harnessMonitorButton.textAlignment = .center
+    harnessMonitorButton.target = self
+    harnessMonitorButton.action = #selector(openHarnessMonitor)
+    harnessMonitorButton.setAccessibilityLabel("Harness Monitor")
+    harnessMonitorButton.isHidden = true
+    statusBar.addSubview(harnessMonitorButton)
     pullRequestButton.isBordered = false
     pullRequestButton.target = self
     pullRequestButton.action = #selector(openFocusedPullRequest)
@@ -1888,7 +1896,7 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityLabel("Focused pane status")
     statusBar.setAccessibilityParent(self)
     setAccessibilityChildren([scroll, newButton, searchButton, storeButton, statusBar])
-    statusBar.setAccessibilityChildren([subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
+    statusBar.setAccessibilityChildren([harnessMonitorButton, subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
@@ -2036,6 +2044,11 @@ private final class SwarmTabStrip: NSView {
     subscriptionUsageState = state["subscriptionUsage"] as? [String: Any]
     subscriptionUsageButton.update(subscriptionUsageState, enabled: actionsEnabled)
     hasSubscriptionUsage = subscriptionUsageState != nil
+    harnessMonitorButton.font = barFont
+    harnessMonitorButton.foreground = terminalForeground
+    harnessMonitorButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
+    harnessMonitorButton.update(state["harnessMonitor"] as? [String: Any], enabled: actionsEnabled)
+    harnessMonitorButton.isHidden = state["harnessMonitor"] == nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
@@ -2274,8 +2287,12 @@ private final class SwarmTabStrip: NSView {
     let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
     let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4)
-    let usageWidth = hasSubscriptionUsage ? min(subscriptionUsageButton.preferredWidth, usageBudget * 0.45) : 0
-    subscriptionUsageButton.frame = NSRect(x: cell,
+    let monitorWidth = harnessMonitorButton.isHidden ? 0 : min(harnessMonitorButton.preferredWidth, usageBudget * 0.55)
+    harnessMonitorButton.frame = NSRect(x: cell, y: y, width: monitorWidth, height: height)
+    let usageWidth = hasSubscriptionUsage && (monitorWidth == 0 || statusBar.bounds.width >= 1050)
+      ? min(subscriptionUsageButton.preferredWidth, usageBudget * (monitorWidth == 0 ? 0.45 : 0.22)) : 0
+    subscriptionUsageButton.isHidden = usageWidth == 0
+    subscriptionUsageButton.frame = NSRect(x: cell + monitorWidth,
       y: y, width: usageWidth, height: height)
     let daemonLeft = subscriptionUsageButton.frame.maxX + (usageWidth > 0 ? cell * 2 : 0)
     daemonButton.frame = NSRect(x: daemonLeft, y: y, width: daemonWidth, height: height)
@@ -2299,6 +2316,7 @@ private final class SwarmTabStrip: NSView {
     contextButton.layoutSubtreeIfNeeded()
     pullRequestButton.layoutSubtreeIfNeeded()
     subscriptionUsageButton.layoutSubtreeIfNeeded()
+    harnessMonitorButton.layoutSubtreeIfNeeded()
   }
   override func draw(_ dirtyRect: NSRect) {
     // A fine rule joins the active tab's outward shoulders to the workspace.
@@ -2329,6 +2347,10 @@ private final class SwarmTabStrip: NSView {
   @objc private func openSubscriptions() {
     guard actionsEnabled, subscriptionUsageButton.isEnabled else { return }
     emit?("subscriptions", nil)
+  }
+  @objc private func openHarnessMonitor() {
+    guard actionsEnabled, harnessMonitorButton.isEnabled else { return }
+    emit?("resourceMonitor", nil)
   }
   @objc private func openDaemon() {
     setDaemonHover(false)
