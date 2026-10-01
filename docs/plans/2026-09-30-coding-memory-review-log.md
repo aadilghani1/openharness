@@ -356,3 +356,49 @@ and 10.910 ms for a page; fresh-worker index p95 was 66.106 ms, with zero reques
 local-only diagnostic without that socket or elevated access. No actual user data or inference was
 used. This measures queued-page browsing, not generated-prose cost, model latency or semantic benefit.
 Reproduce with `cd cli && node --import tsx scripts/memory-benchmark.ts --notebooks`.
+
+## Round 21 — explicit usefulness without automatic self-reinforcement
+
+The published-practitioner review asks whether feedback changes a future decision without becoming
+evidence that a fact is true. The development implementation now uses the owner's Helpful / Not
+helpful rating to adjust ordering among already eligible lexical candidates. It shares that signal
+across Claude and Codex only for the exact receiving project, explicit task/branch scope and known
+conditions. A changed memory revision, different context, ambiguous multi-project request or legacy
+receipt without captured relevance stays neutral. Repeated recall and transport retries earn no
+additional vote. No actual practitioner participated in this review.
+
+The adjustment is `0.125 * (helpful - unhelpful) / (ratings + 4)`, applied to the lexical score.
+This shrinks sparse feedback toward neutral and bounds its influence below 12.5%; it is a provisional
+policy to evaluate, not a calibrated probability or evidence of improved coding outcomes. Existing
+scope, source visibility, applicability, exceptions, validity and more-specific project requirements
+are checked before ranking. The same byte/item limits remain. Clearing feedback removes its effect;
+correcting or forgetting the claim also removes the old revision's influence. A rated receipt still
+does not prove that a native model received or used its content.
+
+The new relevance metadata uses an additive table so an older writer's receipt inserts continue to
+work. One-way keys do not retain prompt text or native receiver session IDs. Existing ratings remain
+inspectable; the UI explicitly identifies earlier ratings that cannot guide future recall. The
+[normal light view](../research/2026-10-01-memory-usefulness/feedback-light-1.0x.png) and
+[200% dark view](../research/2026-10-01-memory-usefulness/feedback-dark-2.0x.png) were inspected.
+These synthetic renders establish layout behavior, not native VoiceOver or physical IME behavior.
+
+Regression review found two privacy bugs before the fix: a repeated session exclusion after an
+older writer's policy change skipped cleanup, and receiving-project reinclusion could revive its
+old ratings. Both regressions failed first. Exclusion, repeated exclusion and reinclusion now discard
+that receiver activity before an equality early return, preserving only the opaque withdrawal
+receipt. Later activity can begin afresh. Source visibility is checked independently.
+
+Validation passed 317 memory/intelligence checks, then all nine focused usefulness cases including
+the additional rated-personal-default versus project-requirement case. All 40 memory viewer checks,
+scoped Flutter analysis, CLI type checking and a separate strict benchmark-runner type check passed.
+Initial fixture errors (missing required legacy policy columns and an inferred optional condition)
+were corrected separately from the two actual privacy failures. The follow-up is restacked on
+`3d55daff9`; the final whole CLI run and exact-commit manual CI results are recorded in its PR.
+
+The [scale diagnostic](../research/2026-10-01-memory-usefulness/performance.json) used 10,000 synthetic
+memories and 5,000 explicitly rated receiving contexts. Across 310 requests, warm recall p95 was
+22.127 ms and fresh-worker p95 was 64.780 ms, with zero timeouts. Reproduce with
+`cd cli && node --import tsx scripts/memory-benchmark.ts --feedback`. This measures local performance,
+not retrieval quality or real hook latency. No personal store was seeded, native model called,
+running app replaced or release published. The held-out real-history and task-benefit requirements,
+real notebook faithfulness, native lifecycle coverage and fuller task/session navigation remain open.
