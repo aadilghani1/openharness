@@ -20,7 +20,7 @@ on 2026-09-30; the unmerged checkpoints below describe earlier review stages.
 | Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
 | Add Phone | Desktop QR/device layout implemented; pairing lifecycle tests and light/dark enlarged-text renders pass |
 | Machine recovery/linking | Desktop linking/password layouts implemented; bounded selectable errors, fixed actions, and 32-point reveal controls tested/rendered |
-| Notifications | macOS menu overview has receipt-bound message previews, tab/machine context, a collapsed Working section, and Mark all read; full desktop inbox remains available. Synthetic native light/dark, expanded, empty, long, selected and unavailable states inspected; live menu interaction still needs review |
+| Notifications | Native name/message rows share the tab/pane activity marks and colors. Working starts expanded; compact headers and clear icon replace repeated labels. Synthetic light/dark, collapsed, empty, long, selected and unavailable states inspected; live menu interaction still needs review |
 | Branches / pull requests | Desktop lists and shared modal veil implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
 | Settings / customization | Desktop status customization, natural-height controls, error contrast, keyboard focus and passive native footer preview implemented; actual status previews preserve the selected renderer |
 | Store | Existing graphical discovery/detail/launch routes retained; ordinary labels, search and counts use system typography; desktop and narrow/enlarged previews inspected |
@@ -38,29 +38,36 @@ The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
 
-## Notification overview review — 2026-09-30
+## Notification overview refinement — 2026-10-01
 
-The menu now presents questions and completed results together, with the actual
-question or notified recap beneath the session title. Working expands inline;
-its count excludes unread sessions already above it and never changes the badge.
-Settings is removed from this menu and its last action is Quit. GitHub merge
-events remain a follow-up rather than inferred notifications.
+The earlier overview repeated a status caption and tab/machine context under
+nearly every title. It now pairs the harness name directly with the message,
+uses the existing tab/pane activity marks and colors, and keeps full context
+in tooltips and accessibility. Working starts expanded as 28-point rows; the
+section disappears when empty. Clear is a quiet icon with a 32-point target.
+The menu keeps native actions, keyboard navigation and receipt validation.
+[Apple notification research](macos-design-research.md#notification-menu-refinement--2026-10-01)
+informed the hierarchy, not a claim of system Notification Center equivalence.
 
 Native captures use synthetic sessions and the production AppKit views:
 [light](images/notification-overview-light.png),
 [dark](images/notification-overview-dark.png), and
-[expanded Working](images/notification-overview-working.png). These are view
-renders on neutral surfaces; they do not simulate the window-server blur.
-The fixture also covers empty, long/truncated, highlighted, and offline rows.
-Reproduce with `tool/check_swarm_titlebar.sh <flutter-sdk> --status-menu-preview`.
+[collapsed Working](images/notification-overview-collapsed.png). The six-session
+expanded sample is 360×465 points, down from 360×597. Empty is 360×184; long
+names preserve the 360-point menu width. These are view renders on neutral
+surfaces; they do not simulate window-server blur. The fixture also covers
+long/truncated, highlighted and offline rows. Reproduce with
+`tool/check_swarm_titlebar.sh <flutter-sdk> --status-menu-preview`.
 
-Validation: 67 targeted Flutter tests, 44 native menu checks, changed-file static
-analysis, icon audit, and a signed Intel Skia debug build. Coverage includes
-receipt-bound previews, same-session coalescing, unread/working separation,
-known versus unknown elapsed time, stale clicks, snapshot clearing, tab moves,
-existing-pane navigation, disclosure key handling, effective shortcut hints,
-and sign-out cleanup. Physical pointer/keyboard tracking and VoiceOver in the
-user's running app remain manual review items; this fixture is not that evidence.
+Validation: 15 targeted Flutter tests, 50 native menu checks, and 4,405 native
+tab/layout checks; changed-file static analysis and the icon audit pass. A
+signed Intel Skia debug build is ready for local review. Menu and tab bridge payloads match for glyph, label and
+color. Tests cover receipt-bound previews, stale clicks, snapshot clearing,
+tab moves, existing-pane navigation, expanded defaults, disclosure keys,
+shortcut hints, sign-out and the animation lifecycle. The native glyph drawing
+is shared without changing tab geometry. Physical pointer/keyboard tracking
+and VoiceOver in the user's running app remain manual review items; these
+fixtures are not that evidence.
 
 ## AI review panel
 

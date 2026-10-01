@@ -1740,6 +1740,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       terminalThemeStore.value,
     );
     final barStyle = workspaceBarTextStyle();
+    int activityInk(HarnessActivity activity) =>
+        activityColor(activity, terminalTheme, color: prefs.color).toARGB32();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'reduceMotion': _reduceMotion,
@@ -1867,8 +1869,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
           },
       ],
       'attention': _attention,
-      if (_native) 'statusMenuEntries': statusMenuEntries(app),
-      if (_native) 'statusMenuWorkingEntries': statusMenuWorkingEntries(app),
+      if (_native)
+        'statusMenuEntries': statusMenuEntries(
+          app,
+          colorForActivity: activityInk,
+        ),
+      if (_native)
+        'statusMenuWorkingEntries': statusMenuWorkingEntries(
+          app,
+          colorForActivity: activityInk,
+        ),
       // The fallback bell and the macOS menu use the same unread ledger.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
@@ -1924,16 +1934,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 )
                 .length,
             if (tabActivity(app, swarm) case final activity?)
-              'activity': {
-                'mark': activity.mark,
-                'label': activity.label,
-                'working': activity == HarnessActivity.working,
-                'color': activityColor(
-                  activity,
-                  terminalTheme,
-                  color: prefs.color,
-                ).toARGB32(),
-              },
+              'activity': nativeActivityPayload(
+                activity,
+                color: activityInk(activity),
+              ),
           },
       ],
     };

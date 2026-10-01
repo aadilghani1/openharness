@@ -10,7 +10,7 @@ func news(_ id: String, _ title: String, _ message: String, tab: String, machine
           label: String = "Ready for review") -> [String: Any] {
   ["machineId": machine, "agentId": id, "title": title, "message": message,
    "tabId": tab, "tabName": tab, "machineName": machine, "unread": true,
-   "label": label, "readToken": id, "receivedAt": timestamp - age * 1000]
+   "label": label, "activity": ["mark": label == "Needs input" ? "?" : "✓", "label": label, "working": false], "readToken": id, "receivedAt": timestamp - age * 1000]
 }
 let notifications = [
   news("hn", "hn", "Keep the shell running after detach?", tab: "TUI", machine: "M2", age: 10, label: "Needs input"),
@@ -28,14 +28,24 @@ let bindings: [[String: Any]] = [
 ]
 let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
 
-func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]], expanded: Bool = false,
+func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]], expanded: Bool = true,
             highlight: Bool = false) {
   app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
   let status = HarnessStatusMenu(installStatusItem: false, showWindow: {}, emit: { _, _ in })
   status.menu.appearance = app.appearance
   status.updateKeymap(map, context: "workspace")
-  status.update(["enabled": true, "statusMenuEntries": entries, "statusMenuWorkingEntries": work])
-  if expanded, let toggle = status.menu.items.first(where: { $0.identifier?.rawValue == "toggleWorking" }) {
+  func styled(_ row: [String: Any], working: Bool = false) -> [String: Any] {
+    var row = row
+    var activity = row["activity"] as? [String: Any] ?? ["mark": "⠋", "label": "Working", "working": true]
+    let mark = activity["mark"] as? String
+    activity["color"] = mark == "?" ? (dark ? 0xffe5e510 : 0xff4d2d00)
+      : working ? (dark ? 0xff11a8cd : 0xff1b7c83) : (dark ? 0xff0dbc79 : 0xff116329)
+    row["activity"] = activity
+    return row
+  }
+  status.update(["enabled": true, "statusMenuEntries": entries.map { styled($0) },
+                 "statusMenuWorkingEntries": work.map { styled($0, working: true) }])
+  if !expanded, let toggle = status.menu.items.first(where: { $0.identifier?.rawValue == "toggleWorking" }) {
     _ = toggle.view?.accessibilityPerformPress()
   }
   var captured = false
@@ -77,10 +87,10 @@ func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String
 
 render("notification-overview-light", dark: false, entries: notifications, work: working)
 render("notification-overview-dark", dark: true, entries: notifications, work: working)
-render("notification-overview-working", dark: false, entries: notifications, work: working, expanded: true)
+render("notification-overview-collapsed", dark: false, entries: notifications, work: working, expanded: false)
 render("notification-overview-empty", dark: false, entries: [], work: [])
 let long = news("long", String(repeating: "Long session title ", count: 6),
-                String(repeating: "A lengthy question that must wrap and then truncate without covering its tab and machine context. ", count: 8),
+                String(repeating: "A lengthy question that must wrap and then truncate without covering its time or status mark. ", count: 8),
                 tab: "Desktop with an unusually long tab name", machine: "Office Mac with a long machine name", age: 180, label: "Needs input")
 var offline = notifications[1]
 offline["unavailable"] = "Offline"

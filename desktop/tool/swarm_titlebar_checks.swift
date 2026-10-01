@@ -140,7 +140,7 @@ private extension SwarmTabButton {
     }
     try checkTitlebar(pictures.count == 10, "All ten Braille frames render distinctly")
     for (mark, label) in states {
-      activity = SwarmTabActivity(payload(mark, label))
+      activity = HarnessNativeActivity(payload(mark, label))
       layoutSubtreeIfNeeded()
       try checkTitlebar(preferredWidth == width && (mark.isEmpty || activityRect == rect),
         "\(label) preserves tab width and visible marks share their inline cell")
@@ -174,7 +174,7 @@ private extension SwarmTabButton {
   func checkShortNamesFit() throws {
     for name in ["desktop", "device", "swarm", "daemons", "web", "tui", "mobile"] {
       displayLabel = name
-      activity = SwarmTabActivity(["mark": "", "label": "Idle", "color": Int64(0xff999999)])
+      activity = HarnessNativeActivity(["mark": "", "label": "Idle", "color": Int64(0xff999999)])
       frame.size.width = preferredWidth
       let available = titleRect.width
       try checkTitlebar(available >= max(label.size().width, emphasizedLabel.size().width),
@@ -342,7 +342,7 @@ private extension SwarmTabButton {
       symbol.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
       "Symbols emphasize their ink on hover without changing weight or adding a background")
     shortcutHint = "⌘2"
-    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
+    activity = HarnessNativeActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
     layoutSubtreeIfNeeded()
     let width = preferredWidth
     let resting = renderedPixels()
@@ -395,7 +395,7 @@ private extension SwarmTabButton {
     name = "1: Release planning"
     displayLabel = name
     shortcutHint = "⌘2"
-    activity = SwarmTabActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
+    activity = HarnessNativeActivity(["mark": "⠋", "label": "Working", "color": Int64(0xff64d2ff)])
     layoutSubtreeIfNeeded()
     let title = titleRect, close = closeButton.frame, width = preferredWidth
     try checkTitlebar(closeButton.isHidden && !displaysShortcut,

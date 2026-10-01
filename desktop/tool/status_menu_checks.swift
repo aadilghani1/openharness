@@ -26,7 +26,9 @@ private func fixture(_ agent: String, project: String = "autonomous-harness",
     "agentId": agent, "title": agent, "tabName": tabId == nil ? "Other sessions" : tabName, "unread": unread,
     "detail": "Office Mac · \(project)", "machineName": "Office Mac",
     "message": "The reconnect fix is ready for you to try.",
-    "receivedAt": Date().timeIntervalSince1970 * 1000 - 120_000]
+    "receivedAt": Date().timeIntervalSince1970 * 1000 - 120_000,
+    "activity": ["mark": unread ? "✓" : "⠋", "label": unread ? "Finished · unread" : "Working",
+                 "working": !unread, "color": Int64(0xff11a8cd)]]
   row["tabId"] = tabId
   if unread { row["readToken"] = token; row["label"] = "Finished" }
   if offline { row["unavailable"] = "Offline" }
@@ -42,6 +44,33 @@ private extension HarnessStatusMenu {
     menu.items.first { ($0.representedObject as? [String: Any])?["agentId"] as? String == agent }!
   }
   func click(_ item: NSMenuItem) { menu.performActionForItem(at: menu.index(of: item)) }
+
+  func checkActivityLifecycle() throws {
+    let running = fixture("Running", unread: false)
+    update(["enabled": true, "statusMenuEntries": [], "statusMenuWorkingEntries": [running]])
+    let view = row("Running").view as! HarnessStatusMenuRow
+    try check(activityTimer == nil && view.activity?.mark == "⠋", "Closed menus have the shared Working mark and no clock")
+    menuWillOpen(menu)
+    if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+      try check(activityTimer != nil, "Opening expanded Working starts the native clock")
+    }
+    let rect = view.frame
+    let label = view.accessibilityLabel()
+    for frame in 0..<10 { view.activityFrame = frame }
+    try check(view.frame == rect && view.accessibilityLabel() == label,
+              "Animation leaves row geometry and accessibility announcements stable")
+    update(["enabled": true, "reduceMotion": true, "statusMenuEntries": [], "statusMenuWorkingEntries": [running]])
+    try check(activityTimer == nil && view.activityFrame == 0, "Reduce Motion stops an open menu's animation")
+    menuDidClose(menu)
+    update(["enabled": true, "statusMenuEntries": [], "statusMenuWorkingEntries": [running]])
+    menuWillOpen(menu)
+    click(item("toggleWorking"))
+    try check(activityTimer == nil && row("Running").isHidden, "Collapsing Working stops its clock")
+    click(item("toggleWorking"))
+    menuDidClose(menu)
+    try check(activityTimer == nil, "Closing the menu releases its clock")
+    update([:])
+  }
 }
 
 _ = NSApplication.shared
@@ -50,16 +79,17 @@ var reveals = 0
 let status = HarnessStatusMenu(installStatusItem: false, showWindow: { reveals += 1 },
                                emit: { emitted.append(($0, $1)) })
 do {
+  try status.checkActivityLifecycle()
   var rows = [fixture("General chat conversation"),
               fixture("DeepSeek model", project: "No Project", unread: false),
               fixture("Math addition inquiry", project: "No Project", tabId: nil, offline: true)]
   status.update(["enabled": true, "statusMenuEntries": rows])
   try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" }.count == 2,
             "One row per unread session")
-  try check((status.row("General chat conversation").view?.frame.height ?? 0) > 64 &&
-            (status.row("General chat conversation").view?.frame.height ?? 0) <= 98 &&
+  try check((status.row("General chat conversation").view?.frame.height ?? 0) >= 50 &&
+            (status.row("General chat conversation").view?.frame.height ?? 0) <= 70 &&
             status.row("General chat conversation").view?.accessibilityLabel()?.contains("reconnect fix") == true,
-            "Multiline rows expose the actual message to accessibility")
+            "Compact rows expose the actual message to accessibility")
   try check(status.item("clearStatusNotifications").view?.accessibilityLabel()?.contains("Notifications (2)") == true &&
             !status.menu.items.contains { $0.title == "Build" }, "One notification section replaces tab headings")
   try check(!status.row("Math addition inquiry").isEnabled, "Offline conversations stay visible but disabled")
@@ -116,7 +146,9 @@ do {
   try check(reveals == 3, "Show Harness remains available during a modal")
   status.update(["enabled": true, "statusMenuEntries": []])
   try check(status.menu.items.contains { $0.title == "No unread notifications" } &&
-            !status.item("clearStatusNotifications").isEnabled, "An empty inbox is explicit and cannot be cleared")
+            !status.item("clearStatusNotifications").isEnabled &&
+            !status.menu.items.contains { $0.identifier?.rawValue == "toggleWorking" },
+            "An empty inbox is explicit, cannot be cleared and has no empty Working section")
   let open = status.menu.items.first { $0.title == "Open Harness…" }!
   status.click(open)
   try check(emitted.last?.0 == "addAgent" && reveals == 4,
@@ -183,15 +215,16 @@ do {
   var working = (0..<7).map { fixture("Working \($0)", unread: false) }
   status.update(["enabled": true, "statusMenuEntries": (0..<8).map { fixture("News \($0)") },
                  "statusMenuWorkingEntries": working])
-  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" && !$0.isHidden }.count == 5 &&
+  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" && !$0.isHidden }.count == 10 &&
             status.item("notificationInbox").title == "View all 8 notifications…",
             "The glance is bounded, with a route to every unread notification")
   let toggle = status.item("toggleWorking")
-  try check(toggle.title == "Working (7)" && status.row("Working 0").isHidden,
-            "Working starts collapsed")
+  try check(toggle.title == "Working (7)" && !status.row("Working 0").isHidden,
+            "Working starts expanded, including after an empty bootstrap")
   status.menuWillOpen(status.menu)
-  try check(toggle.view?.accessibilityPerformPress() == true && !status.row("Working 0").isHidden,
-            "Disclosure expands inline through the accessible native control")
+  try check(toggle.view?.accessibilityPerformPress() == true && status.row("Working 0").isHidden,
+            "Disclosure collapses inline through the accessible native control")
+  _ = toggle.view?.accessibilityPerformPress()
   let overflow = status.item("moreWorking")
   try check(overflow.submenu?.items.count == 2, "Additional work stays available without flooding the overview")
   func keyEvent(_ code: UInt16) -> NSEvent {

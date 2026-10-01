@@ -1704,11 +1704,13 @@ private final class SwarmVoiceLabel: NSView {
 /// Mirrors hn and Dart's ten-frame, 100ms Braille clock. The channel sends only
 /// activity changes; animation never pushes workspace snapshots through Flutter.
 private let harnessActivityFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-private func harnessActivityFrame(at date: Date = Date()) -> Int {
+func harnessActivityFrame(at date: Date = Date()) -> Int {
   Int(date.timeIntervalSince1970 * 1000) / 100 % harnessActivityFrames.count
 }
 
-private struct SwarmTabActivity: Equatable {
+/// Shared by native tabs and notification rows. These are Harness's activity
+/// glyphs, not a second set of SF Symbols. Keep the tab's original geometry.
+struct HarnessNativeActivity: Equatable {
   let mark: String
   let label: String
   let working: Bool
@@ -1721,6 +1723,18 @@ private struct SwarmTabActivity: Equatable {
     self.label = label
     working = payload["working"] as? Bool == true
     color = statusColor(payload["color"], fallback: .labelColor)
+  }
+
+  func symbol(frame: Int) -> String { working ? harnessActivityFrames[frame] : mark }
+
+  static func draw(_ mark: String, in rect: NSRect, color: NSColor) {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let paused = mark == "||"
+    let marker = NSAttributedString(string: mark,
+      attributes: [.font: paused ? NSFontManager.shared.convert(font, toSize: font.pointSize * 0.65) : font,
+        .kern: paused ? -font.pointSize * 0.15 : 0, .foregroundColor: color])
+    marker.draw(at: NSPoint(x: rect.midX - marker.size().width / 2,
+                           y: rect.midY - marker.size().height / 2))
   }
 }
 
@@ -2075,7 +2089,7 @@ private final class SwarmTabStrip: NSView {
       tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
-      tab.activity = SwarmTabActivity(row["activity"] as? [String: Any])
+      tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
         guard let self, let tab, self.actionsEnabled,
               self.tabs.contains(where: { $0 === tab }) else { return }
@@ -2404,7 +2418,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
-  var activity: SwarmTabActivity? {
+  var activity: HarnessNativeActivity? {
     didSet { if activity != oldValue { invalidateLabel(); updateAccessibility() } }
   }
   var activityFrame = 0 {
@@ -2413,7 +2427,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   // Keep the old question payload useful for an older Flutter fixture/runner.
   private var activityLabel: String? { activity?.label ?? (attention ? "Needs your input" : nil) }
   private var activityMark: String? {
-    if let activity { return activity.working ? harnessActivityFrames[activityFrame] : activity.mark }
+    if let activity { return activity.symbol(frame: activityFrame) }
     return attention ? "?" : nil
   }
   private var titleRect: NSRect {
@@ -2620,16 +2634,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
         width: titleRect.width, height: text.size().height))
     }
     if !displaysShortcut, let activityMark {
-      let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-      let paused = activityMark == "||"
-      let marker = NSAttributedString(string: activityMark,
-        attributes: [.font: paused ? NSFontManager.shared.convert(font, toSize: font.pointSize * 0.65) : font,
-          .kern: paused ? -font.pointSize * 0.15 : 0,
-          .foregroundColor: activity?.color ?? NSColor.systemOrange])
       NSGraphicsContext.saveGraphicsState()
       bounds.clip()
-      marker.draw(at: NSPoint(x: activityRect.midX - marker.size().width / 2,
-        y: contentCenterY - marker.size().height / 2))
+      HarnessNativeActivity.draw(activityMark,
+        in: NSRect(x: activityRect.minX, y: contentCenterY - 8, width: activityRect.width, height: 16),
+        color: activity?.color ?? .systemOrange)
       NSGraphicsContext.restoreGraphicsState()
     }
     if displaysShortcut, let shortcut = shortcutLabel {

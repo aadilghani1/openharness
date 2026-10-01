@@ -8,8 +8,11 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   private(set) var statusItem: NSStatusItem?
   private var entries: [[String: Any]] = []
   private var working: [[String: Any]] = []
-  private var workingExpanded = false
+  private var workingExpanded = true
   private var workingItems: [NSMenuItem] = []
+  private var activityTimer: Timer?
+  private var motionObserver: NSObjectProtocol?
+  private var reduceMotion = false
   private var keymap: HarnessNativeKeymap?
   private var keyContext = "workspace"
   private var menuKeys: Any?
@@ -27,6 +30,10 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     super.init()
     menu.autoenablesItems = false
     menu.delegate = self
+    motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) {
+        [weak self] _ in self?.syncActivityAnimation()
+      }
     if installStatusItem {
       let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
       statusItem = item
@@ -38,11 +45,18 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   }
 
   deinit {
+    activityTimer?.invalidate()
+    if let motionObserver { NSWorkspace.shared.notificationCenter.removeObserver(motionObserver) }
     if let menuKeys { NSEvent.removeMonitor(menuKeys) }
     if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
   }
 
   func update(_ state: [String: Any]) {
+    let nextReduceMotion = state["reduceMotion"] as? Bool == true
+    if reduceMotion != nextReduceMotion {
+      reduceMotion = nextReduceMotion
+      syncActivityAnimation()
+    }
     let nextEnabled = state["enabled"] as? Bool == true
     let nextAvailable = state["statusMenuEntries"] != nil
     let nextEntries = (state["statusMenuEntries"] as? [[String: Any]] ?? [])
@@ -55,7 +69,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     workspaceAvailable = nextAvailable
     entries = nextEntries
     working = nextAvailable ? nextWorking : []
-    if !workspaceAvailable { workingExpanded = false }
+    if !workspaceAvailable { workingExpanded = true }
     let count = entries.count
     statusItem?.button?.image = Self.badgeImage(logo: NSImage(named: "HarnessStatusIcon"),
                                               count: workspaceAvailable ? count : nil)
@@ -65,6 +79,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     // Never move a conversation out from under the pointer. Stale actions are
     // revalidated against `entries`, even while the displayed menu stays still.
     if !tracking { rebuild() }
+    syncActivityAnimation()
     if !workspaceAvailable { menu.cancelTracking() }
   }
 
@@ -73,10 +88,14 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    guard menu === self.menu else { return }
+    guard menu === self.menu else {
+      for item in menu.items { (item.view as? HarnessStatusMenuRow)?.refreshTime() }
+      return
+    }
     if dirty { rebuild() }
     refreshTimes()
     tracking = true
+    syncActivityAnimation()
     if menuKeys == nil {
       menuKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
         guard let self, self.tracking, let item = self.menu.highlightedItem,
@@ -89,6 +108,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
   func menuDidClose(_ menu: NSMenu) {
     guard menu === self.menu else { return }
     tracking = false
+    syncActivityAnimation()
     if let menuKeys { NSEvent.removeMonitor(menuKeys); self.menuKeys = nil }
     // AppKit dispatches the selected item after closing. Rebuild on next open
     // or update so its receipt remains the snapshot the person selected.
@@ -131,15 +151,44 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     }
   }
 
+  private var activityRows: [HarnessStatusMenuRow] {
+    menu.items.flatMap { [$0] + ($0.submenu?.items ?? []) }
+      .compactMap { $0.view as? HarnessStatusMenuRow }
+      .filter { $0.activity?.working == true }
+  }
+
+  private func syncActivityAnimation() {
+    let moving = tracking && enabled && workingExpanded && !reduceMotion &&
+      !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && !activityRows.isEmpty
+    guard moving else {
+      activityTimer?.invalidate()
+      activityTimer = nil
+      for row in activityRows { row.activityFrame = 0 }
+      return
+    }
+    for row in activityRows { row.activityFrame = harnessActivityFrame() }
+    guard activityTimer == nil else { return }
+    let next = (floor(Date().timeIntervalSince1970 * 10) + 1) / 10
+    let timer = Timer(fire: Date(timeIntervalSince1970: next), interval: 0.1, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      for row in self.activityRows where row.window?.isVisible == true && !row.isHiddenOrHasHiddenAncestor {
+        row.activityFrame = harnessActivityFrame()
+      }
+    }
+    activityTimer = timer
+    // Tracking is itself foreground interaction, even when another app owns
+    // the key window. Closing or collapsing the menu stops this local clock.
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
   private func rebuild() {
     dirty = false
     menu.removeAllItems()
     workingItems.removeAll()
-    if working.isEmpty { workingExpanded = false }
     menu.minimumWidth = 360
     let clear = add("Mark all read", "clearStatusNotifications", enabled: enabled && !entries.isEmpty)
     clear.representedObject = entries
-    clear.view = HarnessStatusMenuRow(item: clear, heading: "Notifications (\(entries.count))")
+    clear.view = HarnessStatusMenuRow(item: clear, heading: "Notifications", count: entries.count)
     if entries.isEmpty {
       let empty = NSMenuItem(title: workspaceAvailable ? "No unread notifications" : "Open Harness to get started",
                             action: nil, keyEquivalent: "")
@@ -151,10 +200,10 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
         add("View all \(entries.count) notifications…", "notificationInbox", enabled: enabled)
       }
     }
-    if workspaceAvailable {
+    if workspaceAvailable && !working.isEmpty {
       menu.addItem(.separator())
       let toggle = add("Working (\(working.count))", "toggleWorking", enabled: !working.isEmpty)
-      toggle.view = HarnessStatusMenuRow(item: toggle, expanded: workingExpanded)
+      toggle.view = HarnessStatusMenuRow(item: toggle, heading: "Working", count: working.count, expanded: workingExpanded)
       for entry in working.prefix(5) {
         workingItems.append(addSession(entry, to: menu))
       }
@@ -212,6 +261,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
       // Expand the already displayed snapshot. New arrivals and their receipts
       // stay deferred until the next opening, just like the notification rows.
       for row in workingItems { row.isHidden = !workingExpanded }
+      syncActivityAnimation()
       menu.update()
     case "openStatusHarness":
       guard enabled, let receipt = item.representedObject as? [String: Any],
@@ -239,7 +289,14 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
 
   private func compact(_ text: String) -> String {
     let line = text.components(separatedBy: .newlines).joined(separator: " ")
-    return line.count > 56 ? String(line.prefix(55)) + "…" : line
+    // Bound native title measurement too; the custom row keeps the full name
+    // for drawing/VoiceOver without letting it widen the entire menu.
+    var prefix = String(line.prefix(80))
+    let font = NSFont.menuFont(ofSize: 0)
+    while !prefix.isEmpty && (prefix as NSString).size(withAttributes: [.font: font]).width > 250 {
+      prefix.removeLast()
+    }
+    return prefix == line ? line : prefix + "…"
   }
 
   /// A single template mask lets AppKit tint the logo and badge together for
@@ -292,22 +349,30 @@ private final class HarnessStatusMenuRow: NSView {
   private weak var item: NSMenuItem?
   private let entry: [String: Any]?
   private let heading: String?
+  private let count: Int
+  let activity: HarnessNativeActivity?
   private var time = ""
   var highlighted = false { didSet { needsDisplay = true } }
   var expanded: Bool? { didSet { updateAccessibility(); needsDisplay = true } }
+  var activityFrame = 0 {
+    didSet { if oldValue != activityFrame { setNeedsDisplay(activityRect) } }
+  }
   override var isFlipped: Bool { true }
 
-  init(item: NSMenuItem, entry: [String: Any]? = nil, heading: String? = nil, expanded: Bool? = nil) {
+  init(item: NSMenuItem, entry: [String: Any]? = nil, heading: String? = nil,
+       count: Int = 0, expanded: Bool? = nil) {
     self.item = item
     self.entry = entry
     self.heading = heading
+    self.count = count
     self.expanded = expanded
+    activity = HarnessNativeActivity(entry?["activity"] as? [String: Any])
     let unread = entry?["unread"] as? Bool == true
-    let message = entry?["message"] as? String ?? ""
-    let measured = (message as NSString).boundingRect(with: NSSize(width: 316, height: 1000),
+    let message = unread ? entry?["message"] as? String ?? "" : ""
+    let measured = (message as NSString).boundingRect(with: NSSize(width: 304, height: 1000),
       options: [.usesLineFragmentOrigin], attributes: [.font: NSFont.systemFont(ofSize: 13)])
-    let messageHeight = message.isEmpty ? 0 : min(32, ceil(measured.height)) + 2
-    let height: CGFloat = entry == nil ? 32 : unread ? 64 + messageHeight : 44
+    let messageHeight = message.isEmpty ? 0 : min(32, ceil(measured.height)) + 4
+    let height: CGFloat = entry == nil ? 32 : unread ? 34 + messageHeight : 28
     super.init(frame: NSRect(x: 0, y: 0, width: 360, height: height))
     autoresizingMask = [.width]
     setAccessibilityElement(true)
@@ -333,7 +398,6 @@ private final class HarnessStatusMenuRow: NSView {
         else if age < 3600 { time = "\(age / 60)m" }
         else if age < 86400 { time = "\(age / 3600)h" }
         else { time = "\(age / 86400)d" }
-        if unread && age >= 60 { time += " ago" }
       }
     }
     updateAccessibility()
@@ -350,8 +414,10 @@ private final class HarnessStatusMenuRow: NSView {
     guard let item else { return }
     let text: String
     if let entry {
-      text = [entry["title"] as? String, entry["label"] as? String, entry["message"] as? String,
-              context, time, entry["unread"] as? Bool == true ? "Unread" : nil]
+      let age = time.isEmpty ? nil : entry["unread"] as? Bool == true
+        ? (time == "now" ? time : "\(time) ago") : "\(time) elapsed"
+      text = [entry["title"] as? String, activity?.label ?? entry["label"] as? String,
+              entry["message"] as? String, context, age, entry["unread"] as? Bool == true ? "Unread" : nil]
         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
       toolTip = [text, entry["detail"] as? String].compactMap { $0 }.joined(separator: " · ")
     } else if let expanded {
@@ -359,8 +425,8 @@ private final class HarnessStatusMenuRow: NSView {
       setAccessibilityExpanded(expanded)
       toolTip = expanded ? "Hide working sessions" : "Show working sessions"
     } else {
-      text = "\(heading ?? "Notifications"), Mark all read"
-      toolTip = "Mark these notifications as read. Pending questions stay unanswered."
+      text = "\(heading ?? "Notifications") (\(count)), Mark all read"
+      toolTip = "Mark all read. Pending questions stay unanswered."
     }
     setAccessibilityLabel(text)
     setAccessibilityEnabled(item.isEnabled)
@@ -369,7 +435,11 @@ private final class HarnessStatusMenuRow: NSView {
   }
 
   private var clearRect: NSRect {
-    NSRect(x: bounds.width - 110, y: 2, width: 102, height: bounds.height - 4)
+    NSRect(x: bounds.width - 44, y: 0, width: 32, height: bounds.height)
+  }
+
+  private var activityRect: NSRect {
+    NSRect(x: 16, y: entry?["unread"] as? Bool == true ? 7 : 6, width: 16, height: 16)
   }
 
   override func draw(_ dirtyRect: NSRect) {
@@ -377,56 +447,60 @@ private final class HarnessStatusMenuRow: NSView {
     let selected = highlighted && item.isEnabled
     if selected {
       NSColor.selectedContentBackgroundColor.setFill()
-      NSBezierPath(roundedRect: heading == nil ? bounds.insetBy(dx: 4, dy: 2) : clearRect,
-                   xRadius: 5, yRadius: 5).fill()
+      NSBezierPath(roundedRect: heading != nil && expanded == nil
+        ? clearRect.insetBy(dx: 2, dy: 2) : bounds.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
     }
     let primary: NSColor = !item.isEnabled ? .disabledControlTextColor
       : selected ? .selectedMenuItemTextColor : .labelColor
     let secondary: NSColor = !item.isEnabled ? .disabledControlTextColor
       : selected ? .selectedMenuItemTextColor : .secondaryLabelColor
     if let heading {
-      text(heading, x: 16, y: 8, width: clearRect.minX - 20, height: 18,
-           size: 12, weight: .medium, color: .secondaryLabelColor)
-      text("Mark all read", x: clearRect.minX, y: 8, width: clearRect.width, height: 18,
-           size: 12, color: !item.isEnabled ? .disabledControlTextColor
-             : selected ? .selectedMenuItemTextColor : .labelColor, alignment: .center)
-      return
-    }
-    if let expanded {
-      if item.isEnabled, let icon = HarnessControlSymbols.image(expanded ? "chevron.down" : "chevron.right")?.copy() as? NSImage {
-        icon.lockFocus()
-        primary.set()
-        NSRect(origin: .zero, size: icon.size).fill(using: .sourceAtop)
-        icon.unlockFocus()
-        let scale = min(16 / icon.size.width, 16 / icon.size.height)
-        let size = NSSize(width: icon.size.width * scale, height: icon.size.height * scale)
-        icon.draw(in: NSRect(x: 11 + (16 - size.width) / 2, y: 8 + (16 - size.height) / 2,
-                            width: size.width, height: size.height),
-                  from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+      let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+      let labelWidth = ceil((heading as NSString).size(withAttributes: [.font: font]).width)
+      let headingInk: NSColor = selected && expanded != nil ? .selectedMenuItemTextColor : .secondaryLabelColor
+      text(heading, x: 16, y: 8, width: labelWidth, height: 18,
+           size: 12, weight: .semibold, color: headingInk)
+      if count > 0 {
+        text("\(count)", x: 16 + labelWidth + 7, y: 8, width: clearRect.minX - labelWidth - 27,
+             height: 18, size: 12, color: headingInk)
       }
-      text(item.title, x: 34, y: 7, width: bounds.width - 50, height: 20, color: primary)
+      if item.isEnabled {
+        symbol(expanded.map { $0 ? "chevron.down" : "chevron.right" } ?? "xmark",
+               in: clearRect, color: secondary)
+      }
       return
     }
     guard let entry else { return }
     let unread = entry["unread"] as? Bool == true
     let message = entry["message"] as? String ?? ""
-    if unread {
-      (selected ? NSColor.selectedMenuItemTextColor : NSColor.systemBlue).setFill()
-      NSBezierPath(ovalIn: NSRect(x: 13, y: 13, width: 6, height: 6)).fill()
+    if let activity {
+      HarnessNativeActivity.draw(activity.symbol(frame: activityFrame), in: activityRect,
+        color: !item.isEnabled || selected ? primary : activity.color)
     }
-    text(entry["title"] as? String ?? item.title, x: 28, y: 6,
-         width: bounds.width - 111, height: 19, weight: unread ? .semibold : .regular, color: primary)
-    text(time, x: bounds.width - 78, y: 8, width: 62, height: 17,
+    let titleY: CGFloat = unread ? 6 : 5
+    let timeWidth = ceil((time as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width)
+    text(entry["title"] as? String ?? item.title, x: 40, y: titleY,
+         width: bounds.width - 56 - (time.isEmpty ? 0 : timeWidth + 12), height: 19,
+         weight: unread ? .semibold : .regular, color: primary)
+    text(time, x: bounds.width - 16 - timeWidth, y: titleY + 2, width: timeWidth, height: 16,
          size: 12, color: secondary, alignment: .right)
-    if unread {
-      text(entry["label"] as? String ?? "", x: 28, y: 26, width: bounds.width - 44,
-           height: 17, size: 12, color: secondary)
-      if !message.isEmpty {
-        text(message, x: 28, y: 43, width: bounds.width - 44, height: 32, color: primary, multiline: true)
-      }
+    if unread && !message.isEmpty {
+      text(message, x: 40, y: 26, width: bounds.width - 56, height: 32,
+           color: primary, multiline: true)
     }
-    text(context, x: 28, y: bounds.height - 20, width: bounds.width - 44, height: 17,
-         size: 12, color: secondary)
+  }
+
+  private func symbol(_ name: String, in rect: NSRect, color: NSColor) {
+    guard let icon = HarnessControlSymbols.image(name)?.copy() as? NSImage else { return }
+    icon.lockFocus()
+    color.set()
+    NSRect(origin: .zero, size: icon.size).fill(using: .sourceAtop)
+    icon.unlockFocus()
+    let scale = min(1, min(16 / icon.size.width, 16 / icon.size.height))
+    let size = NSSize(width: icon.size.width * scale, height: icon.size.height * scale)
+    icon.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                        width: size.width, height: size.height),
+              from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
   }
 
   private func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat,
@@ -443,12 +517,14 @@ private final class HarnessStatusMenuRow: NSView {
   }
 
   override func resetCursorRects() {
-    if item?.isEnabled == true { addCursorRect(heading == nil ? bounds : clearRect, cursor: .pointingHand) }
+    if item?.isEnabled == true {
+      addCursorRect(heading != nil && expanded == nil ? clearRect : bounds, cursor: .pointingHand)
+    }
   }
 
   override func mouseUp(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
-    guard (heading == nil ? bounds : clearRect).contains(point) else { return }
+    guard (heading != nil && expanded == nil ? clearRect : bounds).contains(point) else { return }
     activate()
   }
 

@@ -9,7 +9,10 @@ import 'workspace_status.dart';
 
 /// One notification section, questions first and newest first within each kind.
 /// Receipts travel with each row so a menu left open cannot clear newer news.
-List<Map<String, Object?>> statusMenuEntries(AppNotifier app) {
+List<Map<String, Object?>> statusMenuEntries(
+  AppNotifier app, {
+  int Function(HarnessActivity)? colorForActivity,
+}) {
   final notifications = notificationInbox(app);
   if (notifications.isEmpty) return [];
   final names = workspaceTabNames(app);
@@ -17,7 +20,7 @@ List<Map<String, Object?>> statusMenuEntries(AppNotifier app) {
   final rows = [
     for (final notification in notifications)
       {
-        ..._entry(app, notification),
+        ..._entry(app, notification, colorForActivity),
         ..._location(
           app,
           notification.machineId,
@@ -41,7 +44,10 @@ List<Map<String, Object?>> statusMenuEntries(AppNotifier app) {
 
 /// The same live activity as the tabs. Idle shells and waiting questions are
 /// not working. A session with unread news gets its one row above instead.
-List<Map<String, Object?>> statusMenuWorkingEntries(AppNotifier app) {
+List<Map<String, Object?>> statusMenuWorkingEntries(
+  AppNotifier app, {
+  int Function(HarnessActivity)? colorForActivity,
+}) {
   final names = workspaceTabNames(app);
   final owners = _owners(app);
   final unread = notificationInbox(app).map((row) => row.id).toSet();
@@ -57,6 +63,10 @@ List<Map<String, Object?>> statusMenuWorkingEntries(AppNotifier app) {
           'title': session.agent.displayName,
           'unread': false,
           'label': 'Working',
+          'activity': nativeActivityPayload(
+            HarnessActivity.working,
+            color: colorForActivity?.call(HarnessActivity.working),
+          ),
           'startedAt': app
               .agentWorkingSince(session.machineId, session.agent.id)
               ?.millisecondsSinceEpoch,
@@ -108,7 +118,11 @@ Map<String, Object?> _location(
   };
 }
 
-Map<String, Object?> _entry(AppNotifier app, InboxNotification notification) {
+Map<String, Object?> _entry(
+  AppNotifier app,
+  InboxNotification notification,
+  int Function(HarnessActivity)? colorForActivity,
+) {
   final machineId = notification.machineId;
   final agentId = notification.agentId;
   final question = app.questionFor(machineId, agentId);
@@ -119,6 +133,10 @@ Map<String, Object?> _entry(AppNotifier app, InboxNotification notification) {
     'detail': notification.detail,
     'unavailable': notification.unavailable,
     'unread': true,
+    'activity': nativeActivityPayload(
+      notification.activity,
+      color: colorForActivity?.call(notification.activity),
+    ),
     'label': notification.kind == AlertKind.done
         ? 'Ready for review'
         : notification.label,
