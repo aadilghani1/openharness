@@ -60,7 +60,7 @@ export interface MemoryRuntimeStatus {
   reason?: string
 }
 
-/** Capture remains active while the selected model is unavailable. Inference waits for quiet. */
+/** Capture continues during work. Learning yields to new requests and the collection companion. */
 export class CodingMemoryRuntime {
   private active: ActiveProfile | null = null
   private readonly management = new Map<string, { connection: Connection; leases: number }>()
@@ -85,8 +85,8 @@ export class CodingMemoryRuntime {
     void this.tick()
   }
 
-  /** Call on actual foreground activity, not periodic discovery/model metadata updates. */
-  activity(): void { this.lastActivityAt = this.now(); this.active?.learner.cancel() }
+  /** New local user turns interrupt review; streamed output and discovery do not. */
+  activity(): void { this.lastActivityAt = this.now(); this.active?.learner.cancel('foreground_activity') }
 
   tick(): Promise<void> {
     if (this.active && !this.authorized(this.active)) this.active.learner.cancel()
@@ -370,7 +370,10 @@ export class CodingMemoryRuntime {
       active.maintainedAt = this.now()
     }
     const sessions = this.deps.sessions().filter(session => session.coding && session.sessionId)
-    if (sessions.some(session => session.busy)) this.activity()
+    // Long coding jobs may run for hours. Only the current collection's own conversation needs
+    // to be idle; fresh user turns anywhere still reset the quiet window through activity().
+    const companionBusy = sessions.some(session => session.scope === 'profile' && session.busy)
+    if (companionBusy) this.activity()
     // Bound per-tick filesystem work and share turns among concurrent sessions.
     const count = Math.min(8, sessions.length)
     for (let index = 0; index < count; index++) {
@@ -391,8 +394,11 @@ export class CodingMemoryRuntime {
       } catch (error) { active.captureStatus = { state: 'unavailable', sources: 0, reason: reason(error) } }
     }
     this.offset = sessions.length ? (this.offset + count) % sessions.length : 0
-    if (!this.authorized(active) || !active.preferences.learn || active.learning
-      || this.now() - this.lastActivityAt < (this.deps.quietMs ?? 15_000)) return
+    if (!this.authorized(active) || !active.preferences.learn || active.learning) return
+    if (companionBusy) { active.learningStatus = { state: 'foreground_busy' }; return }
+    if (this.now() - this.lastActivityAt < (this.deps.quietMs ?? 15_000)) {
+      active.learningStatus = { state: 'waiting_for_quiet' }; return
+    }
     active.learning = active.learner.tick()
     void active.learning.then(outcome => { if (this.active === active) active.learningStatus = outcome })
       .catch(error => { if (this.active === active) active.learningStatus = { state: 'failed', reason: reason(error) } })

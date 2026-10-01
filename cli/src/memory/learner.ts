@@ -57,7 +57,7 @@ export class MemoryLearner {
     return this.active
   }
 
-  cancel(): void { this.controller?.abort() }
+  cancel(reason: 'state_changed' | 'foreground_activity' = 'state_changed'): void { this.controller?.abort(reason) }
 
   private async review(): Promise<LearningOutcome> {
     let lease: LearningLease | null = null
@@ -70,7 +70,7 @@ export class MemoryLearner {
       assertActive(controller.signal)
       if (pending !== 'ready') return { state: pending }
       const target = await this.inference.target()
-      if (controller.signal.aborted) return { state: 'cancelled' }
+      if (controller.signal.aborted) return { state: controller.signal.reason === 'foreground_activity' ? 'waiting_for_quiet' : 'cancelled' }
       const claim = await this.memory.request('claim', [target])
       if (claim.state !== 'claimed') return { state: claim.state }
       lease = claim.lease
@@ -104,12 +104,14 @@ export class MemoryLearner {
         ? { state: committed.state, learned: committed.records.length }
         : { state: committed.state, reason: committed.reason }
     } catch (error) {
-      const code = error instanceof MemoryError ? error.code : 'inference_unavailable'
-      const state = code === 'inference_usage_limit' ? 'budget_deferred'
+      const failure = error instanceof MemoryError ? error.code : 'inference_unavailable'
+      const code = failure === 'inference_cancelled' && controller.signal.reason === 'foreground_activity'
+        ? 'inference_interrupted' : failure
+      const state = code === 'inference_interrupted' ? 'queued' : code === 'inference_usage_limit' ? 'budget_deferred'
         : ['inference_cancelled', 'inference_unavailable', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
           : code === 'episode_context_too_large' ? 'source_incomplete' : 'failed'
       if (lease) await this.memory.request('defer', [lease, state]).catch(() => {})
-      return { state, reason: code }
+      return { state: state === 'queued' ? 'waiting_for_quiet' : state, reason: code }
     }
   }
 }

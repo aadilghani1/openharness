@@ -75,6 +75,8 @@ Use existing authorized transcript storage as the primary archive. The memory da
 
 After a completed turn, enqueue an episode for background review. Explicit corrections and decisions get priority. Quiet-period batching handles routine work; idle session closure handles unfinished episodes. Stop hooks enqueue and return—they never start another foreground conversation or keep the user's terminal running to perform memory work.
 
+The implemented scheduler waits 15 seconds after a fresh local root-agent turn starts and yields while the selected collection companion is busy. Streamed output, tool results, compaction, completion, replay/resume and subagent work do not continually restart that timer. Other coding agents and remote machines may keep working while a completed local episode is reviewed. A new local request interrupts review; its source is requeued for the next quiet window, with the attempted call still counted against the existing six-per-hour budget. Account, privacy and model changes retain their independent cancellation/publication checks. This priority policy does not establish zero latency or quota impact on other agents sharing the provider account; that needs real-model measurement before rollout.
+
 Use `CompanionIntelligence` with the collection's observed engine, account, model, and effort. Extraction is a bounded, tool-free request returning a schema-validated proposal. It cannot execute remembered commands or mutate the store. Profile generation and collection identity are checked again before commit; a stale result is discarded and requeued under the current profile. No hidden fallback provider or cheaper model.
 
 The request contains the episode, matching existing memories, and relevant known instructions. Output contains candidates or a typed no-change reason. For every candidate, the service checks referenced evidence IDs, assertion type, coding facet, scope, novelty, applicability, conflicts, secrets, and injection attempts. Preserve why a choice was made, the conditions under which it applies, and accepted exceptions. Model-generated confidence alone cannot activate a memory.
@@ -211,6 +213,8 @@ An active continuity record can accurately report that a hypothesis is still unt
 Ingestion and source cursors commit atomically. Extraction jobs are at-least-once with idempotent commits. Consolidation uses a per-profile/project lease and compares input revisions on commit; conflicting updates rebase/retry. Queue states distinguish `no_useful_memory`, `waiting_for_model`, `budget_deferred`, `source_incomplete`, and failure. Budget exhaustion must never advance the source cursor as if learning succeeded.
 
 Start with the existing bounded inference budget, applied to episodes rather than tiny signals. Prioritize foreground companion work and urgent corrections; expose queued age and consumed budget. Backlog limits must preserve cursors and report any source-retention gap instead of silently dropping unreviewed work.
+
+Current throughput remains one completed episode per extraction reservation, at most six reservations per hour. Removing the global-busy starvation condition does not fix this separate backlog limit. Batching compatible completed episodes must preserve each episode's boundaries and evidence, enforce the same project/task/branch authority and input cap, and settle/recover them atomically. No throughput or semantic-quality improvement from batching is claimed yet.
 
 ## 5. Project identity and knowledge boundaries
 

@@ -238,11 +238,11 @@ export class MemoryQueue {
     })
   }
 
-  defer(lease: LearningLease, reason: 'waiting_for_model' | 'budget_deferred' | 'failed' | 'source_incomplete'): void {
+  defer(lease: LearningLease, reason: 'queued' | 'waiting_for_model' | 'budget_deferred' | 'failed' | 'source_incomplete'): void {
     this.deps.transaction(() => {
       const job = this.deps.db.prepare('SELECT state, lease_token FROM memory_jobs WHERE id = ?').get(lease.jobId)
       if (job?.state !== 'reviewing' || job.lease_token !== lease.token) return
-      this.release(lease.jobId, reason, reason, this.deps.now() + (reason === 'budget_deferred' ? HOUR : 60_000))
+      this.release(lease.jobId, reason, reason, this.deps.now() + (reason === 'queued' ? 0 : reason === 'budget_deferred' ? HOUR : 60_000))
     })
   }
 

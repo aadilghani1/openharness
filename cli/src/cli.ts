@@ -101,7 +101,7 @@ import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
 import { MemoryControl } from './memory/control.js'
 import { isOwnerProcess } from './memory/ownerProcess.js'
-import { MemorySessionRoster } from './memory/hostSessions.js'
+import { hasMemoryForegroundActivity, MemorySessionRoster } from './memory/hostSessions.js'
 import { companionMemoryInference } from './memory/companion.js'
 import { CompanionStartupProfile } from './pair/startupProfile.js'
 import { ConversationReview } from './pair/learn/conversationReview.js'
@@ -3214,7 +3214,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
-    if (!opts?.resumed && !opts?.replay) codingMemory?.activity()
+    if (hasMemoryForegroundActivity(events, opts) && !isSubagentSession(sessionId)) codingMemory?.activity()
     const usageSession = registry.bySession(sessionId)
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const [eventIndex, event] of events.entries()) {
@@ -4889,7 +4889,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
             ? !!profileId && zooMemoryOwner === profileId && zooPair.consent : guestConsent) }
       },
       sessions: () => roster.refresh(registry.advertised(), id => mirror.isBusy(id), isSubagentSession, pairHarness.agentId()),
-      inference: companionMemoryInference(companionIntelligence, () => pairSensor.snapshot().harnesses.some(h => h.working)),
+      inference: companionMemoryInference(companionIntelligence, agentId => {
+        const session = registry.advertised().find(candidate => candidate.agentId === agentId)
+        return !!session?.sessionId && mirror.isBusy(session.sessionId)
+      }),
     })
     let refreshing: Promise<void> | null = null
     let lastAttempt = -Infinity

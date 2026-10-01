@@ -1,5 +1,13 @@
 import { isAbsolute, parse, resolve } from 'node:path'
 import type { MemoryHostSession } from './runtime.js'
+import type { LiveEvent } from '../lib/normalize.js'
+
+/** A streamed reply or tool result is ongoing work, not a new foreground request. */
+export function hasMemoryForegroundActivity(events: readonly Pick<LiveEvent, 'type'>[],
+  options?: { resumed?: boolean; replay?: boolean }): boolean {
+  return !options?.resumed && !options?.replay
+    && events.some(event => event.type === 'turn_started' || event.type === 'user_message')
+}
 
 interface RegisteredMemorySession {
   agentId: string; engine: string; sessionId: string; cwd: string | null; transcriptPath: string | null

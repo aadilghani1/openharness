@@ -196,6 +196,16 @@ describe('model availability, leases, and idempotent publication', () => {
     expect(store.source('first', access)).not.toBeNull()
   })
 
+  it('keeps interrupted calls in the rolling budget even when the same episode is immediately eligible again', () => {
+    store.learning.capture(batch())
+    for (let index = 0; index < 6; index++) store.learning.defer(claim(), 'queued')
+    expect(store.learning.claim(target).state).toBe('budget_deferred')
+    expect(store.learning.status().callsLastHour).toBe(6)
+    expect(store.source('first', access)).not.toBeNull()
+    now += 3_600_001
+    expect(claim().sources.map(source => source.id)).toEqual(['first'])
+  })
+
   it('cancels jobs and late model output when their supporting memory is forgotten', () => {
     const unique = 'forgotten_queued_lemur'
     const source = event('first', { text: `For debugging use ${unique}.` })

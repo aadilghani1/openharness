@@ -187,7 +187,13 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
         ? 'Waiting for the model selected in your companion’s terminal. Your model choice stays in control.'
         : runtime['state'] != 'ready'
         ? 'Waiting for your companion’s memory service to be ready.'
-        : 'Learning from new, included coding sessions when your agents are quiet.';
+        : learning['state'] == 'foreground_busy'
+        ? 'Your companion is working. Learning waits until it is free.'
+        : learning['state'] == 'waiting_for_quiet'
+        ? 'Giving your latest request a moment before reviewing completed work.'
+        : learning['state'] == 'budget_deferred'
+        ? 'Waiting for the next learning allowance before reviewing more work.'
+        : 'Learning from completed coding work. Your companion and new requests take priority.';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

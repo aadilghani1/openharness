@@ -108,6 +108,24 @@ it('coalesces overlapping ticks and promptly cancels a provider that ignores abo
   expect(store.learning.status().jobs.waiting_for_model).toBe(1)
 })
 
+it('requeues an interrupted review for the next quiet window without calling it unavailable or accepting late output', async () => {
+  const { provider, entered, resolve } = pendingInference()
+  const learner = new MemoryLearner(memory, provider)
+  const running = learner.tick()
+  await entered
+  learner.cancel('foreground_activity')
+  expect(await running).toEqual({ state: 'waiting_for_quiet', reason: 'inference_interrupted' })
+  expect(store.learning.status().jobs).toEqual({ queued: 1 })
+  expect(store.learning.status().callsLastHour).toBe(1)
+  expect(store.learning.pendingReview()).toBe('ready')
+  resolve(JSON.stringify({ proposals: [proposal] }))
+  await Promise.resolve()
+  expect(store.list(access)).toEqual([])
+  const resumed = inference(JSON.stringify({ proposals: [proposal] }))
+  expect(await new MemoryLearner(memory, resumed).tick()).toEqual({ state: 'learned', learned: 1 })
+  expect(store.learning.status().callsLastHour).toBe(2)
+})
+
 it('does not invoke a provider when cancellation happened while acquiring the lease', async () => {
   const request = memory.request.bind(memory)
   const provider = inference()

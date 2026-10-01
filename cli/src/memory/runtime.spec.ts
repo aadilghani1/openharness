@@ -256,7 +256,22 @@ it('keeps personal and project identity caches separate even if two agents use t
   expect((await runtime.recall('agent', { query: 'changes' })).status).toBe('ok')
 })
 
-it('waits for quiet and cancels background inference when foreground activity resumes', async () => {
+it('learns a completed turn while other project work continues, leaving the unfinished turn open', async () => {
+  await runtime.tick()
+  await writeFile(sessions[0].transcriptPath, lines() + JSON.stringify({ type: 'user', uuid: 'next',
+    timestamp: new Date(now + 3).toISOString(), message: { content: 'Continue the implementation.' } }) + '\n')
+  sessions[0].busy = true
+  now += 20_000
+  await runtime.tick()
+  await vi.waitFor(() => expect(runtime.status().learning?.state).toBe('learned'), { interval: 5 })
+  expect(inference.run).toHaveBeenCalledOnce()
+  const store = stores.get('owner_a')!
+  expect(store.learning.status().jobs).toEqual({ learned: 1, open: 1 })
+  expect(store.learning.status().callsLastHour).toBe(1)
+})
+
+it('waits for its companion to be free and cancels background inference when a new user turn starts', async () => {
+  sessions[0].scope = 'profile'
   const running = deferred<string>()
   inference.run = vi.fn(() => running.promise)
   await runtime.tick()
@@ -265,10 +280,12 @@ it('waits for quiet and cancels background inference when foreground activity re
   now += 20_000
   await runtime.tick()
   expect(inference.run).not.toHaveBeenCalled()
+  expect(runtime.status().learning?.state).toBe('foreground_busy')
   sessions[0].busy = false
   now += 14_999
   await runtime.tick()
   expect(inference.run).not.toHaveBeenCalled()
+  expect(runtime.status().learning?.state).toBe('waiting_for_quiet')
   now++
   await runtime.tick()
   await vi.waitFor(() => expect(inference.run).toHaveBeenCalledTimes(1), { interval: 5 })
@@ -276,7 +293,9 @@ it('waits for quiet and cancels background inference when foreground activity re
   runtime.activity()
   expect(signal.aborted).toBe(true)
   running.resolve(JSON.stringify({ proposals: [] }))
-  await vi.waitFor(() => expect(runtime.status().learning?.reason).toBe('inference_cancelled'), { interval: 5 })
+  await vi.waitFor(() => expect(runtime.status().learning?.reason).toBe('inference_interrupted'), { interval: 5 })
+  expect(stores.get('owner_a')!.learning.status().jobs).toEqual({ queued: 1 })
+  expect(stores.get('owner_a')!.learning.pendingReview()).toBe('ready')
 })
 
 it('preserves separate learning/recall preferences through off/on and account switches', async () => {

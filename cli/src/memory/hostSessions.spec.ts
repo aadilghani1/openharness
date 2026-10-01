@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest'
-import { MemorySessionRoster } from './hostSessions.js'
+import { hasMemoryForegroundActivity, MemorySessionRoster } from './hostSessions.js'
+import { lineToEvents, newTurnState } from '../lib/normalize.js'
+import { CodexNormalizer } from '../engines/codex/normalizer.js'
 
 const session = { agentId: 'agent', engine: 'claude', sessionId: 'native', cwd: '/projects/code',
   transcriptPath: '/native/session.jsonl', registeredAt: 100 }
@@ -38,4 +40,30 @@ it('uses personal scope only for the current verified collection conversation, n
   expect(roster.refresh([companion], no, no)).toEqual([])
   expect(roster.refresh([companion], no, no, 'agent')).toMatchObject([{ scope: 'profile' }])
   expect(roster.refresh([], no, no, 'another_agent')).toEqual([])
+})
+
+it('recognizes fresh requests in both native event formats without treating their streamed replies as new activity', () => {
+  const claude = newTurnState()
+  const user = lineToEvents(JSON.stringify({ type: 'user', uuid: 'question', message: { role: 'user', content: 'Fix the parser.' } }), claude)
+  expect(hasMemoryForegroundActivity(user)).toBe(true)
+  const reply = lineToEvents(JSON.stringify({ type: 'assistant', uuid: 'reply',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'I am checking the parser.' }] } }), claude)
+  expect(reply.length).toBeGreaterThan(0)
+  expect(hasMemoryForegroundActivity(reply)).toBe(false)
+  const codex = new CodexNormalizer('live')
+  expect(hasMemoryForegroundActivity(codex.ingest(JSON.stringify({ type: 'event_msg',
+    payload: { type: 'user_message', message: 'Fix the parser.' } })))).toBe(true)
+  const codexReply = codex.ingest(JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'Checking now.' } }))
+  expect(codexReply.length).toBeGreaterThan(0)
+  expect(hasMemoryForegroundActivity(codexReply)).toBe(false)
+})
+
+it('does not interrupt learning for replay, resume, compaction, tool traffic or completion events', () => {
+  const prompt = [{ type: 'turn_started' as const }]
+  expect(hasMemoryForegroundActivity(prompt, { replay: true })).toBe(false)
+  expect(hasMemoryForegroundActivity(prompt, { resumed: true })).toBe(false)
+  expect(hasMemoryForegroundActivity([{ type: 'user_message' }])).toBe(true)
+  expect(hasMemoryForegroundActivity(['thinking_delta', 'text_delta', 'tool_start', 'tool_end', 'context_compact',
+    'done', 'turn_ended', 'subagent_finished'].map(type => ({ type })) as Parameters<typeof hasMemoryForegroundActivity>[0])).toBe(false)
+  expect(hasMemoryForegroundActivity([])).toBe(false)
 })
