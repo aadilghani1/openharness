@@ -10,8 +10,10 @@ import { MemoryClient } from '../src/memory/client.js'
 import type { SourceEvent, MemoryDraft } from '../src/memory/types.js'
 import type { RecallPacket, RecallRequest } from '../src/memory/types.js'
 
-const directory = await mkdtemp(join(tmpdir(), 'harness-memory-benchmark-'))
 const receiptMode = process.argv.includes('--receipts')
+const notebookMode = process.argv.includes('--notebooks')
+if (receiptMode && notebookMode) throw new Error('Choose one benchmark mode')
+const directory = await mkdtemp(join(tmpdir(), 'harness-memory-benchmark-'))
 const binding = { engine: 'codex' as const, sessionId: 'synthetic_session', projectId: 'project_1', route: 'prompt_hook' as const }
 const access = { profileId: 'benchmark', projectIds: ['project_1'], includeProfile: receiptMode }
 const query = { query: 'fixture_5321', conditions: { taskType: 'debugging' } }
@@ -37,7 +39,7 @@ try {
         sessionId: `session_${i}`, nativeEventId: `event_${i}`, role: 'user', eligibility: 'coding', observedAt: Date.now(), rootIds: [`source_${i}`],
         text: `For fixture_${i} debugging, start with a failing test because reviewing small repairs is easier.` }
       store.ingest(event)
-      const draft: MemoryDraft = { kind: 'working_preference', facet: 'debugging', assertionType: 'stated_preference',
+      const draft: MemoryDraft = { kind: 'working_preference', facet: notebookMode ? `debugging_${Math.floor(i / 10) % 10}` : 'debugging', assertionType: 'stated_preference',
         scope: { profileId: 'benchmark', projectId }, claim: event.text, rationale: 'Reviewing small repairs is easier.',
         futureAction: 'Start with a failing test.', applicability: { taskType: 'debugging' }, exceptions: [], retrievalCues: [`fixture_${i}`, 'debugging'],
         evidenceClass: 'user_stated', evidence: [{ sourceEventId: event.id, quote: event.text,
@@ -55,6 +57,60 @@ try {
   const bundle = await build({ entryPoints: [fileURLToPath(new URL('../src/memory/worker.ts', import.meta.url))],
     bundle: true, write: false, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'silent' })
   const workerSource = bundle.outputFiles[0].text
+  if (notebookMode) {
+    const samples = { coldIndex: [] as number[], coldDetail: [] as number[], warmIndex: [] as number[], warmDetail: [] as number[] }
+    let timeouts = 0, requests = 0, largestPageBytes = 0
+    const measure = async <T>(values: number[], read: () => Promise<T>): Promise<T | null> => {
+      const started = performance.now()
+      ++requests
+      try { return await read() }
+      catch (error) {
+        if ((error as { code?: string }).code !== 'memory_deadline') throw error
+        ++timeouts
+        return null
+      } finally { values.push(performance.now() - started) }
+    }
+    let cursor: string | undefined
+    const browse = async (cold: boolean) => {
+      const index = await measure(cold ? samples.coldIndex : samples.warmIndex,
+        () => client!.request('libraryNotebooks', ['benchmark', { limit: 12, cursor }]))
+      if (!index) return
+      if (!index.items.length || index.items.length > 12) throw new Error('notebook_index_mismatch')
+      cursor = index.nextCursor ?? undefined
+      const detail = await measure(cold ? samples.coldDetail : samples.warmDetail, async () => {
+        const value = await client!.request('libraryNotebook', ['benchmark', index.items[0].id])
+        if (!value) throw new Error('missing_notebook_detail')
+        return value
+      })
+      if (!detail) return
+      if (detail.summary.id !== index.items[0].id || detail.summary.activeRecords !== 100
+        || detail.memories.items.length !== 20 || !detail.memories.nextCursor || detail.explanation !== null) {
+        throw new Error('notebook_detail_mismatch')
+      }
+      largestPageBytes = Math.max(largestPageBytes, Buffer.byteLength(JSON.stringify(detail)))
+    }
+    for (let index = 0; index < 10; index++) {
+      client = new MemoryClient({ directory, profileId: 'benchmark', source: workerSource })
+      await browse(true)
+      await client.close(); client = undefined
+    }
+    client = new MemoryClient({ directory, profileId: 'benchmark', source: workerSource })
+    await client.request('controls', [])
+    const lag = monitorEventLoopDelay({ resolution: 1 }); lag.enable()
+    try { for (let index = 0; index < 100; index++) await browse(false) }
+    finally { lag.disable() }
+    const summarize = (values: number[]) => {
+      values.sort((a, b) => a - b)
+      return { p50Ms: values[Math.ceil(values.length * .5) - 1], p95Ms: values[Math.ceil(values.length * .95) - 1], maxMs: values.at(-1) }
+    }
+    console.log(JSON.stringify({ kind: 'synthetic-memory-performance', mode: 'owner-notebooks',
+      records: count, projects: 10, notebooks: 100, node: process.version, platform: platform(), arch: arch(), seedMs,
+      samples: Object.fromEntries(Object.entries(samples).map(([key, values]) => [key, summarize(values)])),
+      requests, timeouts, largestPageBytes, parentEventLoopP95Ms: lag.percentile(95) / 1e6,
+      limitations: ['Synthetic queued notebooks; generated-prose detail cost is not measured.',
+        'Cold means a new worker for the index, not an emptied OS disk cache; its detail follows in the same worker.',
+        'One local machine; no native model calls, semantic quality or comparative task benefit measured.'] }, null, 2))
+  } else {
   const cold: number[] = []
   let timeouts = 0
   for (let i = 0; i < 10; i++) {
@@ -91,4 +147,5 @@ try {
     timeouts, largestPacketBytes: largestPacket, parentEventLoopP95Ms: lag.percentile(95) / 1e6,
     limitations: ['Synthetic lexical matches, not a retrieval-quality benchmark.', 'Cold means a new worker, not an emptied OS disk cache.',
       'One local machine; provider extraction and native hook delivery are not measured.'] }, null, 2))
+  }
 } finally { await client?.close(); await rm(directory, { recursive: true, force: true }) }
