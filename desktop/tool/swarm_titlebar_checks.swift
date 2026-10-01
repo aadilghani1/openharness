@@ -116,6 +116,88 @@ private extension SwarmTabStrip {
 }
 
 private extension SwarmTabButton {
+  func checkLabelMeasurementChanges() throws {
+    // Reuse one populated tab through each single-property change. Compare it
+    // with a newly constructed tab so an unrelated invalidation cannot hide
+    // a stale width, stale shortcut, old font, or old foreground color.
+    func compareWithFresh(_ reason: String) throws {
+      let fresh = SwarmTabButton(id: "fresh-label-check")
+      fresh.name = name
+      fresh.displayLabel = displayLabel
+      fresh.shortcutHint = shortcutHint
+      fresh.foreground = foreground
+      fresh.labelFont = labelFont
+      fresh.selected = selected
+      fresh.attention = attention
+      fresh.activity = activity
+      fresh.activityFrame = activityFrame
+      fresh.showsShortcutHint = showsShortcutHint
+      fresh.actionsEnabled = actionsEnabled
+      fresh.frame = frame
+      layoutSubtreeIfNeeded()
+      fresh.layoutSubtreeIfNeeded()
+      try checkTitlebar(naturalTitleWidth == max(label.size().width, emphasizedLabel.size().width),
+        "\(reason): measured title matches AppKit's actual text")
+      try checkTitlebar(titleRect == fresh.titleRect && indicatorRect == fresh.indicatorRect &&
+        preferredWidth == fresh.preferredWidth && minimumWidth == fresh.minimumWidth,
+        "\(reason): retained and fresh tab geometry agree")
+      try checkTitlebar(toolTip == fresh.toolTip && renderedPixels() == fresh.renderedPixels(),
+        "\(reason): retained and fresh tab pixels and tooltip agree")
+    }
+    frame = NSRect(x: 0, y: 0, width: 230, height: 40)
+    displayLabel = "desktop"
+    shortcutHint = "⌘1"
+    activity = HarnessNativeActivity(["mark": "⠋", "label": "Working", "working": true,
+      "color": Int64(0xff64d2ff)])
+    try compareWithFresh("Initial populated tab")
+    for title in ["a-very-long-project-name-that-truncates", "", "设备 日本語", "🧑🏽‍💻 café مرحبا", "desktop"] {
+      displayLabel = title
+      try compareWithFresh("Rename displayed title")
+    }
+    for font in [NSFont.systemFont(ofSize: 20), NSFont.monospacedSystemFont(ofSize: 36, weight: .regular),
+                 NSFont.systemFont(ofSize: 13)] {
+      labelFont = font
+      try compareWithFresh("Change font")
+    }
+    for hint in ["⌃⌥⌘R", nil, "", "⌘8"] as [String?] {
+      shortcutHint = hint
+      try compareWithFresh("Remap or remove shortcut")
+    }
+    for color in [NSColor.systemRed, NSColor.black, NSColor.white] {
+      foreground = color
+      try compareWithFresh("Change foreground")
+    }
+    for active in [true, false] {
+      selected = active
+      try compareWithFresh("Change selected weight")
+    }
+    for tick in 0..<10 {
+      activityFrame = tick
+      try compareWithFresh("Animate frame \(tick)")
+    }
+    for shown in [true, false, true] {
+      showsShortcutHint = shown
+      try compareWithFresh("Show or hide Command hints")
+    }
+    for enabled in [false, true] {
+      actionsEnabled = enabled
+      try compareWithFresh("Enter or leave a modal")
+    }
+    activity = nil
+    try compareWithFresh("Remove activity")
+    for needsInput in [true, false] {
+      attention = needsInput
+      try compareWithFresh("Change legacy attention")
+    }
+    for width in [CGFloat(28), 56, 125, 400] {
+      frame.size.width = width
+      needsLayout = true
+      try compareWithFresh("Resize tab to \(width)")
+    }
+    name = "Renamed full title"
+    try compareWithFresh("Rename full tooltip")
+  }
+
   func checkActivityDrawing(states: [(String, String)]) throws {
     func payload(_ mark: String, _ label: String) -> [String: Any] {
       ["mark": mark, "label": label, "color": Int64(0xff64d2ff)]
@@ -2466,6 +2548,7 @@ do {
   try strip.checkTopActions()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
+  try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()
   try SwarmTabButton(id: "close-shortcuts").checkHoverCloseAndShortcutHints()
   try strip.checkTabPresentationAndCapture()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
