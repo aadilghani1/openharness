@@ -197,7 +197,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive) {
       // The app switcher coming up is `inactive`, and a swipe there can end the app without it
-      // ever reaching `paused` — so the screens are kept here as well. See [AppNotifier.handleAppInactive].
+      // ever reaching `paused` — so the machine cache is written here as well. See
+      // [AppNotifier.handleAppInactive].
       widget.notifier.handleAppInactive();
       return;
     }

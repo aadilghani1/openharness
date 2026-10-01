@@ -968,8 +968,8 @@ class AppNotifier extends ChangeNotifier {
     GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
-       // On the machine cache's terms, below: a real app keeps screens on disk, a test only when
-       // it hands over a store of its own.
+       // On the machine cache's terms, below: a real app keeps screens (in memory), a test only
+       // when it hands over a store of its own.
        _keptScreenStore =
            keptScreenStore ??
            (paneLayoutStore == null ? null : KeptScreenStore()),
@@ -1270,12 +1270,11 @@ class AppNotifier extends ChangeNotifier {
     // than when that screen mounts — several state-file operations later, behind
     // every one of their locks. See [LastOpenedAgent.prefetch].
     lastOpenedAgent.prefetch();
-    // The screens kept from the last run, read beside it: the agent that record names is drawn
-    // from them the moment its tile exists. A tile attached before the read lands is drawn when
-    // it does ([_seedWaitingTiles]).
-    final keptScreens = _keptScreenStore;
-    if (keptScreens != null) {
-      unawaited(keptScreens.load().then((_) => _seedWaitingTiles()));
+    // No screen from the last run: the agent that record names is drawn as the skeleton until its
+    // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
+    // the app, on the store's terms: a test never reaches the real cache directory.
+    if (_keptScreenStore != null) {
+      unawaited(KeptScreenStore.deleteLegacyFile());
     }
     // Before the machines, deliberately: the tiles are intent, they render as
     // "waiting for that machine" on their own, and each attaches as its machine
@@ -1404,7 +1403,7 @@ class AppNotifier extends ChangeNotifier {
     _forgetLaunchHold();
     // Signed out from elsewhere: the kept screens go as on a sign-out here (see [logout]).
     _keptScreens.clear();
-    unawaited(_keptScreenStore?.clear());
+    _keptScreenStore?.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
     _lastError = message;
@@ -1549,8 +1548,8 @@ class AppNotifier extends ChangeNotifier {
     // Not awaited: sign-out must not wait on a disk write, and the cache is only
     // ever read after a sign-in that this clears the way for.
     unawaited(_machineCache?.clear());
-    // The screens kept on disk are this account's terminals — they go with it, as the cache does.
-    unawaited(_keptScreenStore?.clear());
+    // The kept screens are this account's terminals — they go with it, as the cache does.
+    _keptScreenStore?.clear();
     sessionPreviews.clear();
     agentNotices.reset();
     expandedMachines.clear();
@@ -2696,8 +2695,7 @@ class AppNotifier extends ChangeNotifier {
   /// every launch measured (ten of ten) its `terminal_ready` arrived in the same second as the
   /// list's reply, which took 1.1–3.0s for 134 agents. The machine builds that reply for every
   /// agent at once, stopped ones included (`agents_list` in the CLI's `backendSocket.ts`), and the
-  /// one stream somebody was waiting to type into queued behind it — while the kept screen made
-  /// the terminal look ready from the first frames of the launch, and a tap on it raised nothing.
+  /// one stream somebody was waiting to type into queued behind it.
   ///
   /// Nothing on screen needs the list first: a launch draws from last run's
   /// ([MachineState.agentsFromCache]), which is also what limits this to a launch — a reconnect
@@ -5432,15 +5430,10 @@ class AppNotifier extends ChangeNotifier {
     if (kept != null) {
       terminal.seedScreen(kept);
     } else {
-      // Or the screen kept on disk — from a moment ago, or from the last run. See
-      // [_keptScreenStore]: this is what puts a launch's agent on screen before its machine answers.
+      // Or its visible screen, kept when this run last left it — see [_keptScreenStore]. Nothing
+      // from an earlier run: a launch's agent is the skeleton until its keyframe lands.
       final saved = _keptScreenStore?.read(keptKey);
-      if (saved != null) {
-        terminal.seedSnapshot(
-          saved,
-          fromEarlierRun: saved.savedAt.isBefore(_runStartedAt),
-        );
-      }
+      if (saved != null) terminal.seedSnapshot(saved);
     }
     terminal.addListener(notifyListeners);
     // The launch's held machines go once a terminal is live — see [_launchMachineId].
@@ -5467,8 +5460,8 @@ class AppNotifier extends ChangeNotifier {
     pane.session = null;
     if (terminal == null) return;
     terminal.removeListener(notifyListeners);
-    // The screen as the reader left it, for the next time this agent opens — see [_keptScreens],
-    // and [_keptScreenStore] for the next launch.
+    // The screen as the reader left it, for the next time this agent opens in this run — see
+    // [_keptScreens], and [_keptScreenStore] for one opened again after those three have moved on.
     final agentId = pane.agentId;
     if (keepScreen && agentId != null && terminal.hasRenderedFrame) {
       final key = '${pane.machineId}/$agentId';
@@ -5559,17 +5552,10 @@ class AppNotifier extends ChangeNotifier {
   final _keptScreens = <String, Terminal>{};
   static const _keptScreenLimit = 3;
 
-  /// The visible screens of the agents opened most recently, kept on disk for the NEXT launch as
-  /// well as this run — see [KeptScreenStore]. Where [_keptScreens] has no exact terminal for an
-  /// agent (it holds three, and nothing past a relaunch), this has the screen it showed. Null in
-  /// tests that do not hand one over.
+  /// The visible screens of the agents opened most recently in this run, in memory only — see
+  /// [KeptScreenStore]. Where [_keptScreens] has no exact terminal for an agent (it holds three),
+  /// this has the screen it showed. Null in tests that do not hand one over.
   final KeptScreenStore? _keptScreenStore;
-
-  /// When this run began, near enough: the notifier is built at the start of the launch, and this
-  /// run keeps no screen before its first live frame. A kept screen saved before it is an EARLIER
-  /// run's — the one a launch draws, which the page shows only part of
-  /// ([TerminalSession.keptScreenFromEarlierRun]).
-  final DateTime _runStartedAt = DateTime.now();
 
   /// [terminal]'s screen into [_keptScreenStore] under [key], when it has a live one to keep.
   void _keepScreen(String key, TerminalSession terminal) {
@@ -5577,20 +5563,6 @@ class AppNotifier extends ChangeNotifier {
     if (store == null) return;
     final snapshot = terminal.snapshotForKeeping();
     if (snapshot != null) store.put(key, snapshot);
-  }
-
-  /// Every tile's live screen into [_keptScreenStore], written now — the app is going to the
-  /// background, and a closed app keeps nothing it had not written.
-  void _keepLiveScreens() {
-    final store = _keptScreenStore;
-    if (store == null) return;
-    for (final pane in allPanes) {
-      final agentId = pane.agentId;
-      final terminal = pane.session;
-      if (agentId == null || terminal == null) continue;
-      _keepScreen('${pane.machineId}/$agentId', terminal);
-    }
-    unawaited(store.flush());
   }
 
   /// [json] — one agent as the daemon sent it — into the machine cache's copy of [machine]'s list,
@@ -5628,8 +5600,8 @@ class AppNotifier extends ChangeNotifier {
 
   /// The machine cache written out if anything in it changed since it last was — the agents this
   /// run learned one at a time, between lists ([MachineCache.hasUnsaved]). Called as the app leaves
-  /// the screen, beside [_keepLiveScreens], and by [_saveMachineCacheSoon]. Never awaited, and
-  /// nothing when nothing changed: an idle run writes nothing.
+  /// the screen ([handleAppPaused], [handleAppInactive]) and by [_saveMachineCacheSoon]. Never
+  /// awaited, and nothing when nothing changed: an idle run writes nothing.
   void _keepMachineCache() {
     _machineCacheSaveTimer?.cancel();
     _machineCacheSaveTimer = null;
@@ -5648,29 +5620,9 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  /// Draw a kept screen behind every tile that has nothing to show yet — the store's read lands a
-  /// moment into a launch, possibly after the launch's own tile was attached ([_attachSession] seeds
-  /// the ones attached after it).
-  void _seedWaitingTiles() {
-    final store = _keptScreenStore;
-    if (store == null || _disposed) return;
-    for (final pane in allPanes) {
-      final agentId = pane.agentId;
-      final terminal = pane.session;
-      if (agentId == null || terminal == null || terminal.hasScreen) continue;
-      final snapshot = store.read('${pane.machineId}/$agentId');
-      if (snapshot != null) {
-        terminal.seedSnapshot(
-          snapshot,
-          fromEarlierRun: snapshot.savedAt.isBefore(_runStartedAt),
-        );
-      }
-    }
-  }
-
   Future<void> _closeAllPanes({bool persist = true}) async {
-    // Everything closing at once is a sign-out or a reset: nothing of it is kept — not in memory,
-    // and not on disk ([_detachSession]'s `keepScreen`).
+    // Everything closing at once is a sign-out or a reset: nothing of it is kept
+    // ([_detachSession]'s `keepScreen`).
     _keptScreens.clear();
     final open = allPanes.toList();
     for (final swarm in swarms) {
@@ -6379,23 +6331,18 @@ class AppNotifier extends ChangeNotifier {
   /// of somebody. The sockets are left to the OS, which suspends them anyway —
   /// [handleAppResumed] is what puts both back.
   ///
-  /// And keep every tile's screen on disk now ([_keepLiveScreens]): this is the last moment the app
-  /// is sure to run, since closing it from the app switcher starts by sending it here.
+  /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
+  /// to run, since closing it from the app switcher starts by sending it here.
   void handleAppPaused() {
     _desk.pause();
-    _keepLiveScreens();
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
   }
 
   /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
-  /// only the screens and the machine cache are kept ([_keepLiveScreens], [_keepMachineCache]),
-  /// because the switcher is where an app is closed, and closing it there need not pass through
-  /// [handleAppPaused] first.
-  void handleAppInactive() {
-    _keepLiveScreens();
-    _keepMachineCache();
-  }
+  /// only the machine cache is written ([_keepMachineCache]), because the switcher is where an app
+  /// is closed, and closing it there need not pass through [handleAppPaused] first.
+  void handleAppInactive() => _keepMachineCache();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -6434,7 +6381,6 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
-    _keptScreenStore?.dispose();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

@@ -3,13 +3,14 @@ import 'dart:math' as math;
 import 'package:xterm/xterm.dart';
 
 /// What a terminal showed — its visible screen as the escape sequences that redraw it — kept so the
-/// next time its agent opens, even in the next run of the app, that screen is up at once while the
-/// live stream attaches (`AppNotifier._attachSession`, [TerminalSession.seedSnapshot]).
+/// next time its agent opens in this run, that screen is up at once while the live stream attaches
+/// (`AppNotifier._attachSession`, [TerminalSession.seedSnapshot]). In memory only — see
+/// `KeptScreenStore`.
 ///
 /// ⚠️ **The visible screen only, never the scrollback.** What it is for is the first frame of an
 /// open: a page that shows the reader's last view of the agent instead of a skeleton until the
-/// machine's keyframe lands, which then replaces it whole. Scrollback would multiply what is kept on
-/// the phone — a terminal's contents, written to its disk — for nothing that first frame shows.
+/// machine's keyframe lands, which then replaces it whole. Scrollback would multiply what is kept —
+/// fifty of these — for nothing that first frame shows.
 class ScreenSnapshot {
   const ScreenSnapshot({
     required this.cols,
@@ -33,34 +34,6 @@ class ScreenSnapshot {
   /// A screen whose redraw runs past this is dropped rather than kept: dense colour on a large
   /// screen, and the store is meant to be small.
   static const maxAnsiChars = 96 * 1024;
-
-  Map<String, dynamic> toJson() => {
-    'cols': cols,
-    'rows': rows,
-    'ansi': ansi,
-    'savedAt': savedAt.millisecondsSinceEpoch,
-  };
-
-  /// The stored shape, or null for anything else. Never throws.
-  static ScreenSnapshot? fromJson(Object? raw) {
-    if (raw is! Map) return null;
-    final cols = raw['cols'];
-    final rows = raw['rows'];
-    final ansi = raw['ansi'];
-    final savedAt = raw['savedAt'];
-    if (cols is! int || cols < 1 || cols > maxCols) return null;
-    if (rows is! int || rows < 1 || rows > maxRows) return null;
-    if (ansi is! String || ansi.isEmpty || ansi.length > maxAnsiChars) {
-      return null;
-    }
-    if (savedAt is! int) return null;
-    return ScreenSnapshot(
-      cols: cols,
-      rows: rows,
-      ansi: ansi,
-      savedAt: DateTime.fromMillisecondsSinceEpoch(savedAt),
-    );
-  }
 
   /// [terminal]'s visible screen, or null when there is nothing worth keeping — an empty screen, an
   /// impossible size, or a redraw past [maxAnsiChars].
