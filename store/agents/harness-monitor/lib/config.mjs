@@ -55,13 +55,13 @@ export function stripJsonc(text) {
 export function template(policy = DEFAULT_POLICY) {
   return `// Harness Monitor — the rules for this machine's harnesses.
 //
-// Edit this file, or drag the two lines in the Harness Monitor pane. It is read on every refresh, so a
+// Edit this file and review Cleanup in the Harness Monitor table. It is read on every refresh, so a
 // save takes effect within seconds. Preview any change without moving anything:  hps pause --policy
 //
-// The only thing the rules ever do is PAUSE a harness: its engine exits, and its pane, scrollback and
-// conversation stay. \`hps resume\` brings it back where it left off. Nothing here deletes anything.
+// Rules only propose stopping sessions. Apply a reviewed plan explicitly; nothing runs automatically.
+// The daemon retains history and launch settings. Resume behavior depends on the engine's resumeMode.
 {
-  // Most engines running at once on this machine — a backstop. Past it, the least recently used are paused.
+  // Most engines running at once on each machine. Cleanup proposes stopping the least recently active.
   // Lower it on a machine that swaps: free memory divided by ~300 MB per harness.
   "runningCeiling": ${policy.runningCeiling},
 
@@ -77,13 +77,13 @@ export function template(policy = DEFAULT_POLICY) {
 
   // What is never paused, by any rule.
   "protect": {
-    "needsInput": ${policy.protect.needsInput},   // it looks like it is waiting on you
-    "working": ${policy.protect.working},      // mid-turn: CPU, or output in the last minute
-    "attached": ${policy.protect.attached},     // someone is looking at that pane right now
+    "needsInput": ${policy.protect.needsInput},   // daemon reports a pending question
+    "working": ${policy.protect.working},      // daemon reports an open turn
+    "attached": ${policy.protect.attached},     // reserved; current daemon inventory does not report attachment
     "pinned": ${policy.protect.pinned}        // listed in "pins" below
   },
 
-  // Agent ids the rules must never pause. \`hps --json\` shows each harness's id; the pane has a pin button.
+  // Composite machine/agent ids the rules must never pause. \`hps --json --all --machines\` shows each id.
   "pins": []
 }
 `

@@ -13,26 +13,27 @@
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { pause, resume } from '../lib/actions.mjs'
+import { closeBridges } from '../lib/bridge.mjs'
 import { collect, resolveRef, summarize } from '../lib/inventory.mjs'
-import { capture } from '../lib/panes.mjs'
+import { capture, panes } from '../lib/panes.mjs'
 import { DEFAULT_POLICY, decide, humanIdle, normalizePolicy, parseDuration } from '../lib/policy.mjs'
-import { clearPaused, gb, markPaused, readState, record, writeState, writeVerdict } from '../lib/state.mjs'
+import { gb, readState, record, writeVerdict } from '../lib/state.mjs'
 import { footer, planLines, receiptLine, table } from '../lib/format.mjs'
 
 const WORKSPACE = resolve(process.env.HARNESS_WORKSPACE || process.cwd())
 const TTY = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
 const COLUMNS = Number(process.env.COLUMNS) || process.stdout.columns || 120
 
-const USAGE = `hps — every harness on this machine, running or paused
+const USAGE = `hps — sessions on this machine, running or stopped
 
   hps                                the list, freshest first (like \`docker ps\`)
   hps top                            the same list, refreshing
   hps [--all] [--state running|paused|shell|gone] [--project NAME] [--engine NAME]
             [--idle 4h] [--sort idle|mem|name|project] [--limit N] [--watch [SECONDS]]
-            [--machines]           also list every other machine you have linked (read-only from here)
+            [--machines]           include linked machines for reads and actions
   hps show <ref>                     one harness in full, with the last thing on its pane
-  hps pause <ref…>               the engine exits; pane, scrollback and conversation stay
-  hps resume <ref…>                  the engine comes back where it left off
+  hps pause <ref…>               stop the process and retain history and launch settings
+  hps resume <ref…>                  reopen with the saved engine configuration
   hps pause --policy                 what the rules would do to the fleet right now, and why
   hps pause --policy --apply         do it
   hps pause --idle 8h                one threshold instead of all of them
@@ -43,9 +44,9 @@ const USAGE = `hps — every harness on this machine, running or paused
   Add --json to any command. --force gets past a guard; --dry-run shows what would happen.
   \`park\`/\`wake\` alias pause/resume. \`prune\`, \`gc\` and \`policy\` alias \`pause --policy\`.
 
-  The rules are a config file: ~/.config/harness/policy.jsonc. Edit it, or drag the two lines in the pane.
+  The rules are a config file: ~/.config/harness/policy.jsonc. Edit it and review Cleanup in the table.
   Nothing here writes it for you — a setter subcommand was only ever a worse text editor. To exempt one
-  harness, put its id in "pins" (or click the pin in the pane).
+  harness, put its composite id from --json in "pins".
 `
 
 function parseArgs(argv) {
@@ -100,8 +101,7 @@ async function world({ includeRemote = false } = {}) {
   return { state, policy, rows, problems, machines, degraded, plan, summary: summarize(rows) }
 }
 
-async function commit(state, entries) {
-  await writeState(WORKSPACE, state)
+async function commit(entries) {
   for (const entry of entries) await record(WORKSPACE, entry)
 }
 
@@ -160,19 +160,19 @@ async function main() {
   }
 
   if (command === 'show') {
-    const { rows } = await world()
+    const { rows } = await world({ includeRemote: Boolean(flags.machines) })
     const { row, error } = resolveRef(rest[0], rows)
     if (error) die(error)
     const screen = row.local && row.pane ? await capture(row.pane, { lines: Number(flags.lines) || 12 }) : ''
     if (flags.json) { out(JSON.stringify({ ...row, screen }, null, 2)); return }
     const pairs = [
-      ['name', row.name], ['title', row.title ?? '—'], ['state', row.state + (row.needsInput ? ' (looks like it is waiting on you)' : '')],
-      ['idle', `${humanIdle(row.idleMs)} (last turn ${new Date(row.lastActivity).toLocaleString()})`],
+      ['name', row.name], ['title', row.title ?? '—'], ['status', row.activity],
+      ['idle', row.lastActivity == null ? 'unknown' : `${humanIdle(row.idleMs)} (last active ${new Date(row.lastActivity).toLocaleString()})`],
       ['engine', `${row.engine}${row.model ? ` · ${row.model}${row.effort ? ` @${row.effort}` : ''}` : ''}`],
       ['folder', row.home], ['branch', row.branch ?? '—'], ['project', row.project],
-      ['memory', row.rssBytes ? `${gb(row.rssBytes)} across ${row.procs} ${row.procs === 1 ? 'process' : 'processes'}` : '—'],
+      ['memory', row.rssBytes == null ? '—' : `${gb(row.rssBytes)} resident across the process tree`],
       ['pane', row.pane ? `${row.pane}${row.paneTarget ? ` (${row.paneTarget})` : ''}${row.dead ? ' · dead, held open' : ''}` : '—'],
-      ['machine', row.machine + (row.local ? '' : ' (remote — read-only from here)')],
+      ['machine', row.machine + (row.local ? '' : ' (remote)')],
       ['harness', row.dshName ?? row.dsh ?? '—'], ['agent id', row.id],
       ['pinned', row.pinned ? 'yes — the policy leaves it alone' : 'no'],
     ]
@@ -183,7 +183,7 @@ async function main() {
   }
 
   if (['pause', 'resume'].includes(command)) {
-    const { rows, policy, state, plan, summary, problems } = await world()
+    const { rows, policy, plan, summary, problems } = await world({ includeRemote: Boolean(flags.machines) })
     let targets = []
     // `resume --paused` is the undo button: everything this ever paused, back in one line. A dry run first,
     // like every other bulk selection.
@@ -206,7 +206,10 @@ async function main() {
     // thing a config file cannot tell you — what it would do to the fleet as it is right now.
     if (flags['dry-run']) {
       await writeVerdict(WORKSPACE, { summary, rows, plan: plan.entries, problems })
-      if (flags.json) { out(JSON.stringify({ dryRun: true, command, totals: plan.totals, plan: plan.entries.filter((e) => e.action !== 'keep') }, null, 2)); return }
+      if (flags.json) {
+        const preview = flags.policy ? plan.entries.filter(e => e.action !== 'keep') : targets.map(row => ({ id: row.id, name: row.name, action: command, activity: row.activity, idleMs: row.idleMs }))
+        out(JSON.stringify({ dryRun: true, command, ...(flags.policy ? { totals: plan.totals } : {}), plan: preview }, null, 2)); return
+      }
       if (flags.policy) {
         out(planLines(plan.entries, { tty: TTY }))
         out('')
@@ -218,19 +221,13 @@ async function main() {
       return
     }
 
-    const options = { policy, force: Boolean(flags.force), killAfterGrace: Boolean(flags.force) }
+    const options = { policy, force: Boolean(flags.force) }
     const results = []
-    let next = state
     for (const row of targets) {
-      const ticket = state.paused?.[row.id] ?? null
-      const result = command === 'pause' ? await pause(row, options) : await resume(row, { ticket })
-      // The ticket is written before the receipt is printed: a pause whose session id was not recorded is
-      // a harness nobody can resume, which is worse than one that is still running.
-      if (result.ok && result.ticket) next = markPaused(next, row, result.ticket)
-      if (result.ok && command === 'resume') next = clearPaused(next, row.id)
+      const result = command === 'pause' ? await pause(row, options) : await resume(row)
       results.push(result)
     }
-    await commit(next, results.map((result) => ({ ...result, by: flags.by ?? 'cli' })))
+    await commit(results.map((result) => ({ ...result, by: flags.by ?? 'cli' })))
     if (flags.json) { out(JSON.stringify({ results }, null, 2)); return }
     for (const result of results) out(receiptLine(result, { tty: TTY }))
     const freed = results.filter((r) => r.ok && r.freed).reduce((sum, r) => sum + r.freed, 0)
@@ -244,7 +241,8 @@ async function main() {
     const { rows } = await world({ includeRemote: false })
     const { row, error } = resolveRef(rest[0], rows)
     if (error) die(error)
-    if (!row.paneTarget) die('That harness has no pane on this machine.')
+    row.paneTarget = (await panes()).get(row.pane)?.target
+    if (!row.local || !row.paneTarget) die('That harness has no pane on this machine. Open it in Harness Monitor.')
     if (flags.json) { out(JSON.stringify({ session: row.paneTarget.split(':')[0], pane: row.pane })); return }
     // Hand the terminal over, the way `docker attach` and `screen -r` do. Printing a command for someone
     // to paste is the worst of both: it is neither the answer nor the action.
@@ -264,4 +262,4 @@ async function main() {
   die(`No such command: ${command}\n\n${USAGE}`, 2)
 }
 
-main().catch((error) => die(error instanceof Error ? error.message : String(error)))
+main().finally(closeBridges).catch((error) => die(error instanceof Error ? error.message : String(error)))

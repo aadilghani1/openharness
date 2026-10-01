@@ -9,9 +9,8 @@
  *
  * The vocabulary, kept identical everywhere:
  *   running    the engine process is alive — a normal Harness agent
- *   paused   the pane and the conversation are there, the engine process is not (the daemon's own
- *            "dormant but still viewable agent"); resuming it resumes the conversation
- *   gone     no pane left; the daemon dropped the row. History only, nothing to resume
+ *   paused   the daemon retains history and launch settings, but the process is stopped
+ *   gone     the daemon knows the row but its terminal is unavailable
  */
 
 /** Shipped defaults. Every number here is a judgement, and every one of them is meant to be argued
@@ -37,7 +36,7 @@ export const DEFAULT_POLICY = {
     needsInput: true,
     /** Mid-turn. Pausing here would throw away work in flight. */
     working: true,
-    /** Somebody is looking at this pane right now. */
+    /** Reserved for inventories that report attachment; current daemon inventory does not. */
     attached: true,
     /** Listed in `pins`. The one escape hatch the rules must never overrule. */
     pinned: true,
@@ -100,6 +99,10 @@ export function normalizePolicy(raw, { home = '' } = {}) {
 
 /** Why this row cannot be touched, or null. Order is the order a person would say them in. */
 export function protectionFor(row, policy) {
+  if (row.online === false) return { by: 'offline', why: 'machine is offline' }
+  if (row.activityKnown === false) return { by: 'unknown', why: 'activity is unknown; update the owning daemon' }
+  if (row.self) return { by: 'monitor', why: 'this monitor’s assistant' }
+  if (row.canStop === false) return { by: 'unavailable', why: 'not ready to stop' }
   const p = policy.protect
   if (p.pinned && row.pinned) return { by: 'pinned', why: 'pinned' }
   if (p.needsInput && row.needsInput) return { by: 'needsInput', why: 'waiting on you' }
@@ -121,7 +124,7 @@ const RUNNING = new Set(['running'])
  * The plan. One entry per row, in the order given, plus the rules' own totals.
  *
  * `action` is what the row should become: `pause` or `keep`. Nothing here decides
- * how — `pause.mjs` owns the mechanics, and `forget` never means deleting a transcript.
+ * how — `actions.mjs` asks the owning daemon. Nothing deletes history.
  */
 export function decide(rows, rawPolicy, { now = Date.now(), home = '' } = {}) {
   const policy = rawPolicy?.pauseAfterIdleMs ? rawPolicy : normalizePolicy(rawPolicy, { home })
@@ -131,10 +134,7 @@ export function decide(rows, rawPolicy, { now = Date.now(), home = '' } = {}) {
   for (const row of rows) {
     const idle = Math.max(0, Number(row.idleMs) || 0)
     if (row.state === 'gone') {
-      const goneFor = Math.max(0, now - (row.stateSince ?? now))
-      entries.push(goneFor >= policy.forgetAfterRetiredMs
-        ? { id: row.id, name: row.name, action: 'forget', rule: 'gone', why: `no pane left, and gone for ${humanIdle(goneFor)} — drop it from the hps (its transcript stays where the engine wrote it)` }
-        : keep(row, 'no pane left; kept in history for now'))
+      entries.push(keep(row, 'terminal unavailable; retained in daemon inventory'))
       continue
     }
     // A shell somebody opened is not an agent: no conversation, nothing to resume, no rule applies.
@@ -162,9 +162,11 @@ export function decide(rows, rawPolicy, { now = Date.now(), home = '' } = {}) {
   const survivors = rows.filter((row, i) => RUNNING.has(row.state) && entries[i].action === 'keep')
   const byId = new Map(rows.map((row, i) => [row.id, entries[i]]))
   const ranked = [...survivors].sort((a, b) => (a.idleMs ?? 0) - (b.idleMs ?? 0))
-  let slots = policy.runningCeiling
+  const slots = new Map()
   for (const row of ranked) {
-    if (slots > 0) { slots -= 1; continue }
+    const remaining = slots.get(row.machineId) ?? policy.runningCeiling
+    slots.set(row.machineId, remaining - 1)
+    if (remaining > 0) continue
     const entry = byId.get(row.id)
     if (entry.protectedBy) continue
     entry.action = 'pause'

@@ -101,8 +101,8 @@ test('a verb with the token acts, records a receipt, and refreshes', async (t) =
   const reply = await post(base, viewer.token, '/api/act', { verb: 'pause', ids: ['a1'] })
   assert.equal(reply.results.length, 1)
   assert.deepEqual(done, [['pause', 'a1']])
-  const tickets = JSON.parse(await readFile(join(process.env.HARNESS_MONITOR_STATE, 'paused.json'), 'utf8'))
-  assert.ok(tickets.a1, 'the resume ticket was written down')
+  const tickets = await readFile(join(process.env.HARNESS_MONITOR_STATE, 'paused.json'), 'utf8').catch(() => '{}')
+  assert.deepEqual(JSON.parse(tickets), {}, 'saved lifecycle belongs to the daemon, not a second ticket book')
   const log = await readFile(join(process.env.HARNESS_MONITOR_STATE, 'log.jsonl'), 'utf8')
   assert.match(log, /"by":"pane"/)
 })
@@ -114,6 +114,27 @@ test('pinning is a state edit and needs no engine at all', async (t) => {
   const rules = await readFile(process.env.HARNESS_MONITOR_CONFIG, 'utf8')
   assert.match(rules, /"pins": \["a1","a2"\]/, 'pins land in the rules file, where a person can see them')
   assert.match(rules, /\/\/ Most engines running at once/, 'and the comments are still there')
+  assert.deepEqual(done, [])
+})
+test('cleanup rechecks the plan while explicit row stops remain explicit', async (t) => {
+  let reads = 0
+  const { viewer, base, done } = await serve(undefined, { collect: async () => ({ rows: [row({ id: 'a1', idleMs: reads++ ? 0 : 2 * DAY })], problems: [] }) })
+  t.after(() => viewer.close())
+  const refused = await post(base, viewer.token, '/api/act', { verb: 'pause', ids: ['a1'] })
+  assert.equal(refused.results[0].ok, false); assert.deepEqual(done, [])
+  const explicit = await post(base, viewer.token, '/api/act', { verb: 'pause', ids: ['a1'], manual: true })
+  assert.equal(explicit.results[0].ok, true); assert.deepEqual(done, [['pause', 'a1']])
+})
+test('the reviewed conversation cannot be replaced by a newly eligible conversation', async (t) => {
+  const current = row({ id: 'a1', idleMs: 2 * DAY, sessionId: 'new-conversation' })
+  const { viewer, base, done } = await serve([current])
+  t.after(() => viewer.close())
+  for (const manual of [false, true]) {
+    const reply = await post(base, viewer.token, '/api/act', { verb: 'pause', ids: ['a1'], manual,
+      expected: [{ id: 'a1', sessionId: 'reviewed-conversation', lastActivity: current.lastActivity }] })
+    assert.equal(reply.results[0].ok, false)
+    assert.match(reply.results[0].detail, /changed since you reviewed/)
+  }
   assert.deepEqual(done, [])
 })
 

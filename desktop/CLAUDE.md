@@ -261,9 +261,11 @@ there is no title or deferred-close button. Cancel is the default. Previously qu
 plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 
-`HarnessMonitor` drives the bottom-left resource summary and existing session manager. It samples
-connected owned sessions every 15 seconds, every 3 seconds while expanded, and never while the app
-is hidden. RAM is process-tree RSS; CPU is interval use, with 100% representing one core. Unknown
+`HarnessMonitor` drives the bottom-left resource summary. It samples connected owned sessions
+every 15 seconds and never while the app is hidden. Clicking it opens the reusable
+`autonomous/harness-monitor` DSH tab through `HarnessMonitorController`, with its viewer full width
+and the assistant terminal revealed only on request. The DSH table shares the daemon's resource
+sampler and adds opt-in activity metadata to `agents_list`. RAM is process-tree RSS; CPU is interval use, with 100% representing one core. Unknown
 readings remain unknown. Shared Codex servers are listed separately and included once in totals;
 token counts reuse existing agent data. The monitor never resumes sessions or scans transcripts.
 

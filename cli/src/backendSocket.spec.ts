@@ -2248,6 +2248,25 @@ describe('agent_restart RPC', () => {
     await socket.stop()
   })
 
+  it('adds monitor activity and readings only when explicitly requested', async () => {
+    const { socket, frames } = localSocket()
+    vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
+    vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
+    vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
+    socket.harnessResourcesReader = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
+    socket.monitorActivityProvider = sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle'
+    for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
+      socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId, monitor, includeStopped: true } })
+    }
+    await vi.waitFor(() => expect(frames.filter(f => f.type === 'agents_list_result')).toHaveLength(2))
+    const response = (id: string) => (frames.find(frame => (frame.payload as any).requestId === id)?.payload as any).agents
+    expect(response('plain').every((agent: any) => agent.monitor === undefined)).toBe(true)
+    expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toEqual({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
+    expect(response('monitor').find((a: any) => a.id === 'stopped').monitor).toMatchObject({ rssBytes: 0, cpu: 0, pid: null })
+    expect(socket.harnessResourcesReader).toHaveBeenCalledOnce()
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
   it('delegates a resume-only intent and retains its original receipt', async () => {
     const { socket, frames } = localSocket()
     const creationId = `resume-${randomUUID()}`

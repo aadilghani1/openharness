@@ -6,7 +6,6 @@ import 'package:harness/core/harness_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/harness_monitor.dart';
 import 'package:harness/state/app_state.dart' show MachineState;
-import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -228,54 +227,4 @@ void main() {
     },
   );
 
-  testWidgets(
-    'compact monitor shows status, RAM, CPU and cached tokens at enlarged text',
-    (tester) async {
-      final connection = _Connection();
-      final app = createApp(
-        connected: true,
-        connectionForTest: (_) => connection,
-      );
-      final monitor = HarnessMonitor(app);
-      addTearDown(monitor.dispose);
-      addTearDown(app.dispose);
-      app.machineStates['m']!.agents = [
-        const Agent(
-          id: 'a0',
-          name: 'Review',
-          engine: 'codex',
-          terminalAvailable: true,
-          tokensUsed: 9200,
-        ),
-      ];
-      await monitor.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: MediaQuery(
-            data: const MediaQueryData(textScaler: TextScaler.linear(1.4)),
-            child: Scaffold(
-              body: SizedBox(
-                width: 500,
-                height: 600,
-                child: HarnessSessionManager(
-                  app: app,
-                  monitor: monitor,
-                  recent: const [],
-                  onClose: () {},
-                  onOpen: (_) async => true,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-      expect(find.text('Harness Monitor'), findsOneWidget);
-      expect(find.textContaining('1.4 GB RAM'), findsOneWidget);
-      expect(find.textContaining('125.5% CPU'), findsOneWidget);
-      expect(find.textContaining('tokens'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
 }

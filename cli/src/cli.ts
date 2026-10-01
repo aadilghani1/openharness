@@ -2928,6 +2928,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  backend.monitorActivityProvider = sessionId => openQuestions.has(sessionId)
+    ? 'needsInput' : sessionTurnOpen(sessionId) ? 'working' : 'idle'
   const agentNotifications = new AgentNotifications()
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),

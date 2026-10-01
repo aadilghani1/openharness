@@ -88,6 +88,11 @@ test('the ceiling pauses the least recently active, and never a protected row', 
   assert.equal(totals.runningAfter, 3) // the pinned one still counts as running
 })
 
+test('each machine has its own ceiling', () => {
+  const plan = decide([row({ id: 'local', machineId: 'm1' }), row({ id: 'remote', machineId: 'm2' })], { runningCeiling: 1 })
+  assert.equal(plan.totals.pause, 0)
+})
+
 test('a ceiling of zero still cannot pause what is protected', () => {
   const { entries } = decide([row({ id: 'p', pinned: true, idleMs: 3 * HOUR })], { runningCeiling: 0 })
   assert.equal(entries[0].action, 'keep')

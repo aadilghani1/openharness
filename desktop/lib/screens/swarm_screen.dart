@@ -91,8 +91,6 @@ import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../widgets/harness_start_page.dart';
-import '../widgets/harness_session_manager.dart';
-import '../widgets/onboarding_card.dart';
 import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
 import '../widgets/rename_agent_dialog.dart';
@@ -268,8 +266,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late int _tabStripRequest;
   OverlayEntry? _modelsOverlay;
   VoidCallback? _unregisterModels;
-  OverlayEntry? _harnessesOverlay;
-  VoidCallback? _unregisterHarnesses;
   late final WorkspacePullRequest _pullRequest;
   final _toolbarNotices = ToolbarNotices();
   late final _onboarding =
@@ -767,7 +763,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           _closeSearch(restoreFocus: false);
           _closeCommandBar(restoreFocus: false);
           _closeModelsControls(restoreFocus: false);
-          _closeHarnessControls(restoreFocus: false);
           _closeDaemon(restoreFocus: false);
           _closeHatch(restoreFocus: false);
         }
@@ -826,9 +821,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
-    _unregisterHarnesses?.call();
-    _harnessesOverlay?.remove();
-    _harnessesOverlay?.dispose();
     _onboarding.removeListener(_onboardingChanged);
     if (widget.onboarding == null) _onboarding.dispose();
     app.modelManager.removeListener(_modelManagerChanged);
@@ -932,8 +924,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool get _modelsVisible =>
       _modelsOverlay != null || _search?.isModelMode == true;
   bool get _machinesVisible => _search?.isMachineMode == true;
-  bool get _harnessesVisible =>
-      _harnessesOverlay != null || _search?.scopePrefix.isEmpty == true;
+  bool get _harnessesVisible => _search?.scopePrefix.isEmpty == true;
 
   bool get _shortcutsEnabled =>
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
@@ -971,8 +962,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _commandBarOpen ||
         (finding
             ? (_newHarness != null && !_newHarnessEmbedded) ||
-                  _modelsOverlay != null ||
-                  _harnessesOverlay != null
+                  _modelsOverlay != null
             : _search != null ||
                   _modelsVisible ||
                   _machinesVisible ||
@@ -1038,7 +1028,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeDaemonHint();
     _closeDaemon(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
-    _closeHarnessControls(restoreFocus: false);
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -1282,7 +1271,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _onboardingChanged() {
     if (!mounted) return;
     _modelsOverlay?.markNeedsBuild();
-    _harnessesOverlay?.markNeedsBuild();
     if (_menuHost) _syncNative();
     setState(() {});
   }
@@ -1722,7 +1710,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _paletteChanged() {
     _modelsOverlay?.markNeedsBuild();
-    _harnessesOverlay?.markNeedsBuild();
     _searchOverlay?.markNeedsBuild();
     if (_menuHost) _syncNative();
   }
@@ -2134,7 +2121,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'harnessControls' || call.method == 'resourceMonitor') {
-      _toggleHarnessControls(liveOnly: call.method == 'resourceMonitor');
+      _toggleHarnessControls();
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -2510,7 +2497,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       String? error,
     }) async {
       String? result;
-      _closeHarnessControls(restoreFocus: false);
       await _dialog(() async {
         result = await showSessionCloseDialog(
           context,
@@ -5027,112 +5013,21 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  void _toggleHarnessControls({bool liveOnly = false}) {
-    if (_harnessesOverlay != null) {
-      _closeHarnessControls();
-      return;
-    }
+  void _toggleHarnessControls() {
+    if (app.harnessMonitor.opening) return;
     if (!_shortcutsEnabled || _newHarness?.requestDismiss() == false) return;
     _closeNewHarness(restoreFocus: false);
     _closeSearch(restoreFocus: false);
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
-    _preparePaneFocus();
     _onboarding.acknowledge(OnboardingStep.harnesses);
-    final overlay = Overlay.of(context);
-    _harnessesOverlay = OverlayEntry(
-      builder: (context) => LayoutBuilder(
-        builder: (context, constraints) => Stack(
-          children: [
-            Positioned.fill(
-              top: _native ? 0 : _tabBarHeight,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _closeHarnessControls,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            Positioned(
-              bottom: _statusBarHeight + 8,
-              left: 10,
-              width: (constraints.maxWidth - 20).clamp(0, 640),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight:
-                      (constraints.maxHeight -
-                              (_native ? 0 : _tabBarHeight) -
-                              20)
-                          .clamp(0, 620),
-                ),
-                child: KeymapProvider(
-                  keymap: _keymap,
-                  child: HarnessSessionManager(
-                    app: app,
-                    monitor: _harnessMonitor,
-                    initialFilter: liveOnly
-                        ? SessionFilter.running
-                        : SessionFilter.all,
-                    introduction: _onboarding.next == OnboardingStep.harnesses
-                        ? OnboardingCard(
-                            title: 'Run your first harness',
-                            description:
-                                'Give an agent a task. Watch it get to work.',
-                            action: 'New harness',
-                            onAction: () {
-                              _closeHarnessControls(restoreFocus: false);
-                              _runShortcut('agent.new');
-                            },
-                            onDismiss: () =>
-                                _onboarding.dismiss(OnboardingStep.harnesses),
-                          )
-                        : null,
-                    recent: _navigation.recent,
-                    onClose: _closeHarnessControls,
-                    onOpen: (row) async {
-                      final destination = swarmDestinations(app)
-                          .where((item) => item.id == row.id)
-                          .firstOrNull;
-                      if (destination == null) return false;
-                      final opened = await activateSwarmDestination(
-                        app,
-                        destination,
-                        destinationSwarmId: app.activeSwarmId,
-                      );
-                      return opened;
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    overlay.insert(_harnessesOverlay!);
-    _harnessMonitor.setExpanded(true);
-    _unregisterHarnesses = registerTransientMenu(
-      () => _closeHarnessControls(restoreFocus: false),
-    );
-    if (_menuHost) _syncNative();
-    setState(() {});
-  }
-
-  void _closeHarnessControls({bool restoreFocus = true}) {
-    if (_harnessesOverlay == null) return;
-    _unregisterHarnesses?.call();
-    _unregisterHarnesses = null;
-    _harnessesOverlay?.remove();
-    _harnessesOverlay?.dispose();
-    _harnessesOverlay = null;
-    _harnessMonitor.setExpanded(false);
-    if (!mounted) return;
-    if (_menuHost) _syncNative();
-    setState(() {});
-    if (restoreFocus) {
-      _shellFocus.requestFocus();
-      final pane = app.focusedPane;
-      if (pane != null) app.focusPane(pane.id, reveal: true);
-    }
+    unawaited(() async {
+      final error = await app.harnessMonitor.open();
+      if (mounted && error != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error)));
+      }
+    }());
   }
 
   void _toggleSessions({SessionFilter? filter}) {
@@ -7173,7 +7068,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       label: _harnessMonitor.detail,
                       tooltip: _harnessMonitor.detail,
                       onPressed: _shortcutsEnabled
-                          ? () => _toggleHarnessControls(liveOnly: true)
+                          ? () => _toggleHarnessControls()
                           : null,
                       builder: (context, emphasized) => Padding(
                         padding: EdgeInsets.symmetric(horizontal: cell.width),

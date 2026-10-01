@@ -1,5 +1,6 @@
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
+import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
@@ -751,6 +752,8 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
+  private readonly monitorCompletions = new MonitorCompletions()
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
    *  this Node has no `node:sqlite`. */
   sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
@@ -1228,6 +1231,7 @@ export class BackendSocket {
   /** Send an up-frame (event or RPC reply) to the WEB audience. Queued while disconnected.
    *  User-content events are group-encrypted (E2EE) here; system frames pass through as plaintext. */
   send(frame: Frame): void {
+    this.monitorCompletions.observe(frame)
     // Only an already-open orchestration service observes events; ordinary sessions
     // do not create project state or incur disk work. Project payloads stay local.
     this.orchestratorService?.ingest(frame)
@@ -2160,7 +2164,8 @@ export class BackendSocket {
           return
 
         case 'agents_list': {
-          const projects = await Promise.all(registry.advertised().map((s) => this.toProject(s)))
+          const sessions = registry.advertised()
+          const projects = await Promise.all(sessions.map((s) => this.toProject(s)))
           // Older clients/devices keep their live-only contract. The desktop picker
           // explicitly asks for stopped work and receives no stale terminal routes.
           if (payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device') {
@@ -2177,7 +2182,23 @@ export class BackendSocket {
             reply(type, requestId, { agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(deviceAgentListItem) })
             return
           }
-          reply(type, requestId, { agents: projects })
+          if (payload.monitor === true) {
+            const snapshot = await this.harnessResourcesReader().catch(() => ({ agents: [] }))
+            const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
+            const byId = new Map(sessions.map(s => [s.agentId, s]))
+            reply(type, requestId, { agents: projects.map(agent => {
+              const session = byId.get(agent.id)
+              const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
+              const reading = resources.get(agent.id)
+              return { ...agent, monitor: {
+                activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
+                activityKnown: this.monitorActivityProvider !== null,
+                rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
+                cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
+                pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
+              } }
+            }) })
+          } else reply(type, requestId, { agents: projects })
           return
         }
 

@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
+import 'harness_monitor_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
@@ -6851,6 +6852,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Model Manager keeps the original package ID for installed workspaces.
   static const gridHarness = 'autonomous/autonomous-grid';
+  late final harnessMonitor = HarnessMonitorController(this);
   ModelManagerController? _modelManager;
   ModelManagerController get modelManager =>
       _modelManager ??= ModelManagerController(this);
@@ -8130,6 +8132,10 @@ class AppNotifier extends ChangeNotifier {
         ownerAgentId: agent.id,
       );
       swarm.panes.insert(insertion, pane);
+      if (agent.dsh == harnessMonitorId) {
+        swarm.zoomedPaneId = pane.id;
+        swarm.focusedPaneId = pane.id;
+      }
       // The same bookkeeping a split does when it grows the grid by one:
       // pins past the insertion slide right, and the shape is re-derived.
       swarm.pinnedSlots.updateAll(
@@ -8148,6 +8154,95 @@ class AppNotifier extends ChangeNotifier {
     }
     if (changed) _persistLayout();
     return changed;
+  }
+
+  /// The monitor opens as a full-width table; the OpenCode terminal remains its DSH owner.
+  void showHarnessMonitorTable(String machineId, String agentId) {
+    final pane = activeSwarm.panes
+        .where(
+          (p) =>
+              p.isWeb && p.machineId == machineId && p.ownerAgentId == agentId,
+        )
+        .firstOrNull;
+    if (pane == null) return;
+    focusPane(pane.id);
+    zoomedPaneId = pane.id;
+    _persistLayout();
+    notifyListeners();
+  }
+
+  /// Only navigation crosses the viewer bridge. Lifecycle operations use the ordinary app APIs.
+  Future<String?> handleHarnessMonitorAction(
+    TerminalPane source,
+    Map<String, dynamic> action,
+  ) async {
+    final owner = stateOf(source.machineId);
+    final monitor = owner?.agents
+        .where((a) => a.id == source.ownerAgentId && a.dsh == harnessMonitorId)
+        .firstOrNull;
+    if (!source.isWeb ||
+        monitor == null ||
+        !activeSwarm.panes.contains(source)) {
+      return 'This monitor is no longer active.';
+    }
+    if (action['action'] == 'assistant') {
+      final terminal = activeSwarm.panes
+          .where(
+            (p) => p.machineId == source.machineId && p.agentId == monitor.id,
+          )
+          .firstOrNull;
+      if (terminal == null) return 'The assistant is unavailable.';
+      zoomedPaneId = null;
+      focusPane(terminal.id, reveal: true);
+      _persistLayout();
+      notifyListeners();
+      return null;
+    }
+    final machineId = action['machineId'], agentId = action['agentId'];
+    if (action['action'] != 'open' ||
+        machineId is! String ||
+        agentId is! String) {
+      return 'Unknown monitor action.';
+    }
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      return 'Connect the owning machine to open this session.';
+    }
+    await _loadMachineData(machine, force: true);
+    if (!identical(stateOf(machineId), machine) ||
+        !identical(stateOf(source.machineId), owner) ||
+        !activeSwarm.panes.contains(source)) {
+      return null;
+    }
+    if (machine.isOffline || machine.agentsLoadError != null) {
+      return 'Reconnect the owning machine and refresh the monitor.';
+    }
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null) {
+      return 'This session is no longer available. Refresh the monitor.';
+    }
+    if (agent.isStopped) {
+      final result = await resumeAgent(machineId, agentId);
+      if (result.error != null) return result.error;
+      if (!identical(stateOf(machineId), machine) ||
+          !activeSwarm.panes.contains(source)) {
+        return null;
+      }
+    } else if (!agent.terminalAvailable) {
+      return 'This session is not ready to open. Refresh the monitor.';
+    }
+    if (!revealAgentView(machineId, agentId)) {
+      newSwarm();
+      await addAgentToSwarm(
+        machineId,
+        agentId,
+        swarmId: activeSwarmId,
+        intent: AttachIntent.person,
+      );
+    }
+    return null;
   }
 
   /// Whether the active tab shows this agent's viewer beside its terminal.
@@ -14347,6 +14442,7 @@ class AppNotifier extends ChangeNotifier {
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();
+    harnessMonitor.dispose();
     _modelsMenu?.dispose();
     for (final controller in _teamControllers.values) {
       controller.dispose();
