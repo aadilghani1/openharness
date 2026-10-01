@@ -107,24 +107,30 @@ describe('buildEngineLaunchArgv', () => {
       expect(result.out).not.toContain('This pane is a shell now')
     })
     it('a take-over that waits says so, and starts the engine only once the other process is gone', () => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-wait-engine-'))
+      const binary = join(folder, 'codex')
+      // /bin/sh --help succeeds on macOS but fails with Ubuntu's dash. A
+      // simulated CLI needs its own help contract for the real startup probe.
+      writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n', { mode: 0o755 })
       // Not a child of this process, as the terminal's is not: an unreaped child never looks gone.
       const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 1 >/dev/null 2>&1 & echo $!']).toString().trim())
       try {
         const argv = buildEngineLaunchArgv('codex', { waitForPid: { pid, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
         const started = Date.now()
-        const result = run([argv[0], argv[1], argv[2], 'harness-engine', '/bin/sh', '-c', 'printf "%s\\n" "engine ran"'])
+        const result = run([argv[0], argv[1], argv[2], 'harness-engine', binary])
         expect(Date.now() - started).toBeGreaterThanOrEqual(800)
         expect(result.out).toContain('Waiting for the Codex in your terminal to finish its turn.')
         expect(result.out.indexOf('Waiting for')).toBeLessThan(result.out.indexOf('engine ran'))
         expect(result.status).toBe(0)
+        // Nothing to wait for: it starts at once.
+        const immediate = buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
+        const immediateStarted = Date.now()
+        expect(run([immediate[0], immediate[1], immediate[2], 'harness-engine', binary]).out).toContain('engine ran')
+        expect(Date.now() - immediateStarted).toBeLessThan(800)
       } finally {
         try { process.kill(pid) } catch { /* gone */ }
+        rmSync(folder, { recursive: true, force: true })
       }
-      // Nothing to wait for: it starts at once.
-      const argv = buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
-      const started = Date.now()
-      expect(run([argv[0], argv[1], argv[2], 'harness-engine', '/bin/sh', '-c', 'printf "%s\\n" "engine ran"']).out).toContain('engine ran')
-      expect(Date.now() - started).toBeLessThan(800)
     })
     it('a command that does not exist still ends the pane with 127, so "not installed" stays a launch failure', () => {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, NO_TMUX)
