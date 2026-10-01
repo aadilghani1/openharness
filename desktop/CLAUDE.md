@@ -337,7 +337,7 @@ its headless debug timings do not establish native display or network latency.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
 - The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
-  with harness count, scoped hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
   and quiet, with larger click targets. Each pane ends with model, split down,

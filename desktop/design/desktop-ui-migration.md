@@ -238,7 +238,7 @@ The experimental branch remains unmerged for the user's visual review.
   Tab-strip close still appears on hover and yields to Command-held hints.
 - The footer originally showed remaining subscription usage. The current
   [status-bar contract](workspace-status-bar.md) uses global harness count,
-  scoped host CPU/RAM/GPU and neutral allowance-used percentages, separated by
+  local host CPU/RAM/GPU and neutral allowance-used percentages, separated by
   whitespace. Deduplicated accounts, limiting windows and Subscriptions actions
   stay shared with Models. Unknown readings show `-`. The right side retains
   the focused machine/project/branch/PR and their actions.

@@ -36,10 +36,10 @@ Use neutral workspace ink at every usage level. The context on the right still
 follows the focused pane; it may identify a remote machine while hardware remains
 local.
 
-`Harnesses 118` opens the existing session manager, filtered to live sessions.
-Include running sessions on connected owned machines even when none of this
-window's tabs show them. Saved history remains in All and Saved. Its RAM and CPU
-columns can be sorted highest first; tokens reuse existing agent updates.
+`Harnesses 118` opens the reusable Harness Monitor tab. Count running sessions on
+connected owned machines even when none of this window's tabs show them. The
+monitor's process table retains its own resource sampling and session actions.
+Saved history remains available through session search.
 
 CPU, RAM and GPU always describe the local computer, independently of pane focus
 or machine selection. Never substitute a remote host if local readings are
@@ -75,6 +75,8 @@ process birth identities. Those session-manager figures remain process-tree
 resident memory and interval CPU, where 100% means one core. Shared Codex servers
 appear once, separately. Keep this distinct from the normalized host CPU in the
 footer. Unknown session readings retain the monitor's existing explanation.
+
+![Status bar with synthetic readings and focused-pane context](images/workspace-resources.png)
 
 Native and Flutter footers share data and behavior. At narrow widths remove GPU,
 then RAM as complete groups, keeping CPU and the full tooltip. Subscription usage
@@ -226,7 +228,7 @@ truncate without moving or covering the close target. Clicking the model focuses
 that pane and opens the same unified Models picker as Cmd-:, preserving the
 existing target and availability guards.
 
-The footer shows subscription allowance **used**, alongside scoped hardware.
+The footer shows subscription allowance **used**, alongside local hardware.
 Read the same deduplicated account rows as Models: each percentage uses the
 limiting window and expires under the same rules. Compute used = 100 − remaining
 and round to a whole percentage. Different accounts remain distinct. Unknown
@@ -384,7 +386,7 @@ rather than extra padding only above it. Native and Flutter reserve 37.5 pt and
 keep the same pane height, with equal space above and below the footer content.
 
 Show `machine  project`, then `(branch)` and PR when known at the right. Put the
-harness count, scoped resources and subscription usage at the left. The status row has one-cell outer gutters and no background fill or divider;
+harness count, local resources and subscription usage at the left. The status row has one-cell outer gutters and no background fill or divider;
 its controls sit directly on the workspace surface. The right side follows the
 focused pane; usage at the left covers all subscriptions independently of focus.
 Each context field preserves its existing action.

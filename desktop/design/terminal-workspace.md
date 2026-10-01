@@ -30,7 +30,7 @@ system menu bar; the window keeps Search and Store. Linux and browser bars
 retain their notification bell. Show a count badge only when something is unread.
 Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
-The footer shows a global harness count, scoped host CPU/RAM/GPU and subscription
+The footer shows a global harness count, local host CPU/RAM/GPU and subscription
 allowance used on the left, all in neutral ink with whole percentages. Its
 right-hand context follows the focused pane: machine, project, branch and PR. Each pane header ends with model, split down, split right, zoom,
 and close, in that order. The icons stay visible with quiet ink and no button
