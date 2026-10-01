@@ -23,8 +23,18 @@ One command. Credentials are already on the release Mac, so there is nothing to 
 ```bash
 bash mobile/scripts/release-ios.sh                 # build -> validate -> upload
 bash mobile/scripts/release-ios.sh --validate-only # rehearse, upload nothing
-bash mobile/scripts/release-ios.sh --skip-build    # upload the ipa already in build/ios/ipa
+bash mobile/scripts/release-ios.sh --skip-build    # upload what the last build left in build/ios
 ```
+
+The build is `flutter build ios --config-only` followed by `xcodebuild archive` and
+`-exportArchive`, not `flutter build ipa`: Flutter cannot hand xcodebuild an API key, so on a Mac with
+no signing certificate and no Xcode account it failed at signing whatever key was configured.
+
+The archive is **unsigned**; the export signs the app and its frameworks with the team's Apple
+Distribution certificate. Signing the archive would need an Apple Development certificate on the Mac,
+and the shared release account (`mobile.dev@autonomous.ai`) has used up its quota of those — Xcode
+answers "Choose a certificate to revoke", and revoking one breaks whichever Mac holds it. Runner has
+no entitlements file, so the export's own entitlements are all the app needs.
 
 ### Where the credentials live, and why not here
 
@@ -40,30 +50,27 @@ App Store Connect session — the repo's own `.gitignore` already refuses `*.p8`
 putting the other halves in Markdown would walk straight around that.
 
 Setting up a second machine: create a Team Key at App Store Connect ▸ Users and Access ▸ Integrations
-▸ App Store Connect API (role App Manager), drop the one-time `.p8` download into
-`~/.appstoreconnect/private_keys/`, and write the two ids into the `.env` above. An Apple ID plus an
-**app-specific** password (`ASC_USERNAME` / `ASC_APP_PASSWORD`) works too.
+▸ App Store Connect API (role **Admin**), drop the one-time `.p8` download into
+`~/.appstoreconnect/private_keys/`, and write the two ids into the `.env` above. That is the whole
+setup: the script hands the same key to the export, which signs with the team's cloud-managed
+distribution certificate — nothing to sign into Xcode, nothing to import into the keychain. An App
+Manager key uploads but cannot sign that way. An Apple ID plus an **app-specific** password
+(`ASC_USERNAME` / `ASC_APP_PASSWORD`) uploads too, but then signing needs the account in Xcode (below).
 
 The script validates before uploading, which is what catches a duplicate build number or a missing
 icon size in thirty seconds instead of in an email twenty minutes later.
 
 ### Upload with an existing Xcode account
 
-If the release script stops at `no credentials`, an Apple account already signed into Xcode can
-also sign and upload. Select the Autonomous Inc. team, then build the same production archive:
+With neither credential set, the script signs **and** uploads with the Apple account signed into
+Xcode ▸ Settings ▸ Accounts (a member of the Autonomous Inc. team): it archives as above, then runs
+`xcodebuild -exportArchive -allowProvisioningUpdates` with `method = app-store-connect`,
+`destination = upload`, `signingStyle = automatic`, `teamID = 54DJVWMJCC` and
+`manageAppVersionAndBuildNumber = false` on `mobile/build/ios/archive/Runner.xcarchive`. Nothing is
+validated first — altool cannot borrow Xcode's session — so `--validate-only` refuses this path, and
+a duplicate build number shows up as the upload failing.
 
-```bash
-cd mobile
-flutter build ipa --release --export-method app-store
-```
-
-Export that archive with `xcodebuild -exportArchive -allowProvisioningUpdates`, using an export
-options plist with `method = app-store-connect`, `destination = upload`, `signingStyle = automatic`,
-`teamID = 54DJVWMJCC` and `manageAppVersionAndBuildNumber = false`. The archive is
-`mobile/build/ios/archive/Runner.xcarchive`. This uses Xcode's account session; it does not configure
-API-key credentials for `release-ios.sh`.
-
-Build 49 used this path. Apple accepted the upload and started processing it. Xcode reported a
+Build 49 used this path, by hand. Apple accepted the upload and started processing it. Xcode reported a
 non-blocking missing dSYM for the vendored WebRTC framework; native crashes inside that framework
 may lack symbolicated stacks until the matching symbols are supplied.
 
