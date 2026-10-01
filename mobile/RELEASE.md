@@ -124,8 +124,8 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.1 (51)` | 2026-10-01 | TestFlight. First build on the 1.0.1 train — 1.0.0 was approved and its train closed, so ASC refused 1.0.0 (51). Faster launch to the first session; tabs named as on the desktop; Find recaps fold behind a chevron; device key log (#518). First upload from an unsigned archive signed on export (`release-ios.sh`, Xcode account). Built from `feat/mobile-ios-android` |
 | `1.0.1 (52)` | 2026-10-01 | TestFlight. The launch terminal opens before the agent list; the desktop app, web and CLI sign in by scanning a QR with the phone (#519). Built from `feat/mobile-ios-android` after merging `main` |
 
-`pubspec.yaml` is now at `1.0.1+53`, the next build number. Build 52 is already uploaded; do not
-upload it again. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.1+54`, the next build number. Build 52 is the last iOS upload and 53
+went to Play only; do not upload either again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -341,3 +341,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | --- | --- | --- |
 | `16` (1.0.0) | 2026-09-18 | Internal testing — the first Play upload |
 | `41` (1.0.0) | 2026-09-24 | Built for resubmission after Play rejected the build under the broken-functionality policy (its browser sign-in redirected to `127.0.0.1`, which timed out on the reviewer's device). Signs in with an emailed code instead; also carries the notices and tab marks of iOS 39–40 |
+| `53` (1.0.1) | 2026-10-01 | Internal testing. Same code as iOS 1.0.1 (52): faster launch, QR sign-in for desktop/web/CLI (#519), tab and Find polish. First Play build from the second Mac, with the upload key copied from the first (`storeFile` rewritten to this Mac's path) |
