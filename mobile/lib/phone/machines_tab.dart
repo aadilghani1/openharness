@@ -31,8 +31,8 @@ class MachinesTab extends StatelessWidget {
 
   final AppNotifier notifier;
 
-  /// The tab's big title. Off when this is PUSHED — from the terminal's `⋯` sheet — where it needs
-  /// the back chevron that a large header does not draw.
+  /// The tab's big title. Off when this is PUSHED — from Settings — where it draws the back chevron
+  /// above its title instead, as Settings itself does.
   final bool large;
 
   @override
@@ -48,10 +48,17 @@ class MachinesTab extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!large)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TtyBackButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(
+                padding: EdgeInsets.fromLTRB(
                   Tty.origin,
-                  12,
+                  large ? 12 : 8,
                   Tty.origin,
                   4,
                 ),
