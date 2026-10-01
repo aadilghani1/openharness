@@ -167,10 +167,10 @@ try {
           for (const line of raw) lineToEvents(line, state)
           if (raw.length) turnOpen = state.turnOpen
         }
-        return inspectCloseActivity(row.engine, screen, turnOpen, false)
+        return inspectCloseActivity(row, screen, turnOpen, false)
       },
-      checkpoint: async (row, explicitlyStopped, phase) => sessionCheckpoints.save(row, {
-        explicitlyStopped, screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
+      checkpoint: async (row, phase) => sessionCheckpoints.save(row, {
+        screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
       }),
       stop: stopAgent, changed: row => { void agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }).then(agent => socketBackend.send({ type: 'agent_synced', payload: { agent } })) },
     })
@@ -344,7 +344,7 @@ try {
     const { TerminalStreamManager } = await import('../src/lib/terminalStreamManager.js')
     const { TerminalBackendCoordinator } = await import('../src/lib/terminalBackendCoordinator.js')
     const streams = new TerminalStreamManager({
-      terminals: new TerminalBackendCoordinator([backend], ['tmux'], []),
+      terminals: new TerminalBackendCoordinator([backend], ['tmux']),
       resolveAgent: id => registry.byAgent(id), streamingAvailable: true,
       sendTarget: (id, type, payload) => socketBackend.sendTerminalTo(id, type, payload),
       sendBinaryTarget: (id, frame) => socketBackend.sendTerminalBinaryTo(id, frame),

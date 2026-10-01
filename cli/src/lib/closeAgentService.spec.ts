@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { CloseAgentService, inspectCloseActivity, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { SessionCheckpointStore } from './sessionCheckpoint.js'
 
 let row: RegisteredSession
 let service: CloseAgentService
@@ -139,14 +140,78 @@ it('will not acknowledge a deferred close when durable storage fails', async () 
 
 it('uses a known empty composer, not inactivity, to establish idle', () => {
   const screen = '›\n\n  100% context left'
-  expect(inspectCloseActivity('codex', screen, false, false)).toBe('idle')
-  expect(inspectCloseActivity('codex', screen, undefined, false)).toBe('unknown')
-  expect(inspectCloseActivity('codex', screen, true, false)).toBe('working')
-  expect(inspectCloseActivity('codex', screen, false, true)).toBe('needs_input')
-  expect(inspectCloseActivity('codex', null, false, false)).toBe('unknown')
-  expect(inspectCloseActivity('codex', '› A draft\n  100% context left', false, false)).toBe('draft')
-  expect(inspectCloseActivity('codex', `${screen}\n  ◎ /goal active (41m)`, false, false)).toBe('working')
-  expect(inspectCloseActivity('claude', '❯\n  2 background tasks', false, false)).toBe('working')
+  expect(inspectCloseActivity(row, screen, false, false)).toBe('idle')
+  expect(inspectCloseActivity(row, screen, undefined, false)).toBe('unknown')
+  expect(inspectCloseActivity(row, screen, true, false)).toBe('working')
+  expect(inspectCloseActivity(row, screen, false, true)).toBe('needs_input')
+  expect(inspectCloseActivity(row, null, false, false)).toBe('unknown')
+  expect(inspectCloseActivity(row, '› A draft\n  100% context left', false, false)).toBe('draft')
+  expect(inspectCloseActivity(row, `${screen}\n  ◎ /goal active (41m)`, false, false)).toBe('working')
+  expect(inspectCloseActivity({ ...row, engine: 'claude' }, '❯\n  2 background tasks', false, false)).toBe('working')
+})
+
+const unusedScreens = {
+  // Prompt/footer styling observed in the unused Companions terminal; path redacted.
+  codex: '\u001b[1m\u001b[38;5;215m›\u001b[0m\u001b[48;5;234m \u001b[2mAsk Codex to do anything\u001b[0m\n\n  GPT-6-Astra max · /tmp/companions\n  ? for shortcuts · 1 warning · f2 to view',
+  claude: '────────────\n❯\u00a0\u001b[2mAsk about the codebase\u001b[0m\n────────────\n  ? for shortcuts',
+}
+
+it.each(['claude', 'codex'] as const)('closes an unused %s chat only after saving its screen', async engine => {
+  Object.assign(row, { engine, sessionId: '', transcriptPath: null, launch: { state: 'ready' } })
+  const screen = unusedScreens[engine]
+  const directory = join(env.ADAPTER_DATA_DIR, 'unused-checkpoints', row.agentId)
+  const store = new SessionCheckpointStore(directory)
+  deps.activity = vi.fn(async () => inspectCloseActivity(row, screen, undefined, false))
+  deps.checkpoint = vi.fn((s, phase) => store.save(s, { screen: phase === 'before' ? screen : null }))
+  deps.stop = vi.fn(async (id, options) => {
+    await options.checkpoint!(row, 'before')
+    await options.beforeStop!(row)
+    const manifest = JSON.parse(readFileSync(join(directory, readdirSync(directory).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
+    expect(JSON.parse(readFileSync(join(directory, manifest.file), 'utf8')).screen).toBe(screen)
+    expect(options.current!()).toBe(true)
+    await options.checkpoint!(row, 'after')
+    registry.removeAgent(id)
+  })
+  expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
+  expect(await service.request(request('idle'))).toEqual({ closed: true })
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before')
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after')
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+
+it.each([
+  [null, 'unknown'],
+  ['Starting Codex…', 'unknown'],
+  ['unrecognized terminal screen', 'unknown'],
+  ['› Keep this draft\n  100% context left', 'draft'],
+  ['›\n  a multiline draft\n  100% context left', 'draft'],
+  ['›\nAllow this action', 'needs_input'],
+  ['• Working (4s · esc to interrupt)\n›\n  100% context left', 'working'],
+  [`${unusedScreens.codex}\n ◎ /goal active (41m)`, 'working'],
+] as const)('does not treat an unused chat as idle with %j', (screen, activity) => {
+  Object.assign(row, { sessionId: '', transcriptPath: null })
+  expect(inspectCloseActivity(row, screen, undefined, false)).toBe(activity)
+  expect(inspectCloseActivity(row, unusedScreens.codex, true, false)).toBe('working')
+  expect(inspectCloseActivity(row, unusedScreens.codex, undefined, true)).toBe('needs_input')
+})
+
+it.each([
+  { sessionId: 'existing-conversation' },
+  { transcriptPath: '/tmp/existing-conversation.jsonl' },
+  { resumeOnly: true as const },
+  { launch: { state: 'starting' as const } },
+  { launch: { state: 'failed' as const, error: 'START_FAILED' } },
+  { engine: 'terminal' as const },
+])('retains unknown turn state with %j', change => {
+  const session = { ...row, sessionId: '', transcriptPath: null, ...change }
+  expect(inspectCloseActivity(session, '›\n\n  100% context left', undefined, false)).toBe('unknown')
+})
+
+it.each(['working', 'draft', 'unknown'] as const)('retains an unused chat that becomes %s while saving', async activity => {
+  Object.assign(row, { sessionId: '', transcriptPath: null })
+  vi.mocked(deps.activity).mockResolvedValueOnce('idle').mockResolvedValue(activity)
+  expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity })
+  expect(registry.byAgent(row.agentId)).toBe(row)
 })
 
 it('automatically stops only after two timer observations of sustained idle', async () => {
@@ -185,9 +250,8 @@ it('rejects a disposed service and a target replaced while reading activity', as
   expect(await service.request(request('inspect'))).toEqual({ error: 'AGENT_CHANGED' })
   expect(deps.stop).not.toHaveBeenCalled()
 })
-it.each(['unbound', 'terminal'])('never automatically closes %s work on an empty composer alone', async kind => {
-  if (kind === 'unbound') row.sessionId = ''
-  else row.engine = 'terminal'
+it('never automatically closes a shell on an empty composer alone', async () => {
+  row.engine = 'terminal'
   expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'unknown' })
   expect(deps.stop).not.toHaveBeenCalled()
 })

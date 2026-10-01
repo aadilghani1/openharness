@@ -20,9 +20,13 @@ export type AgentClosePlan = {
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode }
 export type AgentCloseResult = { closed?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
-/** A quiet CPU is never evidence of an idle agent. Require both its engine state and empty composer. */
-export function inspectCloseActivity(engine: RegisteredSession['engine'], screen: string | null,
+type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'launch' | 'resumeOnly'>
+
+/** An empty new chat has no turn state yet. Existing chats still require that state,
+ * and neither kind is idle without a recognized empty composer. */
+export function inspectCloseActivity(session: CloseSession, screen: string | null,
   turnOpen: boolean | undefined, needsInput: boolean): CloseActivity {
+  const { engine } = session
   if (needsInput) return 'needs_input'
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
@@ -33,7 +37,10 @@ export function inspectCloseActivity(engine: RegisteredSession['engine'], screen
   const hold = teamWriteHold(engine, screen)
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
-  if (hold || turnOpen === undefined) return 'unknown'
+  const unusedChat = (engine === 'claude' || engine === 'codex')
+    && !session.sessionId && !session.transcriptPath && !session.resumeOnly
+    && (session.launch == null || session.launch.state === 'ready')
+  if (hold || (turnOpen === undefined && !unusedChat)) return 'unknown'
   return 'idle'
 }
 
@@ -48,7 +55,7 @@ function matches(s: RegisteredSession | undefined, request: AgentCloseRequest): 
 export interface CloseAgentServiceDeps {
   registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan'>
   activity(s: RegisteredSession): Promise<CloseActivity>
-  checkpoint(s: RegisteredSession, explicitlyStopped: boolean, phase: 'before' | 'after'): Promise<void>
+  checkpoint(s: RegisteredSession, phase: 'before' | 'after'): Promise<void>
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   now?: () => number
@@ -110,7 +117,7 @@ export class CloseAgentService {
       const observed = await this.deps.activity(s)
       // Close belongs to the global workspace. Other viewers do not change
       // whether the session has unfinished work.
-      const activity = observed === 'idle' && (!s.sessionId || resumeMode(s.engine) !== 'conversation') ? 'unknown' : observed
+      const activity = observed === 'idle' && resumeMode(s.engine) !== 'conversation' ? 'unknown' : observed
       if (!current()) return { error: 'AGENT_CHANGED' }
       if (request.mode === 'inspect') return { activity }
       if (request.mode === 'after_task') {
@@ -124,7 +131,7 @@ export class CloseAgentService {
       if (request.mode === 'idle' && activity !== 'idle') return { error: 'SESSION_NOT_IDLE', activity }
       await this.deps.stop(s.agentId, {
         current: () => !!current(),
-        checkpoint: (s, phase) => this.deps.checkpoint(s, request.mode === 'now', phase),
+        checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
         beforeStop: async () => {
           const latest = current()
           if (!latest) throw new Error('The session changed while saving. Please try again.')

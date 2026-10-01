@@ -53,11 +53,11 @@ class _CloseConnection extends WsConn {
 void main() {
   late AppNotifier app;
   late _CloseConnection connection;
-  Agent agent(String id) => Agent(
+  Agent agent(String id, {bool started = true}) => Agent(
     id: id,
     name: 'Work $id',
     engine: 'codex',
-    sessionId: 'conversation-$id',
+    sessionId: started ? 'conversation-$id' : null,
     createdAt: DateTime.utc(2026, 9, 30, 12),
     closeSupported: true,
     terminalAvailable: true,
@@ -130,6 +130,29 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('an unused idle Companions chat closes its whole tab directly', (
+    tester,
+  ) async {
+    app.stateOf('m')!.agents = [agent('a0', started: false)];
+    final pane = app.adoptSessionForTest(terminal('a0', []));
+    await mount(tester, app);
+    // Bind the live utility tab after startup's experimental-feature gate.
+    final tab = app.activeSwarm
+      ..kind = 'companions'
+      ..name = 'companions';
+    await app.requestClosePane(pane.id);
+    await tester.pumpAndSettle();
+    expect(modes(), ['inspect', 'idle']);
+    expect(connection.closes.every((r) => r['sessionId'] == ''), isTrue);
+    expect(app.swarms, isNot(contains(tab)));
+    expect(app.allPanes, isEmpty);
+    expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+    expect(app.closedHistory, hasLength(1));
+    expect(find.widgetWithText(FilledButton, 'Close'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   for (final entry in {
     'working': 'Still working. Close anyway?',

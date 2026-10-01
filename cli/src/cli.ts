@@ -6824,10 +6824,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     activity: async s => {
       if (s.sessionId) await watcher.pollSession(s.sessionId)
       const screen = await captureTerminal(s.agentId, 80)
-      return inspectCloseActivity(s.engine, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
+      return inspectCloseActivity(s, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
     },
-    checkpoint: async (s, explicitlyStopped, phase) => sessionCheckpoints.save(s, {
-      explicitlyStopped, screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
+    checkpoint: async (s, phase) => sessionCheckpoints.save(s, {
+      screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
     }),
     stop: stopAgent,
     changed: announceSession,

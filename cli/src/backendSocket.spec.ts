@@ -31,7 +31,12 @@ import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2e
 import { CloseAgentService } from './lib/closeAgentService.js'
 
 describe('safe session close RPC', () => {
-  it.each(['idle', 'working'] as const)('uses %s activity even with another live viewer', async activity => {
+  it.each([
+    { activity: 'idle', sessionId: 'close-history' },
+    { activity: 'working', sessionId: 'close-history' },
+    { activity: 'idle', sessionId: '' },
+    { activity: 'working', sessionId: '' },
+  ] as const)('uses $activity activity for session "$sessionId" even with another live viewer', async ({ activity, sessionId }) => {
     const socket = new BackendSocket('fixture')
     const frames: any[] = []
     for (const connId of ['local:close', 'local:other']) {
@@ -41,7 +46,7 @@ describe('safe session close RPC', () => {
       })
     }
     const row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' })!
-    row.sessionId = 'close-history'
+    row.sessionId = sessionId
     const checkpoint = vi.fn(async () => {})
     const stop = vi.fn(async (_agentId, options) => {
       await options.checkpoint(row, 'before')

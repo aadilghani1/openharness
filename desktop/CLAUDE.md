@@ -253,10 +253,12 @@ from `node_status` pushes — distinct from our own socket status, pending offli
 
 Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm` and closes the session across
 the global workspace. An owned idle session saves its native conversation and terminal snapshot
-before releasing its process, regardless of other viewers. Working, waiting-for-input, draft, or
-unknown sessions show one short sentence with Cancel and Close; there is no title or deferred-close
-button. Cancel is the default. Previously queued daemon close plans remain compatible. Layout
-cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
+before releasing its process, regardless of other viewers. A ready, unused Claude/Codex chat with
+an empty composer also closes directly, saving its terminal snapshot without requiring a native
+conversation. Missing activity evidence for an existing chat remains unknown. Working,
+waiting-for-input, draft, or unknown sessions show one short sentence with Cancel and Close;
+there is no title or deferred-close button. Cancel is the default. Previously queued daemon close
+plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 
 `HarnessMonitor` drives the bottom-left resource summary and existing session manager. It samples
