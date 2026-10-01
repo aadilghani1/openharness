@@ -34,6 +34,16 @@ it.each(['2.1.285', '2.1.286'])('uses a fresh %s native process with the selecte
   expect(launch.tmux).toBeUndefined()
 })
 
+it('lets native credential lookup use the actual OS user, never an inherited claimed identity', async () => {
+  program(`const owner=require('node:os').userInfo().username;
+    if(process.env.USER!==owner || process.env.LOGNAME!==owner) process.exit(7);
+    ${emit({ type: 'system', subtype: 'init', tools: [] })} ${success}`)
+  vi.stubEnv('USER', 'a-different-user')
+  vi.stubEnv('LOGNAME', 'a-different-user')
+  expect(await runClaudeMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'selected-model' }))
+    .toEqual({ text: '{"proposals":[]}' })
+})
+
 it.each([
   { type: 'system', subtype: 'init', tools: ['Bash'] },
   { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'false' } }] } },
@@ -47,6 +57,30 @@ it('does not treat an error result or partial assistant prose as a completed ext
   program(`${emit({ type: 'assistant', message: { content: [{ type: 'text', text: '{"proposals":[]}' }] } })}
     ${emit({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['quota exhausted'] })}`)
   await expect(runClaudeMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model' })).rejects.toThrow('inference_usage_limit')
+})
+
+// Sanitized native 2.1.286 observations: weekly-limit rejection, assistant.error=rate_limit,
+// and a success-subtype result with is_error=true. Omitted account/session identifiers and prose.
+it.each([
+  { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day' } },
+  { type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: 'Usage unavailable' }] } },
+  { type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit" },
+])('defers native usage rejection without accepting a later answer', async event => {
+  program(`${emit(event)} ${success}`)
+  await expect(runClaudeMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'opus' }))
+    .rejects.toThrow('inference_usage_limit')
+})
+
+it.each(['allowed', 'allowed_warning'])('allows %s rate-limit telemetry without inventing a quota failure', async status => {
+  program(`${emit({ type: 'rate_limit_event', rate_limit_info: { status } })} ${success}`)
+  expect(await runClaudeMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'opus' }))
+    .toEqual({ text: '{"proposals":[]}' })
+})
+
+it('rejects a native assistant error even if a later frame claims success', async () => {
+  program(`${emit({ type: 'assistant', error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Unavailable' }] } })} ${success}`)
+  await expect(runClaudeMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'opus' }))
+    .rejects.toThrow('inference_unavailable')
 })
 
 it('waits on an uncertified native release', async () => {
