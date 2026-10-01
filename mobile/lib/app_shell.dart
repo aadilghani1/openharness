@@ -53,8 +53,15 @@ Future<void> startHarness({
   // — no key is ever matched against one — so the file a touchscreen could not
   // have edited is not read either.
   await StartupTrace.time('settings.load', loadPersistedSettings);
+  // ⚠️ **The app's state is made here, before the first frame, not by the first build that reads
+  // it (owner, 2026-10-01).** Its bootstrap starts the reads the launch's dial waits on
+  // (`AppNotifier.bootstrap`); made by `RootShell`'s build, they began only after MaterialApp's
+  // own first build (~170ms on a debug launch) and then queued behind the first frame too.
+  final container = ProviderContainer();
+  StartupTrace.timeSync('app.create', () => container.read(appStateProvider));
   runApp(
-    ProviderScope(
+    UncontrolledProviderScope(
+      container: container,
       child: HarnessApp(
         authenticatedScreen: authenticatedScreen,
         signedOutScreen: signedOutScreen,

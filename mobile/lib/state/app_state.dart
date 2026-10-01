@@ -1192,6 +1192,18 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> bootstrap() async {
+    // ⚠️ **Started before anything is awaited (owner, 2026-10-01).** The launch's dial waits on
+    // these two reads: the last-opened agent names its machine, the cache says that machine was up
+    // ([_warmStartMachines]). Started after the config and the sign-in check, they landed after
+    // the first frame, ~250ms into the dial's wait. Disk only; dropped when nobody is signed in.
+    lastOpenedAgent.prefetch();
+    final cache = _machineCache;
+    if (cache != null) {
+      _launchCacheRead = StartupTrace.time(
+        'boot.machineCacheRead',
+        cache.readRaw,
+      );
+    }
     try {
       if (_store != null) {
         try {
@@ -1221,8 +1233,15 @@ class AppNotifier extends ChangeNotifier {
       currentUser = null;
       status = AppStatus.unauthenticated;
       notifyListeners();
+    } finally {
+      // Taken by the warm start when signed in; otherwise last run's text has no reader.
+      _launchCacheRead = null;
     }
   }
+
+  /// The machine cache as [bootstrap] began reading it, for the launch's [_warmStartMachines] —
+  /// once, and only during the bootstrap that started it.
+  Future<String?>? _launchCacheRead;
 
   /// Whether this device is signed in, and everything behind the login screen when it is — what
   /// `bootstrap()` does once its config is loaded.
@@ -1266,9 +1285,11 @@ class AppNotifier extends ChangeNotifier {
     _bootStatusMessage = 'Getting your machines…';
     notifyListeners();
     // Which agent to reopen is the first thing the phone's home screen asks for
-    // and the last thing it can draw without, so the read starts here rather
-    // than when that screen mounts — several state-file operations later, behind
-    // every one of their locks. See [LastOpenedAgent.prefetch].
+    // and the last thing it can draw without, so the read starts no later than
+    // here rather than when that screen mounts — several state-file operations
+    // later, behind every one of their locks. A launch has already started it
+    // (top of [bootstrap]); a sign-in in this run starts it here. See
+    // [LastOpenedAgent.prefetch].
     lastOpenedAgent.prefetch();
     // No screen from the last run: the agent that record names is drawn as the skeleton until its
     // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
@@ -2715,6 +2736,15 @@ class AppNotifier extends ChangeNotifier {
         pane.machineId != machine.machine.machineId) {
       return;
     }
+    await _untilTerminalLive(terminal, _launchListYield);
+  }
+
+  /// Until [terminal] shows its first live frame or stops opening (failed, taken, gone) — and never
+  /// longer than [bound], so nothing waits on a terminal that is not coming.
+  Future<void> _untilTerminalLive(
+    TerminalSession terminal,
+    Duration bound,
+  ) async {
     // `controlling` without a frame is a `terminal_ready` whose keyframe is on its way: still worth
     // the wait, the screen is not live until it lands.
     bool over() {
@@ -2731,7 +2761,7 @@ class AppNotifier extends ChangeNotifier {
     }
 
     // A session closed meanwhile never notifies again; this is what ends the wait then.
-    final timer = Timer(_launchListYield, () {
+    final timer = Timer(bound, () {
       if (!done.isCompleted) done.complete();
     });
     terminal.addListener(check);
@@ -2770,10 +2800,15 @@ class AppNotifier extends ChangeNotifier {
     final cache = _machineCache;
     if (cache == null || _disposed) return;
     final revision = _authRevision;
-    // Taken before the cache read so the two overlap: the record was prefetched at the top of the
-    // bootstrap and is normally on hand by the time the cache is.
+    // Both reads were started at the top of [bootstrap] and are normally in hand by now. Taken
+    // before any await; the cache's once, so a later warm start (a sign-in in this run) reads what
+    // is on disk then.
     final launchRead = lastOpenedAgent.prefetched;
-    final raw = await StartupTrace.time('boot.machineCacheRead', cache.readRaw);
+    final pendingRaw =
+        _launchCacheRead ??
+        StartupTrace.time('boot.machineCacheRead', cache.readRaw);
+    _launchCacheRead = null;
+    final raw = await pendingRaw;
     if (raw == null || _disposed || !_authWorkCurrent(revision)) return;
     AgentRef? launchAgent;
     if (launchRead != null) {
@@ -4457,8 +4492,20 @@ class AppNotifier extends ChangeNotifier {
     final last = _touchedAt[key];
     if (last != null && now.difference(last) < _touchEvery) return;
     _touchedAt[key] = now;
+    final revision = _authRevision;
     unawaited(() async {
       try {
+        // ⚠️ **After the agent's own terminal, never ahead of it (owner, 2026-10-01).** The machine
+        // takes a connection's frames one at a time (`enqueueDown` in the CLI's backendSocket.ts),
+        // and this one costs it a whole agent frame (`toProject`, git context and all). At launch
+        // it is queued before the socket is up and flushed first, so the `terminal_open` behind it
+        // waited for that. A recency stamp can wait a second; the screen cannot.
+        await _yieldToTerminalOpen(_conn(machineId), machineId, agentId);
+        if (_disposed ||
+            !_authWorkCurrent(revision) ||
+            machineStates[machineId]?.needsLink != false) {
+          return;
+        }
         await _conn(machineId).request(
           'agent_update',
           payload: {'agentId': agentId, 'opened': true},
@@ -4471,6 +4518,39 @@ class AppNotifier extends ChangeNotifier {
 
   static const _touchEvery = Duration(seconds: 3);
   final _touchedAt = <String, DateTime>{};
+
+  /// The longest [touchAgent] holds its stamp for the socket, and then for the terminal.
+  static const _touchYield = Duration(seconds: 3);
+
+  /// Until [agentId]'s terminal on [machineId] is live — see [touchAgent]. The socket first: a frame
+  /// asked for before it is up is queued, and that queue goes out ahead of the terminal's open
+  /// (`WsConn._flushQueue` runs before the open's wait for readiness ends).
+  Future<void> _yieldToTerminalOpen(
+    WsConn connection,
+    String machineId,
+    String agentId,
+  ) async {
+    // Read as the app shows it too: a machine already `connected` here has nothing to wait for.
+    if (!connection.isReady &&
+        machineStates[machineId]?.connectionStatus !=
+            ConnectionStatus.connected) {
+      try {
+        await connection.waitUntilReady(timeout: _touchYield);
+      } catch (_) {
+        // Not up in time, or closed: the stamp goes the way it always did.
+      }
+    }
+    if (_disposed) return;
+    TerminalSession? terminal;
+    for (final pane in allPanes) {
+      if (pane.machineId == machineId && pane.agentId == agentId) {
+        terminal = pane.session;
+        if (terminal != null) break;
+      }
+    }
+    if (terminal == null) return;
+    await _untilTerminalLive(terminal, _touchYield);
+  }
 
   /// Deletes an agent via `agent_delete`. Returns null on success, or an error message to show
   /// inline in the caller's dialog.

@@ -128,6 +128,10 @@ class WsConn {
   Timer? _reconnectTimer;
   String? _tokenUsed;
 
+  /// This socket's `e2e_hello` went out right behind its `machine_select`, so the select's ack must
+  /// not send another — see [connect]. Reset on every dial.
+  bool _helloAhead = false;
+
   /// How long a dial may take to open before it counts as failed. Without one, a socket dialled
   /// into a network that swallows packets waits out the OS's own TCP timeout — over a minute on
   /// iOS — with the machine showing "reconnecting" the whole time.
@@ -215,6 +219,7 @@ class WsConn {
     // Anything still pending on it was addressed to a channel that is gone, and
     // `_flushQueue` re-sends what actually matters once the session is ready.
     _outboundTail = Future<void>.value();
+    _helloAhead = false;
     WebSocketChannel? dialing;
     onStatus(
       _attempt == 0
@@ -260,13 +265,46 @@ class WsConn {
       }
       if (_closing) return;
       _tokenUsed = token;
+      final base = Uri.parse('$wsBaseUrl/api/web-ws');
+      final uri = base.replace(
+        queryParameters: {
+          ...base.queryParameters,
+          'autonomousEnv': autonomousEnv,
+        },
+      );
+      // ⚠️ **Dialled BEFORE the codec is awaited (owner, 2026-10-01).** The socket needs only the
+      // credential; the codec is not used until the first frame. Awaited first, its disk read and key
+      // mint (~65ms at launch) stood in front of a TCP + TLS + upgrade that could have been under way.
+      //
+      // ⚠️ But NOT made [_channel] until the codec is in place: a frame sent in between would go
+      // out with no codec to seal it — in the clear. Until then the socket is this method's alone,
+      // and closed here on every way out.
+      final channel = (connectChannel ?? WebSocketChannel.connect)(
+        uri,
+        protocols: [token],
+      );
+      void dropChannel() =>
+          unawaited(channel.sink.close().catchError((Object _) {}));
+      // Its outcome captured here, where the future is made: the ways out below leave without
+      // awaiting it, and an unhandled rejection would be reported as a crash.
+      final opening = StartupTrace.time(
+        'ws.dial',
+        () => channel.ready.timeout(_dialTimeout),
+      ).then<Object?>((_) => null, onError: (Object error) => error);
       if (pendingCodec != null) {
         final result = await pendingCodec;
-        if (_closing) return;
+        if (_closing) {
+          dropChannel();
+          return;
+        }
         final failure = result.error;
-        if (failure != null) throw failure;
+        if (failure != null) {
+          dropChannel();
+          throw failure;
+        }
         final codec = result.codec;
         if (codec == null) {
+          dropChannel();
           _refusePeer('NO_PEER_LINK');
           return;
         }
@@ -276,22 +314,9 @@ class WsConn {
         final plugins = transportPlugins;
         if (plugins != null) _plugin = plugins(_PluginHost(this), machineId);
       }
-      final base = Uri.parse('$wsBaseUrl/api/web-ws');
-      final uri = base.replace(
-        queryParameters: {
-          ...base.queryParameters,
-          'autonomousEnv': autonomousEnv,
-        },
-      );
-      final channel = dialing = (connectChannel ?? WebSocketChannel.connect)(
-        uri,
-        protocols: [token],
-      );
-      _channel = channel;
-      await StartupTrace.time(
-        'ws.dial',
-        () => channel.ready.timeout(_dialTimeout),
-      );
+      _channel = dialing = channel;
+      final dialFailure = await opening;
+      if (dialFailure != null) throw dialFailure;
       if (_closing || !identical(_channel, channel)) {
         // Logged because this is a silent exit from a dial that otherwise looks
         // successful — the trace shows `ws.dial` completing and then nothing at
@@ -330,10 +355,25 @@ class WsConn {
       // relay. Cancelled by [_markReady], by [_onDone] and by [close].
       _armSelectWatchdog();
       appLog.debug('ws', '→ machine_select $machineId');
-      await sendFrame({
+      final selected = await _enqueueFrame({
         'type': 'machine_select',
         'payload': {'machineId': machineId},
       });
+      // ⚠️ **The hello goes right behind the select, not on its ack (owner, 2026-10-01).** The
+      // relay takes a socket's frames strictly in order (`backend/src/lib/orderedInbox.ts`), so it
+      // reaches the machine only once the select has bound — waiting for the ack added a whole
+      // phone↔relay round trip in front of every handshake. A select the relay refuses drops it
+      // (no machine bound), which is harmless. The ack still reaches the plugin before the welcome:
+      // the relay sends it before it handles the hello. See the `connected` case in [_onRelayFrame].
+      final codec = _codec;
+      if (selected &&
+          codec != null &&
+          !_closing &&
+          !_ready &&
+          identical(_channel, channel)) {
+        channel.sink.add(jsonEncode(codec.helloFrame()));
+        _helloAhead = true;
+      }
     } on WsCredentialRevoked catch (error) {
       // ⚠️ Not for a connection somebody already closed. Signing out closes every connection, and
       // one still waiting on its credential then learns the session is gone — which is the
@@ -500,6 +540,12 @@ class WsConn {
           // The policy rides the ack; the plugin must have it before the welcome
           // that decides whether to act on it.
           _plugin?.onConnectedAck(payload);
+          // Already sent behind this socket's select — see [connect]. Exactly one hello per
+          // session: a second one would have the machine start the handshake over.
+          if (_helloAhead) {
+            _helloAhead = false;
+            return;
+          }
           _channel?.sink.add(jsonEncode(codec.helloFrame()));
         }
         return;
