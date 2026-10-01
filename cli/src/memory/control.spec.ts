@@ -5,7 +5,7 @@ import type { CallerVerdict } from '../pair/learn/approval.js'
 import { isOwnerProcess } from './ownerProcess.js'
 
 let owner: string | null, now: number, control: MemoryControl
-let runtime: Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryProjects' | 'libraryNotebooks' | 'libraryNotebook' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
+let runtime: Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryProjects' | 'libraryActivity' | 'libraryNotebooks' | 'libraryNotebook' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
 let verify: ReturnType<typeof vi.fn<(id: string) => Promise<CallerVerdict>>>
 const command = { kind: 'forget' as const, id: 'memory', revision: 1 }
 const preview = { command, version: { generation: 1, knowledge: 1, preferences: 'hash' }, effects: { deletedIds: ['memory'] } }
@@ -15,6 +15,7 @@ beforeEach(() => {
     libraryStatus: vi.fn(async () => ({ runtime: { state: 'ready' as const }, preferences: { learn: true, recall: true }, queue: {} as never })),
     libraryPage: vi.fn(async () => ({ items: [], nextCursor: null, version: preview.version })),
     libraryProjects: vi.fn(async () => ({ items: [], nextBefore: null })),
+    libraryActivity: vi.fn(async () => ({ sessions: [], selectedAgentId: null, items: [], version: preview.version })),
     libraryNotebooks: vi.fn(async () => ({ items: [], nextCursor: null, version: preview.version })),
     libraryNotebook: vi.fn(async () => null),
     libraryDetail: vi.fn(async () => null), libraryPreview: vi.fn(async () => structuredClone(preview)),
@@ -44,6 +45,13 @@ it('routes bounded project search through the verified current owner', async () 
   expect(await request({ action: 'projects', query: { search: 'editor', limit: 10, before: 100 } })).toMatchObject({ ok: true, items: [] })
   expect(runtime.libraryProjects).toHaveBeenCalledExactlyOnceWith('owner', { search: 'editor', limit: 10, before: 100 })
   expect(await request({ action: 'projects', query: { limit: 500 } })).toMatchObject({ error: 'INVALID_INPUT' })
+})
+
+it('keeps activity owner-only and derives native receiver identity from the host', async () => {
+  expect(await request({ action: 'activity', token: 'agent' })).toMatchObject({ error: 'PERSON_ONLY' })
+  expect(await request({ action: 'activity', query: { sessionId: 'claimed-native' } })).toMatchObject({ error: 'INVALID_INPUT' })
+  expect(await request({ action: 'activity', query: { agentId: 'open-agent' } })).toMatchObject({ ok: true, items: [] })
+  expect(runtime.libraryActivity).toHaveBeenCalledExactlyOnceWith('owner', { agentId: 'open-agent' })
 })
 
 it('keeps notebook browsing owner-only and bounded, including direct page requests', async () => {

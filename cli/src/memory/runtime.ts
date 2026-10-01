@@ -1,5 +1,6 @@
 /** Local host lifecycle. Session authority and coding eligibility must come from the daemon. */
 import { join } from 'node:path'
+import { redact } from '../pair/learn/guard.js'
 import { z } from 'zod'
 import { digest } from './admission.js'
 import { NativeMemoryCapture, type CaptureOutcome } from './capture.js'
@@ -9,6 +10,7 @@ import { locateProject, type ProjectContext } from './project.js'
 import type { Arguments, MemoryPort, Operation, Result } from './operations.js'
 import type { MemoryPreferences } from './store.js'
 import type { LibraryQuery, LibraryProjectQuery, LibraryCommand, LibraryPreview, NotebookQuery } from './library.js'
+import { libraryActivityQuerySchema, type LibraryActivityQuery } from './library.js'
 import type { PreparedRecall, RecallReceipt } from './receipts.js'
 import { conditionsSchema, MemoryError, parse, type RecallPacket, type RecallRequest } from './types.js'
 
@@ -22,6 +24,9 @@ export interface MemoryHostContext {
 }
 export interface MemoryHostSession {
   agentId: string
+  name?: string
+  /** Exited sessions can remain briefly for capture, but never appear as open activity. */
+  present?: boolean
   engine: 'claude' | 'codex'
   cliVersion?: string | null
   sessionId: string
@@ -127,6 +132,27 @@ export class CodingMemoryRuntime {
 
   async libraryProjects(owner: string, query: LibraryProjectQuery = {}) {
     return this.withOwner(owner, port => port.request('libraryProjects', [owner, query]))
+  }
+
+  async libraryActivity(owner: string, input: LibraryActivityQuery = {}) {
+    const query = parse(libraryActivityQuerySchema, input)
+    return this.withOwner(owner, async port => {
+      const sessions = this.deps.sessions().filter(s => s.coding && s.sessionId && s.present !== false)
+        .slice(0, 128).map(s => ({ ...s }))
+      if (query.agentId && !sessions.some(s => s.agentId === query.agentId)) throw new MemoryError('session_unavailable')
+      const result = await port.request('libraryActivity', [owner,
+        sessions.map(({ agentId, engine, sessionId }) => ({ agentId, engine, sessionId })), query])
+      // A resumed/replaced session must not inherit another native conversation's selections.
+      const current = this.deps.sessions()
+      if (sessions.some(s => !current.some(c => c.present !== false && c.coding && c.agentId === s.agentId
+        && c.engine === s.engine && c.sessionId === s.sessionId && c.workspace === s.workspace
+        && c.transcriptPath === s.transcriptPath && c.scope === s.scope && c.liveFrom === s.liveFrom))) {
+        throw new MemoryError('session_changed')
+      }
+      return { ...result, sessions: result.sessions.map(row => ({ ...row,
+        name: redact((sessions.find(s => s.agentId === row.agentId)?.name ||
+          `${row.engine === 'claude' ? 'Claude' : 'Codex'} session`).slice(0, 200)) })) }
+    })
   }
 
   async libraryNotebooks(owner: string, query: NotebookQuery = {}) {

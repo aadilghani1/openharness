@@ -296,7 +296,27 @@ Keep the actual DSH terminal on the right. The left viewer's Memories area has t
 - **Helping now:** memories selected for the active task, why their conditions match, relevant conflicts/unknowns, and precise delivery status. “Provided to Codex” is distinct from “You confirmed this helped.” Accepted examples open at their reviewed revision with the approved attributes identified.
 - **Learning:** quiet status such as caught up, reviewing completed work, waiting for the selected model, or missing source history. Rejected generic candidates are diagnostic detail, not an inbox demanding attention.
 
-Implementation checkpoint: the viewer currently offers How you work, Project knowledge and Learning, with retained evidence, owner corrections, project scope narrowing, dependent-forget previews and separate Learn/Recall preferences. The project picker and detail view show persisted names and folder paths. Memory details include recent recall and explicit helpful/unhelpful feedback; ratings keep the detail open, support clearing, and offer a fresh read after an uncertain reply without automatically retrying the write. The agent terminal remains unchanged. Project knowledge now includes a maintained notebook index and topic pages with source links, conditions, unresolved records and correction/forget controls. Individual memories remain available while notebook synthesis is queued or paused. Feedback-based ranking is implemented as an experimental bounded adjustment. Work-in-progress grouping, a collection-wide Helping now view and task/session navigation remain planned. The legacy approved-lesson list remains available; the 24-hour test action is hidden when the new memory service is available.
+Implementation checkpoint: the viewer offers How you work, Project knowledge, Helping now and Learning, with retained evidence, owner corrections, project scope narrowing, dependent-forget previews and separate Learn/Recall preferences. The project picker and detail view show persisted names and folder paths. Memory details include recent recall and explicit helpful/unhelpful feedback; ratings keep the detail open, support clearing, and offer a fresh read after an uncertain reply without automatically retrying the write. The agent terminal remains unchanged. Project knowledge includes a maintained notebook index and topic pages with source links, conditions, unresolved records and correction/forget controls. Individual memories remain available while notebook synthesis is queued or paused. Feedback-based ranking is an experimental bounded adjustment. Work-in-progress grouping and navigation from a memory to the working agent's task/session remain planned. The legacy approved-lesson list remains available; the 24-hour test action is hidden when the new memory service is available.
+
+Helping now lets the owner select an open coding session and inspect its last recorded recall,
+including an empty result. It shows the known session name, project, timestamp, current selected
+memory versions, applicability and exceptions, delivery uncertainty, and exact-version feedback.
+Read memory opens the existing evidence/correction/forget editor. The ordinary Memories refresh
+updates activity too; changing sessions never launches an agent or sends terminal input.
+
+An additive, content-free latest-attempt row per native session prevents an old positive recall
+from appearing current after a newer empty result. It retains a one-way session key, engine,
+receiving project, time, outcome, selected count and optional receipt pointer, bounded to 5,000
+sessions and 30 days. It keeps no prompt, claim, conditions or native session ID. Source/receiver
+privacy, current revisions and validity are checked again on reads. Receiver exclusion removes
+the row; reinclusion does not restore it. The owner endpoint binds at most 128 receivers from the
+host roster and rechecks immutable session identities after the worker reply. Exited sessions
+retained briefly for final transcript capture do not appear as open sessions.
+
+This is the last recorded store preparation, not an assertion about the latest user turn, every
+failed host request, actual model-context delivery or use. The time and uncertainty stay visible.
+Older positive-only histories are not backfilled as current activity. These inspection controls
+do not satisfy the real-model quality and coding-task benefit gates below.
 
 Tim can answer “Why did you remember that?” using the same evidence API the viewer uses. He must not invent shared experiences. A corrected memory updates its story rather than adding another repetitive lesson. A small optional recent-learning digest replaces repeated interruption, and no memory-count reward is attached to growth.
 

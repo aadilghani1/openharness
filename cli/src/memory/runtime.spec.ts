@@ -96,6 +96,29 @@ it('opens no store and invokes no model while experimental, watching consent or 
   expect(inference.run).not.toHaveBeenCalled()
 })
 
+it.each(['replace', 'mutate'] as const)('binds activity to open host sessions and rejects a native-session %s during the read', async mode => {
+  await learn()
+  sessions[0].name = 'Parser fixes'
+  const prepared = await runtime.preparePromptRecall('agent', { query: 'coding' })
+  expect(prepared.receipt).not.toBeNull()
+  const calls = vi.mocked(inference.run).mock.calls.length
+  expect(await runtime.libraryActivity('owner_a')).toMatchObject({
+    sessions: [{ agentId: 'agent', name: 'Parser fixes' }], items: [{ record: { claim: preference } }] })
+  expect(vi.mocked(inference.run).mock.calls.length).toBe(calls)
+  sessions[0].present = false
+  expect((await runtime.libraryActivity('owner_a')).sessions).toEqual([])
+  await expect(runtime.libraryActivity('owner_a', { agentId: 'agent' })).rejects.toThrow('session_unavailable')
+  sessions[0].present = true
+  intercept = async operation => {
+    if (operation !== 'libraryActivity') return
+    if (mode === 'replace') sessions[0] = { ...sessions[0], sessionId: 'replacement' }
+    else sessions[0].sessionId = 'replacement'
+  }
+  await expect(runtime.libraryActivity('owner_a')).rejects.toThrow('session_changed')
+  intercept = undefined
+  expect((await runtime.libraryActivity('owner_a')).items).toEqual([])
+})
+
 it('lets the explicit owner inspect and change saved preferences with watching off without starting capture', async () => {
   context.watching = false
   expect(runtime.ownerKey()).toBe('owner_a')

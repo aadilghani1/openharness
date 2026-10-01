@@ -1,7 +1,7 @@
 /** Owner-facing library contracts. These are not model tools or scope capabilities. */
 import { z } from 'zod'
 import { conditionsSchema, draftSchema, type MemoryRecord, type MemoryScope, type MemorySupport, type SourceEvent } from './types.js'
-import type { MemoryRecallUse, RecallFeedback } from './receipts.js'
+import type { MemoryRecallUse, RecallFeedback, RecallActivity } from './receipts.js'
 import type { NotebookState } from './notebook.js'
 import type { TopicPage } from './types.js'
 
@@ -15,6 +15,15 @@ export const libraryQuerySchema = z.object({
   state: z.enum(['active', 'tentative', 'needs_verification', 'superseded', 'archived']).optional(),
 }).strict()
 export type LibraryQuery = z.infer<typeof libraryQuerySchema>
+export const libraryActivityQuerySchema = z.object({ agentId: id.optional() }).strict()
+export type LibraryActivityQuery = z.infer<typeof libraryActivityQuerySchema>
+export interface LibraryActivity {
+  sessions: Array<Omit<RecallActivity, 'projectId'> & { project: LibraryProject | null }>
+  selectedAgentId: string | null
+  items: Array<{ record: MemorySummary & Pick<MemoryRecord, 'applicability' | 'rationale' | 'futureAction' | 'exceptions'>
+    recall: LibraryDetail['recalls'][number] }>
+  version: LibraryPage['version']
+}
 export const libraryProjectQuerySchema = z.object({
   search: z.string().trim().max(200).optional(),
   before: z.number().int().positive().safe().optional(),

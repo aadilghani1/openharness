@@ -446,3 +446,63 @@ same path was refused and the original report hash remained unchanged. The score
 against the source file. No native inference, private history scan, production memory write, app
 replacement, firmware change or release occurred. Real model quality and the full release evidence
 remain unproven; a reviewed synthetic diagnostic will not substitute for them.
+
+## Round 23 — inspect what was prepared for the current coding session
+
+Bret Victor's [Learnable Programming](https://worrydream.com/LearnableProgramming/) argues for
+making program state and behavior visible in context. Our application of that principle is to
+show the owner which memory versions Harness prepared for an open coding session, when that
+happened, and the conditions attached to them. This is our engineering interpretation of a
+published source; Victor did not participate in or endorse this review.
+
+Companions → Memories now includes Helping now. Its session picker uses the live host roster,
+including framework, project and known session name. Each selected memory offers Read memory
+for the existing evidence/correction/forget editor, plus exact-version Helpful / Not helpful
+feedback and clearing. A transport emission remains explicitly unverified delivery. The timestamp
+describes the last recorded store preparation, which may precede the current turn; failed host
+requests and actual model use are not inferred.
+
+Review found that positive-only receipt history could leave an earlier selection looking current
+after a newer empty recall. An additive, content-free latest-attempt row now records empty/off
+results too, without creating a full history receipt. The row keeps a one-way receiver key and
+bounded metadata, never prompt text, claims or native session IDs. Retention is 30 days and at
+most 5,000 receivers. Earlier histories are not backfilled. Reads recheck source and receiver
+privacy, current revisions and validity; closed capture-grace sessions are excluded. Receiver
+exclusion removes activity, and reinclusion does not resurrect it.
+
+The owner endpoint accepts an optional host agent ID, derives native identities itself and rejects
+an identity change during the worker request. A regression test exposed an in-place mutation of
+the supplied session object: the check incorrectly accepted the old result before the fix.
+The runtime now copies the session snapshot before awaiting. Desktop reads reject late replies,
+preserve an explicit session choice, clear invalidated content and never retry a feedback write
+after an uncertain response. A library change while previewing feedback prevents application.
+
+All **92 focused CLI tests** passed, as did CLI type checking, strict benchmark-runner checking,
+scoped Flutter analysis and the icon audit. The full local CLI run had **8,238 passed, 5 failed
+and 39 skipped** in 677 seconds. The five failures are the unchanged OpenCode help checks: the
+installed binary emits its help to stderr while those tests inspect stdout. The full desktop run
+had **5,232 passed, 4 failed and 15 skipped**. All four failures were reproduced in a disposable
+copy of the unchanged base `cf69f796d`: a pending activity timer in `bios_navigation_test`, two
+stale Search harnesses/Open Harness tooltip expectations in `search_workspace_test`, and the
+watchdog expectation in `workspace_event_isolation_test`. Neither full local run is recorded as
+passing. The PR records final rebased checks and the exact-commit manual CI result.
+
+Both native macOS fixture cases passed on Apple Silicon. They exercise keyboard feedback once,
+focus return and removal of a previous memory after an empty recall. The actual renderer's
+[dark](../research/2026-10-01-memory-activity/activity-native-dark.png) and
+[light](../research/2026-10-01-memory-activity/activity-native-light.png) captures were inspected.
+Headless widget fixtures also cover narrow windows and 200% text, loading, emptiness, errors and
+identity changes. Flutter logged a failure to foreground the native fixture, although both tests
+and captures completed; physical AppKit input, IME and VoiceOver remain unverified.
+
+The [synthetic performance diagnostic](../research/2026-10-01-memory-activity-performance.json)
+used 10,000 memories, 5,000 retained receivers and 128 open-session identities. Across 310 recalls
+and activity reads, warm recall p95 was **23.061 ms**, fresh-worker recall p95 **49.793 ms**, and
+the activity read p95 **3.682 ms**, with no recall timeouts. Reproduce with
+`cd cli && node --import tsx scripts/memory-benchmark.ts --activity`. These are local lexical
+performance measurements, not semantic quality, native delivery or coding-task benefit.
+
+No private history was scanned, native model called, production memory seeded, installed review
+app replaced or release published. Real extraction and notebook faithfulness, cross-framework
+task benefit, native lifecycle coverage, task/session navigation and the held-out rollout gates
+remain open. This change makes existing recall inspectable; it does not establish those outcomes.

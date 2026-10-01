@@ -1,7 +1,7 @@
 /** Local owner controls. Agent tools get a different, host-scoped recall path. */
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, notebookQuerySchema, type LibraryPreview } from './library.js'
+import { libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, notebookQuerySchema, libraryActivityQuerySchema, type LibraryPreview } from './library.js'
 import { MemoryError, parse } from './types.js'
 import type { CodingMemoryRuntime } from './runtime.js'
 import type { CallerVerdict } from '../pair/learn/approval.js'
@@ -13,13 +13,14 @@ const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('configure_experiment'), enabled: z.boolean(), expected: z.number().int().nonnegative().safe() }).strict(),
   z.object({ action: z.literal('list'), query: libraryQuerySchema.optional() }).strict(),
   z.object({ action: z.literal('projects'), query: libraryProjectQuerySchema.optional() }).strict(),
+  z.object({ action: z.literal('activity'), query: libraryActivityQuerySchema.optional() }).strict(),
   z.object({ action: z.literal('notebooks'), query: notebookQuerySchema.optional() }).strict(),
   z.object({ action: z.literal('notebook'), id: z.string().min(1).max(200) }).strict(),
   z.object({ action: z.literal('show'), id: z.string().min(1).max(200) }).strict(),
   z.object({ action: z.literal('preview'), command: libraryCommandSchema }).strict(),
   z.object({ action: z.literal('apply'), capability: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
 ])
-type Runtime = Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryProjects' | 'libraryNotebooks' | 'libraryNotebook' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
+type Runtime = Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryProjects' | 'libraryActivity' | 'libraryNotebooks' | 'libraryNotebook' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
 interface Deps {
   runtime(): Runtime | null
   /** Must verify the OS owner as well as rejecting a process inside an agent's harness. */
@@ -71,6 +72,7 @@ export class MemoryControl {
         case 'status': return { ok: true, ...await runtime.libraryStatus(owner) }
         case 'list': return { ok: true, ...await runtime.libraryPage(owner, request.query) }
         case 'projects': return { ok: true, ...await runtime.libraryProjects(owner, request.query) }
+        case 'activity': return { ok: true, ...await runtime.libraryActivity(owner, request.query) }
         case 'notebooks': return { ok: true, ...await runtime.libraryNotebooks(owner, request.query) }
         case 'notebook': {
           const detail = await runtime.libraryNotebook(owner, request.id)

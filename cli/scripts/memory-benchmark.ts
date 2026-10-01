@@ -13,14 +13,28 @@ import type { RecallPacket, RecallRequest } from '../src/memory/types.js'
 const receiptMode = process.argv.includes('--receipts')
 const notebookMode = process.argv.includes('--notebooks')
 const feedbackMode = process.argv.includes('--feedback')
-if ([receiptMode, notebookMode, feedbackMode].filter(Boolean).length > 1) throw new Error('Choose one benchmark mode')
+const activityMode = process.argv.includes('--activity')
+if ([receiptMode, notebookMode, feedbackMode, activityMode].filter(Boolean).length > 1) throw new Error('Choose one benchmark mode')
 const directory = await mkdtemp(join(tmpdir(), 'harness-memory-benchmark-'))
 const binding = { engine: 'codex' as const, sessionId: 'synthetic_session', projectId: 'project_1', route: 'prompt_hook' as const }
-const access = { profileId: 'benchmark', projectIds: ['project_1'], includeProfile: receiptMode || feedbackMode }
+const access = { profileId: 'benchmark', projectIds: ['project_1'], includeProfile: receiptMode || feedbackMode || activityMode }
 const query = { query: 'fixture_5321', conditions: { taskType: 'debugging' } }
 let client: MemoryClient | undefined
+const activitySamples: number[] = []
+let largestActivityBytes = 0
+const receivers = [{ agentId: 'active', engine: binding.engine, sessionId: binding.sessionId },
+  ...Array.from({ length: 127 }, (_, i) => ({ agentId: `open_${i}`, engine: binding.engine, sessionId: `receiver_${4_000 + i}` }))]
+async function activity(): Promise<void> {
+  if (!activityMode) return
+  const started = performance.now()
+  const result = await client!.request('libraryActivity', ['benchmark', receivers, { agentId: 'active' }])
+  activitySamples.push(performance.now() - started)
+  if (result.sessions.length !== 128 || result.selectedAgentId !== 'active' || !result.items.length
+    || result.items.some(item => item.record.scope.projectId !== 'project_1')) throw new Error('activity_mismatch')
+  largestActivityBytes = Math.max(largestActivityBytes, Buffer.byteLength(JSON.stringify(result)))
+}
 async function recall(request: RecallRequest): Promise<RecallPacket> {
-  if (!receiptMode) return client!.recall(request, access)
+  if (!receiptMode && !activityMode) return client!.recall(request, access)
   try { return (await client!.request('prepareRecall', [request, binding, access], 200)).packet }
   catch (error) { if ((error as { code?: string }).code !== 'memory_deadline') throw error
     return { status: 'timeout', items: [], text: '', estimatedTokens: 0 } }
@@ -48,9 +62,10 @@ try {
         validity: { validFrom: null, validUntil: null, recheckWhen: [] } }
       store.propose(draft, { profileId: 'benchmark', projectIds: [projectId], includeProfile: false })
     }
-    if (receiptMode) {
+    if (receiptMode || activityMode) {
       const first = store.prepareRecall(query, binding, access).receipt!
-      for (let i = 0; i < 5_000; i++) store.prepareRecall(query, binding, access)
+      for (let i = 0; i < 5_000; i++) store.prepareRecall(query,
+        activityMode ? { ...binding, sessionId: `receiver_${i}` } : binding, access)
       if (store.recallEmitted(first.id, binding, access)) throw new Error('receipt_cap_not_applied')
     }
     if (feedbackMode) {
@@ -132,6 +147,7 @@ try {
     cold.push(performance.now() - start)
     if (packet.status === 'timeout') timeouts++
     else if (packet.status !== 'ok' || !packet.items.some(item => item.claim.includes('fixture_5321'))) throw new Error('cold_recall_mismatch')
+    if (packet.status === 'ok') await activity()
     await client.close(); client = undefined
   }
   client = new MemoryClient({ directory, profileId: 'benchmark', source: workerSource })
@@ -147,16 +163,19 @@ try {
       if (packet.status === 'timeout') timeouts++
       else if (packet.status !== 'ok' || !packet.items.length || packet.items.some(item => item.scope.projectId !== 'project_1')) throw new Error('warm_recall_mismatch')
       largestPacket = Math.max(largestPacket, Buffer.byteLength(packet.text))
+      if (packet.status === 'ok') await activity()
     }
   } finally { lag.disable() }
   const summary = (values: number[]) => {
     values.sort((a, b) => a - b)
     return { p50Ms: values[Math.ceil(values.length * .5) - 1], p95Ms: values[Math.ceil(values.length * .95) - 1], maxMs: values.at(-1) }
   }
-  console.log(JSON.stringify({ kind: 'synthetic-memory-performance', mode: feedbackMode ? 'recall-with-contextual-feedback' : receiptMode ? 'prepare-with-full-receipt-history' : 'recall',
-    retainedReceipts: receiptMode || feedbackMode ? 5_000 : 0, ratedContexts: feedbackMode ? 5_000 : 0, records: count, projects: 10, node: process.version,
+  console.log(JSON.stringify({ kind: 'synthetic-memory-performance', mode: activityMode ? 'prepare-and-owner-activity' : feedbackMode ? 'recall-with-contextual-feedback' : receiptMode ? 'prepare-with-full-receipt-history' : 'recall',
+    retainedReceipts: receiptMode || feedbackMode || activityMode ? 5_000 : 0, ratedContexts: feedbackMode ? 5_000 : 0, records: count, projects: 10, node: process.version,
     platform: platform(), arch: arch(), seedMs, cold: summary(cold), warm: summary(warm), requests: cold.length + warm.length,
     timeouts, largestPacketBytes: largestPacket, parentEventLoopP95Ms: lag.percentile(95) / 1e6,
+    ...(activityMode ? { latestAttempts: 5_000, openSessions: receivers.length,
+      activityAfterRecall: summary(activitySamples), activityRequests: activitySamples.length, largestActivityBytes } : {}),
     limitations: ['Synthetic lexical matches, not a retrieval-quality benchmark.', 'Cold means a new worker, not an emptied OS disk cache.',
       'One local machine; provider extraction and native hook delivery are not measured.'] }, null, 2))
   }

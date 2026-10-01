@@ -6,7 +6,7 @@ export type MemoryOperations = Pick<CodingMemoryStore,
   'controls' | 'setControls' | 'preferences' | 'setPreferences' | 'changePreferences' | 'maintain' | 'registerProject' | 'projectForLocator' | 'linkProjectLocator' | 'setProjectIncluded'
   | 'sessionPolicy' | 'setSessionIncluded' | 'capturePolicy'
   | 'ingest' | 'source' | 'propose' | 'revise' | 'correctFromUser' | 'read' | 'history' | 'support' | 'list' | 'recall'
-  | 'libraryPage' | 'libraryProjects' | 'libraryDetail' | 'libraryCorrect' | 'libraryForget' | 'libraryPreview' | 'libraryApply'
+  | 'libraryPage' | 'libraryProjects' | 'libraryActivity' | 'libraryDetail' | 'libraryCorrect' | 'libraryForget' | 'libraryPreview' | 'libraryApply'
   | 'notebookPending' | 'notebookClaim' | 'notebookFinish' | 'notebookDefer' | 'libraryNotebooks' | 'libraryNotebook'
   | 'prepareRecall' | 'recallEmitted' | 'recallReceipts' | 'putTopic' | 'topic' | 'forget'>
   & Pick<MemoryQueue, 'capture' | 'checkpoint' | 'pendingReview' | 'claim' | 'finish' | 'defer' | 'cursor' | 'episodeOpen' | 'status'>
@@ -18,7 +18,7 @@ export type MemoryPort = { request<K extends Operation>(operation: K, args: Argu
 export const STORE_OPERATIONS = ['controls', 'setControls', 'preferences', 'setPreferences', 'changePreferences', 'maintain', 'registerProject', 'projectForLocator', 'linkProjectLocator', 'setProjectIncluded',
   'sessionPolicy', 'setSessionIncluded', 'capturePolicy',
   'ingest', 'source', 'propose', 'revise', 'correctFromUser', 'read', 'history', 'support', 'list', 'recall',
-  'libraryPage', 'libraryProjects', 'libraryDetail', 'libraryCorrect', 'libraryForget', 'libraryPreview', 'libraryApply',
+  'libraryPage', 'libraryProjects', 'libraryActivity', 'libraryDetail', 'libraryCorrect', 'libraryForget', 'libraryPreview', 'libraryApply',
   'notebookPending', 'notebookClaim', 'notebookFinish', 'notebookDefer', 'libraryNotebooks', 'libraryNotebook',
   'prepareRecall', 'recallEmitted', 'recallReceipts', 'putTopic', 'topic', 'forget'] as const
 export const QUEUE_OPERATIONS = ['capture', 'checkpoint', 'pendingReview', 'claim', 'finish', 'defer', 'cursor', 'episodeOpen', 'status'] as const

@@ -20,9 +20,10 @@ it('admits coding processes and bundled coding DSHs while excluding other domain
 it('retains a recently exited process long enough to capture its final native reply, without archive discovery', () => {
   let now = 1_000
   const roster = new MemorySessionRoster('/home/person', () => now)
-  roster.refresh([session], () => true, no)
+  expect(roster.refresh([{ ...session, title: 'Parser fixes' }], () => true, no))
+    .toMatchObject([{ present: true, name: 'Parser fixes' }])
   now += 10_000
-  expect(roster.refresh([], no, no)).toMatchObject([{ sessionId: 'native', busy: false }])
+  expect(roster.refresh([], no, no)).toMatchObject([{ sessionId: 'native', busy: false, present: false }])
   now += 120_001
   expect(roster.refresh([], no, no)).toEqual([])
 })

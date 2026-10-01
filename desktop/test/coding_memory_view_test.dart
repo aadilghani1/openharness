@@ -12,6 +12,7 @@ import 'package:harness/companions/coding_memory_view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/theme/color_palette.dart';
+import 'package:harness/shared/widgets/skeleton.dart';
 
 import 'support/coding_memory_fixture.dart';
 import 'support/real_fonts.dart';
@@ -103,6 +104,161 @@ void main() {
       await File('$output/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
       image.dispose();
     });
+  }
+
+  testWidgets(
+    'Helping now explains a selection and preserves rating focus and source controls',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(
+        find.text('Sent by Harness · Delivery not confirmed'),
+        findsOneWidget,
+      );
+      expect(find.text('Applies when task: bug fix.'), findsOneWidget);
+      await tap(tester, 'Helpful');
+      final helpful = tester
+          .widgetList<DesktopPill>(find.byType(DesktopPill))
+          .singleWhere((p) => p.label == 'Helpful');
+      expect(helpful.selected, isTrue);
+      expect(helpful.focusNode!.hasFocus, isTrue);
+      expect(transport.previewed!['receiptId'], 'synthetic-receipt');
+      await tap(tester, 'Clear feedback');
+      expect(
+        transport.calls.where((p) => p['action'] == 'apply'),
+        hasLength(2),
+      );
+      await tap(tester, 'Read memory');
+      expect(find.text('Correct memory'), findsOneWidget);
+      expect(find.text('Forget…'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Helping now shows an empty latest recall without an earlier positive memory',
+    (tester) async {
+      transport.handle = (p) async => p['action'] == 'activity'
+          ? syntheticActivity(transport.record, empty: true)
+          : transport.respond(p);
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(
+        find.text('No memories were selected for the last recorded request.'),
+        findsOneWidget,
+      );
+      expect(find.text(transport.record['claim'] as String), findsNothing);
+      expect(find.text('Helpful'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Helping now distinguishes loading, empty activity and lost identity',
+    (tester) async {
+      final pending = Completer<Map<String, dynamic>>();
+      transport.handle = (p) => p['action'] == 'activity'
+          ? pending.future
+          : Future.value(transport.respond(p));
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(find.byType(SkeletonText), findsNWidgets(2));
+      expect(find.textContaining('No recall activity'), findsNothing);
+      pending.complete({
+        'ok': true,
+        'sessions': [],
+        'items': [],
+        'selectedAgentId': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.textContaining('No recall activity'), findsOneWidget);
+      transport.invalidate();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('No recall activity'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Helping now session picker switches the inspected task without writing or sending input',
+    (tester) async {
+      transport.handle = (p) async {
+        if (p['action'] != 'activity') return transport.respond(p);
+        final selected =
+            (p['query'] as Map)['agentId'] as String? ?? 'synthetic-agent';
+        final result = syntheticActivity(
+          transport.record,
+          agentId: selected,
+          empty: selected == 'second',
+        );
+        final session = (result['sessions'] as List).single as Map;
+        return {
+          ...result,
+          'sessions': [
+            {
+              ...session,
+              'agentId': 'synthetic-agent',
+              'name': 'First coding task',
+              'selectedCount': 1,
+            },
+            {
+              ...session,
+              'agentId': 'second',
+              'name': 'Second coding task',
+              'selectedCount': 0,
+            },
+          ],
+        };
+      };
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      await tester.tap(find.byKey(const ValueKey('memory-activity-session')));
+      await tester.pumpAndSettle();
+      await tap(tester, 'Second coding task');
+      expect(
+        find.text('No memories were selected for the last recorded request.'),
+        findsOneWidget,
+      );
+      expect(
+        transport.calls.where((p) => p['action'] == 'activity').last['query'],
+        {'agentId': 'second'},
+      );
+      expect(
+        transport.calls.any((p) => ['preview', 'apply'].contains(p['action'])),
+        isFalse,
+      );
+    },
+  );
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'Helping now fits ${brightness.name} at ${scale}x with a long session name',
+        (tester) async {
+          transport.recalls.add(syntheticRecall());
+          transport.handle = (p) async {
+            final result = transport.respond(p);
+            if (p['action'] == 'activity') {
+              ((result['sessions'] as List).first as Map)['name'] = 'Fix the editor regression while preserving keyboard navigation and project context';
+            }
+            return result;
+          };
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: Size(scale == 1 ? 760 : 480, 920),
+          );
+          await tap(tester, 'Helping now');
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'activity-${brightness.name}-${scale}x');
+          await tap(tester, 'Helpful');
+          expect(tester.takeException(), isNull);
+          await capture(
+            tester,
+            'activity-feedback-${brightness.name}-${scale}x',
+          );
+        },
+      );
+    }
   }
 
   testWidgets(

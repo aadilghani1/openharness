@@ -11,7 +11,8 @@ import { admission, assertSafe, canonical, digest, proposalFingerprint } from '.
 import type { ProjectLocator } from './project.js'
 import type { Database } from './database.js'
 import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
-import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt } from './receipts.js'
+import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt, type ActivityReceiver } from './receipts.js'
+import { libraryActivityQuerySchema, type LibraryActivity, type LibraryActivityQuery } from './library.js'
 import { MemoryNotebook, NOTEBOOK_SCHEMA, type NotebookInput, type NotebookLease, type NotebookProposal } from './notebook.js'
 import type { InferenceTarget } from './queue.js'
 import { visibleEvidenceSql } from './visibility.js'
@@ -605,6 +606,31 @@ export class CodingMemoryStore {
       ORDER BY p.rowid DESC LIMIT ?`).all(query.before ?? Number.MAX_SAFE_INTEGER, query.search ?? '', limit + 1)
     return { items: rows.slice(0, limit).map(row => this.projectLabel(String(row.id))),
       nextBefore: rows.length > limit ? Number(rows[limit - 1].rowid) : null }
+  }
+
+  /** Host-supplied open sessions; only the verified owner may inspect their latest selections. */
+  libraryActivity(owner: string, receivers: ActivityReceiver[], input: LibraryActivityQuery = {}): LibraryActivity {
+    this.requireOwner(owner)
+    const query = parse(libraryActivityQuerySchema, input)
+    return this.transaction(() => {
+      const sessions = this.receipts.activity(receivers).map(({ projectId, ...row }) => ({ ...row,
+        project: projectId ? this.projectLabel(projectId) : null }))
+      const selectedAgentId = query.agentId ?? sessions[0]?.agentId ?? null
+      const selection = sessions.find(row => row.agentId === selectedAgentId)
+      const items: LibraryActivity['items'] = []
+      for (const item of selection?.receiptId ? this.receipts.activityItems(selection.receiptId) : []) {
+        const access = this.ownerRecordAccess(item.id)
+        const record = access && this.read(item.id, access)
+        if (!record || record.revision !== item.revision || record.state !== 'active' || !this.current(record)) continue
+        const recall = this.receipts.forMemory(item.id, item.revision, selection!.receiptId!)[0]
+        if (!recall) continue
+        const { projectId, ...use } = recall
+        items.push({ record: { ...summarize(record), applicability: record.applicability,
+          rationale: record.rationale, futureAction: record.futureAction, exceptions: record.exceptions },
+          recall: { ...use, canFeedback: true, project: projectId ? this.projectLabel(projectId) : null } })
+      }
+      return { sessions, selectedAgentId, items, version: this.libraryVersion() }
+    })
   }
 
   private projectLabel(id: string): LibraryProject {

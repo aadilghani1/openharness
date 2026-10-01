@@ -12,6 +12,7 @@ export function hasMemoryForegroundActivity(events: readonly Pick<LiveEvent, 'ty
 interface RegisteredMemorySession {
   agentId: string; engine: string; sessionId: string; cwd: string | null; transcriptPath: string | null
   dsh?: string | null; forkedFrom?: unknown; registeredAt: number; cliVersion?: string | null
+  title?: string | null; defaultName?: string
 }
 // These bundled DSHs have explicit software-development workflows. A package's arbitrary category
 // string, viewer, or use of a coding CLI cannot opt a general-domain DSH into personal coding memory.
@@ -34,6 +35,7 @@ export class MemorySessionRoster {
         || resolve(session.cwd) === parse(resolve(session.cwd)).root) continue
       current.add(session.agentId)
       this.recent.set(session.agentId, { seenAt: this.now(), session: { agentId: session.agentId,
+        name: session.title || session.defaultName, present: true,
         engine: session.engine as 'claude' | 'codex', sessionId: session.sessionId, workspace: session.cwd,
         transcriptPath: session.transcriptPath, coding: true, busy: busy(session.sessionId), scope: companion ? 'profile' : 'project',
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
@@ -42,7 +44,7 @@ export class MemorySessionRoster {
     for (const [agentId, row] of this.recent) {
       if ((row.session.scope === 'profile' && agentId !== collectionAgentId)
         || (observed.has(agentId) && !current.has(agentId)) || this.now() - row.seenAt > 120_000) this.recent.delete(agentId)
-      else if (!current.has(agentId)) row.session = { ...row.session, busy: false }
+      else if (!current.has(agentId)) row.session = { ...row.session, busy: false, present: false }
     }
     while (this.recent.size > 128) this.recent.delete(this.recent.keys().next().value!)
     return [...this.recent.values()].map(row => ({ ...row.session }))

@@ -62,6 +62,39 @@ Map<String, dynamic> syntheticMemory({
   ],
 };
 
+Map<String, dynamic> syntheticActivity(
+  Map<String, dynamic> record, {
+  Map<String, dynamic>? recall,
+  String agentId = 'synthetic-agent',
+  bool empty = false,
+}) {
+  final use = recall ?? syntheticRecall();
+  return {
+    'ok': true,
+    'sessions': [
+      {
+        ...use,
+        'agentId': agentId,
+        'name': 'Fix the editor regression',
+        'selectedCount': empty ? 0 : 1,
+        'status': 'ok',
+        'receiptId': empty ? null : use['receiptId'],
+      },
+    ],
+    'selectedAgentId': agentId,
+    'items': empty
+        ? []
+        : [
+            {'record': record, 'recall': use},
+          ],
+    'version': {
+      'generation': 1,
+      'knowledge': record['revision'],
+      'preferences': 'true:true',
+    },
+  };
+}
+
 Map<String, dynamic> syntheticNotebook(
   Map<String, dynamic> memory, {
   bool ready = true,
@@ -185,6 +218,8 @@ class MemoryFixture extends CodingMemoryConnection {
 
   Map<String, dynamic> respond(Map<String, dynamic> payload) {
     switch (payload['action']) {
+      case 'activity':
+        return syntheticActivity(record, recall: recalls.firstOrNull);
       case 'status':
         return {
           'ok': true,
