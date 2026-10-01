@@ -183,6 +183,17 @@ try {
     const inventory = await rpc('agents_list', { includeStopped: true })
     assert(inventory.agents.some((a: any) => a.id === old.agentId && a.status === 'stopped'))
     const openSaved = async (creationId: string) => {
+      // Warm the same catalog used by status updates before each real resume.
+      // The action must revalidate disk state, and the resumed row must stop
+      // appearing among saved sessions without waiting for a cache timeout.
+      for (let i = 0; i < 2; i++) {
+        const savedInventory = await rpc('agents_list', { includeStopped: true })
+        const rows = savedInventory.agents.filter((a: any) => a.id === old.agentId)
+        assert.equal(rows.length, 1, 'the catalog must not duplicate or lose the conversation')
+        // After an external engine exit, this fixture intentionally leaves the
+        // old registry route until resume repairs it and preserves its shell.
+        if (!registry.advertised().some(row => row.agentId === old.agentId)) assert.equal(rows[0].status, 'stopped')
+      }
       let settled = false, submitted = false, historyVisible = false
       const hookCount = hooks.length
       const nativeHookSeen = () => hooks.some(h => h.engine === engine && h.sessionId === sessionId)
@@ -217,6 +228,8 @@ try {
       assert(settled, `${engine} did not confirm: ${readFileSync(join(root, `${engine}-screen.txt`), 'utf8')}`)
       assert(historyVisible, `${engine} did not render the saved conversation`)
       assert(!needHook || nativeHookSeen(), `${engine} did not send its native SessionStart`)
+      assert(!stoppedAgents.available(registry.advertised()).some(row => row.agentId === old.agentId),
+        'a resumed conversation must immediately leave the saved catalog')
       return opening
     }
     const creationId = randomUUID()
