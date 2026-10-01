@@ -100,6 +100,7 @@ import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
+import { MemoryExperimentSettings } from './memory/experiment.js'
 import { MemoryControl } from './memory/control.js'
 import { isOwnerProcess } from './memory/ownerProcess.js'
 import { hasMemoryForegroundActivity, MemorySessionRoster } from './memory/hostSessions.js'
@@ -1942,8 +1943,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   let companionPromptContext: (agentId: string) => string | null = () => null
   let companionProfileChanged: () => void = () => {}
-  // Development rollout only until the memory viewer, delivery receipts and migration are reviewed.
-  const codingMemoryPreview = process.env.HARNESS_CODING_MEMORY === '1'
+  // Local account opt-in, exposed in Settings → Experimental. The old env flag is a migration default.
+  const memoryExperiment = new MemoryExperimentSettings(join(env.ADAPTER_DATA_DIR, 'coding-memory-settings'), process.env.HARNESS_CODING_MEMORY === '1')
+  const guestMemoryProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
+  const memoryProfile = (): string | null => {
+    const current = readAuthSession()
+    return current ? current.memoryOwner?.key ?? null : guestMemoryProfile
+  }
+  const codingMemoryPreview = () => memoryExperiment.enabled(memoryProfile())
+  let applyCodingMemorySetting: () => Promise<void> = async () => {}
   let codingMemory: CodingMemoryRuntime | null = null
   let memoryPause = Promise.resolve()
   let refreshMemoryIdentity: () => Promise<void> = async () => {}
@@ -3334,7 +3342,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // pair chats, sub-agents and replay stay excluded. Tool-free background reviews
     // never register as agents, so they cannot feed their own results back in here.
     const learnFrom = registry.bySession(sessionId)
-    if (!codingMemoryPreview && learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
+    if (!codingMemoryPreview() && learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
       (!isPairHarnessSession(sessionId) || isCollectionAgent(learnFrom.agentId))) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
@@ -3345,7 +3353,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
-    if (codingMemoryPreview && daemons.on() && !opts?.resumed && !opts?.replay) void codingMemory?.tick()
+    if (codingMemoryPreview() && daemons.on() && !opts?.resumed && !opts?.replay) void codingMemory?.tick()
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
@@ -3944,7 +3952,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const json = await res.json().catch(() => ({})) as Record<string, unknown>
     const result = { status: res.status, body: json }
     if (latest?.accessToken === accessToken && latest.memoryOwner) memoryZooOwners.set(result, latest.memoryOwner.key)
-    if (codingMemoryPreview && daemons.on() && method === 'GET' && path === '/api/auth/me' && res.status === 200 && json?.success === true) {
+    if (method === 'GET' && path === '/api/auth/me' && res.status === 200 && json?.success === true) {
       const userId = (json.data as { user?: { id?: unknown } } | undefined)?.user?.id
       if (typeof userId === 'string') {
         const binding = auth.bindMemoryOwner(userId, accessToken, latest?.autonomousEnv ?? env.AUTONOMOUS_ENV).catch(() => null)
@@ -4514,7 +4522,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           ...(tmuxBackend ? [{ backend: 'tmux', instance: 'default', state: 'configured' }] : []),
         ],
         dormantAgents: registry.list().filter((session) => !session.active).length,
-        ...(codingMemoryPreview ? { codingMemory: codingMemory?.status() ?? { state: 'off' } } : {}),
+        ...(codingMemoryPreview() ? { codingMemory: codingMemory?.status() ?? { state: 'off' } } : {}),
         dataDir: tildify(env.ADAPTER_DATA_DIR),
         port: daemonPort(),
       },
@@ -4803,7 +4811,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     processes: () => processRows(),
     harnessPanePids: async () => { const inventory = await listTmuxPanes(); return inventory.ok ? inventory.panes.map((pane) => pane.rootPid) : null },
   })
-  const memoryControl = new MemoryControl({ runtime: () => codingMemory, verify: async connId => {
+  const memoryControl = new MemoryControl({ runtime: () => codingMemoryPreview() ? codingMemory : null,
+    experiment: { owner: memoryProfile, read: owner => memoryExperiment.read(owner), write: async (owner, enabled, expected) => {
+      const choice = memoryExperiment.write(owner, enabled, expected)
+      await applyCodingMemorySetting()
+      return choice
+    } }, verify: async connId => {
     const verdict = await verifyLessonCaller(connId)
     if (!verdict.ok) return verdict
     if (!await isOwnerProcess(verdict.pid)) return { ok: false, error: 'UNVERIFIED', detail: 'The memory library requires a verified process belonging to this computer’s owner.' }
@@ -4918,15 +4931,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
   })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
-  if (codingMemoryPreview) {
+  {
     const roster = new MemorySessionRoster(homedir())
-    const guestProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
     codingMemory = new CodingMemoryRuntime({
       directory: join(env.ADAPTER_DATA_DIR, 'coding-memory'),
       context: () => {
         const current = readAuthSession()
-        const profileId = current ? current.memoryOwner?.key ?? null : guestProfile
-        return { experimental: daemons.on(), profileId,
+        const profileId = current ? current.memoryOwner?.key ?? null : guestMemoryProfile
+        return { experimental: daemons.on() && codingMemoryPreview(), profileId,
           watching: !!pairSensor.pairedDaemon() && (current
             ? !!profileId && zooMemoryOwner === profileId && zooPair.consent : guestConsent) }
       },
@@ -5077,6 +5089,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // paused if it was live (its conversation kept).
   let learnTick: ReturnType<typeof setInterval> | null = null
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
+  applyCodingMemorySetting = async () => {
+    pairLearner?.cancelReviews()
+    conversationReview.stop()
+    memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
+    await memoryPause
+    if (daemons.on() && codingMemoryPreview()) {
+      codingMemory?.start()
+      await refreshMemoryIdentity()
+    }
+  }
   onDaemonsChanged = (on) => {
     plates.setOn(on)
     if (on) {
@@ -5084,11 +5106,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // everything off within the tick (before the rest of the file is read), and any other change asks for
       // the person's yes soon.
       pairRulesConfig()
-      if (!codingMemoryPreview) {
-        learnTick ??= setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
+      {
+        learnTick ??= setInterval(() => { if (!codingMemoryPreview()) void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
         learnTick.unref?.()
       }
-      void memoryPause.then(() => { if (daemons.on()) codingMemory?.start() })
+      void memoryPause.then(() => { if (daemons.on() && codingMemoryPreview()) codingMemory?.start() })
       void refreshMemoryIdentity()
       pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) { pairRulesConfig(); void refreshMemoryIdentity() } }, 30_000)
       pairConfigTick.unref?.()

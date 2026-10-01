@@ -5,9 +5,12 @@ import { libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, ty
 import { MemoryError, parse } from './types.js'
 import type { CodingMemoryRuntime } from './runtime.js'
 import type { CallerVerdict } from '../pair/learn/approval.js'
+import type { MemoryExperimentChoice } from './experiment.js'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
+  z.object({ action: z.literal('experiment') }).strict(),
+  z.object({ action: z.literal('configure_experiment'), enabled: z.boolean(), expected: z.number().int().nonnegative().safe() }).strict(),
   z.object({ action: z.literal('list'), query: libraryQuerySchema.optional() }).strict(),
   z.object({ action: z.literal('projects'), query: libraryProjectQuerySchema.optional() }).strict(),
   z.object({ action: z.literal('show'), id: z.string().min(1).max(200) }).strict(),
@@ -20,6 +23,11 @@ interface Deps {
   /** Must verify the OS owner as well as rejecting a process inside an agent's harness. */
   verify(connId: string): Promise<CallerVerdict>
   now?: () => number
+  experiment?: {
+    owner(): string | null
+    read(owner: string): MemoryExperimentChoice
+    write(owner: string, enabled: boolean, expected: number): Promise<MemoryExperimentChoice>
+  }
 }
 interface Capability { owner: string; connId: string; pid: number; expires: number; preview: LibraryPreview }
 const TTL_MS = 2 * 60_000
@@ -33,13 +41,26 @@ export class MemoryControl {
     // A token-bearing agent cannot turn itself into the person with `confirmed`, a claimed owner,
     // another agentId, or an independently supplied command at apply time.
     if (payload.token) return { ok: false, error: 'PERSON_ONLY' }
-    const runtime = this.deps.runtime()
-    if (!runtime) return { ok: false, error: 'UNSUPPORTED' }
-    const owner = runtime.ownerKey()
-    if (!owner) return { ok: false, error: 'MEMORY_UNAVAILABLE' }
     try {
       const { verb: _verb, requestId: _requestId, token: _token, ...input } = payload
       const request = parse(requestSchema, input)
+      if (request.action === 'experiment' || request.action === 'configure_experiment') {
+        const experiment = this.deps.experiment
+        if (!experiment) return { ok: false, error: 'UNSUPPORTED' }
+        const owner = experiment.owner()
+        if (!owner) return { ok: false, error: 'MEMORY_UNAVAILABLE' }
+        const verdict = await this.deps.verify(connId)
+        if (!verdict.ok) return { ok: false, error: verdict.error }
+        if (owner !== experiment.owner()) throw new MemoryError('owner_changed')
+        const choice = request.action === 'experiment' ? experiment.read(owner)
+          : await experiment.write(owner, request.enabled, request.expected)
+        if (owner !== experiment.owner()) throw new MemoryError('owner_changed')
+        return { ok: true, ...choice }
+      }
+      const runtime = this.deps.runtime()
+      if (!runtime) return { ok: false, error: 'UNSUPPORTED' }
+      const owner = runtime.ownerKey()
+      if (!owner) return { ok: false, error: 'MEMORY_UNAVAILABLE' }
       const verdict = await this.deps.verify(connId)
       if (!verdict.ok) return { ok: false, error: verdict.error, detail: verdict.detail }
       if (runtime !== this.deps.runtime() || owner !== runtime.ownerKey()) throw new MemoryError('owner_changed')
