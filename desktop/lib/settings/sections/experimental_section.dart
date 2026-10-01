@@ -193,6 +193,10 @@ class _CodingMemorySettingState extends State<_CodingMemorySetting> {
           const Text(
             'For your account on this computer. Review memories and control learning and recall in Companions → Memories. Turning this off keeps saved memories.',
           ),
+          if (!widget.companionEnabled)
+            const Text(
+              'Learning and recall are paused while Focus-bar creature is off.',
+            ),
           if (settings.saving)
             const Text('Saving…')
           else if (!settings.loaded && settings.error == null)

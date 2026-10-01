@@ -790,7 +790,8 @@ export class BackendSocket {
   private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
   /**
    * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
-   * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
+   * MCP server) is answered DAEMONS_OFF before any verb runs, except the verified owner's local coding
+   * memory opt-in setting. That setting does not read memory or start a companion. Null: always on.
    */
   daemonsOn: (() => boolean) | null = null
   /**
@@ -1690,9 +1691,14 @@ export class BackendSocket {
     }
     if (type === 'pair') {
       if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
-      if (this.daemonsOn && !this.daemonsOn()) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
       const verb = typeof payload.verb === 'string' ? payload.verb : ''
       const control = this.pairControl
+      // The owner must be able to clear the saved opt-in without turning companions on. Only these
+      // two settings actions reach MemoryControl, which checks their full schema and verifies the OS
+      // caller. Ordinary library, recall and agent tools remain inert while the master switch is off.
+      const memorySetting = control?.verbs.has('memory') && verb === 'memory' &&
+        (payload.action === 'experiment' || payload.action === 'configure_experiment')
+      if (this.daemonsOn && !this.daemonsOn() && !memorySetting) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
       if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
       if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
       detached(service.local(payload))

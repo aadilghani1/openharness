@@ -4,6 +4,13 @@ Status: implementation in progress, 2026-09-30. The memory core, native transcri
 
 The executable [six-case extraction diagnostic](../research/2026-09-30-memory-extraction-cases.json) now exercises the actual learner, admission and recall. Its [first native attempt](../research/2026-09-30-memory-extraction-baseline.json) stopped with the selected Claude login unavailable: **zero completed extractions**, no quality score. This is separate from the 64 design scenarios and from the required held-out evaluation.
 
+The review build now exposes the local opt-in in **Settings → Experimental → Coding memory**.
+It defaults off per account on this computer; the existing environment flag supplies only an unsaved
+default. The companion and watching gates still apply. A saved off stops coding-memory capture,
+learning and recall without deleting records. The [later native diagnostic](../research/2026-10-01-memory-native-quality-blocked.json)
+corrected the login-environment defect but stopped on the selected provider's weekly usage limit,
+again with zero completed extractions. Neither the setting nor the UI review satisfies the model-quality gates.
+
 Companion experience: a coding agent understands how the developer works, the project's engineering decisions, and the state of the current task. Tim can explain what he remembers, where it came from, and when it may no longer apply. Switching Claude Code to Codex, or Tim to GNU, should preserve that knowledge.
 
 Scope: coding work on one machine across agent frameworks, beginning with Claude Code and Codex. The [coding product model](2026-09-30-coding-memory-product.md) defines developer work contexts, preferences, design taste, technical knowledge, and their boundaries. General DSH domains, cross-machine transport, merge resolution, and account synchronization are outside this release. [Research and source comparison](../research/2026-09-30-cross-framework-memory.md). [Evaluation cases](2026-09-30-tim-memory-cases.json).

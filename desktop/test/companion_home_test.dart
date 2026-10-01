@@ -389,6 +389,36 @@ void main() {
   );
 
   testWidgets(
+    'an open Memories viewer discovers coding memory enabled in settings',
+    (tester) async {
+      final memory = MemoryFixture()
+        ..handle = (_) async => {'ok': false, 'error': 'UNSUPPORTED'};
+      await mount(tester, codingMemory: memory);
+      await tester.tap(find.byKey(const ValueKey('companion-nav-Memories')));
+      brain.receive('pair_result', {
+        'requestId': sent.single.$2['requestId'],
+        'ok': true,
+        'lessons': [],
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('For regression fixes, start with a small failing test.'), findsNothing);
+      memory.handle = null;
+      await tester.pump(const Duration(seconds: 30));
+      brain.receive('pair_result', {
+        'requestId': sent.last.$2['requestId'],
+        'ok': true,
+        'lessons': [],
+      });
+      await tester.pump();
+      expect(find.text('For regression fixes, start with a small failing test.'), findsOneWidget);
+      expect(input, isEmpty);
+      expect(memory.calls.where((c) => ['apply', 'preview'].contains(c['action'])), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'DSH keeps its viewer left and real agent terminal right, including setup',
     (tester) async {
       await mount(tester);

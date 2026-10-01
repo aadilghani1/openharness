@@ -171,6 +171,15 @@ Add a maintained coding notebook to Project knowledge. It synthesizes supported 
 
 ## Experience in the coding companion
 
+In the review build, enable **Settings → Experimental → Coding memory**, then open **Companions → Memories**.
+The setting is off by default, belongs to the current account on this computer, and needs no environment
+variable or restart. It uses the model selected in Companions and retains the existing watching consent.
+The viewer separates **How you work**, **Project knowledge**, and **Learning**. Turning the experiment
+off stops its background work and keeps saved memories; Learn and Recall have their own controls inside
+Memories. Companions must be enabled for learning or recall to run, but the local opt-in can still be
+cleared while companions are off. This is an opt-in preview, not evidence that the real-model rollout
+gates have passed.
+
 The memory viewer should answer four practical questions: “How do you understand my way of working?”, “What do you know about this project?”, “Why did you choose that?”, and “Where were we?” Keep the existing terminal as the place where coding work happens.
 
 Show natural statements with scope and evidence. Allow the user to correct a reason, mark an observed tool as a preference, limit a preference to one project, attach an approved reference, or forget it. Do not show personality scores or demand that the user approve an endless stream of obvious lessons. Ask for clarification only when uncertainty materially changes a current decision.
