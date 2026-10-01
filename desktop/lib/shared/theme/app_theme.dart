@@ -331,7 +331,7 @@ abstract final class AppPalette {
   // ground they meet — Paper's search #E2E2DF / Mist's #DCE4EE — not only on
   // white: teal 4.90, online 5.02, warn 4.93 there (6.4–6.5 on white).
 
-  // "Owner" badge — a teal that stays legible on either surface.
+  // "Owner" badge and remote pane focus — legible on either surface.
   static Color get teal =>
       AppTheme.pick(const Color(0xFF0D6B63), const Color(0xFF2DD4BF));
 

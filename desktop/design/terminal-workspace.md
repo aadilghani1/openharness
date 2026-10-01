@@ -56,6 +56,12 @@ own selection. Keep the current pane clear while a menu or the tab strip has
 keyboard focus. Waiting-question borders remain visible above the veil.
 The overlay does not consume the first click or alter terminal state.
 
+Only the focused pane gets a location-colored rim: blue on this computer,
+teal on a known remote machine, including a single or zoomed pane. Unfocused
+panes keep their neutral rim. The existing amber waiting-question border takes
+precedence over the focus color. Location uses machine identity, independently
+of the connection's transport mode.
+
 ## Input and review
 
 Retain existing commands and their live remapping. Menus and visible controls

@@ -145,6 +145,9 @@ Avoid repeatedly drawing cards inside a dialog.
 - Primary text is nearly white or nearly black. Metadata remains readable.
 - Blue filled capsules identify the primary action. Blue rows identify the
   active keyboard/pointer choice; their labels and secondary text turn white.
+- Focused pane rims use blue for this computer and `AppPalette.teal` for a
+  known remote machine. Only the focused pane carries this location cue;
+  waiting-question borders retain their amber priority.
 - A stored choice also has a checkmark. Focus and stored selection differ.
 - Ordinary controls use a faint neutral fill and one thin rim. Hover increases
   the fill. Press increases it again. Focus has a stable 1.5-point blue boundary.
