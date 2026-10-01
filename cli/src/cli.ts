@@ -257,6 +257,7 @@ import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
+import { CodexTurnRecovery } from './lib/codexTurnRecovery.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
 import { CursorTranscriptDiscovery, findCursorTranscript } from './engines/cursor/discovery.js'
@@ -3179,7 +3180,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const TURN_HEARTBEAT_MS = 5000
   const heartbeats = new Map<string, NodeJS.Timeout>()
   const turnStartedAt = new Map<string, number>() // sessionId → turn_started wall clock, for [turn] duration
+  const codexTurnRecovery = new CodexTurnRecovery({
+    snapshot: (sessionId) => {
+      const session = registry.bySession(sessionId)
+      const normalizer = codexNormalizers.get(sessionId)
+      if (!session?.active || session.engine !== 'codex' || !normalizer) return undefined
+      return { normalizer, runtimeKey: JSON.stringify([session.agentId, session.primaryRuntimeKey, session.processIdentity]) }
+    },
+    drain: (sessionId) => watcher.pollSession(sessionId),
+    capture: async (sessionId) => {
+      const session = registry.bySession(sessionId)
+      if (!session?.active || session.engine !== 'codex') return null
+      const screen = await terminals.capture(session, { mode: 'visible', ansi: true })
+      return screen.state === 'succeeded' ? screen.value : null
+    },
+    recovered: (sessionId) => {
+      console.log(`[turn] ${sid(sessionId)} recovered stopped Codex goal from live footer`)
+      // Correct an old status without announcing that work has just finished.
+      emitSessionEvents(sessionId, [{ type: 'turn_ended', payload: { aborted: true } }], { replay: true })
+    },
+  })
   const stopHeartbeat = (sessionId: string): void => {
+    codexTurnRecovery.forget(sessionId)
     const t = heartbeats.get(sessionId)
     if (t) { clearInterval(t); heartbeats.delete(sessionId) }
   }
@@ -3203,6 +3225,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // already open, and it bounds that failure at one heartbeat instead of
       // at whatever is left of a five-minute window.
       if (turnOpen) void watcher.pollSession(sessionId)
+      if (turnOpen) void codexTurnRecovery.check(sessionId)
       // Device: keep the busy tile alive through the turn AND the summarize window. Returns false when idle.
       const deviceBusy = mirror.heartbeat(sessionId)
       // Web: unchanged — heartbeat only while the turn itself is open (summarizing uses turn_summary_pending).
