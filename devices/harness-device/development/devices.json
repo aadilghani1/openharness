@@ -15,6 +15,13 @@
       "name": "Dock-only Pro development unit"
     },
     {
+      "mac": "E8:F6:0A:E7:64:67",
+      "role": "development",
+      "chip": "esp32p4",
+      "branch": "dev/firmware-pro",
+      "name": "Additional Pro development unit assigned by user on 2026-10-01"
+    },
+    {
       "mac": "28:84:85:90:65:94",
       "role": "production",
       "chip": "esp32s3",

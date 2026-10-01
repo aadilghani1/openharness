@@ -11,11 +11,16 @@ to point to when a developer builds.
 | --- | --- | --- | --- |
 | Round development | `dev/firmware-round` | `aa0a583cb30d82af5f600cd8b0569899f960a0ed` | `90:70:69:F3:0E:2C` |
 | Pro development | `dev/firmware-pro` | `92283ad62f6876a363ecfae4d2466340d7e2dd0f` | `E8:F6:0A:E7:64:61` |
+| Additional Pro development | `dev/firmware-pro` | Same Pro branch | `E8:F6:0A:E7:64:67` |
 | Production reference | Diego's approved release | Chosen by Diego | `28:84:85:90:65:94` |
 
 These assignments reflect the user's correction on 2026-09-30: **65:94 is
 production; 0E:2C is development.** The user explicitly reassigned 0E:2C
 from its previous production-reference role after 52:18 disconnected.
+
+On 2026-10-01 the user requested Pro development firmware on the newly attached
+unit, identified as `E8:F6:0A:E7:64:67`. It is an additional Pro development
+target; the existing Pro and both round assignments remain in place.
 
 `devices.json` is the development deployment allowlist. The disconnected 52:18
 and orange terminal are protected. New USB devices are excluded
