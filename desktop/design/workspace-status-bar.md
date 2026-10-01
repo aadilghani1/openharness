@@ -14,7 +14,7 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-Harnesses 118  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%
+Harnesses 118   CPU 20%   RAM 50%   GPU 10%   Claude 100%   Codex 90%
                                                      M2 > project > branch > #439
 ```
 
@@ -25,10 +25,12 @@ there are live sessions to inspect.
 The left side has three independent scopes: a global count of running harnesses,
 hardware for the computer running the app, and subscription allowance used per
 account.
-Use one space between each title and value, and two spaces between complete
+Use one space between each title and value, and three spaces between complete
 parts, including the harness count. Put the title before the value. Do not pad
 numbers to a fixed width. No dots, decimal percentages or `+` suffixes. Adjacent controls each
-contribute one space of horizontal padding, matching the two-space group gap.
+contribute one space of horizontal padding plus one extra space between controls,
+matching the three-space group gap inside each control. The shared
+`workspaceBarGroupSeparator` sets this spacing in Flutter and native views.
 Use neutral workspace ink at every usage level. The context on the right still
 follows the focused pane; it may identify a remote machine while hardware remains
 local.
@@ -41,34 +43,28 @@ columns can be sorted highest first; tokens reuse existing agent updates.
 CPU, RAM and GPU always describe the local computer, independently of pane focus
 or machine selection. Never substitute a remote host if local readings are
 unavailable. The dock has no machine name or filter. Hover identifies the source.
-Clicking opens an anchored comparison:
-one owned machine per row, with CPU/RAM/GPU columns. Selecting a row only inspects
-its details inside the popover; it never changes the dock's scope. Arrow keys select rows;
-Escape or outside click dismisses and returns focus. Never open a pane, switch
-the focused harness, connect an offline machine or start an engine to inspect it.
-Shared machines do not expose host telemetry.
+Hardware is plain status text: no click action, machine selection, or resource
+panel. It never opens a pane, changes focus, or connects a remote machine.
 
 CPU is total host utilization normalized to 0–100%, not a sum of per-process
 percentages. RAM is used physical memory divided by capacity, excluding
 reclaimable cache where the OS reports it. GPU is the busiest device with a
-valid utilization counter; list each GPU separately in the details, never add
-percentages across heterogeneous devices. All three include other applications
-on that machine. No cross-machine average or total appears in the footer.
+valid utilization counter; never add percentages across heterogeneous devices.
+All three include other applications on that machine. No cross-machine average
+or total appears in the footer.
 
-The selected machine's details show memory pressure, used/total memory, swap,
-root-disk free space and individual GPUs. Disk capacity is available on demand,
-not a permanent SSD percentage. Pressure comes from the OS, not a threshold
-invented from RAM usage. macOS uses IORegistry GPU counters; Linux/Windows use
-NVIDIA driver telemetry where available. Unsupported/expired/invalid readings
+Keep disk capacity, swap and memory pressure out of the dock. macOS uses
+IORegistry GPU counters; Linux/Windows use NVIDIA driver telemetry where
+available. Unsupported/expired/invalid readings
 show a single `-`, including older daemons' missing fields. Keep the pair
 visible so unavailable data is distinct from 0%; do not hide it when a reading
 temporarily disappears. Preserve valid zero. An offline or missing local machine
 shows unknown values, never another host's cached readings. Hardware freshness
 expires after 45 seconds.
 
-Sample only the local host every 15 seconds with the popover closed; sample
-connected owned hosts every three seconds while open. Coalesce daemon requests
-for two seconds. Clear hardware readings and stop polling when the app is hidden;
+Sample only the local host every 15 seconds. Do not poll remote hosts for
+this display. Coalesce daemon requests for two seconds. Clear hardware readings
+and stop polling when the app is hidden;
 refresh on return. Session process-tree sampling runs only while its own monitor
 is open (three seconds). A closed count requires no process scan. Inspecting
 tokens never starts a transcript scan.
@@ -79,26 +75,24 @@ resident memory and interval CPU, where 100% means one core. Shared Codex server
 appear once, separately. Keep this distinct from the normalized host CPU in the
 footer. Unknown session readings retain the monitor's existing explanation.
 
-Native and Flutter footers share data and actions. At narrow widths remove GPU,
-then all hardware metrics as complete groups, leaving the machine selector and
-its full tooltip. Subscription usage remains visible in wide windows and
-accessible through Models at every size. Preserve room for focused context.
+Native and Flutter footers share data and behavior. At narrow widths remove GPU,
+then RAM as complete groups, keeping CPU and the full tooltip. Subscription usage
+remains visible in wide windows and accessible through Models at every size.
+Preserve room for focused context.
 
-![Hardware popover with synthetic readings for three machines](images/machine-resources.png)
-
-Validation covers scope following/pinning, unavailable and late responses, hidden
-app polling, keyboard dismissal, native and Flutter entry points, narrow windows,
-light/dark appearance and 2× text. Run `machine_resources_test.dart`,
-`machine_resource_monitor_test.dart`, `harness_resources_test.dart` and
-`workspace_status_test.dart`. Set `HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR` to
-capture the popover fixtures; `HARNESS_RESOURCE_CAPTURE_DIR` enables native footer
-captures in `tool/check_swarm_titlebar.sh`. CLI parser/failure/cache checks live in
+Validation covers local scope, unavailable and late responses, hidden-app
+polling, native and Flutter status text, narrow windows and subscription actions.
+Run `machine_resources_test.dart`, `machine_resource_monitor_test.dart`,
+`harness_resources_test.dart` and `workspace_status_test.dart`.
+Set `HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR` to capture Flutter footer fixtures;
+`HARNESS_RESOURCE_CAPTURE_DIR` enables native footer captures in
+`tool/check_swarm_titlebar.sh`. CLI parser/failure/cache checks live in
 `machineHardware.spec.ts` and `machineResources.spec.ts`.
 
 The layout takes cues from [Stats' combined view](https://github.com/exelban/stats/blob/master/Stats/Views/CombinedView.swift)
 and [Mini widget](https://github.com/exelban/stats/blob/master/Kit/Widgets/Mini.swift):
-compact independent modules, whole percentages, optional separators and details
-on demand. The multi-machine scope above is Harness-specific.
+compact independent modules and whole percentages. Harness keeps the dock to
+local hardware, a global harness count and account usage.
 
 The optional Experimental creature sits after Store in a fixed 44pt slot.
 Tim and eggs use bundled bitmap art; hovering opens a full-size preview without

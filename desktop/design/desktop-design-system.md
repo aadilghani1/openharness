@@ -345,21 +345,20 @@ separate and remains hover-revealed.
 then subscription allowance used at the left; focused machine, project, branch
 and PR at the right. Each context field keeps its existing action. The hardware
 scope always stays on the computer running the app, even when a remote pane is
-focused. The dock has no machine filter; a popover
-row selects details only and cannot change that scope. Never sum percentages
-across machines. Keep disk capacity, swap and memory pressure in that popover.
+focused. Hardware is plain status text, with no machine filter, selection or
+resource panel. Never sum percentages across machines.
 Titles stay quiet when several panes are visible. Do not repeat branches in pane
 headers, or model/effort in the footer. Context honors the selected status face,
 fields, colors and shell/Powerline treatment. Recent-harness context uses its
 monochrome presentation.
-Use whole percentages, one space between title and value, and two between parts:
-`Harnesses 118  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%`.
+Use whole percentages, one space between title and value, and three between parts:
+`Harnesses 118   CPU 20%   RAM 50%   GPU 10%   Claude 100%   Codex 90%`.
 All labels and numbers use neutral readable ink;
 no severity color, dot separators, trailing plus or decimal figures. Subscription
 figures mean allowance used. Preserve Models' deduplicated accounts, limiting
 window and freshness rules. Unknown values show `-`, never fabricated zero.
-Hover explains scope, account identity and reset windows; click opens the
-corresponding hardware or Subscriptions panel without switching a model.
+Hover explains scope, account identity and reset windows. Hardware has no click
+action. Clicking subscription usage opens Subscriptions without switching a model.
 At narrow widths hide complete metric groups rather than clipping percentages.
 Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
 

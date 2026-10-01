@@ -2,21 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/machine_resource_monitor.dart';
 import 'package:harness/state/terminal_pane.dart';
-import 'package:harness/widgets/machine_resource_panel.dart';
 import 'package:harness/widgets/workspace_machine_resources.dart';
 
 import 'support/real_fonts.dart';
-import 'workspace_status_test.dart' show captureControls;
 
 class _App extends AppNotifier {
   _App()
@@ -96,12 +92,6 @@ void main() {
     if (Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'] !=
         null) {
       await loadRealFonts();
-      await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
-            rootBundle.load(
-              'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
-            ),
-          ))
-          .load();
     }
   });
 
@@ -119,14 +109,14 @@ void main() {
       monitor.start();
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.label, 'CPU 20%  RAM 50%  GPU 10%');
+      expect(monitor.label, 'CPU 20%   RAM 50%   GPU 10%');
       expect(monitor.detail, startsWith('M2  CPU 20%'));
       app.focusedPaneId = 2;
       app.selectedMachineId = 'o';
       app.changed();
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.label, 'CPU 20%  RAM 50%  GPU 10%');
+      expect(monitor.label, 'CPU 20%   RAM 50%   GPU 10%');
       app.focusedPaneId = 3;
       app.changed();
       await tester.pump();
@@ -145,14 +135,14 @@ void main() {
       app.changed();
       await tester.pump();
       expect(monitor.localMachine, isNull);
-      expect(monitor.label, 'CPU -  RAM -  GPU -');
+      expect(monitor.label, 'CPU -   RAM -   GPU -');
       monitor.dispose();
       app.dispose();
     },
   );
 
   testWidgets(
-    'polls only the local host at rest, all owned hosts when open, none while hidden',
+    'polls only the local host every 15 seconds and stops while hidden',
     (tester) async {
       final app = _App();
       final monitor = MachineResourceMonitor(app)..start();
@@ -162,21 +152,15 @@ void main() {
       expect(app.calls, ['m']);
       await tester.pump(const Duration(seconds: 1));
       expect(app.calls, ['m', 'm']);
-      monitor.setExpanded(true);
-      await tester.pump();
-      expect(app.calls.skip(2).toSet(), {'m', 'o', 'r'});
-      await tester.pump(const Duration(seconds: 3));
-      expect(app.calls, hasLength(8));
+      await tester.pump(const Duration(seconds: 15));
+      expect(app.calls, ['m', 'm', 'm']);
       app.appLifecycleChanged(AppLifecycleState.hidden);
       expect(monitor.reading(monitor.localMachine), isNull);
       await tester.pump(const Duration(minutes: 2));
-      expect(app.calls, hasLength(8));
+      expect(app.calls, hasLength(3));
       app.appLifecycleChanged(AppLifecycleState.resumed);
       await tester.pump();
-      expect(app.calls, hasLength(11));
-      monitor.setExpanded(false);
-      await tester.pump();
-      expect(app.calls.last, 'm');
+      expect(app.calls, ['m', 'm', 'm', 'm']);
       final count = app.calls.length;
       await tester.pump(const Duration(seconds: 3));
       expect(app.calls, hasLength(count));
@@ -219,83 +203,10 @@ void main() {
       app.changed();
       await tester.pump();
       expect(monitor.localMachine, isNull);
-      expect(monitor.machines.any((s) => s.machine.isShared), isFalse);
       monitor.dispose();
       app.dispose();
     },
   );
-
-  for (final (width, scale, brightness) in [
-    (520.0, 1.0, Brightness.dark),
-    (520.0, 1.0, Brightness.light),
-    (320.0, 2.0, Brightness.dark),
-  ]) {
-    testWidgets(
-      'resource panel stays usable at width $width and text scale $scale in $brightness',
-      (tester) async {
-        final app = _App();
-        final monitor = MachineResourceMonitor(app)..setExpanded(true);
-        await monitor.refresh();
-        addTearDown(monitor.dispose);
-        addTearDown(app.dispose);
-        tester.view.devicePixelRatio = 1;
-        tester.view.physicalSize = const Size(800, 700);
-        addTearDown(tester.view.reset);
-        var closed = false;
-        final originalBrightness = grid.AppTheme.brightness.value;
-        grid.AppTheme.brightness.value = brightness;
-        addTearDown(() => grid.AppTheme.brightness.value = originalBrightness);
-        final shadows = debugDisableShadows;
-        debugDisableShadows = false;
-        addTearDown(() => debugDisableShadows = shadows);
-        await tester.pumpWidget(
-          MaterialApp(
-            debugShowCheckedModeBanner: false,
-            theme: grid.buildAppTheme(brightness: brightness),
-            home: Scaffold(
-              body: MediaQuery(
-                data: MediaQueryData(textScaler: TextScaler.linear(scale)),
-                child: Center(
-                  child: SizedBox(
-                    width: width,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 600),
-                      child: MachineResourcePanel(
-                        monitor: monitor,
-                        onClose: () => closed = true,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-        await tester.pump();
-        expect(tester.takeException(), isNull);
-        expect(find.text('Memory pressure'), findsOneWidget);
-        await captureControls(
-          tester,
-          'machine-resources-$width-$scale-${brightness.name}',
-        );
-        debugDisableShadows = shadows;
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.pump();
-        expect(find.text('48 GB / 64 GB'), findsOneWidget);
-        expect(monitor.scopeName, 'M2');
-        expect(find.text('Follow focused pane'), findsNothing);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-        await tester.pump();
-        expect(find.text('16 GB / 32 GB'), findsOneWidget);
-        expect(monitor.scopeName, 'M2');
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        expect(closed, isTrue);
-        expect(app.allPanes, isEmpty);
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox());
-      },
-    );
-  }
 
   testWidgets(
     'footer hides complete groups at narrow widths and retains full details in its tooltip',
@@ -312,10 +223,7 @@ void main() {
               body: Center(
                 child: SizedBox(
                   width: width,
-                  child: WorkspaceMachineResources(
-                    monitor: monitor,
-                    onPressed: () {},
-                  ),
+                  child: WorkspaceMachineResources(monitor: monitor),
                 ),
               ),
             ),

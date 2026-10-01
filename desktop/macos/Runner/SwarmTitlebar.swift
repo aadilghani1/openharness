@@ -1757,7 +1757,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let subscriptionUsageButton = SwarmContextButton()
   fileprivate let harnessMonitorButton = SwarmContextButton()
-  fileprivate let machineResourcesButton = SwarmContextButton()
+  fileprivate let machineResourcesLabel = SwarmContextButton()
   private var machineResourcesState: [String: Any]?
   private var subscriptionUsageState: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
@@ -1766,6 +1766,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let storeButton = SwarmStoreButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+  private var resourceGroupGapCells: CGFloat = 1
   private let navigationFont = NSFont.systemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
   private var daemonArt = SwarmDaemonArt()
@@ -1834,13 +1835,12 @@ private final class SwarmTabStrip: NSView {
     harnessMonitorButton.setAccessibilityLabel("Harness Monitor")
     harnessMonitorButton.isHidden = true
     statusBar.addSubview(harnessMonitorButton)
-    machineResourcesButton.isBordered = false
-    machineResourcesButton.textAlignment = .left
-    machineResourcesButton.target = self
-    machineResourcesButton.action = #selector(openMachineResources)
-    machineResourcesButton.setAccessibilityLabel("Machine resources")
-    machineResourcesButton.isHidden = true
-    statusBar.addSubview(machineResourcesButton)
+    machineResourcesLabel.isBordered = false
+    machineResourcesLabel.textAlignment = .left
+    machineResourcesLabel.setAccessibilityRole(.staticText)
+    machineResourcesLabel.setAccessibilityLabel("Machine resources")
+    machineResourcesLabel.isHidden = true
+    statusBar.addSubview(machineResourcesLabel)
     pullRequestButton.isBordered = false
     pullRequestButton.target = self
     pullRequestButton.action = #selector(openFocusedPullRequest)
@@ -1905,7 +1905,7 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityLabel("Focused pane status")
     statusBar.setAccessibilityParent(self)
     setAccessibilityChildren([scroll, newButton, searchButton, storeButton, statusBar])
-    statusBar.setAccessibilityChildren([harnessMonitorButton, machineResourcesButton, subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
+    statusBar.setAccessibilityChildren([harnessMonitorButton, machineResourcesLabel, subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
@@ -2033,6 +2033,8 @@ private final class SwarmTabStrip: NSView {
       barFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
+      // Each adjacent control already supplies one padded character cell.
+      resourceGroupGapCells = CGFloat(max(0, ((style["groupGapCells"] as? NSNumber)?.doubleValue ?? 3) - 2))
     }
     for control in [newButton] {
       control.font = navigationFont
@@ -2059,11 +2061,11 @@ private final class SwarmTabStrip: NSView {
     harnessMonitorButton.update(state["harnessMonitor"] as? [String: Any], enabled: actionsEnabled)
     harnessMonitorButton.isHidden = state["harnessMonitor"] == nil
     machineResourcesState = state["machineResources"] as? [String: Any]
-    machineResourcesButton.font = barFont
-    machineResourcesButton.foreground = terminalForeground
-    machineResourcesButton.contentPadding = harnessMonitorButton.contentPadding
-    machineResourcesButton.update(machineResourcesState, enabled: actionsEnabled)
-    machineResourcesButton.isHidden = machineResourcesState == nil
+    machineResourcesLabel.font = barFont
+    machineResourcesLabel.foreground = terminalForeground
+    machineResourcesLabel.contentPadding = harnessMonitorButton.contentPadding
+    machineResourcesLabel.update(machineResourcesState, enabled: false)
+    machineResourcesLabel.isHidden = machineResourcesState == nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
@@ -2296,30 +2298,31 @@ private final class SwarmTabStrip: NSView {
   }
   private func layoutStatusBar() {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
+    let resourceGap = ("m" as NSString).size(withAttributes: [.font: barFont]).width * resourceGroupGapCells
     let height = workspaceBarControlHeight(barFont)
     let y = (statusBar.bounds.height - height) / 2
     let available = max(0, statusBar.bounds.width - cell * 2)
     let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
-    let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4)
+    let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4 - resourceGap * 2)
     let monitorWidth = harnessMonitorButton.isHidden ? 0 : min(harnessMonitorButton.preferredWidth, usageBudget * 0.4)
     let hardwareBudget = usageBudget * 0.42
     if var resource = machineResourcesState {
       for key in ["segments", "compactSegments", "minimalSegments"] {
         guard let segments = machineResourcesState?[key] else { continue }
         resource["segments"] = segments
-        machineResourcesButton.update(resource, enabled: actionsEnabled)
-        if machineResourcesButton.preferredWidth <= hardwareBudget { break }
+        machineResourcesLabel.update(resource, enabled: false)
+        if machineResourcesLabel.preferredWidth <= hardwareBudget { break }
       }
     }
-    let hardwareWidth = machineResourcesButton.isHidden ? 0 : min(machineResourcesButton.preferredWidth, hardwareBudget)
+    let hardwareWidth = machineResourcesLabel.isHidden ? 0 : min(machineResourcesLabel.preferredWidth, hardwareBudget)
     harnessMonitorButton.frame = NSRect(x: cell, y: y, width: monitorWidth, height: height)
     let usageWidth = hasSubscriptionUsage && (monitorWidth == 0 || statusBar.bounds.width >= 1050)
       ? min(subscriptionUsageButton.preferredWidth, usageBudget * (monitorWidth == 0 ? 0.45 : 0.22)) : 0
     subscriptionUsageButton.isHidden = usageWidth == 0
-    machineResourcesButton.frame = NSRect(x: cell + monitorWidth,
+    machineResourcesLabel.frame = NSRect(x: cell + monitorWidth + (monitorWidth > 0 && hardwareWidth > 0 ? resourceGap : 0),
       y: y, width: hardwareWidth, height: height)
-    subscriptionUsageButton.frame = NSRect(x: machineResourcesButton.frame.maxX,
+    subscriptionUsageButton.frame = NSRect(x: machineResourcesLabel.frame.maxX + (usageWidth > 0 && (monitorWidth > 0 || hardwareWidth > 0) ? resourceGap : 0),
       y: y, width: usageWidth, height: height)
     let daemonLeft = subscriptionUsageButton.frame.maxX + (usageWidth > 0 ? cell * 2 : 0)
     daemonButton.frame = NSRect(x: daemonLeft, y: y, width: daemonWidth, height: height)
@@ -2344,7 +2347,7 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.layoutSubtreeIfNeeded()
     subscriptionUsageButton.layoutSubtreeIfNeeded()
     harnessMonitorButton.layoutSubtreeIfNeeded()
-    machineResourcesButton.layoutSubtreeIfNeeded()
+    machineResourcesLabel.layoutSubtreeIfNeeded()
   }
   override func draw(_ dirtyRect: NSRect) {
     // A fine rule joins the active tab's outward shoulders to the workspace.
@@ -2375,10 +2378,6 @@ private final class SwarmTabStrip: NSView {
   @objc private func openSubscriptions() {
     guard actionsEnabled, subscriptionUsageButton.isEnabled else { return }
     emit?("subscriptions", nil)
-  }
-  @objc private func openMachineResources() {
-    guard actionsEnabled, machineResourcesButton.isEnabled else { return }
-    emit?("machineResources", nil)
   }
   @objc private func openHarnessMonitor() {
     guard actionsEnabled, harnessMonitorButton.isEnabled else { return }

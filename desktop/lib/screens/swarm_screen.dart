@@ -53,7 +53,6 @@ import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_monitor.dart';
 import '../state/machine_resource_monitor.dart';
-import '../widgets/machine_resource_panel.dart';
 import '../widgets/workspace_machine_resources.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
@@ -269,8 +268,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late int _tabStripRequest;
   OverlayEntry? _modelsOverlay;
   VoidCallback? _unregisterModels;
-  OverlayEntry? _resourcesOverlay;
-  VoidCallback? _unregisterResources;
   late final WorkspacePullRequest _pullRequest;
   final _toolbarNotices = ToolbarNotices();
   late final _onboarding =
@@ -771,7 +768,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           _closeSearch(restoreFocus: false);
           _closeCommandBar(restoreFocus: false);
           _closeModelsControls(restoreFocus: false);
-          _closeResourceControls(restoreFocus: false);
           _closeDaemon(restoreFocus: false);
           _closeHatch(restoreFocus: false);
         }
@@ -784,9 +780,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void dispose() {
     _harnessMonitor.dispose();
     _machineResources.dispose();
-    _unregisterResources?.call();
-    _resourcesOverlay?.remove();
-    _resourcesOverlay?.dispose();
     if (app.reviewSessionClose == _reviewSessionClose) {
       app.reviewSessionClose = null;
     }
@@ -950,8 +943,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _newHarnessOverlay == null &&
       !_modelsVisible &&
       !_machinesVisible &&
-      !_harnessesVisible &&
-      _resourcesOverlay == null;
+      !_harnessesVisible;
 
   Future<Map<String, dynamic>> _deviceFormCommand(
     String machineId,
@@ -1285,7 +1277,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _onboardingChanged() {
     if (!mounted) return;
     _modelsOverlay?.markNeedsBuild();
-    _resourcesOverlay?.markNeedsBuild();
     if (_menuHost) _syncNative();
     setState(() {});
   }
@@ -1726,7 +1717,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _paletteChanged() {
     _modelsOverlay?.markNeedsBuild();
-    _resourcesOverlay?.markNeedsBuild();
     _searchOverlay?.markNeedsBuild();
     if (_menuHost) _syncNative();
   }
@@ -1792,6 +1782,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'family': barStyle.fontFamily,
         'fallback': barStyle.fontFamilyFallback,
         'size': workspaceBarFontSize,
+        'groupGapCells': workspaceBarGroupSeparator.length,
         'foreground': terminalTheme.foreground.toARGB32(),
         'selection': terminalTheme.selection.toARGB32(),
       },
@@ -1830,7 +1821,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'minimalSegments': [
           {'text': _machineResources.metricsLabel(ram: false, gpu: false)},
         ],
-        'interactive': _shortcutsEnabled,
+        'interactive': false,
       },
       'footerCovered':
           !_showWorkspaceFooter ||
@@ -2154,11 +2145,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (call.method == 'harnessControls' || call.method == 'resourceMonitor') {
       _toggleHarnessControls();
-      await WidgetsBinding.instance.endOfFrame;
-      return;
-    }
-    if (call.method == 'machineResources') {
-      _toggleResourceControls();
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -4562,8 +4548,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       !_commandBarOpen &&
       !_machinesVisible &&
       !_modelsVisible &&
-      !_harnessesVisible &&
-      _resourcesOverlay == null;
+      !_harnessesVisible;
 
   void _showDaemonNotice(
     String message, {
@@ -5049,79 +5034,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (search.selected?.id == initialSelection) selectCurrent();
       }),
     );
-  }
-
-  void _toggleResourceControls() {
-    if (_resourcesOverlay != null) {
-      _closeResourceControls();
-      return;
-    }
-    if (!_shortcutsEnabled || _newHarness?.requestDismiss() == false) return;
-    _closeNewHarness(restoreFocus: false);
-    _closeSearch(restoreFocus: false);
-    _closeCommandBar(restoreFocus: false);
-    dismissTransientMenus();
-    _preparePaneFocus();
-    _resourcesOverlay = OverlayEntry(
-      builder: (context) => LayoutBuilder(
-        builder: (context, constraints) => Stack(
-          children: [
-            Positioned.fill(
-              top: _native ? 0 : _tabBarHeight,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _closeResourceControls,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            Positioned(
-              bottom: _statusBarHeight + 8,
-              left: 10,
-              width: (constraints.maxWidth - 20).clamp(0, 520),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight:
-                      (constraints.maxHeight -
-                              _statusBarHeight -
-                              (_native ? 0 : _tabBarHeight) -
-                              20)
-                          .clamp(0, 600),
-                ),
-                child: MachineResourcePanel(
-                  monitor: _machineResources,
-                  onClose: _closeResourceControls,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    Overlay.of(context).insert(_resourcesOverlay!);
-    _machineResources.setExpanded(true);
-    _unregisterResources = registerTransientMenu(
-      () => _closeResourceControls(restoreFocus: false),
-    );
-    if (_menuHost) _syncNative();
-    setState(() {});
-  }
-
-  void _closeResourceControls({bool restoreFocus = true}) {
-    if (_resourcesOverlay == null) return;
-    _unregisterResources?.call();
-    _unregisterResources = null;
-    _resourcesOverlay?.remove();
-    _resourcesOverlay?.dispose();
-    _resourcesOverlay = null;
-    _machineResources.setExpanded(false);
-    if (!mounted) return;
-    if (_menuHost) _syncNative();
-    setState(() {});
-    if (restoreFocus) {
-      _shellFocus.requestFocus();
-      final pane = app.focusedPane;
-      if (pane != null) app.focusPane(pane.id, reveal: true);
-    }
   }
 
   void _toggleHarnessControls() {
@@ -7104,13 +7016,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final download = kIsWeb && !_compact(context);
       final downloadWidth = download ? available * .16 : 0.0;
       final usage = _subscriptionUsage;
+      final resourceGap = cell.width * (workspaceBarGroupSeparator.length - 2);
       final resourceBudget = math.max(
         0.0,
         available -
             shareWidth -
             downloadWidth -
             (!kIsWeb && _slotShown ? 44 : 0) -
-            cell.width * 5,
+            cell.width * 5 -
+            resourceGap * 2,
       );
       final monitorWidth = math.min(
         workspaceBarTextSizeOf(context, _harnessMonitor.label).width +
@@ -7120,15 +7034,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final hardwareWidth = resourceBudget * .42;
       final usageWidth = constraints.maxWidth < 1050
           ? 0.0
-          : math.max(
-                  0.0,
-                  available -
-                      shareWidth -
-                      downloadWidth -
-                      (!kIsWeb && _slotShown ? 44 : 0) -
-                      cell.width * 5,
-                ) *
-                .22;
+          : resourceBudget * .22;
       final paneContext = Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -7206,17 +7112,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                 ),
+                SizedBox(width: resourceGap),
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: hardwareWidth),
                   child: WorkspaceMachineResources(
                     key: const ValueKey('workspace-machine-resources'),
                     monitor: _machineResources,
-                    onPressed: _shortcutsEnabled
-                        ? _toggleResourceControls
-                        : null,
                   ),
                 ),
-                if (usageWidth > 0)
+                if (usageWidth > 0) ...[
+                  SizedBox(width: resourceGap),
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: usageWidth),
                     child: WorkspaceBarControl(
@@ -7258,6 +7163,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       ),
                     ),
                   ),
+                ],
                 SizedBox(width: cell.width * 2),
                 if (!kIsWeb && _slotShown) _daemonTabButton(),
                 if (download) ...[

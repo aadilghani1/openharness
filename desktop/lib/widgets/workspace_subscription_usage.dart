@@ -1,6 +1,8 @@
 import 'package:flutter/painting.dart';
 
 import '../shared/theme/status_line_style.dart';
+import '../shared/theme/workspace_bar_style.dart'
+    show workspaceBarGroupSeparator;
 
 enum WorkspaceUsageTone { normal, low, exhausted }
 
@@ -60,7 +62,7 @@ class WorkspaceSubscriptionUsage {
           ? '${(100 - remaining).clamp(0, 100).round()}%'
           : '-';
       segments.add((
-        text: '${segments.isEmpty ? '' : '  '}$name ',
+        text: '${segments.isEmpty ? '' : workspaceBarGroupSeparator}$name ',
         tone: WorkspaceUsageTone.normal,
       ));
       segments.add((text: figure, tone: WorkspaceUsageTone.normal));

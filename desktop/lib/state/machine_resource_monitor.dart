@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart';
 
 import '../core/machine_resources.dart';
 import '../core/models.dart';
+import '../shared/theme/workspace_bar_style.dart'
+    show workspaceBarGroupSeparator;
 import 'app_state.dart';
 
 /// The footer always describes this computer, independently of pane focus.
-/// Closed: sample the local machine. Open: sample the owned inventory.
+/// Sample only the local machine while the app is visible.
 /// These optional reads never connect a machine or launch a harness.
 class MachineResourceMonitor extends ChangeNotifier {
   MachineResourceMonitor(this.app);
@@ -16,18 +18,7 @@ class MachineResourceMonitor extends ChangeNotifier {
   Timer? _timer;
   String? _lastScope;
   bool _started = false, _disposed = false, _busy = false, _again = false;
-  bool _expanded = false;
   int _revision = 0;
-
-  List<MachineState> get machines =>
-      app.machineStates.values
-          .where((state) => !state.machine.isShared)
-          .toList()
-        ..sort(
-          (a, b) => a.machine.displayName.toLowerCase().compareTo(
-            b.machine.displayName.toLowerCase(),
-          ),
-        );
 
   MachineState? get localMachine => app.machineStates.values
       .where((state) => state.isLocalMachine && !state.machine.isShared)
@@ -57,8 +48,8 @@ class MachineResourceMonitor extends ChangeNotifier {
   String metricsLabel({bool ram = true, bool gpu = true}) {
     final value = reading(localMachine);
     return 'CPU ${resourcePercent(value?.cpuPercent)}'
-        '${ram ? '  RAM ${resourcePercent(value?.memoryPercent)}' : ''}'
-        '${gpu ? '  GPU ${resourcePercent(value?.busiestGpu?.utilizationPercent)}' : ''}';
+        '${ram ? '${workspaceBarGroupSeparator}RAM ${resourcePercent(value?.memoryPercent)}' : ''}'
+        '${gpu ? '${workspaceBarGroupSeparator}GPU ${resourcePercent(value?.busiestGpu?.utilizationPercent)}' : ''}';
   }
 
   String get label => metricsLabel();
@@ -69,7 +60,7 @@ class MachineResourceMonitor extends ChangeNotifier {
         'This computer’s CPU and RAM usage, including other apps.\n'
         '${value?.busiestGpu == null ? 'GPU reading unavailable.' : 'GPU shows the busiest device: ${value!.busiestGpu!.name}.'}\n'
         '${state != null && !available(state) ? 'Machine disconnected. ' : ''}'
-        'Click to compare machines. Unavailable readings use a dash.';
+        'Unavailable readings use a dash.';
   }
 
   void start() {
@@ -78,14 +69,6 @@ class MachineResourceMonitor extends ChangeNotifier {
     app.addListener(_inventoryChanged);
     app.foreground.addListener(_environmentChanged);
     _environmentChanged();
-  }
-
-  void setExpanded(bool value) {
-    if (_expanded == value) return;
-    _expanded = value;
-    _revision++;
-    _timer?.cancel();
-    if (_started) unawaited(refresh());
   }
 
   void _inventoryChanged() {
@@ -125,7 +108,7 @@ class MachineResourceMonitor extends ChangeNotifier {
     _busy = true;
     final revision = _revision;
     final scope = localMachine;
-    final targets = (_expanded ? machines : [?scope]).where(available).toList();
+    final targets = [?scope].where(available);
     try {
       await Future.wait(
         targets.map((state) async {
@@ -152,7 +135,7 @@ class MachineResourceMonitor extends ChangeNotifier {
           _again = false;
           unawaited(refresh());
         } else {
-          _timer = Timer(Duration(seconds: _expanded ? 3 : 15), refresh);
+          _timer = Timer(const Duration(seconds: 15), refresh);
         }
       }
     }

@@ -8,6 +8,10 @@ import '../../terminal/terminal_typography.dart';
 /// SF Mono on macOS, with the platform's monospace stack elsewhere.
 const workspaceBarFontSize = 13.0;
 
+/// One space inside a label–value pair, three between complete components.
+/// Neighboring controls already contribute one padded cell on either side.
+const workspaceBarGroupSeparator = '   ';
+
 TextStyle workspaceBarTextStyle({Color? color, bool emphasized = false}) =>
     TextStyle(
       fontFamily: terminalFontFamily,
