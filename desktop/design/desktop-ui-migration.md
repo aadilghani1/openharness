@@ -425,3 +425,26 @@ unmerged.
   was replaced or launched. Native viewer interaction, physical IME and VoiceOver
   remain unverified. Human-readable project names, scope changes, per-session
   privacy controls and a delivery/usefulness view remain outstanding.
+
+### Global session close, 2026-10-01
+
+- Explicit Close saves and ends the session across the global workspace. Other
+  viewers do not require confirmation, and other tabs showing the closed session
+  are removed. Confirmed idle sessions close silently; unfinished or uncertain
+  work still requires a decision. Save failures retain the pane.
+- The confirmation has no title: “Still working. Close anyway?” with Cancel and
+  Close. Waiting for input, unsent text and uncertain activity use the same short
+  pattern. Cancel retains initial keyboard focus; the session name remains in
+  accessibility semantics. Previously queued deferred closes remain compatible
+  in the daemon, but the dialog no longer offers that action.
+- 51 desktop tests and 273 CLI tests pass, including another live viewer,
+  unfinished work, failed saves, hidden-tab cleanup, desk sync and history.
+  Scoped Flutter analysis, the CLI type check and CLI bundle pass. The normal
+  macOS debug build and signature verification pass; no installed app was
+  replaced or launched.
+- Real-font synthetic renders were inspected in both appearances at normal and
+  200% text: [dark](../../docs/research/2026-10-01-session-close/dark-1.0x.png),
+  [light](../../docs/research/2026-10-01-session-close/light-1.0x.png),
+  [narrow dark](../../docs/research/2026-10-01-session-close/dark-2.0x.png),
+  [narrow light](../../docs/research/2026-10-01-session-close/light-2.0x.png).
+  Live native interaction and VoiceOver are not claimed by these widget renders.

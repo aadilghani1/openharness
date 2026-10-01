@@ -251,10 +251,11 @@ Window-only preview collections are test/render fixtures, not a user setting.
 Per-machine runtime state is `MachineState` (connection status, transport mode, agents, `nodeOnline`
 from `node_status` pushes — distinct from our own socket status, pending offline agent, turn activity).
 
-Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm`. Closing the last local view
-of an owned idle session saves its native conversation and terminal snapshot before releasing its
-process. Working, unknown, draft, or other-device sessions require a reviewed decision; Cancel is
-the default. Stop after finishing persists a daemon-owned plan, and reopening cancels it. Layout
+Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm` and closes the session across
+the global workspace. An owned idle session saves its native conversation and terminal snapshot
+before releasing its process, regardless of other viewers. Working, waiting-for-input, draft, or
+unknown sessions show one short sentence with Cancel and Close; there is no title or deferred-close
+button. Cancel is the default. Previously queued daemon close plans remain compatible. Layout
 cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 

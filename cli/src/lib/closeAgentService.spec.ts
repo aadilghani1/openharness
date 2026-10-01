@@ -39,6 +39,7 @@ it('backs up an idle session before stopping, without treating a tab switch as C
 })
 it.each<CloseActivity>(['working', 'needs_input', 'draft', 'unknown'])('leaves %s work alive until explicitly approved', async activity => {
   vi.mocked(deps.activity).mockResolvedValue(activity)
+  expect(await service.request(request('inspect'))).toEqual({ activity })
   expect(await service.request(request())).toEqual({ error: 'SESSION_NOT_IDLE', activity })
   expect(deps.stop).not.toHaveBeenCalled()
   expect(await service.request(request('now'))).toEqual({ closed: true })
@@ -55,18 +56,6 @@ it.each(['session', 'creation'] as const)('rejects an outdated %s before reading
 it('rechecks activity after the checkpoint so newly started work stays alive', async () => {
   vi.mocked(deps.activity).mockResolvedValueOnce('idle').mockResolvedValue('working')
   expect(await service.request(request())).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'working' })
-  expect(registry.byAgent(row.agentId)).toBe(row)
-})
-it('requires an explicit choice when another window is using an idle session', async () => {
-  expect(await service.request(request('inspect'), () => true)).toEqual({ activity: 'in_use' })
-  expect(await service.request(request('idle'), () => true)).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'in_use' })
-  expect(deps.stop).not.toHaveBeenCalled()
-  expect(await service.request(request('now'), () => true)).toEqual({ closed: true })
-})
-it('does not stop if another view opens during the backup', async () => {
-  let opened = false
-  vi.mocked(deps.checkpoint).mockImplementation(async () => { opened = true })
-  expect(await service.request(request(), () => opened)).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'in_use' })
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
 it('checkpoint failure retains the session and reports the failure', async () => {

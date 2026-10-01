@@ -3032,8 +3032,7 @@ export class BackendSocket {
             reply(type, requestId, { error: 'INVALID_CLOSE_REQUEST' }); return
           }
           // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
-          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode },
-            () => this.terminalStreams?.hasOtherViews(agentId, connId) ?? false)
+          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode })
             .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
           return
         }

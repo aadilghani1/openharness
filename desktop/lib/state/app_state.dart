@@ -1773,18 +1773,6 @@ class AppNotifier extends ChangeNotifier {
     for (final pane in closing) {
       final id = pane.agentId;
       if (pane.isWeb || id == null || !seen.add((pane.machineId, id))) continue;
-      // The same pane object may belong to several tabs. Only its last view
-      // closes the underlying session, even when another tab is hidden.
-      final remains = swarms.any(
-        (other) => other.panes.any(
-          (p) =>
-              !p.isWeb &&
-              p.machineId == pane.machineId &&
-              p.agentId == id &&
-              (!identical(other, tab) || !closing.contains(p)),
-        ),
-      );
-      if (remains) continue;
       final machine = stateOf(pane.machineId);
       final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
       if (machine?.machine.isShared == true ||
@@ -1814,6 +1802,26 @@ class AppNotifier extends ChangeNotifier {
           }
           if (!_authWorkCurrent(revision) || !swarms.contains(tab)) return;
           await finish();
+          // Close is global: the acknowledged session also leaves any other
+          // tab holding it. Preserve each layout through the normal close path.
+          for (final (machineId, agent) in targets) {
+            final current = stateOf(machineId)?.agents
+                .where((candidate) => candidate.id == agent.id)
+                .firstOrNull;
+            if (current?.isStopped != true ||
+                current?.createdAt != agent.createdAt ||
+                current?.sessionId != agent.sessionId) {
+              continue;
+            }
+            for (final other in swarms.toList()) {
+              for (final pane in other.panes.toList()) {
+                if (!_authWorkCurrent(revision)) return;
+                if (pane.machineId == machineId && pane.agentId == agent.id) {
+                  await closePane(pane.id, swarmId: other.id);
+                }
+              }
+            }
+          }
         } catch (_) {
           if (_authWorkCurrent(revision)) {
             _lastError = 'Could not close this session safely. Check its state and try again.';

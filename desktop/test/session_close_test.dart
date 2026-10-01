@@ -111,8 +111,11 @@ void main() {
       await mount(tester, app);
       unawaited(app.requestClosePane(pane.id));
       await tester.pumpAndSettle();
-      expect(find.text('Stop now'), findsOneWidget);
-      expect(find.text('Stop after finishing'), findsOneWidget);
+      expect(find.text('Still working. Close anyway?'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Close'), findsOneWidget);
+      expect(find.byType(FilledButton), findsOneWidget);
+      expect(find.text('Close session'), findsNothing);
+      expect(find.text('Stop after finishing'), findsNothing);
       expect(
         tester
             .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
@@ -128,22 +131,29 @@ void main() {
     },
   );
 
-  for (final choice in ['now', 'after']) {
-    testWidgets('working Close $choice sends only the reviewed action', (
+  for (final entry in {
+    'working': 'Still working. Close anyway?',
+    'needs_input': 'Waiting for input. Close anyway?',
+    'draft': 'Unsent text. Close anyway?',
+    'unknown': 'May still be working. Close anyway?',
+  }.entries) {
+    testWidgets('${entry.key} Close sends only the reviewed action', (
       tester,
     ) async {
-      connection.activities['a0'] = 'working';
+      connection.activities['a0'] = entry.key;
       final pane = app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
       unawaited(app.requestClosePane(pane.id));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(Key('session-close-$choice')));
+      expect(find.text(entry.value), findsOneWidget);
+      expect(modes(), ['inspect']);
+      await tester.tap(find.widgetWithText(FilledButton, 'Close'));
       await tester.pumpAndSettle();
-      expect(modes(), ['inspect', choice == 'now' ? 'now' : 'after_task']);
+      expect(modes(), ['inspect', 'now']);
       expect(app.allPanes, isEmpty);
       expect(
         app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
-        choice == 'now',
+        isTrue,
       );
       expect(app.closedHistory, hasLength(1));
       await tester.pumpWidget(const SizedBox());
@@ -193,7 +203,7 @@ void main() {
     },
   );
 
-  testWidgets('another hidden tab showing the same session keeps it live', (
+  testWidgets('Close also removes the session from another hidden tab', (
     tester,
   ) async {
     final pane = app.adoptSessionForTest(terminal('a0', []));
@@ -204,9 +214,13 @@ void main() {
     await mount(tester, app);
     await app.requestClosePane(pane.id);
     await tester.pumpAndSettle();
-    expect(connection.closes, isEmpty);
-    expect(original.panes, [pane]);
-    expect(app.stateOf('m')!.agents.first.terminalAvailable, isTrue);
+    expect(modes(), ['inspect', 'idle']);
+    expect(app.allPanes, isEmpty);
+    expect(app.swarms, isNot(contains(original)));
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+      isTrue,
+    );
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'url'
 import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
-import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
+import { TerminalStreamManager } from './lib/terminalStreamManager.js'
+import type { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -27,9 +28,73 @@ import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
-import type { CloseAgentService } from './lib/closeAgentService.js'
+import { CloseAgentService } from './lib/closeAgentService.js'
 
 describe('safe session close RPC', () => {
+  it.each(['idle', 'working'] as const)('uses %s activity even with another live viewer', async activity => {
+    const socket = new BackendSocket('fixture')
+    const frames: any[] = []
+    for (const connId of ['local:close', 'local:other']) {
+      socket.registerLocalClient(connId, {
+        sendFrame: frame => { frames.push({ connId, ...frame }); return true },
+        sendBinary: () => true,
+      })
+    }
+    const row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' })!
+    row.sessionId = 'close-history'
+    const checkpoint = vi.fn(async () => {})
+    const stop = vi.fn(async (_agentId, options) => {
+      await options.checkpoint(row, 'before')
+      await options.beforeStop(row)
+      expect(options.current()).toBe(true)
+      registry.removeAgent(row.agentId)
+    })
+    socket.closeAgentService = new CloseAgentService({
+      registry, activity: async () => activity, checkpoint, stop, changed: () => {},
+    })
+    const terminals = new TerminalStreamManager({
+      terminals: {
+        openStream: async () => ({ state: 'succeeded', value: {
+          runtime: { backend: 'tmux', paneId: '%7302' },
+          beginSnapshot: () => {},
+          endSnapshot: () => {},
+          snapshot: async () => ({ state: 'succeeded', value: { bytes: Buffer.from('fixture'), cols: 80, rows: 24 } }),
+          close: async () => {},
+        } }),
+      } as unknown as TerminalBackendCoordinator,
+      resolveAgent: id => registry.byAgent(id),
+      sendTarget: (connId, type, payload) => { frames.push({ connId, type, payload }); return true },
+      sendBinaryTarget: () => true,
+      streamingAvailable: true,
+    })
+    socket.setTerminalStreamManager(terminals)
+    try {
+      const opening = { agentId: row.agentId, protocolVersion: 3, cols: 80, rows: 24 }
+      await terminals.handleFrame('local:close', 'terminal_open', { ...opening, requestId: 'own' })
+      await terminals.handleFrame('local:other', 'terminal_open', { ...opening, requestId: 'other', takeover: false })
+      expect(frames.filter(frame => frame.type === 'terminal_ready')).toHaveLength(2)
+      expect(frames.find(frame => frame.payload?.requestId === 'other')?.payload.readOnly).toBe(true)
+      const closing = { agentId: row.agentId, sessionId: row.sessionId, createdAt: new Date(row.registeredAt).toISOString() }
+      const ask = async (mode: string) => {
+        socket.handleLocalFrame('local:close', { type: 'agent_close', payload: { ...closing, mode, requestId: mode } })
+        await vi.waitFor(() => expect(frames.some(frame => frame.type === 'agent_close_result' && frame.payload.requestId === mode)).toBe(true))
+        return frames.find(frame => frame.type === 'agent_close_result' && frame.payload.requestId === mode).payload
+      }
+      expect(await ask('inspect')).toMatchObject({ activity })
+      expect(await ask('idle')).toMatchObject(activity === 'idle' ? { closed: true } : { error: 'SESSION_NOT_IDLE', activity })
+      if (activity === 'working') {
+        expect(stop).not.toHaveBeenCalled()
+        expect(await ask('now')).toMatchObject({ closed: true })
+      }
+      expect(checkpoint).toHaveBeenCalledOnce()
+      expect(stop).toHaveBeenCalledOnce()
+      expect(registry.byAgent(row.agentId)).toBeUndefined()
+    } finally {
+      registry.removeAgent(row.agentId)
+      await socket.stop()
+    }
+  })
+
   it('requires encrypted remote frames and never blocks unrelated inventory while saving', async () => {
     const socket = new BackendSocket('fixture')
     const frames: any[] = []
