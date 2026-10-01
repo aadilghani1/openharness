@@ -1895,10 +1895,26 @@ class AppNotifier extends ChangeNotifier {
       if (machine.terminalCapabilityUnanswered) {
         unawaited(_loadTerminalCapabilities(machine, connection, revision));
       }
-      final agents = (response['agents'] as List<dynamic>? ?? [])
+      final rawAgents = response['agents'] as List<dynamic>? ?? const [];
+      final agents = rawAgents
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
           .toList();
       if (agentsEqual(machine.agents, agents)) return;
+      // The machine's own list for the next launch too: what changed reached this phone without a
+      // push (one sent while the socket was away). A harness added or gone goes out soon, the rest
+      // with the app leaving the screen — see [_saveMachineCacheSoon].
+      final cache = _machineCache;
+      if (cache != null) {
+        final had = {for (final agent in machine.agents) agent.id};
+        cache.rememberAgents(machineId, [
+          for (final item in rawAgents)
+            if (item is Map<String, dynamic>) item,
+        ]);
+        if (agents.length != had.length ||
+            !agents.every((agent) => had.contains(agent.id))) {
+          _saveMachineCacheSoon();
+        }
+      }
       _replaceAgents(machine, agents);
       notifyListeners();
     } on WsRequestTimeout {
@@ -2665,6 +2681,63 @@ class AppNotifier extends ChangeNotifier {
     terminal.addListener(check);
   }
 
+  /// The longest a launch's agent list waits for the terminal on screen — see
+  /// [_yieldToLaunchTerminal].
+  static const _launchListYield = Duration(milliseconds: 1500);
+
+  /// Let the terminal on screen answer before [machine]'s agent list is asked for — at launch only.
+  ///
+  /// ⚠️ **Why the list waits (owner, 2026-10-01).** The terminal a launch reopens and the machine's
+  /// agent list left on the same connection in the same instant, and the terminal came second: on
+  /// every launch measured (ten of ten) its `terminal_ready` arrived in the same second as the
+  /// list's reply, which took 1.1–3.0s for 134 agents. The machine builds that reply for every
+  /// agent at once, stopped ones included (`agents_list` in the CLI's `backendSocket.ts`), and the
+  /// one stream somebody was waiting to type into queued behind it — while the kept screen made
+  /// the terminal look ready from the first frames of the launch, and a tap on it raised nothing.
+  ///
+  /// Nothing on screen needs the list first: a launch draws from last run's
+  /// ([MachineState.agentsFromCache]), which is also what limits this to a launch — a reconnect
+  /// already has a confirmed list, and asks at once as it always did. Over the moment the terminal
+  /// shows its first live frame or stops opening (failed, taken, gone), and after
+  /// [_launchListYield] whatever happens: the list never waits on a terminal that is not coming.
+  ///
+  /// What it costs: for up to that long, an agent deleted elsewhere since the last run is still
+  /// drawn (`_AgentGone` in `terminal_page.dart` needs the real list), and the list's news — a new
+  /// agent, a rename — arrives that much later.
+  Future<void> _yieldToLaunchTerminal(MachineState machine) async {
+    if (!machine.agentsFromCache) return;
+    final pane = focusedPane;
+    final terminal = pane?.session;
+    if (pane == null ||
+        terminal == null ||
+        pane.machineId != machine.machine.machineId) {
+      return;
+    }
+    // `controlling` without a frame is a `terminal_ready` whose keyframe is on its way: still worth
+    // the wait, the screen is not live until it lands.
+    bool over() {
+      if (terminal.hasRenderedFrame) return true;
+      final status = terminal.status;
+      return status != TerminalSessionStatus.opening &&
+          status != TerminalSessionStatus.controlling;
+    }
+
+    if (over()) return;
+    final done = Completer<void>();
+    void check() {
+      if (!done.isCompleted && over()) done.complete();
+    }
+
+    // A session closed meanwhile never notifies again; this is what ends the wait then.
+    final timer = Timer(_launchListYield, () {
+      if (!done.isCompleted) done.complete();
+    });
+    terminal.addListener(check);
+    await done.future;
+    timer.cancel();
+    terminal.removeListener(check);
+  }
+
   /// Start dialling last run's machines without waiting for `/api/machines`.
   ///
   /// ⚠️ **The whole point is the socket, not the list.** A relay dial plus the
@@ -2984,6 +3057,10 @@ class AppNotifier extends ChangeNotifier {
         connection,
         revision,
       );
+      // The launch's own terminal first — see [_yieldToLaunchTerminal]. Outside [remaining]: the
+      // wait is the phone's choice, not the machine being slow to answer.
+      await _yieldToLaunchTerminal(machine);
+      if (!_machineWorkCurrent(machine, revision)) return;
       listAskedAt = DateTime.now();
       final response = await StartupTrace.time(
         'agents.list',
@@ -3369,7 +3446,14 @@ class AppNotifier extends ChangeNotifier {
     // No preview reads from here — see [sessionPreviews].
   }
 
-  void _upsertAgent(MachineState machine, Agent agent) {
+  /// [json] is [agent] as the daemon sent it, where the caller has it: kept for the next launch
+  /// ([_cacheAgentJson]).
+  void _upsertAgent(
+    MachineState machine,
+    Agent agent, {
+    Map<String, dynamic>? json,
+  }) {
+    if (json != null) _cacheAgentJson(machine, json);
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
     agent = retainNewerGitContext(agent, previous);
@@ -3409,6 +3493,8 @@ class AppNotifier extends ChangeNotifier {
     final cleanName = name.trim();
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
+    // Written with the rest when the app leaves the screen — see [_keepMachineCache].
+    _machineCache?.renameAgent(machine.machine.machineId, agentId, cleanName);
     for (final pane in panesFor(machine.machine.machineId)) {
       if (pane.agentId != agentId) continue;
       pane.session?.renameAgent(cleanName);
@@ -3419,6 +3505,12 @@ class AppNotifier extends ChangeNotifier {
     machine.agents = machine.agents
         .where((agent) => agent.id != agentId)
         .toList();
+    // Out of the next launch's list too, and soon: reopening a harness that is gone is the one
+    // thing a stale entry would do — see [_saveMachineCacheSoon].
+    if (_machineCache?.forgetAgent(machine.machine.machineId, agentId) ??
+        false) {
+      _saveMachineCacheSoon();
+    }
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
     _keptScreens.remove('${machine.machine.machineId}/$agentId');
     _keptScreenStore?.remove('${machine.machine.machineId}/$agentId');
@@ -4230,16 +4322,20 @@ class AppNotifier extends ChangeNotifier {
     if (raw is! Map || raw['id'] is! String || (raw['id'] as String).isEmpty) {
       return unconfirmed;
     }
+    final Map<String, dynamic> json;
     final Agent agent;
     try {
-      agent = Agent.fromJson(Map<String, dynamic>.from(raw));
+      json = Map<String, dynamic>.from(raw);
+      agent = Agent.fromJson(json);
     } catch (_) {
       return unconfirmed;
     }
     creation._agentId = agent.id;
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
-    _upsertAgent(machine, agent);
+    // Into the next launch's list at once — the harness just made is the one most likely to be
+    // reopened by it. See [_cacheAgentJson].
+    _upsertAgent(machine, agent, json: json);
     // ⚠️ Read from the AGENT the machine answered with, not from what was asked for. "New project"
     // and a clone send no `cwd` at all — the folder is whatever the machine made — so taking it
     // from the request would record nothing for exactly the two sources that produce a folder
@@ -4526,9 +4622,11 @@ class AppNotifier extends ChangeNotifier {
     }
     final raw = result['agent'];
     if (raw is! Map || raw['id'] != stopped.id) return unconfirmed;
+    final Map<String, dynamic> json;
     final Agent resumed;
     try {
-      resumed = Agent.fromJson(Map<String, dynamic>.from(raw));
+      json = Map<String, dynamic>.from(raw);
+      resumed = Agent.fromJson(json);
     } catch (_) {
       return unconfirmed;
     }
@@ -4547,7 +4645,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || machineStates[machine.machine.machineId] != machine) {
       return const RestartAgentResult();
     }
-    _upsertAgent(machine, resumed);
+    _upsertAgent(machine, resumed, json: json);
     notifyListeners();
     return const RestartAgentResult();
   }
@@ -4588,7 +4686,8 @@ class AppNotifier extends ChangeNotifier {
     final raw = result['agent'];
     if (raw is Map) {
       try {
-        _upsertAgent(machine, Agent.fromJson(Map<String, dynamic>.from(raw)));
+        final json = Map<String, dynamic>.from(raw);
+        _upsertAgent(machine, Agent.fromJson(json), json: json);
         notifyListeners();
       } catch (_) {
         // Malformed reply agent — harmless, the CLI's own agent_synced push still lands.
@@ -5332,7 +5431,12 @@ class AppNotifier extends ChangeNotifier {
       // Or the screen kept on disk — from a moment ago, or from the last run. See
       // [_keptScreenStore]: this is what puts a launch's agent on screen before its machine answers.
       final saved = _keptScreenStore?.read(keptKey);
-      if (saved != null) terminal.seedSnapshot(saved);
+      if (saved != null) {
+        terminal.seedSnapshot(
+          saved,
+          fromEarlierRun: saved.savedAt.isBefore(_runStartedAt),
+        );
+      }
     }
     terminal.addListener(notifyListeners);
     // The launch's held machines go once a terminal is live — see [_launchMachineId].
@@ -5457,6 +5561,12 @@ class AppNotifier extends ChangeNotifier {
   /// tests that do not hand one over.
   final KeptScreenStore? _keptScreenStore;
 
+  /// When this run began, near enough: the notifier is built at the start of the launch, and this
+  /// run keeps no screen before its first live frame. A kept screen saved before it is an EARLIER
+  /// run's — the one a launch draws, which the page shows only part of
+  /// ([TerminalSession.keptScreenFromEarlierRun]).
+  final DateTime _runStartedAt = DateTime.now();
+
   /// [terminal]'s screen into [_keptScreenStore] under [key], when it has a live one to keep.
   void _keepScreen(String key, TerminalSession terminal) {
     final store = _keptScreenStore;
@@ -5479,6 +5589,61 @@ class AppNotifier extends ChangeNotifier {
     unawaited(store.flush());
   }
 
+  /// [json] — one agent as the daemon sent it — into the machine cache's copy of [machine]'s list,
+  /// for the next launch to draw from ([MachineCache.rememberAgent]). A harness NEW to that list is
+  /// written out in a moment ([_saveMachineCacheSoon]); any other change waits for the app to leave
+  /// the screen ([_keepMachineCache]).
+  void _cacheAgentJson(MachineState machine, Map<String, dynamic> json) {
+    final cache = _machineCache;
+    if (cache == null) return;
+    if (cache.rememberAgent(machine.machine.machineId, json)) {
+      _saveMachineCacheSoon();
+    }
+  }
+
+  /// When the machine cache goes out after a harness was added to or removed from it — see
+  /// [_saveMachineCacheSoon].
+  Timer? _machineCacheSaveTimer;
+  static const _machineCacheSaveDelay = Duration(seconds: 3);
+
+  /// Write the machine cache in [_machineCacheSaveDelay], not only when the app leaves the screen.
+  ///
+  /// ⚠️ **For a harness made or deleted — not for every push.** The background write
+  /// ([_keepMachineCache]) is the one that matters, and it is enough for everything else: a status, a
+  /// title, a branch drawn a run late costs nothing, the machine's list replaces it a second in.
+  /// A harness missing from the list costs the launch that reopens it its whole head start (the
+  /// terminal waits for that list — see [MachineCache.rememberAgent]), and an app closed without
+  /// passing through the background — killed from a debugger, or crashed — would lose it. Made
+  /// rarely and by hand, so writing for each is a few writes an hour; the delay lets the pushes
+  /// that follow a creation (its name, its terminal coming up) land in the same write. Not
+  /// re-armed by them: the first change starts the clock.
+  void _saveMachineCacheSoon() {
+    if (_machineCacheSaveTimer != null || _disposed) return;
+    _machineCacheSaveTimer = Timer(_machineCacheSaveDelay, _keepMachineCache);
+  }
+
+  /// The machine cache written out if anything in it changed since it last was — the agents this
+  /// run learned one at a time, between lists ([MachineCache.hasUnsaved]). Called as the app leaves
+  /// the screen, beside [_keepLiveScreens], and by [_saveMachineCacheSoon]. Never awaited, and
+  /// nothing when nothing changed: an idle run writes nothing.
+  void _keepMachineCache() {
+    _machineCacheSaveTimer?.cancel();
+    _machineCacheSaveTimer = null;
+    final cache = _machineCache;
+    if (cache == null || _disposed || !cache.hasUnsaved) return;
+    // Signed out, or not yet signed in: the file is the account's, and [logout] clears it.
+    if (status != AppStatus.authenticated) return;
+    // A list not there to write would write the cache EMPTY — every machine gone from the next
+    // launch's warm start. The fetch that fills it saves on landing anyway.
+    if (machines.isEmpty) return;
+    unawaited(
+      cache.save(
+        machines,
+        isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
+      ),
+    );
+  }
+
   /// Draw a kept screen behind every tile that has nothing to show yet — the store's read lands a
   /// moment into a launch, possibly after the launch's own tile was attached ([_attachSession] seeds
   /// the ones attached after it).
@@ -5490,7 +5655,12 @@ class AppNotifier extends ChangeNotifier {
       final terminal = pane.session;
       if (agentId == null || terminal == null || terminal.hasScreen) continue;
       final snapshot = store.read('${pane.machineId}/$agentId');
-      if (snapshot != null) terminal.seedSnapshot(snapshot);
+      if (snapshot != null) {
+        terminal.seedSnapshot(
+          snapshot,
+          fromEarlierRun: snapshot.savedAt.isBefore(_runStartedAt),
+        );
+      }
     }
   }
 
@@ -5881,8 +6051,9 @@ class AppNotifier extends ChangeNotifier {
         final raw = payload['agent'];
         if (raw is Map) {
           try {
-            final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
-            _upsertAgent(machine, agent);
+            final json = Map<String, dynamic>.from(raw);
+            final agent = Agent.fromJson(json);
+            _upsertAgent(machine, agent, json: json);
             if (agent.terminalAvailable) {
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
@@ -5912,8 +6083,9 @@ class AppNotifier extends ChangeNotifier {
         final raw = payload['agent'];
         if (raw is Map && raw['terminal'] is Map) {
           try {
-            final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
-            _upsertAgent(machine, agent);
+            final json = Map<String, dynamic>.from(raw);
+            final agent = Agent.fromJson(json);
+            _upsertAgent(machine, agent, json: json);
             // Same reattach as `agent_synced` above — a pane can be waiting on this exact agent
             // (e.g. one this window's own New Agent dialog just opened) with no session yet.
             // A push about an agent created elsewhere.
@@ -6208,12 +6380,18 @@ class AppNotifier extends ChangeNotifier {
   void handleAppPaused() {
     _desk.pause();
     _keepLiveScreens();
+    // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
+    _keepMachineCache();
   }
 
   /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
-  /// only the screens are kept ([_keepLiveScreens]), because the switcher is where an app is
-  /// closed, and closing it there need not pass through [handleAppPaused] first.
-  void handleAppInactive() => _keepLiveScreens();
+  /// only the screens and the machine cache are kept ([_keepLiveScreens], [_keepMachineCache]),
+  /// because the switcher is where an app is closed, and closing it there need not pass through
+  /// [handleAppPaused] first.
+  void handleAppInactive() {
+    _keepLiveScreens();
+    _keepMachineCache();
+  }
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -6241,6 +6419,8 @@ class AppNotifier extends ChangeNotifier {
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
     _forgetLaunchHold();
+    _machineCacheSaveTimer?.cancel();
+    _machineCacheSaveTimer = null;
     _clearAllTurnActivity();
     for (final pane in allPanes) {
       pane.session?.removeListener(notifyListeners);

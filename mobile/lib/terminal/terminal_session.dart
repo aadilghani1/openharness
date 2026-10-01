@@ -283,8 +283,15 @@ class TerminalSession extends ChangeNotifier {
   /// Something to show: this attach's first frame, or a kept screen standing in for it.
   bool get hasScreen => hasRenderedFrame || _showingKeptScreen;
 
+  /// Whether the kept screen on show ([showingKeptScreen]) was kept by an EARLIER run of the app —
+  /// what a launch draws while it reconnects — rather than by this one, a swipe or a moment ago.
+  /// The phone draws only part of such a screen — see `_KeptScreenCover` in `terminal_page.dart`.
+  bool get keptScreenFromEarlierRun =>
+      _showingKeptScreen && _keptFromEarlierRun;
+  bool _keptFromEarlierRun = false;
+
   /// Shows [kept] — the screen this agent had when the phone last left it — until the live stream's
-  /// first keyframe lands and replaces it.
+  /// first keyframe lands and replaces it. [fromEarlierRun]: see [keptScreenFromEarlierRun].
   ///
   /// ⚠️ **What makes switching back to an agent instant.** An attach waits a network round trip for
   /// its keyframe; until then the page showed a skeleton. The kept screen is what the reader last
@@ -293,11 +300,12 @@ class TerminalSession extends ChangeNotifier {
   ///
   /// Rebound to this session: the kept terminal's callbacks still named the session it came from,
   /// which is gone.
-  void seedScreen(Terminal kept) {
+  void seedScreen(Terminal kept, {bool fromEarlierRun = false}) {
     if (hasRenderedFrame || _disposed) return;
     _bindTerminal(kept);
     terminal = kept;
     _showingKeptScreen = true;
+    _keptFromEarlierRun = fromEarlierRun;
     notifyListeners();
   }
 
@@ -306,12 +314,12 @@ class TerminalSession extends ChangeNotifier {
   ///
   /// Never over something better: a screen already on show (a live frame, or the exact terminal
   /// kept from a moment ago) stays.
-  void seedSnapshot(ScreenSnapshot snapshot) {
+  void seedSnapshot(ScreenSnapshot snapshot, {bool fromEarlierRun = false}) {
     if (hasScreen || _disposed) return;
     final kept = _newTerminal(bindCallbacks: false)
       ..resize(_clampCols(snapshot.cols), _clampRows(snapshot.rows))
       ..write(snapshot.ansi);
-    seedScreen(kept);
+    seedScreen(kept, fromEarlierRun: fromEarlierRun);
   }
 
   /// This session's screen as a [ScreenSnapshot] to keep, or null with nothing live to keep — a

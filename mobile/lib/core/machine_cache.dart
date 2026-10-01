@@ -202,8 +202,80 @@ class MachineCache {
   /// Kept until the next [save] writes it out. Passing an empty list is
   /// meaningful and is kept: a machine whose agents were all deleted should come
   /// back empty next launch, not with the ones it had before.
-  void rememberAgents(String machineId, List<Map<String, dynamic>> agents) =>
-      _agents[machineId] = agents;
+  void rememberAgents(String machineId, List<Map<String, dynamic>> agents) {
+    _agents[machineId] = agents;
+    _unsaved = true;
+  }
+
+  /// Whether a list or an agent was remembered since the last [save] — what a
+  /// save made only to keep the file current asks first (`AppNotifier`'s
+  /// background write), so an unchanged run writes nothing.
+  bool get hasUnsaved => _unsaved;
+  bool _unsaved = false;
+
+  /// [agent] — one agent as the daemon sent it, in a push (`agent_synced`,
+  /// `agent_created`) or a reply that carries one — put in place of the agent
+  /// with its id in [machineId]'s list, or added at its end. Whether it was
+  /// added is returned: a list that GREW is the one change the next launch
+  /// cannot do without (see `AppNotifier`'s early save).
+  ///
+  /// ⚠️ **Why the list is amended between lists (owner, 2026-10-01).** It was
+  /// only ever written when a machine answered `agents_list`, which a phone asks
+  /// on connecting — so a harness made during a run was not in the file at the
+  /// end of it, and the next launch, reopening exactly that harness, had no
+  /// agent to draw a terminal for: it waited out the machine's whole list first.
+  /// Measured on 2 of 7 launches, both straight after making a harness.
+  ///
+  /// The same object `agents_list` carries — one shape on the wire, built by
+  /// one function in the CLI (`agentFrame.ts`) — so it is kept as it came. Not
+  /// for a machine this run has neither read from the file nor listed: there is
+  /// no list to amend, and one agent written as the whole of it would read back
+  /// as a machine that has nothing else.
+  bool rememberAgent(String machineId, Map<String, dynamic> agent) {
+    final list = _agents[machineId];
+    final id = agent['id'];
+    if (list == null || id is! String || id.isEmpty) return false;
+    // A fresh list rather than an edit: the one held may be the very list a
+    // caller handed [rememberAgents], and it is not this class's to change.
+    final next = List<Map<String, dynamic>>.of(list);
+    final at = next.indexWhere((item) => item['id'] == id);
+    if (at == -1) {
+      next.add(agent);
+    } else {
+      next[at] = agent;
+    }
+    _agents[machineId] = next;
+    _unsaved = true;
+    return at == -1;
+  }
+
+  /// [agentId]'s name in [machineId]'s list changed — `agent_renamed`, which
+  /// carries the name alone. A copy of its JSON with the new name; nothing for
+  /// an agent the list does not have.
+  void renameAgent(String machineId, String agentId, String name) {
+    final list = _agents[machineId];
+    if (list == null) return;
+    final at = list.indexWhere((item) => item['id'] == agentId);
+    if (at == -1 || list[at]['name'] == name) return;
+    _agents[machineId] = List<Map<String, dynamic>>.of(list)
+      ..[at] = {...list[at], 'name': name};
+    _unsaved = true;
+  }
+
+  /// [agentId] is gone from [machineId] — deleted, or stopped and waiting for
+  /// the next list to bring it back as such. Whether it was there is returned.
+  bool forgetAgent(String machineId, String agentId) {
+    final list = _agents[machineId];
+    if (list == null) return false;
+    final next = [
+      for (final item in list)
+        if (item['id'] != agentId) item,
+    ];
+    if (next.length == list.length) return false;
+    _agents[machineId] = next;
+    _unsaved = true;
+    return true;
+  }
 
   /// Remember a machine's `terminal_capabilities` reply, as the daemon sent it.
   ///
@@ -254,6 +326,8 @@ class MachineCache {
           },
       ],
     });
+    // What was remembered is in [payload] now, whichever write lands last.
+    _unsaved = false;
     return _queue(() => _store.write(payload));
   }
 
@@ -262,6 +336,7 @@ class MachineCache {
   Future<void> clear() {
     _agents.clear();
     _capabilities.clear();
+    _unsaved = false;
     return _queue(_store.clear);
   }
 

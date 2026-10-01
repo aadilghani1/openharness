@@ -194,6 +194,8 @@ typedef _PageFacts = ({
   TerminalSession? session,
   TerminalSessionStatus? status,
   bool rendered,
+  bool keptScreen,
+  bool keptFromEarlierRun,
   String? agentName,
   String? agentEngine,
   AgentProject? agentProject,
@@ -701,6 +703,10 @@ class _TerminalPageState extends State<TerminalPage>
       session: session,
       status: session?.status,
       rendered: session?.hasRenderedFrame ?? false,
+      // A kept screen can be drawn in after the session exists — the store's read lands a moment
+      // into a launch — and nothing else here moves when it is: see [_attaching].
+      keptScreen: session?.showingKeptScreen ?? false,
+      keptFromEarlierRun: session?.keptScreenFromEarlierRun ?? false,
       agentName: agent?.displayName,
       agentEngine: agent?.engine,
       agentProject: agent?.displayProject,
@@ -962,6 +968,18 @@ class _TerminalPageState extends State<TerminalPage>
     if (voiceStatus(widget.voice, tty) case final said?) {
       return _StatusLine(text: said.text, color: said.color);
     }
+    // Before the question lines: an answer read off a kept screen cannot be given until the stream
+    // it stands in for is up. The facts this page last built from, not a fresh read: the page
+    // rebuilds when the stream moves (`status` and `keptScreen` in [_PageFacts]), and this line
+    // rebuilds with every voice tick besides.
+    if (_attaching(_facts?.session)) {
+      return _StatusLine(
+        text: _keyboardRequested
+            ? 'attaching… · keyboard opens when live'
+            : 'attaching…',
+        color: tty.faint,
+      );
+    }
     final view = _questionWatcher?.view;
     if (view != null && !_answersTappable(view)) {
       return _StatusLine(text: 'answer on screen', color: tty.yellow);
@@ -978,6 +996,21 @@ class _TerminalPageState extends State<TerminalPage>
     }
     return null;
   }
+
+  /// Whether [session] is a kept screen standing in while its stream attaches — drawn like the live
+  /// terminal, and taking no key until the stream is up ([TerminalSession.acceptsInput]).
+  ///
+  /// ⚠️ **Said on the line above the mic, because nothing else says it (owner, 2026-10-01).** The
+  /// kept screen puts the agent on screen in the first frames of a launch, 2–4s before its stream
+  /// is live, and a tap in those seconds raised nothing — read as a terminal that would not focus.
+  /// The tap is not lost: the keyboard is asked for at once ([_raiseKeyboard]) and opens the moment
+  /// the pane stops being read-only. Only while the open is on its way: a stream that failed or
+  /// was taken has its own answer to a tap ([_takeControl]).
+  static bool _attaching(TerminalSession? session) =>
+      session != null &&
+      session.showingKeptScreen &&
+      !session.watching &&
+      session.status == TerminalSessionStatus.opening;
 
   /// Whether the open question's answers are bands to tap in the terminal right now — not under
   /// the keyboard, where a tap on the pane is xterm's.
@@ -1480,6 +1513,10 @@ class _TerminalPageState extends State<TerminalPage>
     // Typing is not scrolling: the chrome has no reason to be out of the way,
     // and the header holds the controls somebody reaches for next.
     _chrome.reveal();
+    // Before the stream is live the pane is read-only, so the keyboard asked for below opens only
+    // once it is up — felt now, and said above the mic meanwhile ([_attaching]), so the wait is
+    // not taken for a tap that missed.
+    if (!session.acceptsInput) HapticFeedback.selectionClick();
     final heard = await widget.voice.takeTranscript();
     if (!mounted) return;
     if (heard.isNotEmpty && session.acceptsInput) {
@@ -2089,6 +2126,19 @@ class _TerminalPageState extends State<TerminalPage>
                                   if (session != null && !session.hasScreen)
                                     Positioned.fill(
                                       child: _Attaching(key: _skeletonKey),
+                                    )
+                                  // A screen an EARLIER run kept stands in for only part of the
+                                  // pane: the skeleton takes the rest until the keyframe lands — see
+                                  // [_KeptScreenCover]. The same skeleton, by key, so one that was
+                                  // showing before the kept screen was read in keeps its sweep. Not
+                                  // over [_AgentGone], which owns the body when the agent is gone.
+                                  else if (!agentGone &&
+                                      session != null &&
+                                      session.keptScreenFromEarlierRun)
+                                    Positioned.fill(
+                                      child: _KeptScreenCover(
+                                        skeleton: _Attaching(key: _skeletonKey),
+                                      ),
                                     ),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
@@ -2696,6 +2746,86 @@ class _AgentGone extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// What covers a kept screen from an EARLIER run while its stream attaches: the [skeleton] over the
+/// lower [share] of the pane, the screen above fading into it.
+///
+/// ⚠️ **Part of the screen, not all of it, and on purpose (owner, 2026-10-01).** The whole kept
+/// screen put the agent up in the first frames of a launch looking exactly as if it were live, for
+/// the two or three seconds it was not — a prompt that took no key, output minutes or hours old: a
+/// session made to look ready while it was still loading. The upper half still says which harness
+/// this is and where it had got to; the lower half — the newest output and the prompt, the part
+/// most likely to have moved and the part that cannot be used yet — is the skeleton the session is
+/// coming back into. The keyframe replaces both whole, as it always did.
+///
+/// Only a screen an earlier run kept ([TerminalSession.keptScreenFromEarlierRun]): one this run kept
+/// a moment ago, swiped back to, is fresh enough to stand in whole, and a skeleton flashing over it
+/// for the half second its keyframe takes would be noise.
+///
+/// Taps go through it ([IgnorePointer]): under the skeleton is the kept prompt, and a tap there asks
+/// for the keyboard as it always does, which opens once the stream is live — see `_raiseKeyboard`.
+class _KeptScreenCover extends StatelessWidget {
+  const _KeptScreenCover({required this.skeleton});
+
+  final Widget skeleton;
+
+  /// How much of the pane the skeleton takes, from the bottom up.
+  static const share = 0.5;
+
+  /// The fade above it, in the terminal's own rows: deep enough that a row the edge crosses fades
+  /// out rather than being cut through, shallow enough to leave the half above it readable.
+  static const fadeRows = 2.0;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final style = terminalFontStore.value;
+    final fade = style.fontSize * style.height * fadeRows;
+    // The terminal's own ground, resolved as [TerminalPanel] and [_Attaching] resolve it, so the
+    // fade ends in exactly the colour the skeleton starts with — no seam where the two meet.
+    final ground = terminalScreenThemeFor(
+      AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).background;
+    return IgnorePointer(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final height = constraints.maxHeight;
+          // Laid out in the pane's Stack, which is always bounded; anything else draws nothing
+          // rather than a skeleton of infinite height.
+          if (!height.isFinite) return const SizedBox.shrink();
+          final cover = height * share;
+          // Never taller than the room above the skeleton — a pane squeezed by the keyboard.
+          final edge = fade < height - cover ? fade : height - cover;
+          return Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              height: cover + edge,
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: edge,
+                    width: double.infinity,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [ground.withValues(alpha: 0), ground],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(child: skeleton),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// The terminal's body while its first keyframe is still crossing the network.
