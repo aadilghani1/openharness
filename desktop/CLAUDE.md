@@ -110,7 +110,7 @@ desktop keeps in native menus or chords must be clickable. Keys keep working but
 advertised. Browser-only UI lives in `lib/web/` and is never imported by desktop code;
 it plugs into shared screens through additive seams whose default is today's desktop
 behavior (e.g. `SwarmScreen.chrome` / `WorkspaceChrome` in `state/workspace_chrome.dart`,
-which runs the same `_commands` table keys use, adds a bar over the picker, and turns off
+which runs the same `_commands` table keys use, gives the picker a clickable Back, and turns off
 `KeyHints` — `widgets/key_hints.dart`, absent means hints shown). Below
 `WorkspaceChrome.compactBelow` (web: 720px, a phone) the workspace goes compact: a tab
 switcher replaces the tab row, `WorkspaceChrome.compactFooter` replaces the status bar with one

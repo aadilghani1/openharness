@@ -1,7 +1,5 @@
 import 'package:flutter/widgets.dart';
 
-import 'swarm_search.dart';
-
 /// The workspace's command table as a host composition sees it: the same ids
 /// and callbacks keys, native menus and the command box already run.
 class WorkspaceCommands {
@@ -15,22 +13,6 @@ class WorkspaceCommands {
   final bool Function() enabled;
   final bool Function(String id) canRun;
   final void Function(String id) run;
-}
-
-/// The open picker as a host composition's bar sees it: its search, and the
-/// same focus and close the picker's own keys use.
-class WorkspacePicker {
-  const WorkspacePicker({
-    required this.search,
-    required this.focus,
-    required this.close,
-  });
-
-  final SwarmSearchController search;
-
-  /// Hands typing back to the picker's input after a click.
-  final VoidCallback focus;
-  final VoidCallback close;
 }
 
 /// One entry of the workspace footer as a host composition sees it: what it
@@ -74,7 +56,7 @@ class WorkspaceChrome {
     required this.leadingWidth,
     required this.leading,
     this.newHarnessMachine,
-    this.pickerBar,
+    this.pickerShowsBack = false,
     this.showsKeyHints = true,
     this.viewMachineCloses = false,
     this.showsShareStatus = false,
@@ -92,9 +74,8 @@ class WorkspaceChrome {
   /// runs none. Null (or no answer) keeps sending the person to Machines.
   final String? Function()? newHarnessMachine;
 
-  /// A row above the picker's input, e.g. clickable scopes and Back.
-  final Widget Function(BuildContext context, WorkspacePicker picker)?
-  pickerBar;
+  /// True gives the picker a clickable Back out of an open machine or project.
+  final bool pickerShowsBack;
 
   /// False hides keyboard hints inside the workspace's pickers ([KeyHints]).
   final bool showsKeyHints;

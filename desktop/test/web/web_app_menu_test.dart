@@ -70,6 +70,27 @@ void main() {
     app.dispose();
   });
 
+  testWidgets('the menu opens with no row lit; keys still walk and close it', (
+    tester,
+  ) async {
+    final app = await _mount(tester);
+    await _openMenu(tester);
+    bool lit(String id) =>
+        Focus.of(tester.element(find.byKey(ValueKey('web-menu:$id'))))
+            .hasPrimaryFocus;
+    // Opened by a click: the pointer picks the row, so none starts lit.
+    expect(lit('machines.list'), isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(lit('machines.list'), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('web-menu:machines.list')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    app.dispose();
+  });
+
   testWidgets('an empty tab opens New harness on a connected machine', (
     tester,
   ) async {
