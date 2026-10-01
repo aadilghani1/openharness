@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { pause, resume } from './lib/actions.mjs'
+import { cleanupReviews } from './lib/cleanup.mjs'
 import { closeBridges } from './lib/bridge.mjs'
 import { collect as collectFleet, summarize, tilde } from './lib/inventory.mjs'
 import { DEFAULT_POLICY, decide, normalizePolicy } from './lib/policy.mjs'
@@ -15,7 +16,7 @@ import { pin, readLog, readState, record, savePolicyValues, writeState, writeVer
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
 const VERBS = new Set(['pause', 'resume', 'pin', 'unpin'])
 
-export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { pause, resume } }) {
+export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { pause, resume }, cleanup = cleanupReviews() }) {
   const token = randomBytes(24).toString('base64url')
   const clients = new Set()
   const cache = new Map()
@@ -181,6 +182,18 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         for await (const chunk of req) { body += chunk; if (body.length > 64 * 1024) { json(res, 413, { error: 'Too large.' }); return } }
         let payload; try { payload = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'Send JSON.' }); return }
         if (url.pathname === '/api/act') { json(res, 200, await act(payload)); return }
+        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await cleanup.preview()); return }
+        if (url.pathname === '/api/cleanup/close') {
+          let result
+          try { result = await write(() => cleanup.close(payload.reviewId, payload.id)) }
+          catch (error) {
+            if (error.code !== 'INVALID_REVIEW') throw error
+            json(res, 409, { error: error.message }); return
+          }
+          await record(workspace, { ...result, by: 'pane' })
+          json(res, 200, result)
+          return
+        }
         if (url.pathname === '/api/policy') { json(res, 200, await write(() => savePolicy(payload.policy ?? {}))); return }
         if (url.pathname === '/api/refresh') { await polling; await poll({ immediate: true, forceRemote: true }); json(res, 200, { ok: true }); return }
         json(res, 404, { error: 'Not found' }); return

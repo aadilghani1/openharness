@@ -6,6 +6,7 @@ const dom = {
   empty: el('empty'), count: el('count'), message: el('message'), updated: el('updated'), problems: el('problems'),
   assistant: el('assistant'), choice: el('assistant-choice'), free: el('assistant-free'), other: el('assistant-other'), cancel: el('assistant-cancel'),
   refresh: el('refresh'), cleanup: el('cleanup'), cleanupDialog: el('cleanup-dialog'), cleanupPlan: el('cleanup-plan'),
+  cleanupMode: el('cleanup-mode'), cleanupExplanation: el('cleanup-explanation'), cleanupProblems: el('cleanup-problems'),
   cleanupSummary: el('cleanup-summary'), cleanupCancel: el('cleanup-cancel'), cleanupApply: el('cleanup-apply'),
 }
 const token = document.querySelector('meta[name="hps-token"]').content
@@ -16,7 +17,7 @@ const state = {
   filter: ['all', ...Object.keys(ACTIVITY)].includes(saved.filter) ? saved.filter : 'all',
   sort: COLUMNS.some(c => c.key === saved.sort && c.key !== 'actions') ? saved.sort : 'lastActivity', direction: saved.direction === 1 ? 1 : -1,
   visible: new Set(Array.isArray(saved.visible) ? saved.visible : COLUMNS.filter(c => !c.optional).map(c => c.key)),
-  widths: {}, selected: null, busy: new Set(), cleanupIds: [], cleanupRows: [], nodes: new Map(), shown: [], assistantIntroSeen: saved.assistantIntroSeen === true,
+  widths: {}, selected: null, busy: new Set(), nodes: new Map(), shown: [], assistantIntroSeen: saved.assistantIntroSeen === true,
 }
 for (const col of COLUMNS) state.widths[col.key] = Math.max(64, Math.min(600, Number(saved.widths?.[col.key]) || col.width))
 const text = (node, value) => { if (node.textContent !== String(value)) node.textContent = value }
@@ -52,7 +53,7 @@ function openRow(id) {
   host({ action: 'open', machineId: row.machineId, agentId: row.agentId })
 }
 async function stopRows(ids, manual) {
-  const expected = (manual ? state.rows : state.cleanupRows).filter(row => ids.includes(row.id)).map(({ id, sessionId, lastActivity }) => ({ id, sessionId, lastActivity }))
+  const expected = state.rows.filter(row => ids.includes(row.id)).map(({ id, sessionId, lastActivity }) => ({ id, sessionId, lastActivity }))
   ids.forEach(id => state.busy.add(id)); render()
   try {
     const reply = await post('/api/act', { verb: 'pause', ids, manual, expected })
@@ -212,17 +213,82 @@ dom.assistant.onclick = () => state.assistantIntroSeen ? showAssistant() : dom.c
 dom.cancel.onclick = () => dom.choice.close()
 dom.free.onclick = () => showAssistant()
 dom.other.onclick = () => showAssistant(true)
-dom.cleanup.onclick = () => {
-  const entries = (state.snapshot?.plan ?? []).filter(e => e.action === 'pause').slice(0, 64)
-  state.cleanupIds = entries.map(e => e.id)
-  state.cleanupRows = state.rows.filter(row => state.cleanupIds.includes(row.id))
-  dom.cleanupPlan.replaceChildren()
-  for (const entry of entries) { const node = element('div', entry.name, 'plan-row'); node.append(element('small', entry.why)); dom.cleanupPlan.append(node) }
-  text(dom.cleanupSummary, entries.length ? entries.length + ' sessions are eligible under your current cleanup rules.' : 'No sessions are eligible under your current cleanup rules.')
-  dom.cleanupApply.disabled = !entries.length; dom.cleanupDialog.showModal()
+let cleanupReview = null, cleanupBusy = false, cleanupGeneration = 0
+const cleanupActivity = { working: 'Working', needs_input: 'Needs you', draft: 'Unsent text', unknown: 'Activity unknown', idle: 'Idle' }
+async function previewCleanup() {
+  if (cleanupBusy) return
+  const generation = ++cleanupGeneration, mode = dom.cleanupMode.value
+  cleanupReview = null
+  dom.cleanupApply.disabled = true; dom.cleanupApply.hidden = false
+  text(dom.cleanupCancel, 'Cancel'); text(dom.cleanupSummary, 'Checking your open tabs…')
+  text(dom.cleanupExplanation, mode === 'hidden'
+    ? 'Harnesses in open tabs stay open. Work in the others will end. History is kept.'
+    : 'Your cleanup rules are checked again before closing. Working sessions, questions, pins and unknown activity stay open. History is kept.')
+  dom.cleanupPlan.replaceChildren(); dom.cleanupProblems.hidden = true
+  try {
+    let plan
+    if (mode === 'hidden') plan = await post('/api/cleanup/preview', {})
+    else {
+      const entries = (state.snapshot?.plan ?? []).filter(e => e.action === 'pause').slice(0, 64)
+      const eligible = new Map(entries.map(e => [e.id, e]))
+      plan = { rows: state.rows.filter(row => eligible.has(row.id)).map(row => ({ ...row, why: eligible.get(row.id).why })), problems: state.snapshot?.problems ?? [] }
+    }
+    if (generation !== cleanupGeneration || !dom.cleanupDialog.open) return
+    cleanupReview = { ...plan, mode }
+    text(dom.cleanupSummary, plan.rows.length
+      ? `Close ${plan.rows.length} ${plan.rows.length === 1 ? 'harness' : 'harnesses'}${mode === 'hidden' ? ' outside your tabs' : ''}?`
+      : mode === 'hidden' ? 'No harnesses to close.' : 'No harnesses match your cleanup rules.')
+    for (const row of plan.rows) {
+      const node = element('div', null, 'plan-row')
+      node.dataset.id = row.id
+      node.append(element('strong', row.name), element('small', `${row.machine} · ${row.why || cleanupActivity[row.activity] || 'Activity unknown'}`))
+      dom.cleanupPlan.append(node)
+    }
+    text(dom.cleanupProblems, plan.problems.map(p => `${p.machine}: ${p.error}`).join('\n'))
+    dom.cleanupProblems.hidden = !plan.problems.length; dom.cleanupApply.disabled = !plan.rows.length
+  } catch (error) { if (generation === cleanupGeneration) text(dom.cleanupSummary, error.message) }
 }
-dom.cleanupCancel.onclick = () => dom.cleanupDialog.close()
-dom.cleanupApply.onclick = async () => { const ids = [...state.cleanupIds]; dom.cleanupDialog.close(); await stopRows(ids, false) }
+dom.cleanup.onclick = () => { dom.cleanupMode.value = 'hidden'; dom.cleanupDialog.showModal(); void previewCleanup() }
+dom.cleanupMode.onchange = () => void previewCleanup()
+dom.cleanupCancel.onclick = () => { if (!cleanupBusy) { cleanupGeneration++; dom.cleanupDialog.close() } }
+dom.cleanupDialog.addEventListener('cancel', event => { if (cleanupBusy) event.preventDefault(); else cleanupGeneration++ })
+dom.cleanupApply.onclick = async () => {
+  if (cleanupBusy || !cleanupReview?.rows.length) return
+  const review = cleanupReview
+  cleanupBusy = true; dom.cleanupApply.disabled = true; dom.cleanupCancel.disabled = true
+  dom.cleanup.disabled = true; dom.cleanupMode.disabled = true
+  let closed = 0, checked = 0
+  function result(row, receipt) {
+    if (receipt.ok) closed++
+    const node = [...dom.cleanupPlan.children].find(node => node.dataset.id === row.id)
+    text(node.lastElementChild, `${row.machine} · ${receipt.detail}`)
+  }
+  try {
+    if (review.mode === 'hidden') {
+      for (const row of review.rows) {
+        text(dom.cleanupSummary, `Closing ${++checked} of ${review.rows.length}…`)
+        let receipt
+        try { receipt = await post('/api/cleanup/close', { reviewId: review.reviewId, id: row.id }) }
+        catch (error) { receipt = { ok: false, detail: error.message + ' Refresh to check.' } }
+        result(row, receipt)
+      }
+    } else {
+      text(dom.cleanupSummary, 'Closing…')
+      let receipts
+      try {
+        const expected = review.rows.map(({ id, sessionId, lastActivity }) => ({ id, sessionId, lastActivity }))
+        const reply = await post('/api/act', { verb: 'pause', ids: expected.map(r => r.id), manual: false, expected })
+        receipts = new Map(reply.results.map(r => [r.id, r]))
+      } catch (error) { receipts = new Map(review.rows.map(row => [row.id, { ok: false, detail: error.message + ' Refresh to check.' }])) }
+      for (const row of review.rows) result(row, receipts.get(row.id) || { ok: false, detail: 'Close was not confirmed. Refresh to check.' })
+    }
+    text(dom.cleanupSummary, closed === review.rows.length ? `${closed} closed. History kept.` : `${closed} closed. ${review.rows.length - closed} left open or unconfirmed.`)
+    await post('/api/refresh', {}).catch(() => message('Refresh to check the latest sessions.'))
+  } finally {
+    cleanupBusy = false; dom.cleanup.disabled = false; dom.cleanupCancel.disabled = false; dom.cleanupMode.disabled = false
+    dom.cleanupApply.hidden = true; text(dom.cleanupCancel, 'Done')
+  }
+}
 let stream
 function connect() {
   if (stream || document.hidden) return

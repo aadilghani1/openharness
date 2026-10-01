@@ -20,7 +20,17 @@ CPU uses the daemon's shared process sampler, measuring interval use; multiple c
 exceed 100%. RAM is subtree resident memory and can double-count shared pages. Token counts are the
 owning daemon's conversation ledger. Last active is conversation activity, never file mtime.
 
-**Cleanup…** previews the current policy and requires an explicit apply. Working, waiting, pinned,
+**Clean up…** defaults to harnesses outside every open tab on your linked machines. **Cancel** keeps
+them running; **Close** saves history and closes their processes and terminals. Background tabs and
+local utility tabs, including Companions, stay open. Working and unknown activity appear in the preview:
+closing them ends unfinished work. Each owning machine checks tabs and session identity again before
+closing. Offline machines, older Harness versions and save failures are reported separately. Reopen
+saved sessions through Open Harness. This requires an updated Harness CLI on each machine.
+
+`hps cleanup --machines --json` previews the same action; `hps cleanup --machines --apply --json`
+closes it. Without `--machines`, it checks this machine only. Nothing runs automatically.
+
+**Clean up… → By cleanup rules** previews the current policy and requires an explicit apply. Working, waiting, pinned,
 offline and unknown-activity sessions are protected and rechecked at execution. There is no automatic
 cleanup timer. The same tools are available to the assistant as `$HPS_CLI` (`toolchain/hps --help`).
 Rules/pins remain in `~/.config/harness/policy.jsonc`; receipts are under `~/.harness/monitor/`.

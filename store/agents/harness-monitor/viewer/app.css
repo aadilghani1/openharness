@@ -59,3 +59,10 @@ h2 { font-size:16px; margin:0 0 18px; } p { line-height:1.6; }
 .plan-row { padding:9px 0; border-bottom:1px solid var(--line); }
 .plan-row small { display:block; color:var(--muted); margin-top:5px; }
 @media (max-width:650px) { header { gap:10px; padding:12px; } h1 { width:100%; } input[type=search] { margin:0; } nav { padding-inline:6px; } footer { gap:10px; } }
+
+.cleanup-mode { display:flex; align-items:center; flex-wrap:wrap; gap:8px; color:var(--muted); }
+.cleanup-mode select { border-color:var(--line); background:var(--row); }
+#cleanup-summary { font-size:16px; font-weight:600; }
+#cleanup-plan .plan-row { overflow-wrap:anywhere; }
+#cleanup-problems { color:var(--yellow); white-space:pre-line; }
+#cleanup-apply { background:var(--red); color:var(--bg); border-color:var(--red); }

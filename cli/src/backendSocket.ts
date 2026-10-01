@@ -502,6 +502,7 @@ export class BackendSocket {
    *  process and forgets the session. Keeps recap + agent name. */
   onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
   closeAgentService: CloseAgentService | null = null
+  cleanupPreview: (() => Promise<Record<string, unknown>>) | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
    *  requested folder and returns its process-agent. Session metadata may bind later through hooks. */
   onCreateAgent: ((input: {
@@ -3047,6 +3048,13 @@ export class BackendSocket {
         // Delete an agent: signal its validated engine process and drop it from the list. Idempotent — an already
         // gone target still acks + re-emits agent_deleted so the web/device converge. E2EE-gated (the
         // frame arrived decrypted). Keeps the persisted recap + agent name for a later resume.
+        case 'agents_cleanup_preview': {
+          if (!this.cleanupPreview) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          void this.cleanupPreview().then(result => reply(type, requestId, result), error => reply(type, requestId, {
+            error: error?.code ?? 'TABS_UNAVAILABLE', detail: error instanceof Error ? error.message : 'Could not check open tabs.',
+          }))
+          return
+        }
         case 'agent_close': {
           if (!this.closeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
           const { agentId, sessionId, createdAt, mode } = payload
@@ -3055,7 +3063,8 @@ export class BackendSocket {
             reply(type, requestId, { error: 'INVALID_CLOSE_REQUEST' }); return
           }
           // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
-          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode })
+          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
+            ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
             .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
           return
         }

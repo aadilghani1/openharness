@@ -22,7 +22,7 @@
     </select></label>
     <span class="spacer"></span>
     <details id="columns"><summary>Columns</summary><div id="column-options" class="menu"></div></details>
-    <button id="cleanup">Cleanup…</button>
+    <button id="cleanup">Clean up…</button>
     <button id="refresh" title="Refresh all machines">Refresh</button>
   </nav>
   <div id="problems" role="status" hidden></div>
@@ -38,12 +38,15 @@
     <p class="muted">OpenCode may require a Zen login. If the free model is unavailable, choose a model yourself; Harness Monitor does not switch to a paid model automatically.</p>
     <div class="dialog-actions"><button id="assistant-cancel">Cancel</button><button id="assistant-other">Choose another model</button><button id="assistant-free">Open assistant</button></div>
   </dialog>
-  <dialog id="cleanup-dialog" aria-labelledby="cleanup-title">
-    <h2 id="cleanup-title">Review cleanup</h2>
-    <p id="cleanup-summary"></p>
+  <dialog id="cleanup-dialog" aria-label="Clean up harnesses">
+    <label class="cleanup-mode">Choose harnesses <select id="cleanup-mode">
+      <option value="hidden">Outside open tabs</option><option value="policy">By cleanup rules</option>
+    </select></label>
+    <p id="cleanup-summary" role="status" aria-live="polite"></p>
+    <p id="cleanup-explanation" class="muted"></p>
     <div id="cleanup-plan"></div>
-    <p class="muted">Cleanup rechecks your rules and current activity. By default, working sessions, questions and pins are protected. Unknown activity is always protected. History and launch settings are retained. Nothing runs automatically.</p>
-    <div class="dialog-actions"><button id="cleanup-cancel">Cancel</button><button id="cleanup-apply">Stop reviewed sessions</button></div>
+    <p id="cleanup-problems" class="muted" hidden></p>
+    <div class="dialog-actions"><button id="cleanup-cancel">Cancel</button><button id="cleanup-apply">Close</button></div>
   </dialog>
   <script type="module" src="app.js"></script>
 </body>

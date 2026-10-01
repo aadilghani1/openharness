@@ -145,6 +145,7 @@ import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
+import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -2281,6 +2282,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // machine's at once, so this computer's tiles are on screen whichever machine the wheel last landed on
   // and skipping the recap here would leave them permanently blank.
   /** Agents with a tile open in the desktop window right now. Empty when no window is attached. */
+  const cleanupTabs = new OpenTabProtection({
+    machineId: () => backend.machineId,
+    sessions: () => registry.list(),
+    readDesk: () => proxyBackend('GET', '/api/desk'),
+  })
   let openPaneAgents = new Set<string>()
   /** Whether the window those tiles belong to is actually in front. See onAppPanes. */
   let appWindowForeground = true
@@ -5230,6 +5236,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void cableRef?.syncSwarms()
       void cableRef?.syncAgents()
     },
+    onAppTabAgents: (connection, ids) => cleanupTabs.updateWindow(connection, ids),
     onAppPanes: (agentIds, foreground) => {
       // ORDER matters here, not just membership. The dial's carousel is built
       // around these — tiles first, in tile order — so the thumb walks the same
@@ -6823,6 +6830,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onDeleteAgent = stopAgent
   backend.closeAgentService = new CloseAgentService({
     registry,
+    openTabs: cleanupTabs,
     activity: async s => {
       if (s.sessionId) await watcher.pollSession(s.sessionId)
       const screen = await captureTerminal(s.agentId, 80)
@@ -6835,6 +6843,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     changed: announceSession,
   })
   backend.closeAgentService.start()
+  backend.cleanupPreview = async () => {
+    await cleanupTabs.refresh()
+    const sessions = registry.advertised()
+    const agents = []
+    for (const s of sessions) {
+      if (!cleanupTabs.isHidden(s)) continue
+      const target = { agentId: s.agentId, sessionId: s.sessionId, createdAt: new Date(s.registeredAt).toISOString() }
+      const inspected = await backend.closeAgentService!.request({ ...target, mode: 'inspect' })
+      if (inspected.error) continue // A changing session is never added to a reviewed batch.
+      agents.push({ ...target, name: projectDisplayName(s), engine: s.engine, activity: inspected.activity ?? 'unknown' })
+    }
+    return { version: 1, agents, kept: sessions.length - agents.length }
+  }
 
   backend.onResumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,

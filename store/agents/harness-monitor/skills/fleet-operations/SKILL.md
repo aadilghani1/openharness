@@ -19,9 +19,11 @@ are ambiguous. Missing measurements are unknown; an offline machine is not a sto
 - `hps resume <ref> --machines --json` restores saved launch settings. Check `resumeMode`: conversation,
   fresh conversation, or shell. Do not promise every engine resumes the same conversation.
 - `hps pause --policy --machines --json` previews cleanup; `--apply` applies the current plan.
+- `hps cleanup --machines --json` previews harnesses outside all open tabs; `--apply` closes them.
+  Background tabs and local utility tabs such as Companions stay open.
 - `hps resume --paused --machines --json` previews reopening stopped sessions; `--apply` executes it.
 
-For more than two sessions, show the dry run with reasons and obtain approval before applying it.
+For more than two sessions, show the dry run with reasons and obtain approval before applying it, unless those targets are already authorized.
 Recheck the plan after approval; if the targets changed, present the new targets. Named actions must
 still correspond to the person's request. Never use `--force` unless explicitly requested for those
 sessions. The row's × button is an explicit single-session stop and may interrupt work in progress.
@@ -31,11 +33,18 @@ Do not signal PIDs, reconstruct engine flags, respawn a tmux pane, or edit the r
 read the original resume receipt; do not invent a new operation to compensate. Explain refusals and
 uncertain outcomes. Receipts are recorded in `~/.harness/monitor/log.jsonl`.
 
+## Close harnesses outside tabs
+
+Use `hps cleanup` only when the person asks to close harnesses outside their tabs. Review the names
+and activity first: it includes working and unknown activity and can end unfinished work. The owning
+daemon rechecks open tabs and session identity and saves history before closing. Never bypass those
+guards. Report offline machines, unsupported versions, save failures and unconfirmed closes.
+
 ## Cleanup rules
 
 [references/policy.md](references/policy.md) explains the proposal rules. They never run automatically.
 Working sessions, questions, pins, unavailable controls and unknown activity are protected by default.
-Attachment is not currently reported; do not promise protection merely because a pane is visible.
+These policy rules do not use the open-tab guard of the separate `hps cleanup` command.
 
 Rules and pins live in `~/.config/harness/policy.jsonc`. Preserve comments and simulate a proposed
 change before applying it. Do not change thresholds to make a refused cleanup succeed.

@@ -64,6 +64,34 @@ it('checkpoint failure retains the session and reports the failure', async () =>
   expect(await service.request(request())).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+it('cleanup requires open-tab support and checks again after history is saved', async () => {
+  const close = { ...request('now'), onlyIfHidden: true }
+  expect(await service.request(close)).toMatchObject({ error: 'UNSUPPORTED' })
+  deps.openTabs = { isHidden: () => true, assertHidden: vi.fn().mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(Object.assign(new Error('Now in a tab'), { code: 'SESSION_IN_TAB' })) }
+  expect(await service.request(close)).toMatchObject({ error: 'SESSION_IN_TAB' })
+  expect(deps.checkpoint).toHaveBeenCalledOnce()
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+it('a new local tab cancels cleanup at the final process fence', async () => {
+  let hidden = true
+  deps.openTabs = { isHidden: () => hidden, assertHidden: vi.fn(async () => {}) }
+  vi.mocked(deps.stop).mockImplementation(async (_id, options) => {
+    await options.beforeStop?.(row)
+    hidden = false
+    expect(options.current?.()).toBe(false)
+    throw new Error('Opened while closing')
+  })
+  expect(await service.request({ ...request('now'), onlyIfHidden: true })).toMatchObject({ error: 'CLOSE_FAILED' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+it('an explicitly reviewed cleanup closes unknown activity through the history checkpoint', async () => {
+  deps.openTabs = { isHidden: () => true, assertHidden: vi.fn(async () => {}) }
+  vi.mocked(deps.activity).mockResolvedValue('unknown')
+  expect(await service.request({ ...request('now'), onlyIfHidden: true })).toEqual({ closed: true })
+  expect(deps.checkpoint).toHaveBeenCalledOnce()
+  expect(deps.openTabs.assertHidden).toHaveBeenCalledTimes(2)
+})
 it('joins repeated clicks and cancels a pending close when reopened during its backup', async () => {
   let finish!: () => void
   vi.mocked(deps.checkpoint).mockImplementation(() => new Promise(resolve => { finish = resolve }))

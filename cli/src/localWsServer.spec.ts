@@ -359,11 +359,13 @@ describe('local CLI WebSocket', () => {
   it('takes the window\'s swarms, drops what is not a swarm, and forgets them on close', async () => {
     const backend = new FakeBackend()
     const seen: unknown[] = []
+    const tabs = vi.fn()
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId,
       backend,
       onAppSwarms: (swarms) => seen.push(swarms),
+      onAppTabAgents: tabs,
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
@@ -398,10 +400,13 @@ describe('local CLI WebSocket', () => {
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])
 
+    expect(tabs).toHaveBeenCalledExactlyOnceWith(backend.connId, ['a1', 'a2'])
+
     ws.close()
     // The window is gone, and so are its tabs.
     await vi.waitFor(() => expect(seen).toHaveLength(2))
     expect(seen[1]).toBeNull()
+    expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
   it('follows an explicit app_focus, and keeps it off the wire', async () => {

@@ -7,12 +7,13 @@
  * developer already has muscle memory for — `ls`, `pause`, `resume`, `gc`, `log` — and every one of them
  * takes `--json` so the agent beside it never has to parse a table meant for eyes.
  *
- * Nothing here deletes a harness. See lib/actions.mjs for why that boundary is the point.
+ * Explicit cleanup closes hidden harnesses through the owning daemon and preserves history.
  */
 
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { pause, resume } from '../lib/actions.mjs'
+import { closeHidden, previewCleanup } from '../lib/cleanup.mjs'
 import { closeBridges } from '../lib/bridge.mjs'
 import { collect, resolveRef, summarize } from '../lib/inventory.mjs'
 import { capture, panes } from '../lib/panes.mjs'
@@ -39,6 +40,8 @@ const USAGE = `hps — sessions on this machine, running or stopped
   hps pause --idle 8h                one threshold instead of all of them
   hps resume --paused                everything that is paused, back in one line
   hps attach <ref>                   hand this terminal to that pane (tmux attach, screen -r)
+  hps cleanup [--machines]           preview harnesses outside all open tabs
+  hps cleanup [--machines] --apply   close them and keep history; ends unfinished work
 
   <ref> is a row number from the last list, a %pane, an agent-id prefix, or part of a name.
   Add --json to any command. --force gets past a guard; --dry-run shows what would happen.
@@ -121,7 +124,7 @@ function pick(refs, rows) {
 // wrong habit here would collide the day these verbs move into the real CLI.
 const ALIASES = { park: 'pause', wake: 'resume', revive: 'resume', unpause: 'resume', hibernate: 'pause', top: 'ls', ps: 'ls', prune: 'pause', gc: 'pause', policy: 'pause' }
 // `observe` is plumbing: the workspace init script calls it to write the first verdict. Not in the help.
-const COMMANDS = new Set(['ls', 'show', 'pause', 'resume', 'attach', 'observe', 'help', ...Object.keys(ALIASES)])
+const COMMANDS = new Set(['ls', 'show', 'pause', 'resume', 'attach', 'cleanup', 'observe', 'help', ...Object.keys(ALIASES)])
 
 async function main() {
   // `hps` on its own is the list — `docker ps`, not `docker ps ls`. A leading flag is a flag, not a verb,
@@ -142,6 +145,32 @@ async function main() {
   // is not the same as asked for.
   if ((flags.policy || flags.idle || flags['over-ceiling'] || flags.paused) && !flags.apply) flags['dry-run'] = true
   if (flags.help || command === 'help' || command === '--help') { out(USAGE); return }
+
+  if (command === 'cleanup') {
+    try {
+      const plan = await previewCleanup({ includeRemote: Boolean(flags.machines) })
+      const results = []
+      if (flags.apply === true && !flags['dry-run']) {
+        for (const row of plan.rows) {
+          const result = await closeHidden(row)
+          results.push(result)
+          await record(WORKSPACE, { ...result, by: 'cli' })
+        }
+      }
+      const applied = flags.apply === true && !flags['dry-run']
+      if (flags.json) out(JSON.stringify({ ...plan, dryRun: !applied, results }, null, 2))
+      else {
+        for (const row of plan.rows) out(`${row.machine} · ${row.name} · ${row.activity}`)
+        for (const problem of plan.problems) out(`${problem.machine}: ${problem.error}`)
+        if (applied) {
+          for (const result of results) out(`${result.machine} · ${result.name}: ${result.detail}`)
+          out(`${results.filter(r => r.ok).length} closed. History kept.`)
+        } else out(`${plan.rows.length} harnesses outside your tabs. --apply closes them, ends unfinished work, and keeps history.`)
+      }
+      if (plan.problems.length || results.some(r => !r.ok)) process.exitCode = 1
+    } finally { closeBridges() }
+    return
+  }
 
   if (command === 'ls' || command === 'ps') {
     const watch = flags.watch !== undefined

@@ -13,13 +13,17 @@ write a resume command into tmux, or reconstruct a saved launch yourself.
 - `hps resume <ref>` asks the owning daemon to restore it. Respect `resumeMode`: some engines reopen a
   conversation, some start a fresh one, and terminals reopen a shell.
 - `hps pause --policy` previews cleanup. `--apply` executes the reviewed plan.
+- `hps cleanup --machines` previews harnesses outside every open tab; `--apply` closes them, saving
+  history. Background tabs and local utility tabs such as Companions stay open.
 - `hps resume --paused` is a dry run until `--apply`.
 - `--machines` includes linked machines for reads and actions. Use the full composite machine/agent ID
   in JSON output when a name, pane or agent ID is ambiguous. Never assume IDs are global.
 
 For changes to more than two sessions, show the dry run with reasons and obtain the person's approval
-before applying. Never force cleanup of Working, Needs you, pinned or unknown-activity sessions.
-`--force` is for the person to request explicitly. Never change rules simply because the table is open.
+before applying, unless the person has already authorized those targets. Explicit `hps cleanup` may
+include working or unknown activity only when the person asks to close harnesses outside their tabs.
+Never bypass its tab or history guards. Policy cleanup keeps Working, Needs you, pinned and unknown
+activity protected. `--force` is for the person to request explicitly. Never change rules simply because the table is open.
 Rules and pins live in `~/.config/harness/policy.jsonc`; preserve comments when editing it.
 
 A timed-out resume is uncertain. Check its original receipt; never launch another process to compensate.

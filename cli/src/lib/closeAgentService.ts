@@ -17,7 +17,7 @@ export type AgentClosePlan = {
   state: 'waiting' | 'failed'
   detail?: string
 }
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode }
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean }
 export type AgentCloseResult = { closed?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'launch' | 'resumeOnly'>
@@ -58,6 +58,7 @@ export interface CloseAgentServiceDeps {
   checkpoint(s: RegisteredSession, phase: 'before' | 'after'): Promise<void>
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
+  openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   now?: () => number
 }
 
@@ -109,9 +110,16 @@ export class CloseAgentService {
     const current = () => {
       const s = this.deps.registry.byAgent(request.agentId)
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision
-        && s && identity(s) === target ? s : undefined
+        && s && identity(s) === target
+        && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {
+      if (request.onlyIfHidden) {
+        if (!this.deps.openTabs || request.mode !== 'now') return { error: 'UNSUPPORTED' }
+        const s = this.deps.registry.byAgent(request.agentId)
+        if (!s) return { error: 'AGENT_CHANGED' }
+        await this.deps.openTabs.assertHidden(s)
+      }
       const s = current()
       if (!s) return { error: 'AGENT_CHANGED' }
       const observed = await this.deps.activity(s)
@@ -135,6 +143,7 @@ export class CloseAgentService {
         beforeStop: async () => {
           const latest = current()
           if (!latest) throw new Error('The session changed while saving. Please try again.')
+          if (request.onlyIfHidden) await this.deps.openTabs!.assertHidden(latest)
           if (request.mode !== 'now') {
             const activity = await this.deps.activity(latest)
             if (activity !== 'idle') throw new CloseRefused(activity)

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DAY, HOUR, row } from './fixtures.mjs'
 import { createViewer } from '../viewer.mjs'
+import { cleanupReviews } from '../lib/cleanup.mjs'
 
 /** A viewer over a fleet that is entirely made up: no daemon, no tmux, no processes. */
 async function serve(rows = [row({ id: 'a1', idleMs: 2 * DAY }), row({ id: 'a2', state: 'paused', idleMs: 20 * DAY, rssBytes: 0 })], options = {}) {
@@ -81,6 +82,25 @@ test('a write without the token does nothing', async (t) => {
   const response = await fetch(`${base}/api/act`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verb: 'pause', ids: ['a1'] }) })
   assert.equal(response.status, 403)
   assert.deepEqual(done, [])
+})
+
+test('cleanup requires the page token, a reviewed target, and retains per-row results', async t => {
+  let previews = 0, closed = 0
+  const cleanup = cleanupReviews({ preview: async () => {
+    previews++; return { rows: [{ id: 'hidden', name: 'Hidden session' }], kept: 2, problems: [] }
+  }, close: async row => { closed++; return { ...row, ok: true, action: 'close', detail: 'Closed. History kept.' } } })
+  const { viewer, base } = await serve(undefined, { cleanup })
+  t.after(() => viewer.close())
+  assert.equal((await fetch(`${base}/api/cleanup/preview`, { method: 'POST', body: '{}' })).status, 403)
+  assert.equal(previews, 0)
+  const plan = await post(base, viewer.token, '/api/cleanup/preview', {})
+  assert.equal(closed, 0)
+  const wrong = await post(base, viewer.token, '/api/cleanup/close', { reviewId: plan.reviewId, id: 'visible' })
+  assert.match(wrong.error, /Refresh/); assert.equal(closed, 0)
+  const result = await post(base, viewer.token, '/api/cleanup/close', { reviewId: plan.reviewId, id: 'hidden' })
+  assert.equal(result.ok, true)
+  await post(base, viewer.token, '/api/cleanup/close', { reviewId: plan.reviewId, id: 'hidden' })
+  assert.equal(closed, 1)
 })
 
 test('a verb Harness Monitor does not have is refused by name', async (t) => {

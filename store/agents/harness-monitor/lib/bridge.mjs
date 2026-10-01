@@ -99,7 +99,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
     const deadline = setTimeout(() => { const m = 'The Harness daemon did not answer on the local bridge. Is Harness running?'; fail(m); reject(new Error(m)) }, Math.min(timeoutMs, 15_000))
     // `forceReconnect` tells Harness the session it kept for this machine is dead (the machine's own
     // Harness restarted under it) and must be dialled fresh rather than handed back once more.
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true, ...(forceReconnect ? { forceReconnect: true } : {}) } })))
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true, tool: true, ...(forceReconnect ? { forceReconnect: true } : {}) } })))
     socket.addEventListener('error', () => { clearTimeout(deadline); const m = 'Could not open the local Harness bridge. Start Harness and try again.'; fail(m); reject(new Error(m)) })
     socket.addEventListener('close', (event) => {
       clearTimeout(deadline)

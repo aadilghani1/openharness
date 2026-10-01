@@ -31,6 +31,24 @@ import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2e
 import { CloseAgentService } from './lib/closeAgentService.js'
 
 describe('safe session close RPC', () => {
+  it('seals cleanup previews and passes the open-tab condition to Close', async () => {
+    const socket = new BackendSocket('fixture'), frames: any[] = []
+    socket.registerLocalClient('local:cleanup', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.cleanupPreview = vi.fn(async () => ({ version: 1, agents: [], kept: 2 }))
+    const request = vi.fn(async () => ({ error: 'SESSION_IN_TAB' }))
+    socket.closeAgentService = { request, dispose() {} } as unknown as CloseAgentService
+    expect(encryptDownFrame('agents_cleanup_preview')).toBe(true)
+    expect(encryptRpcResult('agents_cleanup_preview_result')).toBe(true)
+    await (socket as any).dispatchDown({ type: 'agents_cleanup_preview', payload: { requestId: 'unsealed' } }, 'remote')
+    expect(socket.cleanupPreview).not.toHaveBeenCalled()
+    socket.handleLocalFrame('local:cleanup', { type: 'agents_cleanup_preview', payload: { requestId: 'preview' } })
+    const target = { agentId: 'a', sessionId: 's', createdAt: '2026-10-01T00:00:00.000Z', mode: 'now', onlyIfHidden: true }
+    socket.handleLocalFrame('local:cleanup', { type: 'agent_close', payload: { ...target, requestId: 'close' } })
+    await vi.waitFor(() => expect(frames.some(f => f.payload?.requestId === 'close')).toBe(true))
+    expect(request).toHaveBeenCalledWith(target)
+    expect(frames.find(f => f.payload?.requestId === 'preview').payload).toMatchObject({ version: 1, kept: 2 })
+    await socket.stop()
+  })
   it.each([
     { activity: 'idle', sessionId: 'close-history' },
     { activity: 'working', sessionId: 'close-history' },
