@@ -24,7 +24,7 @@ HN = BASE / 'hn'
 shutil.copy2(os.environ.get('HN_NEW_UI_BINARY', ROOT / 'target/release/harness-tui'), HN)
 TMUX = shutil.which('tmux')
 assert TMUX
-ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ') if k in os.environ}
+ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_NEW_UI='1')
@@ -52,12 +52,18 @@ def screen(): return tmux('capture-pane', '-p', '-t', 'test')
 def settle_ui():
     # Wait for chooser content to redraw, not just tmux send-keys returning,
     # before taking mouse coordinates.
-    # Crop to popup borders so animated working panes cannot keep it unsettled.
+    # The panel is borderless; crop inside its central 90% surface so animated
+    # working panes around it cannot keep it unsettled.
     previous, changed = None, time.monotonic()
     deadline = changed + 3
     while time.monotonic() < deadline:
-        signature = tuple(line[line.index('│'):line.rindex('│') + 1]
-                          for line in screen().splitlines() if line.count('│') >= 2)
+        lines = screen().splitlines()
+        # Once the form/chooser closes, live panes are allowed to keep changing.
+        if not any('›' in line for line in lines):
+            return
+        width = max(map(len, lines), default=0)
+        padx, pady = width // 20 + 2, len(lines) // 20 + 2
+        signature = tuple(line[padx:width-padx] for line in lines[pady:len(lines)-pady])
         if signature != previous:
             previous, changed = signature, time.monotonic()
         elif time.monotonic() - changed >= .15:
@@ -77,7 +83,9 @@ def wait(fn, label, seconds=8):
 def shows(text): wait(lambda: text in screen(), text)
 def snapshot(name):
     time.sleep(.1)
-    if OUTPUT: (OUTPUT / (name + '.ansi')).write_text(tmux('capture-pane', '-p', '-e', '-t', 'test'))
+    if OUTPUT:
+        (OUTPUT / (name + '.ansi')).write_text(tmux('capture-pane', '-p', '-e', '-t', 'test'))
+        (OUTPUT / (name + '.txt')).write_text(screen())
 def create_count(): return len(state().get('created', []))
 def click(x, y):
     for suffix in ['M', 'm']:
@@ -86,7 +94,7 @@ def click(x, y):
     settle_ui()
 def field_at(label):
     # A field's label: after a space, the pointer or an edge (the form is a borderless panel).
-    return r'(?<![^\s│›])(' + label + r') {2,}'
+    return r'(?<![^\s│›])(' + label + r')(?= {2,}|$)'
 def field(label):
     def find():
         for y, line in enumerate(screen().splitlines()):
@@ -96,8 +104,9 @@ def field(label):
     click(*find())
 def choose_field(label, query):
     field(label); type_text(query); keys('Enter'); shows('New Harness')
+def form_visible(): return re.search(field_at('Task'), screen()) is not None
 def new_form():
-    keys('C-b', 'N'); shows('Options')
+    keys('C-b', 'N'); wait(form_visible, 'New Harness form')
 def placement():
     window, windows, panes = hn('display-message', '-p', '#{window_id} #{session_windows} #{window_panes}').split()
     return window, int(windows), int(panes)
@@ -111,7 +120,7 @@ def submit(count):
     time.sleep(.15)
     before = placement()
     keys('Enter')
-    wait(lambda: create_count() == count and 'Options' not in screen(), 'created harness')
+    wait(lambda: create_count() == count and not form_visible(), 'created harness')
     placed_in_current_window(before)
 
 def raw(data):
@@ -149,7 +158,7 @@ try:
     assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
     snapshot('new-harness-agent')
     type_text('codex'); keys('Escape')
-    shows('Options'); field('Agent'); type_text('codex'); keys('Enter')
+    shows('Approvals'); field('Agent'); type_text('codex'); keys('Enter')
     field('Project'); shows('Clone Repository'); snapshot('new-harness-project')
     type_text('clone'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('GitHub URL')
     raw('\x1b[200~autonomous-ai/openharness\x1b[201~'); keys('Enter')
@@ -157,10 +166,16 @@ try:
     assert create_count() == before, 'choosing fields must not launch'
     field('Project'); type_text('new folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Folder name')
     type_text('fail-once'); keys('Enter'); shows('New Folder: fail-once')
-    field('Options'); shows('Approvals'); shows('Model'); shows('Profile')
-    assert not re.search(field_at('Machine'), screen()), 'Machine belongs in Project, not Options'
+    shows('Approvals'); shows('Model'); shows('Profile')
+    assert not re.search(field_at('Options|Machine'), screen()), 'settings are direct fields; machine belongs in Project'
     choose_field('Approvals', 'read only'); shows('Read only')
-    snapshot('new-harness-options')
+    task_text = 'Fix café login.\n\nKeep 界 and 🦀 intact.\nAdd a regression test.'
+    field('Task'); shows('Task (optional)')
+    raw('\x1b[200~Fix café login.\r\n\r\nKeep 界 and 🦀 intact.\x1b[201~')
+    shows('Keep 界 and 🦀 intact.')
+    keys('M-Enter'); type_text('Add a regression test.'); keys('Enter')
+    assert create_count() == before, 'accepting a task returns to the form without launching'
+    snapshot('new-harness-settings')
     keys('Enter', 'Enter'); shows('Fixture launch failure')
     assert create_count() == before + 1, 'busy popup prevents double submission'
     shows('fail-once'); shows('Read only')
@@ -168,6 +183,7 @@ try:
     assert request['engine'] == 'codex', request
     assert request['projectSource'] == 'new' and request['projectName'] == 'fail-once', request
     assert request['permissionMode'] == 'readOnly' and request['bypassPermission'] is False, request
+    assert request['prompt'] == task_text, request
     snapshot('new-harness-retry')
     keys('Escape'); new_form(); shows('Fixture launch failure')
     submit(before + 2)
@@ -175,22 +191,23 @@ try:
     assert retry['creationId'] != request['creationId'], 'confirmed refusal requires a fresh receipt'
     assert retry['cwd'] == '/home/demo/fail-once', 'reuse the already prepared folder'
     assert not any(k in retry for k in ('projectSource', 'projectName', 'gitSource', 'branchRef')), retry
+    assert retry['prompt'] == task_text, 'retry retains the complete task'
     assert len(state('reconnect')['inputs']) == input_before, 'form input must never reach a working pane'
     print('PASS New Harness: desktop fields, keyboard, search, paste, retry and no duplicate/input leak', flush=True)
 
     new_form(); field('Project'); type_text('open folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Use this folder')
-    type_text('projects'); keys('Enter'); shows('Use this folder'); keys('Enter'); shows('/projects')
-    field('Options'); shows('[x]'); choose_field('Branch', 'feature')
+    type_text('projects'); keys('Enter'); shows('Use this folder'); keys('Enter'); shows('projects @ local')
+    shows('[x]'); choose_field('Branch', 'feature')
     submit(before + 3)
     request = state()['created'][-1]
     assert request['projectSource'] == 'worktree' and request['gitSource'].endswith('/projects'), request
     assert request['branchRef'] == 'refs/heads/feature' and request['branchMode'] == 'existing', request
     print('PASS New Harness: browse folders, Git discovery and desktop worktree branch selection', flush=True)
 
-    new_form(); field('Options'); choose_field('Profile', 'Work'); shows('Work')
+    new_form(); choose_field('Profile', 'Work'); shows('Work')
     submit(before + 4)
     assert state()['created'][-1]['codexHome'] == '/home/demo/.codex-work'
-    new_form(); field('Options'); choose_field('Model', 'demo-model'); shows('demo-model')
+    new_form(); choose_field('Model', 'demo-model'); shows('demo-model')
     submit(before + 5)
     request = state()['created'][-1]
     assert request['gridModel'] == 'demo-model' and request['gridName'] == 'studio', request
@@ -201,19 +218,19 @@ try:
     new_form(); field('Agent'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
     submit(before + 6)
     assert state()['created'][-1]['dsh'] == 'example/blender'
-    new_form(); choose_field('Harness', 'Terminal'); field('Options')
+    new_form(); choose_field('Harness', 'Terminal')
     assert not re.search(field_at('Model|Approvals|Profile'), screen()), 'Terminal omits irrelevant settings'
     # Return focus to the action without accepting any of the disabled Git rows.
     before_terminal = placement()
     field('New Harness')
-    wait(lambda: create_count() == before + 7 and 'Options' not in screen(), 'terminal launch')
+    wait(lambda: create_count() == before + 7 and not form_visible(), 'terminal launch')
     placed_in_current_window(before_terminal)
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and request.get('permissionMode') is None, request
     assert not any(k in request for k in ('dsh', 'prompt', 'gridModel', 'gitSource', 'codexHome')), request
     print('PASS New Harness: specialized harness compatibility and ordinary Terminal launch', flush=True)
 
-    new_form(); field('Agent'); type_text('claude'); keys('Enter'); field('Options'); choose_field('Approvals', 'plan'); shows('Plan first')
+    new_form(); field('Agent'); type_text('claude'); keys('Enter'); choose_field('Approvals', 'plan'); shows('Plan first')
     keys('Escape'); new_form(); shows('Plan first')
     count = create_count()
     for w, h in [(80, 24), (45, 14), (22, 5), (1, 1), (150, 42)] * 3:
@@ -222,10 +239,34 @@ try:
         assert hn('display-message', '-p', '#{window_panes}').isdigit(), 'hn survives tiny resizes'
     field('Project'); shows('Search projects')
     tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24')
-    wait(lambda: any('Search projects' in line and line.rstrip().endswith('│') for line in screen().splitlines()), 'narrow picker redraw')
+    shows('Search projects')
     snapshot('new-harness-narrow')
     keys('Escape', 'Escape'); assert create_count() == count
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); new_form()
+
+    # A review capture with the requested project label, through the real folder chooser.
+    choose_field('Approvals', 'auto-approve')
+    field('Project'); type_text('open folder'); keys('Enter'); shows('Choose a machine'); keys('Enter'); shows('Use this folder')
+    keys('C-l', 'C-a', 'C-k'); type_text('/home/dev/autonomous-harness'); keys('Enter')
+    shows('Use this folder'); keys('Enter')
+    shows('autonomous-harness @ local'); shows('[x]')
+    tmux('resize-window', '-t', 'test', '-x', '100', '-y', '26'); settle_ui()
+    snapshot('new-harness-flat')
+    field('Task'); shows('Task (optional)')
+    raw('\x1b[200~Improve the New Harness keyboard flow.\nKeep the launch settings visible.\x1b[201~')
+    shows('Keep the launch settings visible.'); snapshot('new-harness-task')
+    keys('Escape', 'Escape'); new_form(); shows('Improve the New Harness keyboard flow.')
+    snapshot('new-harness-flat-task')
+    tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24'); settle_ui()
+    snapshot('new-harness-flat-narrow')
+    # Clearing the task allows an unsupported engine; it must never silently discard one.
+    choose_field('Agent', 'Terminal'); field('New Harness'); shows('This agent cannot start with a task')
+    assert create_count() == count, 'an unsupported task is rejected before creating a harness'
+    field('Task'); keys('C-a', 'C-k', 'Enter'); choose_field('Agent', 'claude')
+    field('Task'); type_text('x' * 2001); keys('Enter'); field('New Harness'); shows('Task is too long')
+    assert create_count() == count, 'an overlong task is rejected before creating a harness'
+    field('Task'); keys('C-a', 'C-k', 'Enter')
+    tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     # Supply actual terminal palette replies, as a light terminal would.
     raw('\x1b]10;rgb:2020/2020/2020\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
     snapshot('new-harness-light'); keys('Escape')
@@ -245,7 +286,7 @@ try:
     time.sleep(.5)
     keys('Enter'); shows('Still starting your harness')
     assert create_count() == count + 1
-    keys('Enter'); wait(lambda: 'Options' not in screen(), 'original harness recovered')
+    keys('Enter'); wait(lambda: not form_visible(), 'original harness recovered')
     placed_in_current_window(before_recovery)
     assert create_count() == count + 1, 'status recovery must never send a second create'
     checks = state()['creationChecks'][-2:]

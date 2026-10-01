@@ -153,7 +153,7 @@ impl Keymap {
         // Harness's own, on keys tmux leaves unbound.
         // (Enter: the one key to remember — every command and setting by name.)
         b(k(KeyCode::Enter, none), "choose-command", false, "Commands and settings, by name");
-        b(ch('N'), "new-harness", false, "New Harness: agent, project and options");
+        b(ch('N'), "new-harness", false, "New Harness: agent, project, task and launch settings");
         b(ch('@'), "choose-tree -m", false, "Machines (then their harnesses)");
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
         b(ch('a'), "next-harness", false, "Go to the next harness that needs you");
@@ -622,4 +622,3 @@ mod tmux_parity {
         assert!(wrong.is_empty(), "keys that differ from tmux 3.5a:\n{}", wrong.join("\n"));
     }
 }
-
