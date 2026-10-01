@@ -26,6 +26,7 @@ TMUX = shutil.which('tmux')
 assert TMUX
 ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
+           RUST_BACKTRACE='1',
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_DEMO='1', MOCK_RECONNECT='1', MOCK_NEW_UI='1')
 OUTPUT = Path(os.environ['HN_NEW_UI_OUTPUT']) if os.environ.get('HN_NEW_UI_OUTPUT') else None

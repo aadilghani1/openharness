@@ -28,7 +28,6 @@ def repository(u, name, branch='main', committed=True):
 
 
 def options(u):
-    u.field('Options')
     u.wait('Worktree')
 
 

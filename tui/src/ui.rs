@@ -165,6 +165,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::term_out::begin_frame(usstyle, links);
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }
+    // Ratatui can observe a resize before the queued terminal event reaches the app.
+    // Every pane and popup must use this frame's dimensions before drawing into its buffer.
+    if app.size != (area.width, area.height) {
+        app.size = (area.width, area.height);
+        app.fit_panes();
+    }
     // The status lines (tmux's status: off, on, 2 … 5), at the bottom or (status-position) the top.
     let lines = app.status_lines().max(1).min(area.height);
     let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);

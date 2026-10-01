@@ -1845,6 +1845,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_resize_before_its_input_event_keeps_the_form_and_choosers_in_frame() {
+        for choice in [None, Some(Choice::Agent), Some(Choice::Task)] {
+            let mut app = app();
+            open(&mut app, None, None);
+            if let Some(kind) = choice {
+                let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+                child(&mut app, &mut form, kind, "");
+                app.modal = Some(Modal::NewHarness(form));
+            }
+            // The backend has already resized, but no Resize input event has been delivered.
+            for (width, height) in [(80, 24), (45, 14), (22, 5), (1, 1), (150, 42)] {
+                let mut terminal = ratatui::Terminal::new(
+                    ratatui::backend::TestBackend::new(width, height),
+                ).unwrap();
+                terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+                let bounds = Rect::new(0, 0, width, height);
+                let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+                assert_eq!(form.area.intersection(bounds), form.area);
+                assert_eq!(form.child_area.intersection(bounds), form.child_area);
+                assert!(form.hits.iter().all(|(hit, _)| hit.intersection(bounds) == *hit));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn project_error_keeps_its_recovery_instruction_and_action_visible() {
         let mut app = app();
         open(&mut app, None, None);

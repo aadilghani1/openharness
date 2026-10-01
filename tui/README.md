@@ -177,6 +177,10 @@ receive it as their first message; an unavailable first task or one exceeding th
 Git projects default to a new worktree from main, as on desktop; missing main requires a branch
 choice. Models and profiles are checked on the selected machine before starting.
 
+![New Harness with Agent, Project and Task above the visible launch settings](docs/new-harness.png)
+
+<sub>Rendered from the isolated terminal fixture in `tests/new-harness.py`.</sub>
+
 Choosers open in the form's place without moving the panel. Escape returns through
 nested choosers and preserves a dismissed draft. Confirmed failures keep the draft and reuse
 any prepared project folder on retry. A lost reply offers Check status for the original launch;
