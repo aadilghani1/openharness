@@ -100,17 +100,20 @@ test('pin and the resume ticket are the only edits, and each is reversible', () 
 })
 
 test('every action leaves a receipt, newest first', async () => {
-  const dir = await workspace()
-  await record(dir, { action: 'pause', id: 'a1', name: 'widgets', ok: true, detail: 'engine stopped' })
-  await record(dir, { action: 'resume', id: 'a1', name: 'widgets', ok: true, detail: 'resumed' })
-  const log = await readLog(dir)
+  const { dir, env } = await machine()
+  await record(dir, { action: 'pause', id: 'a1', name: 'widgets', ok: true, detail: 'engine stopped' }, env)
+  await record(dir, { action: 'resume', id: 'a1', name: 'widgets', ok: true, detail: 'resumed' }, env)
+  const log = await readLog(dir, {}, env)
   assert.equal(log.length, 2)
   assert.equal(log[0].action, 'resume')
   assert.ok(log[0].at)
 })
 
 test('a log that cannot be written does not undo the action', async () => {
-  await record('/nope/not/a/place', { action: 'pause', ok: true })
+  const { dir, env } = await machine()
+  const blocked = join(dir, 'file')
+  await writeFile(blocked, 'not a directory')
+  await record(null, { action: 'pause', ok: true }, { ...env, HARNESS_MONITOR_STATE: join(blocked, 'state') })
 })
 
 test('the pane header is ready only when the fleet is inside its policy', async () => {
