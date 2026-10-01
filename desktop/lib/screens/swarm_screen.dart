@@ -1776,7 +1776,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
-      'searchTooltip': _commandTooltip('Search harnesses', 'harnesses.list'),
+      'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
@@ -6325,7 +6325,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode('app.daemon_talk', 'Talk to daemon', 'Ask your paired daemon'),
       ?mode(
         'harnesses.list',
-        'Harnesses',
+        'Open Harness',
         'Manage running and paused harnesses',
       ),
       ?mode('terminal.new', 'New terminal', 'A shell where you are'),
@@ -7516,8 +7516,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Widget _searchButton(TerminalTheme theme) => WorkspaceBarControl(
     key: const ValueKey('swarm-search-button'),
-    label: 'Search harnesses',
-    tooltip: _commandTooltip('Search harnesses', 'harnesses.list'),
+    label: 'Open Harness',
+    tooltip: _commandTooltip('Open Harness', 'harnesses.list'),
     onPressed: _shortcutsEnabled ? _toggleSessions : null,
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,

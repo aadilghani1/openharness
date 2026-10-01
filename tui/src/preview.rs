@@ -42,7 +42,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     let state = app.fleet.state_of(a);
     let (word, color) = match state {
         State::NeedsInput => ("waiting on you", Color::Yellow), State::Working => ("working", Color::Cyan), State::Done => ("finished a turn", Color::Green),
-        State::Ready => ("idle", Color::Green), State::Starting => ("starting", Color::Yellow), State::Failed => (if a.launch == "failed" { "failed to start" } else { "failed" }, Color::Red),
+        State::Unknown => ("status unavailable", Color::DarkGray), State::Ready => ("idle", Color::Green), State::Starting => ("starting", Color::Yellow), State::Failed => (if a.launch == "failed" { "failed to start" } else { "failed" }, Color::Red),
         State::Paused => ("paused — enter resumes it", Color::DarkGray), State::Offline => ("offline", Color::DarkGray),
     };
     let home = app.homes.get(machine_id).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());

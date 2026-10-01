@@ -258,6 +258,8 @@ import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
+import { TurnActivity, type ActivityFrame } from './lib/turnActivity.js'
+import { CodexActivityReader, RuntimeActivityReader, activityRuntimeKey } from './lib/runtimeActivity.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
 import { CursorTranscriptDiscovery, findCursorTranscript } from './engines/cursor/discovery.js'
@@ -1579,6 +1581,7 @@ function mergedLaunchEnv(
 }
 
 /** Set by runForeground once the DSH companions exist; a frame projected before that carries none. */
+let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
@@ -1587,6 +1590,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null): Promi
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
+    activity: () => activityFrameContextRef?.(s) ?? null,
   })
 }
 
@@ -2412,6 +2416,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? commandcodeNormalizers.get(sessionId)?.turnOpen
   const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
   const watcher = new Watcher()
+  const codexActivity = new CodexActivityReader()
+  const runtimeActivity = new RuntimeActivityReader({
+    codex: session => codexActivity.read(session),
+    capture: async session => {
+      const screen = await terminals.capture(session, { mode: 'visible', ansi: true })
+      return screen.state === 'succeeded' ? screen.value : null
+    },
+  })
+  const turnActivity = new TurnActivity({
+    runtime: sessionId => {
+      const session = registry.bySession(sessionId)
+      return session?.active ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId) } : undefined
+    },
+    drain: sessionId => watcher.pollSession(sessionId),
+    probe: async sessionId => {
+      const session = registry.bySession(sessionId)
+      return session?.active ? runtimeActivity.read(session) : 'unknown'
+    },
+  })
+  activityFrameContextRef = session => isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
+  backend.activityFrameProvider = activityFrameContextRef
+
   const queuedSessionEvents: Array<{
     sessionId: string
     events: ReturnType<CursorNormalizer['ingest']>
@@ -3005,6 +3031,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const mirror = new CommanderMirror({
     notifications: agentNotifications,
     notifyWithoutDevice: true,
+    verifiedWorking: sessionId => turnActivity.snapshot(sessionId)?.state === 'working',
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
     hasDevice: () => deviceIsWatching(),        // device-gate the LLM recap (mirror node)
@@ -3177,51 +3204,34 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     companionProfileChanged()
   }
 
-  // Turn heartbeat (5s): pushes `turn_heartbeat` to the web while the turn is open (keeps its 10s
-  // turn-watchdog armed through a quiet stretch — a long tool, thinking with no new JSONL line), AND fans a
-  // busy heartbeat to the device via mirror.heartbeat() so the device's busy tile stays fresh. Unlike the
-  // web send, the device fan-out spans the WHOLE busy window — the turn AND the trailing summarize (up to
-  // the 60s one-shot timeout) — because the device clears busy only on a live terminal and has a
-  // busy-timeout watchdog that would otherwise cut a long "Summarizing…". So the timer self-cancels only
-  // once BOTH the turn is closed and mirror.heartbeat() reports idle (turn done + summary done). Mirrors the
-  // the hosted runtime brain (TURN_HEARTBEAT_MS=5000), per-session, one timer per session.
+  // A timer is an opportunity to inspect work, not proof that work is happening.
+  // Keep polling unfinished transcripts even when their activity lease expires:
+  // a missed file notification or a later completion must still be discovered.
   const TURN_HEARTBEAT_MS = 5000
   const heartbeats = new Map<string, NodeJS.Timeout>()
-  const turnStartedAt = new Map<string, number>() // sessionId → turn_started wall clock, for [turn] duration
+  const turnStartedAt = new Map<string, number>()
   const stopHeartbeat = (sessionId: string): void => {
-    const t = heartbeats.get(sessionId)
-    if (t) { clearInterval(t); heartbeats.delete(sessionId) }
+    runtimeActivity.forget(sessionId)
+    const timer = heartbeats.get(sessionId)
+    if (timer) { clearInterval(timer); heartbeats.delete(sessionId) }
   }
   const startHeartbeat = (sessionId: string): void => {
-    stopHeartbeat(sessionId) // restart → guarantee a single timer per session
-    const timer = setInterval(() => {
-      if (!registry.has(sessionId)) { stopHeartbeat(sessionId); return }
-      const turnOpen = sessionTurnOpen(sessionId)
-      // A TURN THAT IS OPEN GETS ITS TRANSCRIPT RE-READ, every beat.
-      //
-      // The engines whose turn ends in a FILE — codex writes `task_complete`,
-      // and the other JSONL readers are the same shape — depend on chokidar
-      // delivering that last write. MEASURED twice, on two sessions an hour
-      // apart: it did not. Codex finished at 15:31:38 and the turn closed at
-      // 15:35:29, to the second, because the only thing that noticed was the
-      // five-minute reconciliation sweep. The web client never saw it because
-      // it renders the terminal stream; the device waits on `turn_ended` for
-      // its recap, so it sat spinning for 3m51s on a question answered in 18s.
-      //
-      // Reading to EOF here costs one stat and a short read of a file that is
-      // already open, and it bounds that failure at one heartbeat instead of
-      // at whatever is left of a five-minute window.
-      if (turnOpen) void watcher.pollSession(sessionId)
-      // Device: keep the busy tile alive through the turn AND the summarize window. Returns false when idle.
-      const deviceBusy = mirror.heartbeat(sessionId)
-      // Web: unchanged — heartbeat only while the turn itself is open (summarizing uses turn_summary_pending).
-      if (turnOpen) {
-        const agentId = agentIdFor(sessionId)
-        backend.send(turnHeartbeatFrame(sessionId, agentId))
+    stopHeartbeat(sessionId)
+    const beat = async () => {
+      if (!registry.bySession(sessionId)?.active) {
+        stopHeartbeat(sessionId); turnActivity.forget(sessionId); return
       }
-      // Self-cancel only once the turn is closed AND the summarize is done (no more device heartbeat needed).
-      if (!turnOpen && !deviceBusy) stopHeartbeat(sessionId)
-    }, TURN_HEARTBEAT_MS)
+      if (sessionTurnOpen(sessionId)) await turnActivity.check(sessionId)
+      if (!heartbeats.has(sessionId)) return
+      const activity = turnActivity.snapshot(sessionId)
+      if (activity) {
+        backend.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+        if (activity.state === 'working') backend.send(turnHeartbeatFrame(sessionId, agentIdFor(sessionId), activity))
+      }
+      const deviceBusy = mirror.heartbeat(sessionId)
+      if (!sessionTurnOpen(sessionId) && !deviceBusy) stopHeartbeat(sessionId)
+    }
+    const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', String(error))) }, TURN_HEARTBEAT_MS)
     heartbeats.set(sessionId, timer)
   }
 
@@ -3266,13 +3276,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const [eventIndex, event] of events.entries()) {
       const agentId = agentIdFor(sessionId)
-      const frame = correlateAgentEvent(event, sessionId, agentId)
+      const replay = !!(opts?.resumed || opts?.replay)
+      turnActivity.observe(sessionId, event.type, replay)
+      const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`
       // (the payload is E2EE; the backend can only read the envelope). The backend's daily turn count
       // skips these; every other consumer ignores an unknown field. Measured before this existed: one
       // agent credited with 42 turns in a single second, all re-reads.
-      if (event.type === 'turn_started' && (opts?.resumed || opts?.replay)) frame.replay = true
+      if (replay) { frame.replay = true; frame.payload.replay = true }
       // The end of a turn carries the two facts an app needs to decide whether it is NEWS, in the clear
       // beside `agentId` for the same reason `replay` is — the payload is E2EE and the apps read this
       // without opening it:
@@ -5570,11 +5582,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.message : err)
     }
   })
-  // Lines that were on disk before the tail began (watcher.ts `HistoryEvent`). They still stream — the
-  // clients render them the way they always have — but every `turn_started` among them is a prompt
-  // already answered, except the last one if the batch ends inside a turn: that turn is running now,
-  // and it is the one an `unseen` re-attach exists to catch (its first prompt landed before the path
-  // was known). Everything else is marked `replay` so the backend does not count it as a turn today.
+  // A transcript catch-up is history, including an unfinished last turn.
+  // Its content still streams, but only fresh events or live inspection can
+  // establish Working; replay cannot create a new completion notification.
   watcher.on('history', (batch: HistoryEvent) => {
     try {
       type Events = ReturnType<CursorNormalizer['ingest']>
@@ -5584,18 +5594,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         if (events) all.push(...events)
       }
       if (!all.length) return
-      const liveTail = sessionTurnOpen(batch.sessionId)
-        ? all.map((e) => e.type).lastIndexOf('turn_started')
-        : -1
-      const starts = all.filter((e, i) => e.type === 'turn_started' && i !== liveTail).length
-      if (starts) console.log(`[watcher] ${sid(batch.sessionId)} re-read ${batch.lines.length} lines already on disk · ${starts} past turn_started marked replay${liveTail >= 0 ? ' · last turn still open, kept live' : ''}`)
-      // Order is preserved: the live tail (if any) is emitted in place, between what surrounds it.
-      if (liveTail < 0) { emitSessionEvents(batch.sessionId, all, { replay: true }); return }
-      const before = all.slice(0, liveTail)
-      const after = all.slice(liveTail + 1)
-      if (before.length) emitSessionEvents(batch.sessionId, before, { replay: true })
-      emitSessionEvents(batch.sessionId, [all[liveTail]])
-      if (after.length) emitSessionEvents(batch.sessionId, after, { replay: true })
+      // Every line in this batch was already on disk. An unclosed last turn
+      // is not a fresh prompt; live runtime inspection can establish activity.
+      emitSessionEvents(batch.sessionId, all, { replay: true })
     } catch (err) {
       console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.message : err)
     }
@@ -7051,6 +7052,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     await localSocket?.close()
+    codexActivity.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
@@ -7159,6 +7161,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     await localSocket?.close()
+    codexActivity.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     await dshViewers.stopAll()

@@ -301,6 +301,12 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         key: 'menu-bar-open-harness',
         icon: AppIcons.folderOpen,
         label: 'Open Harness',
+        action: 'sessions',
+      ),
+      _swarmRow(
+        key: 'menu-bar-open-project',
+        icon: AppIcons.folderOpen,
+        label: 'Open Project',
         action: 'addAgent',
       ),
       _swarmRow(
@@ -457,12 +463,6 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         },
       ),
       const AppMenuDivider(),
-      _swarmRow(
-        key: 'menu-bar-sessions',
-        icon: AppIcons.terminal,
-        label: 'Harnesses',
-        action: 'sessions',
-      ),
       _swarmRow(
         key: 'menu-bar-notifications',
         icon: AppIcons.bell,

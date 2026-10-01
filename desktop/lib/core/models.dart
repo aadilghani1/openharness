@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable, listEquals;
 
+import 'agent_activity.dart';
 import 'runtime_model_name.dart';
 import 'agent_git_context.dart';
 
@@ -289,6 +290,7 @@ class AgentOutputStats {
 }
 
 class Agent {
+  final AgentActivity? activity;
   final String id;
   final String? sessionId;
   final String name;
@@ -432,6 +434,7 @@ class Agent {
   final String? namedAgent;
 
   const Agent({
+    this.activity,
     required this.id,
     this.sessionId,
     required this.name,
@@ -572,6 +575,7 @@ class Agent {
       engine: _safeEngine(j['engine']),
     );
     return Agent(
+      activity: AgentActivity.fromJson(j['activity']),
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
       name: j['name'] as String? ?? 'harness',
@@ -650,6 +654,7 @@ class Agent {
     DateTime? lastOpenedAt,
     bool clearClosePlan = false,
   }) => Agent(
+    activity: activity,
     id: id,
     sessionId: sessionId,
     name: name ?? this.name,

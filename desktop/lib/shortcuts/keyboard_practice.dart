@@ -39,7 +39,7 @@ class KeyboardLesson {
       .join(' / ');
   String get result => switch (command) {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
-    'agent.open' ||
+    'agent.open' => '# Projects\nChoose a project to see its harnesses.',
     'agent.add' => '[harness 1] │ [harness 2]\nBoth harnesses share this tab.',
     'agent.new' => 'Codex · This Mac · payments\nHarness anything (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
     'pane.zoom' => '[harness 2 — full workspace]\nPress the same key to restore the other panes.',

@@ -1687,7 +1687,7 @@ fn harness_value(app: &App, machine: &str, id: &str, key: &str) -> Option<Val> {
 /// failed, paused, offline.
 fn state_word(s: crate::fleet::State) -> &'static str {
     use crate::fleet::State::*;
-    match s { NeedsInput => "needs", Working => "working", Done => "done", Ready => "idle", Starting => "starting", Failed => "failed", Paused => "paused", Offline => "offline" }
+    match s { NeedsInput => "needs", Working => "working", Done => "done", Unknown => "unknown", Ready => "idle", Starting => "starting", Failed => "failed", Paused => "paused", Offline => "offline" }
 }
 
 /// `#{window_raw_flags}`: `#` activity, `!` bell, `~` silence, `*` current, `-` last, `M` the

@@ -273,7 +273,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             // request, and its state in words ('failed, 'done, 'waiting, 'working, 'idle).
             let words = match state {
                 State::NeedsInput => "waiting needs-you", State::Failed => "failed", State::Done => "done finished", State::Working => "working",
-                State::Starting => "starting", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
+                State::Starting => "starting", State::Unknown => "status unavailable", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
             };
             // Its pull request's state in words too: 'pr, 'open, 'merged.
             let pr_words = a.pr.as_ref().map(|p| format!("pr {}", p.state.to_lowercase())).unwrap_or_default();

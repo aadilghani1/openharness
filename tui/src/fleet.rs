@@ -64,6 +64,7 @@ pub struct Agent {
     pub known_at: Instant,
     pub active_at: u64,
     pub working: bool,
+    pub activity: crate::activity::Activity,
     pub last_beat: Option<Instant>,
     pub question: Option<Question>,
     pub unread: bool,
@@ -213,6 +214,7 @@ pub enum State {
     Working,
     Done,
     Ready,
+    Unknown,
     Starting,
     Failed,
     Paused,
@@ -234,6 +236,7 @@ impl Agent {
         if self.working { return State::Working }
         if self.errored { return State::Failed }
         if self.unread { return State::Done }
+        if self.activity.unknown { return State::Unknown }
         State::Ready
     }
 
@@ -282,6 +285,11 @@ pub fn parse_iso(text: &str) -> Option<u64> {
 }
 
 pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Agent {
+    if let Some(agent) = previous {
+        if agent.session_id != s(row, "sessionId") && agent.activity.older(&row["activity"]) { return agent.clone() }
+    }
+    let activity = previous.map(|p| p.activity.clone()).unwrap_or_default();
+    let previous = previous.filter(|agent| agent.session_id == s(row, "sessionId"));
     let project = row.get("project").cloned().unwrap_or(Value::Null);
     let launch = row.get("launch").cloned().unwrap_or(Value::Null);
     let title = s(row, "title");
@@ -289,7 +297,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
     if name.is_empty() { name = if !title.is_empty() { title } else { s(&project, "name") } }
     if name.is_empty() { name = s(row, "engine") }
     let dsh = { let n = s(row, "dshName"); if n.is_empty() { s(row, "dsh") } else { n } };
-    Agent {
+    let mut agent = Agent {
         machine_id: machine_id.to_string(),
         id: s(row, "id"),
         session_id: s(row, "sessionId"),
@@ -305,6 +313,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         known_at: previous.map(|p| p.known_at).unwrap_or_else(Instant::now),
         // Not `updatedAt`: the daemon restamps every row on each reconcile.
         active_at: previous.map(|p| p.active_at).unwrap_or(0),
+        activity,
         working: previous.map(|p| p.working).unwrap_or(false),
         last_beat: previous.and_then(|p| p.last_beat),
         question: previous.and_then(|p| p.question.clone()),
@@ -342,7 +351,10 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         grid_base_url: s(&row["grid"], "baseUrl"),
         grid_state: s(&row["grid"], "state"),
         grid_note: grid_note(&row["grid"]["note"]),
-    }
+    };
+    if let Some(working) = agent.activity.accept(&row["activity"], Instant::now()) { agent.working = working; }
+    if matches!(agent.status.as_str(), "stopped" | "offline") { agent.working = false; agent.activity.unknown = false; }
+    agent
 }
 
 /// TodoWrite's list: each item's words (its present-tense form while it is in progress) and state.
@@ -530,7 +542,10 @@ impl Fleet {
     pub fn event_agent(&mut self, machine_id: &str, payload: &Value) -> Option<&mut Agent> {
         let id = s(payload, "agentId");
         if !id.is_empty() && self.agents.contains_key(&(machine_id.to_string(), id.clone())) {
-            return self.agents.get_mut(&(machine_id.to_string(), id));
+            let agent = self.agents.get_mut(&(machine_id.to_string(), id))?;
+            let session = payload.get("sessionId").or_else(|| payload.get("dbSessionId")).and_then(Value::as_str);
+            if agent.status == "stopped" || session.is_some_and(|s| !agent.session_id.is_empty() && s != agent.session_id) { return None }
+            return Some(agent);
         }
         let session = { let x = s(payload, "sessionId"); if x.is_empty() { s(payload, "dbSessionId") } else { x } };
         if session.is_empty() { return None }
@@ -542,7 +557,7 @@ impl Fleet {
     /// starting, idle, paused, offline — within the first three and working, the one that has
     /// waited (or run) longest first; the rest most recent first.
     pub fn ranked(&self) -> Vec<&Agent> {
-        let bucket = |st: State| match st { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Ready => 5, State::Paused => 6, State::Offline => 7 };
+        let bucket = |st: State| match st { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Unknown => 5, State::Ready => 6, State::Paused => 7, State::Offline => 8 };
         // Each one's key once (the clock read once for all: a comparison that read it again could
         // order two alike harnesses both ways, which a sort must never see).
         let now = now_ms();
@@ -727,5 +742,26 @@ mod answer_tests {
         assert_eq!(answer_text(&q(false), "9").as_deref(), Some("9"));
         assert_eq!(answer_text(&q(false), " per user, please ").as_deref(), Some("per user, please"));
         assert_eq!(answer_text(&q(false), "  "), None);
+    }
+}
+
+#[cfg(test)]
+mod activity_evidence_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn late_snapshot_cannot_restore_an_old_conversation() {
+        let old = json!({"id":"agent","sessionId":"old","activity":{"state":"working","epoch":"daemon","revision":1,"validForMs":30000}});
+        let new = json!({"id":"agent","sessionId":"new","activity":{"state":"idle","epoch":"daemon","revision":2,"validForMs":0}});
+        let first = agent_from("m", &old, None);
+        let replacement = agent_from("m", &new, Some(&first));
+        let late = agent_from("m", &old, Some(&replacement));
+        assert_eq!(late.session_id, "new"); assert!(!late.working);
+    }
+    #[test]
+    fn unavailable_activity_is_neither_working_nor_done() {
+        let row = json!({"id":"agent","sessionId":"s","activity":{"state":"unknown","epoch":"daemon","revision":1,"validForMs":0}});
+        let agent = agent_from("m", &row, None);
+        assert_eq!(agent.state(None), State::Unknown); assert!(!agent.unread);
     }
 }

@@ -42,6 +42,7 @@ import '../core/browser_label.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/agent_activity.dart';
 import '../core/models.dart';
 import '../core/harness_resources.dart';
 import '../core/machine_resources.dart';
@@ -358,6 +359,9 @@ class MachineState {
   // opening a terminal stream against an unavailable node.
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
+  final Set<String> unknownActivityAgentIds = {};
+  final Map<String, AgentActivityOrder> activityOrder = {};
+  final Set<String> legacyHeartbeatSeen = {};
 
   /// Successful turn events from work opened in this workspace: the daemon's
   /// `turn` and `store` habits (read only while daemons are on). Capture the
@@ -5850,6 +5854,7 @@ class AppNotifier extends ChangeNotifier {
           prev.name != agent.name ||
           prev.title != agent.title ||
           prev.sessionId != agent.sessionId ||
+          prev.activity != agent.activity ||
           prev.engine != agent.engine ||
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
@@ -7764,7 +7769,14 @@ class AppNotifier extends ChangeNotifier {
     final previousWork = {for (final agent in machine.agents) agent.id: agent};
     agents = [
       for (final agent in agents)
-        retainNewerGitContext(agent, previousWork[agent.id]),
+        if (previousWork[agent.id] case final previous?
+            when previous.sessionId != agent.sessionId &&
+                agent.activity != null &&
+                machine.activityOrder[agent.id]?.isOlder(agent.activity!) ==
+                    true)
+          previous
+        else
+          retainNewerGitContext(agent, previousWork[agent.id]),
     ];
     final previous = {for (final agent in machine.agents) agent.id: agent};
     final nextIds = agents.map((agent) => agent.id).toSet();
@@ -7787,6 +7799,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machine.agents = agents;
     for (final agent in agents) {
+      _reconcileAgentActivity(machine, agent, previous[agent.id]);
       if (previous[agent.id]?.name != agent.name) {
         _recordAgentName(machine, agent);
       }
@@ -7807,6 +7820,9 @@ class AppNotifier extends ChangeNotifier {
       machine.activeAgentId = null;
     }
     machine.processingAgentIds.removeWhere((id) => !nextIds.contains(id));
+    machine.unknownActivityAgentIds.removeWhere((id) => !nextIds.contains(id));
+    machine.activityOrder.removeWhere((id, _) => !nextIds.contains(id));
+    machine.legacyHeartbeatSeen.removeWhere((id) => !nextIds.contains(id));
     machine.sessionAgentIds.clear();
     for (final agent in agents) {
       final sessionId = agent.sessionId;
@@ -7816,7 +7832,9 @@ class AppNotifier extends ChangeNotifier {
       final agentId = machine.sessionAgentIds[sessionId];
       if (agentId == null) continue;
       machine.pendingProcessingSessions.remove(sessionId);
-      _markAgentProcessing(machine, agentId);
+      if (!machine.activityOrder.containsKey(agentId)) {
+        _markAgentProcessing(machine, agentId);
+      }
     }
     _warmPreviews(machine);
     for (final agent in agents) {
@@ -7824,9 +7842,37 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  void _reconcileAgentActivity(
+    MachineState machine,
+    Agent agent,
+    Agent? previous,
+  ) {
+    // Busy belongs to one conversation, not to the reusable harness ID. A
+    // stopped or replaced conversation cannot keep its old working signal.
+    if (agent.isStopped ||
+        (previous?.sessionId != null &&
+            previous!.sessionId != agent.sessionId)) {
+      _cancelTurnActivity(machine.machine.machineId, agent.id);
+      machine.liveTurnAgents.remove(agent.id);
+      machine.legacyHeartbeatSeen.remove(agent.id);
+      machine.pendingProcessingSessions.remove(previous?.sessionId);
+      if (agent.isStopped) {
+        machine.pendingProcessingSessions.remove(agent.sessionId);
+      }
+    }
+    if (!agent.isStopped && agent.activity != null) {
+      _applyReportedActivity(machine, agent.id, agent.activity!);
+    }
+  }
+
   bool _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
+    if (previous?.sessionId != agent.sessionId &&
+        agent.activity != null &&
+        machine.activityOrder[agent.id]?.isOlder(agent.activity!) == true) {
+      return false;
+    }
     agent = retainNewerGitContext(agent, previous);
     // Discovery repeatedly sends the same snapshot. Preserve the existing
     // object (pane presentation keys include it), and do not refetch previews
@@ -7845,6 +7891,7 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    _reconcileAgentActivity(machine, agent, previous);
     if (previous?.name != agent.name) _recordAgentName(machine, agent);
     _syncAgentName(machine, agent);
     sessionPreviews.retainAgent(
@@ -7857,7 +7904,8 @@ class AppNotifier extends ChangeNotifier {
     final sessionId = agent.sessionId;
     if (sessionId != null) {
       machine.sessionAgentIds[sessionId] = agent.id;
-      if (machine.pendingProcessingSessions.remove(sessionId)) {
+      if (machine.pendingProcessingSessions.remove(sessionId) &&
+          !machine.activityOrder.containsKey(agent.id)) {
         _markAgentProcessing(machine, agent.id);
       }
     }
@@ -8429,11 +8477,16 @@ class AppNotifier extends ChangeNotifier {
   String _turnActivityKey(String machineId, String agentId) =>
       '$machineId\u0000$agentId';
 
-  bool _markAgentProcessing(MachineState machine, String agentId) {
-    final changed = machine.processingAgentIds.add(agentId);
+  bool _markAgentProcessing(
+    MachineState machine,
+    String agentId, {
+    Duration? lease,
+  }) {
+    var changed = machine.unknownActivityAgentIds.remove(agentId);
+    changed = machine.processingAgentIds.add(agentId) || changed;
     final key = _turnActivityKey(machine.machine.machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
-    _turnActivityWatchdogs[key] = Timer(turnActivityTimeout, () {
+    _turnActivityWatchdogs[key] = Timer(lease ?? turnActivityTimeout, () {
       _turnActivityWatchdogs.remove(key);
       // Closed even when the machine has been replaced under us: this path is
       // the only end a stalled turn ever gets, and a stats turn left open would
@@ -8441,9 +8494,42 @@ class AppNotifier extends ChangeNotifier {
       harnessStats.onTurnEnded(key);
       final current = machineStates[machine.machine.machineId];
       if (!identical(current, machine)) return;
+      machine.unknownActivityAgentIds.add(agentId);
       if (machine.processingAgentIds.remove(agentId)) notifyListeners();
     });
     return changed;
+  }
+
+  ({bool accepted, bool changed}) _applyReportedActivity(
+    MachineState machine,
+    String agentId,
+    AgentActivity activity,
+  ) {
+    final order = machine.activityOrder.putIfAbsent(
+      agentId,
+      AgentActivityOrder.new,
+    );
+    if (!order.accept(activity)) return (accepted: false, changed: false);
+    if (activity.state == 'working' && activity.validForMs > 0) {
+      return (
+        accepted: true,
+        changed: _markAgentProcessing(
+          machine,
+          agentId,
+          lease: Duration(milliseconds: activity.validForMs),
+        ),
+      );
+    }
+    final wasWorking = machine.processingAgentIds.contains(agentId);
+    final wasUnknown = machine.unknownActivityAgentIds.contains(agentId);
+    _cancelTurnActivity(
+      machine.machine.machineId,
+      agentId,
+      clearQuestion: false,
+    );
+    final unknown = activity.state != 'idle';
+    if (unknown) machine.unknownActivityAgentIds.add(agentId);
+    return (accepted: true, changed: wasWorking || wasUnknown != unknown);
   }
 
   /// Whether this agent is mid-turn, by the app's own reckoning.
@@ -8539,6 +8625,7 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.end(machineId, agentId);
     final machine = machineStates[machineId];
     machine?.processingAgentIds.remove(agentId);
+    machine?.unknownActivityAgentIds.remove(agentId);
     // Raw turn endings do not decide whether a question is answered. The
     // shared daemon question-close event does. Disconnect/deletion still clear.
     if (clearQuestion) machine?.blockedAgents.remove(agentId);
@@ -8549,6 +8636,9 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.processingAgentIds.clear();
+    machine.unknownActivityAgentIds.clear();
+    machine.activityOrder.clear();
+    machine.legacyHeartbeatSeen.clear();
     machine.pendingProcessingSessions.clear();
     machine.blockedAgents.clear();
   }
@@ -8561,6 +8651,9 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
+      machine.unknownActivityAgentIds.clear();
+      machine.activityOrder.clear();
+      machine.legacyHeartbeatSeen.clear();
       machine.pendingProcessingSessions.clear();
       machine.blockedAgents.clear();
     }
@@ -13539,6 +13632,56 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
+    if (type == 'agent_activity' ||
+        _modelAnswerEvents.contains(type) ||
+        payload.containsKey('activity') ||
+        type == 'turn_started' ||
+        type == 'turn_heartbeat' ||
+        type == 'turn_ended') {
+      final agentId = _eventAgentId(machine, event, payload);
+      final agent = machine.agents
+          .where((agent) => agent.id == agentId)
+          .firstOrNull;
+      final sessionId = _eventSessionId(event, payload);
+      // Heartbeats need the same conversation check as transcript events.
+      // Late work from a previous conversation must neither revive this
+      // harness nor end a newer turn after it has been resumed or replaced.
+      if ((agent?.isStopped == true && type != 'turn_ended') ||
+          (sessionId != null &&
+              agent?.sessionId != null &&
+              sessionId != agent!.sessionId)) {
+        return;
+      }
+    }
+    final reportedActivity = AgentActivity.fromJson(payload['activity']);
+    if (reportedActivity != null) {
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null) {
+        final applied = _applyReportedActivity(machine, id, reportedActivity);
+        if (applied.changed) notifyListeners();
+        if (!applied.accepted &&
+            (type == 'turn_ended' || type == 'turn_started')) {
+          return;
+        }
+      }
+    }
+    if (type == 'agent_activity') return;
+    if (reportedActivity == null &&
+        event['replay'] != true &&
+        const {
+          'text_delta',
+          'thinking_delta',
+          'thinking_title',
+          'tool_start',
+          'tool_end',
+        }.contains(type)) {
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null && !machine.activityOrder.containsKey(id)) {
+        machine.legacyHeartbeatSeen.remove(id);
+        if (_markAgentProcessing(machine, id)) notifyListeners();
+      }
+    }
+
     // Before the preview's early returns: several first-output kinds (`thinking_delta`) are not
     // preview events at all.
     if (type == 'turn_started' || _modelAnswerEvents.contains(type)) {
@@ -14000,22 +14143,36 @@ class AppNotifier extends ChangeNotifier {
         var changed = false;
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
-          if (type == 'turn_started') {
+          if (type == 'turn_started' && event['replay'] != true) {
             machine.liveTurnAgents.add(agentId);
             changed = machine.failedTurnAgents.remove(agentId);
           }
-          changed = _markAgentProcessing(machine, agentId) || changed;
+          if (reportedActivity == null &&
+              event['replay'] != true &&
+              !machine.activityOrder.containsKey(agentId)) {
+            if (type == 'turn_started') {
+              machine.legacyHeartbeatSeen.remove(agentId);
+            }
+            // Older daemons renew historical turn flags forever. One unverified
+            // heartbeat is bounded; only real new work can establish it again.
+            if (type == 'turn_started' ||
+                machine.legacyHeartbeatSeen.add(agentId)) {
+              changed = _markAgentProcessing(machine, agentId) || changed;
+            }
+          }
           // Only a START opens a stats turn, for the reason above: a heartbeat
           // is a turn already under way, and counting one would report an agent
           // this app merely reconnected to as work somebody just asked for.
-          if (type == 'turn_started') {
+          if (type == 'turn_started' && event['replay'] != true) {
             final key = _turnActivityKey(machine.machine.machineId, agentId);
             changed = harnessStats.turnStartedAt(key) == null || changed;
             harnessStats.onTurnStarted(key);
           }
         } else {
           final sessionId = _eventSessionId(event, payload);
-          if (sessionId != null) {
+          if (sessionId != null &&
+              event['replay'] != true &&
+              reportedActivity == null) {
             changed = machine.pendingProcessingSessions.add(sessionId);
           }
         }

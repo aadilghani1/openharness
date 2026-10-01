@@ -1280,6 +1280,12 @@ impl App {
                 for id in ids { self.open_stream(id, false) }
             }
             MachineEvent::Failed(error) | MachineEvent::Closed(error) => {
+                for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id) {
+                    let unknown = agent.working || agent.activity.unknown;
+                    agent.working = false;
+                    agent.activity = crate::activity::Activity::default();
+                    agent.activity.unknown = unknown;
+                }
                 let needs_link = error.code == "NO_PEER_LINK";
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) {
                     machine.reach = if needs_link { Reach::NeedsLink } else if machine.online() { Reach::Error(error.to_string()) } else { Reach::Offline };
@@ -1351,6 +1357,14 @@ impl App {
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
         // The dial's frames come from this computer's daemon, to the windows on it.
         if machine_id == self.fleet.local_id && crate::dial::on_frame(self, ty, &payload) { return }
+        if payload.get("activity").is_some() {
+            if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                if let Some(working) = agent.activity.accept(&payload["activity"], Instant::now()) {
+                    agent.working = working;
+                } else if matches!(ty, "turn_ended" | "turn_started") { return }
+            }
+        }
+        if ty == "agent_activity" { return }
         // ── models: a message to a resting model starts its pane's "Starting up…" ──
         crate::models::watch_turn(self, machine_id, ty, &payload);
         match ty {
@@ -1375,7 +1389,7 @@ impl App {
                 let id = payload.get("agentId").or_else(|| payload.get("id")).and_then(Value::as_str).unwrap_or("");
                 if let Some(agent) = self.fleet.agents.get_mut(&(machine_id.to_string(), id.to_string())) {
                     agent.status = "stopped".into();
-                    agent.working = false;
+                    agent.working = false; agent.activity.unknown = false;
                     agent.question = None;
                 }
                 self.relist(machine_id);
@@ -1385,8 +1399,14 @@ impl App {
                     let now = fleet::now_ms();
                     // A turn begun (or found running): the state's clock starts, what it says anew.
                     if ty == "turn_started" || !agent.working { agent.since = now; agent.doing = None; agent.said.clear() }
-                    agent.working = true;
-                    agent.last_beat = Some(Instant::now());
+                    if !agent.activity.reported() && payload["replay"] != true {
+                        if ty != "turn_heartbeat" { agent.activity.legacy_heartbeat_seen = false; }
+                        if ty != "turn_heartbeat" || !agent.activity.legacy_heartbeat_seen {
+                            agent.working = true; agent.activity.unknown = false;
+                            agent.last_beat = Some(Instant::now());
+                            agent.activity.legacy_heartbeat_seen = ty == "turn_heartbeat";
+                        }
+                    }
                     agent.active_at = now;
                     if ty == "turn_started" {
                         agent.unread = false; agent.errored = false;
@@ -1425,7 +1445,7 @@ impl App {
                 let (replay, subagent) = (flag("replay"), flag("subagent"));
                 let aborted = payload.get("aborted").and_then(Value::as_bool).unwrap_or(false);
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
-                    agent.working = false;
+                    agent.working = false; agent.activity.unknown = false; agent.activity.until = None;
                     if !subagent { agent.subagents.clear() }
                     agent.active_at = fleet::now_ms();
                     agent.since = agent.active_at;
@@ -5717,7 +5737,10 @@ impl App {
         for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();
         for agent in self.fleet.agents.values_mut() {
-            if agent.working && agent.last_beat.map(|t| now.duration_since(t) > Duration::from_secs(90)).unwrap_or(true) { agent.working = false }
+            if agent.activity.expired(now) { agent.working = false; }
+            if !agent.activity.reported() && agent.working && agent.last_beat.map(|t| now.duration_since(t) > Duration::from_secs(30)).unwrap_or(true) {
+                agent.working = false; agent.activity.unknown = true;
+            }
         }
         let due: Vec<String> = self.links.iter().filter(|(_, s)| s.link.is_none() && s.retry_at.map(|t| t <= now).unwrap_or(false)).map(|(id, _)| id.clone()).collect();
         for id in due {
