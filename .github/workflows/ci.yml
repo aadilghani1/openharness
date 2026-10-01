@@ -144,6 +144,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tmux musl-tools
           npm ci --prefix cli --no-audit --no-fund
+      - name: Real tmux question polling and answer routing
+        working-directory: cli
+        run: node --import tsx scripts/question-poll-native.ts "$RUNNER_TEMP/question-poll.json"
       - name: Release unit tests
         run: cargo test --locked --release
       - name: Build static Linux binary

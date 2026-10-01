@@ -16,6 +16,7 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
+export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
   const cleaned = title
@@ -1104,32 +1105,5 @@ export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
   return new Promise((resolve) => {
     execFile('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
-  })
-}
-
-export function tmuxCaptureArgs(
-  pane: string,
-  historyLines = 100,
-  options: { visible?: boolean; ansi?: boolean } = {},
-): string[] {
-  const bounded = Math.max(20, Math.min(300, Math.floor(historyLines)))
-  const args = ['capture-pane', '-p']
-  if (options.ansi !== false) args.push('-e')
-  args.push('-J', '-t', pane)
-  if (!options.visible) args.push('-S', `-${bounded}`)
-  return args
-}
-
-/** Capture terminal text; SGR and bounded history are independently selectable by backend consumers. */
-export function captureTmuxPane(
-  pane: string,
-  historyLines = 100,
-  options: { visible?: boolean; ansi?: boolean } = {},
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('tmux', tmuxCaptureArgs(pane, historyLines, options), { timeout: 2000 }, (err, stdout) => {
-      if (err) { resolve(null); return }
-      resolve(stdout)
-    })
   })
 }
