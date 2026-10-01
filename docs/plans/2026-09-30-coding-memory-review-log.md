@@ -333,9 +333,12 @@ inferred map type); both fixtures were corrected. Navigation review found an ear
 the delayed-index regression now covers awaiting the read before restoring focus and position. Type
 checking passed. Scoped Flutter analysis found only missing braces on the new multiline guards; those
 were corrected. The final navigation change rebuilt successfully as a normal macOS debug app with the
-Apple Silicon renderer and local signature. The full local CLI
-suite is in progress and has reproduced the installed OpenCode flag failures; its final outcome and
-exact-commit CI must be recorded before merge.
+Apple Silicon renderer and local signature. The full local CLI run completed with **8,086 passed,
+5 failed and 38 skipped** in 642 seconds. All five failures were the unchanged installed OpenCode
+flag checks for `--auto` and `--agent`. The run remains failed; this does not establish native OpenCode
+compatibility. After rebasing onto `606cdf15a`, **338 backend checks across 26 files** and all **67 desktop checks**
+passed, along with CLI and benchmark-runner type checks. The PR records the normal rebased build and
+exact-commit CI before merge.
 
 Synthetic renders cover normal and 200% text in both appearances, including narrow windows and long
 project paths. The [enlarged page](../research/2026-10-01-memory-notebooks/notebook-light-2.0x.png) and
@@ -345,3 +348,11 @@ no synthetic memories were written into the user's store and no native model was
 UI observation, the selected Claude account still had no weekly allowance. Real extraction and
 notebook quality, cross-framework task benefit, usefulness-based ranking, task/session navigation,
 legacy lesson migration and the held-out rollout gates remain unfinished. The feature stays opt-in.
+
+A [synthetic scale check](../research/2026-10-01-memory-notebooks/performance.json) used 10,000 records
+across 100 queued notebooks and 10 projects. Over 220 owner reads, warm p95 was 21.882 ms for the index
+and 10.910 ms for a page; fresh-worker index p95 was 66.106 ms, with zero request timeouts. The original
+`tsx` command could not open its local IPC socket in the sandbox; `node --import tsx` ran the same
+local-only diagnostic without that socket or elevated access. No actual user data or inference was
+used. This measures queued-page browsing, not generated-prose cost, model latency or semantic benefit.
+Reproduce with `cd cli && node --import tsx scripts/memory-benchmark.ts --notebooks`.
