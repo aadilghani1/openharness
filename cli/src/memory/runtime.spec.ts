@@ -352,6 +352,34 @@ it('rejects a late extraction after ownership changes, even when the provider ig
   expect(stores.get('owner_b')!.learning.status().jobs.no_useful_memory).toBeUndefined()
 })
 
+it.each(['owner', 'watching', 'experimental'] as const)('rechecks %s authorization before launch without waiting for another host tick', async change => {
+  const entered = deferred<void>(), release = deferred<void>(), finished = deferred<void>()
+  const launch = vi.fn()
+  inference.run = vi.fn(async (_prompt, options) => {
+    entered.resolve()
+    await release.promise // Native startup can yield while the host account or consent changes.
+    try {
+      options.assertAuthorized?.()
+      launch()
+      return '{"proposals":[]}'
+    } finally { finished.resolve() }
+  })
+  await runtime.tick()
+  await writeFile(sessions[0].transcriptPath, lines())
+  now += 20_000
+  await runtime.tick()
+  await entered.promise
+  if (change === 'owner') context.profileId = 'owner_b'
+  else context[change] = false
+  release.resolve()
+  await finished.promise
+  expect(launch).not.toHaveBeenCalled()
+  await runtime.tick()
+  const previous = open('owner_a')
+  expect(previous.controls()).toMatchObject({ learn: false, recall: false })
+  expect(previous.learning.status().jobs.no_useful_memory).toBeUndefined()
+})
+
 it('withholds recall if the session becomes private while the packet is being read', async () => {
   await learn()
   const delivered = deferred<void>(), release = deferred<void>()

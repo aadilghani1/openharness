@@ -9,6 +9,9 @@ import type { StartupProfile } from './startupProfile.js'
 import { runCodexMemoryInference } from '../memory/inference.js'
 import { runClaudeMemoryInference } from '../memory/claudeInference.js'
 import { memoryAccountIdentity } from '../memory/account.js'
+import type { MemoryInference, MemoryInferenceRunOptions } from '../memory/learner.js'
+import type { MemoryInferenceOptions } from '../memory/inferenceProcess.js'
+import { MemoryError } from '../memory/types.js'
 
 export interface CompanionRuntime {
   agentId: string
@@ -37,7 +40,7 @@ interface IntelligenceDeps {
   current: () => CompanionRuntime | null
   directory: string
   stateFile: string
-  run?: (engine: 'claude' | 'codex', options: OneShotOptions) => Promise<{ text: string }>
+  run?: (engine: 'claude' | 'codex', options: MemoryInferenceOptions) => Promise<{ text: string }>
   accountIdentity?: (runtime: CompanionRuntime) => Promise<string | null>
 }
 
@@ -55,25 +58,37 @@ export class CompanionIntelligence {
   cancel(): void { for (const call of this.calls) call.abort(); this.calls.clear() }
 
   readonly run: PairOneShot = (prompt, opts) => this.execute(prompt, opts, false)
-  readonly extract: PairOneShot = (prompt, opts) => this.execute(prompt, opts, true)
+  readonly extract: MemoryInference['run'] = (prompt, opts) => this.execute(prompt, opts, true)
 
-  private async execute(prompt: string, opts: Parameters<PairOneShot>[1], extraction: boolean): Promise<string | null> {
-    const target = extraction ? await this.extractionTarget() : this.target()
-    if (!target.profile || !target.runtime || target.status.state !== 'ready') return null
-    const { runtime, profile } = target
-    const engine = runtime.engine as 'claude' | 'codex'
+  private async execute(prompt: string, opts: Parameters<PairOneShot>[1] | MemoryInferenceRunOptions, extraction: boolean): Promise<string | null> {
+    // Register before the account lookup: cancel() must cover startup as well as a running child.
     const controller = new AbortController()
     const abort = (): void => controller.abort()
     opts.signal?.addEventListener('abort', abort, { once: true })
     if (opts.signal?.aborted) controller.abort()
     this.calls.add(controller)
     try {
+      const target = extraction ? await this.extractionTarget() : this.target()
+      if (controller.signal.aborted || !target.profile || !target.runtime || target.status.state !== 'ready') return null
+      if (extraction && (!('contextKey' in opts) || opts.contextKey !== target.status.contextKey)) throw new MemoryError('inference_context_changed')
+      const { runtime, profile } = target
+      const engine = runtime.engine as 'claude' | 'codex'
+      const assertAuthorized = (): void => {
+        if (controller.signal.aborted) throw new MemoryError('inference_cancelled')
+        if ('assertAuthorized' in opts) opts.assertAuthorized?.()
+        if (this.target().status.contextKey !== target.runtimeContextKey) throw new MemoryError('inference_context_changed')
+      }
+      if (extraction) assertAuthorized()
       mkdirSync(this.deps.directory, { recursive: true, mode: 0o700 })
-      const options: OneShotOptions = {
+      const options: MemoryInferenceOptions = {
         prompt, cwd: this.deps.directory, model: profile.model,
         ...(profile.effort !== 'auto' ? { effort: profile.effort as OneShotOptions['effort'] } : {}),
         ...(engine === 'codex' && runtime.codexHome ? { codexHome: runtime.codexHome } : {}),
         timeoutMs: opts.timeoutMs, signal: controller.signal,
+        ...(extraction ? { assertAuthorized, beforeRun: async () => {
+          const current = await this.extractionTarget()
+          if (current.status.state !== 'ready' || current.status.contextKey !== target.status.contextKey) throw new MemoryError('inference_context_changed')
+        } } : {}),
       }
       const run = this.deps.run ?? ((engine, options) => engine === 'claude' ? extraction ? runClaudeMemoryInference(options) : runClaudeOneShot(options)
         : extraction ? runCodexMemoryInference(options) : runCodexOneShot(options))
@@ -101,7 +116,7 @@ export class CompanionIntelligence {
       contextKey: createHash('sha256').update(JSON.stringify([target.status.contextKey, identity])).digest('hex') } }
   }
 
-  private target(): { status: IntelligenceStatus; runtime?: CompanionRuntime; profile?: RuntimeProfile } {
+  private target(): { status: IntelligenceStatus; runtimeContextKey?: string; runtime?: CompanionRuntime; profile?: RuntimeProfile } {
     if (!this.deps.enabled()) return { status: { state: 'off' } }
     const runtime = this.deps.current()
     if (!runtime) return { status: { state: 'unopened' } }
@@ -129,7 +144,7 @@ export class CompanionIntelligence {
     }
     const contextKey = createHash('sha256').update(JSON.stringify([runtime.agentId, runtime.sessionId,
       runtime.sessionId ? null : runtime.startup?.processKey, runtime.engine, profile.id, runtime.codexHome ?? null, runtime.accountKey ?? null])).digest('hex')
-    return { runtime, profile, status: { ...status, state: 'ready', model: profile.model, effort: profile.effort, contextKey } }
+    return { runtime, profile, runtimeContextKey: contextKey, status: { ...status, state: 'ready', model: profile.model, effort: profile.effort, contextKey } }
   }
 
   private load(): void {

@@ -15,7 +15,7 @@ it('waits for a certified selected Codex runtime and preserves foreground priori
   expect(foreground).toHaveBeenLastCalledWith('companion')
   busy = false
   expect((await inference.target()).foregroundBusy).toBe(false)
-  const options = { signal: new AbortController().signal, timeoutMs: 1000 }
+  const options = { signal: new AbortController().signal, timeoutMs: 1000, contextKey: 'selected' }
   expect(await inference.run('evidence', options)).toBe('{"proposals":[]}')
   expect(intelligence.extract).toHaveBeenCalledExactlyOnceWith('evidence', options)
 })

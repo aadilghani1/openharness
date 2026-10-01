@@ -56,6 +56,7 @@ it('extracts scoped knowledge through one selected target and retains its exact 
   const outcome = await new MemoryLearner(memory, provider).tick()
   expect(outcome).toEqual({ state: 'learned', learned: 1 })
   expect(provider.run).toHaveBeenCalledOnce()
+  expect(vi.mocked(provider.run).mock.calls[0][1].contextKey).toBe('collection:selected-account:model:high')
   expect(provider.target).toHaveBeenCalledTimes(2)
   const prompt = vi.mocked(provider.run).mock.calls[0][0]
   expect(prompt).toContain(JSON.stringify(event))
@@ -82,6 +83,16 @@ it('records a no-useful-memory result separately from unavailable intelligence',
   provider.run = vi.fn(async () => '{"proposals":[]}')
   expect(await learner.tick()).toEqual({ state: 'no_useful_memory', learned: 0 })
   expect(store.learning.status().jobs.no_useful_memory).toBe(1)
+})
+
+it('keeps sources pending when startup rejects a changed native context', async () => {
+  const provider = inference()
+  provider.run = vi.fn(async () => { throw new MemoryError('inference_context_changed') })
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'waiting_for_model', reason: 'inference_context_changed' })
+  expect(store.learning.status().jobs).toEqual({ waiting_for_model: 1 })
+  expect(store.learning.status().callsLastHour).toBe(1)
+  expect(store.source(event.id, access)?.text).toBe(event.text)
+  expect(store.list(access)).toEqual([])
 })
 
 it.each(['not JSON', JSON.stringify({ proposals: [{ ...proposal, state: 'active' }] }),

@@ -10,6 +10,10 @@ export interface MemoryInferenceObservation {
   reportedCostUsd?: number
 }
 export interface MemoryInferenceOptions extends OneShotOptions {
+  /** Recheck asynchronous native account metadata after the version probe, before spawning. */
+  beforeRun?: () => Promise<void>
+  /** Final synchronous owner/runtime check; no await separates it from process launch. */
+  assertAuthorized?: () => void
   /** Optional diagnostic observer. Never receives source text, reasoning, credentials or raw events. */
   observe?: (observation: MemoryInferenceObservation) => void | Promise<void>
 }
@@ -27,10 +31,13 @@ export function nativeMemoryUsage(value: unknown): MemoryInferenceObservation['u
 }
 
 /** Bounded JSONL process transport shared by the two certified native adapters. */
-export function runInferenceProcess(options: MemoryInferenceOptions, command: string, args: string[], env: NodeJS.ProcessEnv,
+export async function runInferenceProcess(options: MemoryInferenceOptions, command: string, args: string[], env: NodeJS.ProcessEnv,
   decode: (event: Record<string, unknown>) => InferenceFrame): Promise<{ text: string }> {
-  if (options.signal?.aborted) return Promise.reject(new MemoryError('inference_cancelled'))
-  if (!options.model || Buffer.byteLength(options.prompt) > 120_000) return Promise.reject(new MemoryError('invalid_inference_input'))
+  if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
+  if (options.beforeRun) await options.beforeRun()
+  if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
+  options.assertAuthorized?.()
+  if (!options.model || Buffer.byteLength(options.prompt) > 120_000) throw new MemoryError('invalid_inference_input')
   const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     let pending = true

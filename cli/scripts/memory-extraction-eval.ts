@@ -127,6 +127,9 @@ async function run() {
             await mkdir(cwd, { recursive: true, mode: 0o700 })
             const answer = await runNative({ ...options, prompt, cwd, model: selected.model,
               ...(selected.effort === 'auto' ? {} : { effort: selected.effort }), codexHome: selected.codexHome,
+              beforeRun: async () => {
+                if ((await selection()).key !== options.contextKey) throw new MemoryError('evaluation_selection_changed')
+              },
               observe: observation => { observations.push(observation) } })
             if ((await selection()).key !== selected.key) throw new MemoryError('evaluation_selection_changed')
             return answer.text

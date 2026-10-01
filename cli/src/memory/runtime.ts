@@ -351,9 +351,26 @@ export class CodingMemoryRuntime {
         if (host.active !== active || !host.authorized(active)) throw new MemoryError('owner_changed')
         return result
       } }
+      const assertAuthorized = (): void => {
+        if (this.active !== active || !this.authorized(active) || !active.preferences.learn) throw new MemoryError('inference_cancelled')
+      }
+      const inference: MemoryInference = {
+        target: async () => {
+          assertAuthorized()
+          const target = await this.deps.inference.target()
+          assertAuthorized()
+          return target
+        },
+        run: (prompt, options) => {
+          assertAuthorized()
+          return this.deps.inference.run(prompt, { ...options, assertAuthorized: () => {
+            assertAuthorized(); options.assertAuthorized?.()
+          } })
+        },
+      }
       const active: ActiveProfile = { id: profileId, connection, port, projects: new Map(), learning: null, learningStatus: null,
         captureStatus: null, maintainedAt: -Infinity, ready: false, preferences: { learn: false, recall: false },
-        capture: new NativeMemoryCapture(port, this.now), learner: new MemoryLearner(port, this.deps.inference) }
+        capture: new NativeMemoryCapture(port, this.now), learner: new MemoryLearner(port, inference) }
       this.active = active
       try {
         // A new daemon lifetime does not backfill conversations from when this host was absent.

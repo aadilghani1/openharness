@@ -7,9 +7,17 @@ import { MEMORY_CONTEXT_GUIDE } from './context.js'
 const extractionSchema = z.object({ proposals: z.array(draftSchema).max(8) }).strict()
 const outputSchema = JSON.stringify(z.toJSONSchema(extractionSchema, { io: 'input' }))
 export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v2'
+export interface MemoryInferenceRunOptions {
+  signal: AbortSignal
+  timeoutMs: number
+  /** The original lease's selected native runtime/account, not a newly chosen target. */
+  contextKey: string
+  /** Synchronous host authorization, checked again immediately before native process launch. */
+  assertAuthorized?: () => void
+}
 export interface MemoryInference {
   target(): Promise<InferenceTarget>
-  run(prompt: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<string | null>
+  run(prompt: string, options: MemoryInferenceRunOptions): Promise<string | null>
 }
 export interface LearningOutcome { state: string; reason?: string; learned?: number }
 
@@ -87,7 +95,7 @@ export class MemoryLearner {
       }
       const prompt = extractionPrompt(lease, matches)
       const timeoutMs = Math.max(1, Math.min(this.timeoutMs, 90_000))
-      const answer = await infer(this.inference, prompt, controller, timeoutMs)
+      const answer = await infer(this.inference, prompt, controller, timeoutMs, target.key!)
       assertActive(controller.signal)
       if (answer === null) {
         await this.memory.request('defer', [lease, 'waiting_for_model'])
@@ -108,7 +116,7 @@ export class MemoryLearner {
       const code = failure === 'inference_cancelled' && controller.signal.reason === 'foreground_activity'
         ? 'inference_interrupted' : failure
       const state = code === 'inference_interrupted' ? 'queued' : code === 'inference_usage_limit' ? 'budget_deferred'
-        : ['inference_cancelled', 'inference_unavailable', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
+        : ['inference_cancelled', 'inference_context_changed', 'inference_unavailable', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
           : code === 'episode_context_too_large' ? 'source_incomplete' : 'failed'
       if (lease) await this.memory.request('defer', [lease, state]).catch(() => {})
       return { state: state === 'queued' ? 'waiting_for_quiet' : state, reason: code }
@@ -121,7 +129,7 @@ function assertActive(signal: AbortSignal): void {
 }
 
 /** Cancellation must release the queue even when a provider ignores its abort signal. */
-async function infer(inference: MemoryInference, prompt: string, controller: AbortController, timeoutMs: number): Promise<string | null> {
+async function infer(inference: MemoryInference, prompt: string, controller: AbortController, timeoutMs: number, contextKey: string): Promise<string | null> {
   assertActive(controller.signal)
   let timer: NodeJS.Timeout | undefined
   let abort: (() => void) | undefined
@@ -136,7 +144,7 @@ async function infer(inference: MemoryInference, prompt: string, controller: Abo
     })
     return await Promise.race([interrupted, Promise.resolve().then(() => {
       assertActive(controller.signal)
-      return inference.run(prompt, { signal: controller.signal, timeoutMs })
+      return inference.run(prompt, { signal: controller.signal, timeoutMs, contextKey })
     })])
   } finally {
     if (timer) clearTimeout(timer)
