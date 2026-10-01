@@ -470,7 +470,8 @@ void main() {
       restored.dispose();
       await app.closePane(shared.id);
       await tester.pump();
-      expect(app.activeSwarm.manualLayout!.tiles, before.tiles);
+      expect(app.activeSwarm.manualLayout, isNull);
+      expect(app.activeSwarm.arranged!.tiles, before.tiles);
       expect(app.pinnedSlotFor(second), 1);
       expect(app.reopenClosed(), isTrue);
       await tester.pump();
@@ -479,13 +480,14 @@ void main() {
       expect(app.pinnedSlotFor(second), 2);
       await app.closePane(shared.id);
       await tester.pump();
-      final current = app.activeSwarm.manualLayout!;
+      final current = app.activeSwarm.arranged!;
+      final layoutKey = app.activeSwarm.arrangedKey!;
       final resized = current.resize(
         current.dividers.firstWhere((d) => d.axis == PaneResizeAxis.x),
         .6,
         minimum: app.activeSwarm.arrangedMinimum!,
       );
-      app.resizePanes(original, '3:manual', resized);
+      app.resizePanes(original, layoutKey, resized);
       await tester.pump();
       expect(app.reopenClosed(), isTrue);
       await tester.pump();
@@ -494,7 +496,7 @@ void main() {
         isNull,
         reason: 'Reopening must not resurrect the old layout over newer sizing choices',
       );
-      expect(app.activeSwarm.paneSizes['3:manual']!.tiles, resized.tiles);
+      expect(app.activeSwarm.paneSizes[layoutKey]!.tiles, resized.tiles);
       app.setPreset(4, PanePreset.quad);
       await tester.pump();
       expect(app.activeSwarm.manualLayout, isNull);

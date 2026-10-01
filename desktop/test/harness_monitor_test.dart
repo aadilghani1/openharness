@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -129,6 +130,33 @@ void main() {
     expect(connection.creations, hasLength(1));
   });
 
+  test('the monitor closes offline and reopens the same assistant', () async {
+    await app.harnessMonitor.open();
+    final tab = app.activeSwarm;
+    final owner = app.stateOf('m')!;
+    final agent = owner.agents.single;
+    owner
+      ..connectionStatus = ConnectionStatus.disconnected
+      ..nodeOnline = false;
+
+    await app.requestCloseSwarm(tab.id);
+
+    expect(app.swarms, isNot(contains(tab)));
+    expect(app.allPanes, isEmpty);
+    expect(connection.closes, isEmpty);
+    expect(owner.agents.single, same(agent));
+    expect(owner.agents.single.isStopped, isFalse);
+
+    owner
+      ..connectionStatus = ConnectionStatus.connected
+      ..nodeOnline = true;
+    expect(await app.harnessMonitor.open(), isNull);
+    expect(app.activeSwarm.name, harnessMonitorName);
+    expect(app.panes.singleWhere((p) => !p.isWeb).agentId, agent.id);
+    expect(connection.creations, hasLength(1));
+    expect(app.resumes, 0);
+  });
+
   test(
     'Open refreshes the owning machine and reveals an existing tab',
     () async {
@@ -215,6 +243,31 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.zoomedPaneId, viewer.id);
       expect(tester.takeException(), isNull);
+      final monitorTab = app.activeSwarm;
+      if (nativeTabs) {
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('close', {'id': monitorTab.id}),
+          ),
+          (_) {},
+        );
+      } else {
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: const Offset(1200, 700));
+        await mouse.moveTo(
+          tester.getCenter(find.byKey(ValueKey(monitorTab.id))),
+        );
+        await tester.pump();
+        await tester.tap(
+          find.byKey(ValueKey('tab-close:${monitorTab.id}')).hitTestable(),
+        );
+        await mouse.removePointer();
+      }
+      await tester.pumpAndSettle();
+      expect(app.swarms, isNot(contains(monitorTab)));
+      expect(connection.closes, isEmpty);
+      expect(find.text('OK'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     });
   }

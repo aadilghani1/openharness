@@ -252,7 +252,9 @@ Per-machine runtime state is `MachineState` (connection status, transport mode, 
 from `node_status` pushes — distinct from our own socket status, pending offline agent, turn activity).
 
 Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm` and closes the session across
-the global workspace. An owned idle session saves its native conversation and terminal snapshot
+the global workspace. Harness Monitor is the exception: closing its reusable dashboard dismisses
+the view immediately, even offline, and keeps its assistant available for the next open.
+An owned idle session saves its native conversation and terminal snapshot
 before releasing its process, regardless of other viewers. A ready, unused Claude/Codex chat with
 an empty composer also closes directly, saving its terminal snapshot without requiring a native
 conversation. Missing activity evidence for an existing chat remains unknown. Working,

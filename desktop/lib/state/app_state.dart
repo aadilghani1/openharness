@@ -1730,8 +1730,8 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Explicit user Close. Layout cleanup, tab switching, sign-out and moving a
-  /// tile continue using their existing view-only operations.
+  /// Explicit user Close. The reusable Harness Monitor dismisses its views;
+  /// ordinary sessions are saved and stopped before their views close.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
@@ -1782,6 +1782,9 @@ class AppNotifier extends ChangeNotifier {
       final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
       if (machine?.machine.isShared == true ||
           agent == null ||
+          // The monitor is a reusable dashboard, including its assistant.
+          // Dismissing it must work even when its machine cannot be reached.
+          agent.dsh == harnessMonitorId ||
           agent.isStopped ||
           !agent.terminalAvailable ||
           !agent.closeSupported) {
@@ -2064,24 +2067,43 @@ class AppNotifier extends ChangeNotifier {
           agentId: agent.agentId,
         )..composerVisible = agent.composerVisible);
     if (!target.panes.contains(pane)) {
+      final count = target.panes.length;
+      final defaultPreset = PanePreset.defaultFor(count);
+      final defaultTiles = defaultPreset == null
+          ? null
+          : PaneArrangement(defaultPreset.tilesFor(count)).fillRowEnds().tiles;
+      // A close now leaves the default layout. The desk may have frozen it as
+      // manual geometry; either form still permits undo until the user edits it.
       final restoreManual =
           agent.manualLayout != null &&
           listEquals(
             target.panes.map((p) => (p.machineId, p.agentId)).toList(),
-            agent.remainingAgents,
+            agent.remainingReadingOrder,
           ) &&
-          (target.panes.length == 1 ||
-              listEquals(
-                target.manualLayout?.tiles,
-                agent.manualLayout!.remove(agent.index)?.tiles,
-              ));
+          !target.presets.containsKey(count) &&
+          target.paneSizes.entries
+              .where((entry) => entry.key.startsWith('$count:'))
+              .every(
+                (entry) =>
+                    entry.key == '$count:manual' &&
+                    listEquals(entry.value.tiles, defaultTiles),
+              );
       if (restoreManual) {
-        target.pinnedSlots.updateAll(
-          (_, slot) => slot >= agent.index ? slot + 1 : slot,
+        // The old split's rectangles still address the original list order.
+        target.panes.sort(
+          (a, b) => agent.remainingAgents
+              .indexOf((a.machineId, a.agentId))
+              .compareTo(
+                agent.remainingAgents.indexOf((b.machineId, b.agentId)),
+              ),
         );
       }
       target.panes.insert(agent.index.clamp(0, target.panes.length), pane);
       if (restoreManual) {
+        final members = target.panes;
+        target.pinnedSlots.updateAll(
+          (id, _) => members.indexWhere((p) => p.id == id),
+        );
         target.savePaneSizes(
           '${target.panes.length}:manual',
           agent.manualLayout!,
@@ -12217,17 +12239,6 @@ class AppNotifier extends ChangeNotifier {
       return false;
     }
     source.remove(pane);
-    // The tab left behind re-tiles. `Swarm.remove` keeps the shape by carrying
-    // the manual layout down a tile — right when a pane CLOSES, because the
-    // split was drawn around the tiles that remain. A tile that left for
-    // another tab is not that: what is left here is a different set, and
-    // holding the old proportions leaves it visibly lopsided. A layout chosen
-    // outright in the Layout palette still stands; only the dragged sizes go.
-    source.paneSizes.removeWhere(
-      (key, _) => key.startsWith('${source.panes.length}:'),
-    );
-    source.arranged = null;
-    source.arrangedKey = null;
     // A harness's viewer lives beside its terminal, so it travels with it —
     // the same rule `closePane` keeps when the terminal goes.
     final viewers = <TerminalPane>[];

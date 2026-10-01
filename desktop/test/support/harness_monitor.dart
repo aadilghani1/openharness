@@ -6,6 +6,7 @@ import 'model_manager.dart';
 class MonitorConnection extends ModelManagerConnection {
   List<Map<String, dynamic>>? inventory;
   int inventoryReads = 0;
+  final closes = <Map<String, dynamic>>[];
   @override
   Future<void> waitUntilReady({
     Duration timeout = const Duration(seconds: 10),
@@ -17,6 +18,10 @@ class MonitorConnection extends ModelManagerConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    if (type == 'agent_close') {
+      closes.add(Map.of(payload));
+      throw StateError('The monitor machine is unavailable.');
+    }
     if (type == 'agents_list' && inventory != null) {
       inventoryReads++;
       return {'agents': inventory};
@@ -33,6 +38,8 @@ class MonitorConnection extends ModelManagerConnection {
         'agent': {
           ...agent,
           'engine': 'opencode',
+          'closeSupported': true,
+          'createdAt': '2026-10-01T12:00:00.000Z',
           'viewerUrl': 'http://127.0.0.1:4179/',
           'viewerName': harnessMonitorName,
         },

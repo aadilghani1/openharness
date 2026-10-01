@@ -78,6 +78,52 @@ void main() {
   setUpAll(() async {
     if (captureDir != null) await loadPreviewFonts();
   });
+  test(
+    'closing syncs the default layout and reopening restores split order',
+    () async {
+      final api = _DeskApi();
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      for (var i = 0; i < 5; i++) {
+        await app.addAgentToSwarm('m', 'a$i');
+      }
+      final work = app.activeSwarm;
+      final panes = work.panes.toList();
+      final split = PaneArrangement(const [
+        Rect.fromLTRB(0, 0, .5, .25),
+        Rect.fromLTRB(0, .25, .5, .5),
+        Rect.fromLTRB(.5, 0, 1, .5),
+        Rect.fromLTRB(0, .5, .5, 1),
+        Rect.fromLTRB(.5, .5, 1, 1),
+      ]);
+      work.savePaneSizes('5:manual', split);
+      app.togglePinPane(panes[4].id);
+
+      await app.closePane(panes[3].id);
+      await app.deskFlushForTest();
+
+      expect(work.panes.map((p) => p.agentId), ['a0', 'a2', 'a1', 'a4']);
+      expect(work.manualLayout!.tiles, PanePreset.quad.tilesFor(4));
+      final synced = api.doc!.tabs.singleWhere((t) => t.id == work.id);
+      expect(synced.panes.map((p) => p.agentId), ['a0', 'a2', 'a1', 'a4']);
+      expect(synced.layout!.sizes['4:manual'], work.manualLayout!.toJson());
+
+      expect(app.reopenClosed(), isTrue);
+      expect(work.panes.map((p) => p.agentId), ['a0', 'a1', 'a2', 'a3', 'a4']);
+      expect(work.manualLayout!.tiles, split.tiles);
+      expect(app.pinnedSlotFor(panes[4]), 4);
+      await app.deskFlushForTest();
+      expect(
+        api.doc!.tabs
+            .singleWhere((t) => t.id == work.id)
+            .layout!
+            .sizes['5:manual'],
+        split.toJson(),
+      );
+    },
+  );
+
   testWidgets(
     'shared slots survive viewport, focus and zoom changes without writes or terminal remounts',
     (tester) async {
