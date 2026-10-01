@@ -1,3 +1,4 @@
+import type { ActivityFrame } from './turnActivity.js'
 /**
  * The one shape an agent takes on the wire.
  *
@@ -59,6 +60,7 @@ export type AgentFrame = {
    */
   title: string | null
   status: string
+  activity: ActivityFrame | null
   closePlan: { state: 'waiting' | 'failed'; detail?: string } | null
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
@@ -134,6 +136,8 @@ export interface AgentDshContext {
 
 /** What the caller knows and this module deliberately does not look up for itself. */
 export interface AgentFrameContext {
+  /** Evaluated after asynchronous projection, so old snapshots cannot revive work. */
+  activity?: () => ActivityFrame | null
   /** The runtime profile's answer for this session, or null when there is none. */
   selectedModel: string | null
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
@@ -181,7 +185,7 @@ const gitContexts = new SessionGitContextReader()
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage }: AgentFrameContext,
+  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity }: AgentFrameContext,
 ): Promise<AgentFrame> {
   const home = agentProject(s.cwd)
   const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
@@ -198,6 +202,7 @@ export async function agentFrame(
     name: projectDisplayName(s),
     title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
+    activity: contextActivity?.() ?? null,
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },

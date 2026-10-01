@@ -1,8 +1,7 @@
 /** Some Codex goal interruptions never write task_complete/turn_aborted to the
- * rollout. An open transcript is then only historical evidence of work. Use
- * the live stopped-goal footer to repair that state, without touching Codex. */
+ * rollout. An open transcript is then only historical evidence of work. The
+ * live footer is one positive idle reading, never a synthetic turn end. */
 import { stripVTControlCharacters } from 'node:util'
-import type { CodexNormalizer } from '../engines/codex/normalizer.js'
 import { inspectRuntimePane } from './runtimeProfileController.js'
 
 /** Read only the UI below the current empty composer, never output/history.
@@ -18,75 +17,4 @@ export function codexStoppedGoal(screen: string | null): boolean {
   return footer.length <= 4
     && footer.some(line => /\bGoal (?:stalled|paused) \(\/goal resume\)\s*$/.test(line))
     && footer.some(line => /\? for shortcuts\b/.test(line))
-}
-
-export interface CodexTurnSnapshot {
-  normalizer: CodexNormalizer
-  /** Includes agent and terminal identity, so a replacement cannot reuse a read. */
-  runtimeKey: string
-}
-
-export interface CodexTurnRecoveryDeps {
-  snapshot(sessionId: string): CodexTurnSnapshot | undefined
-  drain(sessionId: string): Promise<void>
-  capture(sessionId: string): Promise<string | null>
-  recovered(sessionId: string): void
-  now?: () => number
-}
-
-interface Check extends CodexTurnSnapshot {
-  revision: number
-  quietSince: number
-  checkedAt: number
-  pending: boolean
-  confirmed: boolean
-}
-
-// Quietness only schedules inspection. Two explicit stopped footers, at least
-// five seconds apart, are required; time alone never ends a turn.
-const QUIET_MS = 30_000
-const CHECK_INTERVAL_MS = 5_000
-
-export class CodexTurnRecovery {
-  private readonly checks = new Map<string, Check>()
-  private readonly now: () => number
-  constructor(private readonly deps: CodexTurnRecoveryDeps) { this.now = deps.now ?? Date.now }
-
-  forget(sessionId: string): void { this.checks.delete(sessionId) }
-
-  async check(sessionId: string): Promise<void> {
-    const snapshot = this.deps.snapshot(sessionId)
-    if (!snapshot?.normalizer.turnOpen) { this.forget(sessionId); return }
-    let check = this.checks.get(sessionId)
-    if (!check || check.normalizer !== snapshot.normalizer || check.runtimeKey !== snapshot.runtimeKey
-      || check.revision !== snapshot.normalizer.activityRevision) {
-      check = { ...snapshot, revision: snapshot.normalizer.activityRevision, quietSince: this.now(),
-        checkedAt: -Infinity, pending: false, confirmed: false }
-      this.checks.set(sessionId, check)
-    }
-    if (check.pending || this.now() - check.quietSince < QUIET_MS
-      || this.now() - check.checkedAt < CHECK_INTERVAL_MS) return
-    check.pending = true
-    check.checkedAt = this.now()
-    const current = () => {
-      const latest = this.deps.snapshot(sessionId)
-      return this.checks.get(sessionId) === check && latest?.normalizer === check.normalizer
-        && latest.runtimeKey === check.runtimeKey && check.normalizer.turnOpen
-        && check.normalizer.activityRevision === check.revision
-    }
-    try {
-      await this.deps.drain(sessionId)
-      if (!current()) return
-      const stopped = codexStoppedGoal(await this.deps.capture(sessionId))
-      await this.deps.drain(sessionId)
-      if (!current()) return
-      if (!stopped) { check.confirmed = false; return }
-      if (!check.confirmed) { check.confirmed = true; return }
-      check.normalizer.closeTurn()
-      this.forget(sessionId)
-      this.deps.recovered(sessionId)
-    } catch {
-      check.confirmed = false // Unavailable terminals are unknown, never idle.
-    } finally { check.pending = false }
-  }
 }

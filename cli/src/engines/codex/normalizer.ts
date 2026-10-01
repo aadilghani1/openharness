@@ -260,7 +260,6 @@ function compactEvent(): LiveEvent {
 export class CodexNormalizer implements EngineNormalizer {
   private open = false
   private pendingTask = false
-  private revision = 0
   private toolNames = new Map<string, string>()
   private rawToolNames = new Map<string, string>()
   private hiddenToolCalls = new Set<string>()
@@ -279,15 +278,12 @@ export class CodexNormalizer implements EngineNormalizer {
   ) {}
 
   get turnOpen(): boolean { return this.open }
-  /** Invalidates an asynchronous status check whenever transcript activity arrives. */
-  get activityRevision(): number { return this.revision }
 
-  closeTurn(): void { this.open = false; this.pendingTask = false; this.revision++ }
+  closeTurn(): void { this.open = false; this.pendingTask = false }
 
   ingest(line: string): LiveEvent[] {
     const raw = parse(line)
     if (!raw) return []
-    this.revision++
     const topType = string(raw.type)
     const item = payload(raw)
     const type = string(item?.type)
