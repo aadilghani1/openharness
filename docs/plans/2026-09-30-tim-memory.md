@@ -314,6 +314,41 @@ The first executable development diagnostic contains six frozen synthetic episod
 
 Add `--batch` to select the separate [frozen multi-episode diagnostic](../research/2026-09-30-memory-batch-extraction-cases.json). Its two cases combine useful personal preferences with quoted/unbound material, and test whether an acknowledgement in a separate conversation is falsely attached to an assistant's experiment. Each captured episode retains its own session and evidence IDs. The grader requires every episode in the case to reach a successful terminal review state before scoring record counts, recall or abstention. If input limits leave part of the batch queued, quality checks stay inconclusive and semantic review is unavailable. These cases have not yet been executed against a real model; synthetic provider-output checks establish evaluation mechanics only.
 
+The diagnostic's original recall boolean measures **presence only**. It cannot establish that the
+right memory was returned. New reports also retain the exact recall text, byte budget and token
+estimate for review. The offline review command binds its packet and labels to the exact frozen
+suite and native report bytes, with scorer/runner hashes on its output:
+
+```bash
+cd cli
+node --import tsx scripts/memory-quality-review.ts --suite <frozen-suite.json> --report <native-report.json> --output <new-packet.json>
+node --import tsx scripts/memory-quality-review.ts --suite <frozen-suite.json> --report <native-report.json> --review <labels.json> --output <new-scores.json>
+```
+
+Make a separate copy of the packet's `review` object for labels. Attribute the reviewer as human or
+agent; judge each record's support, specificity and potential usefulness against its source and
+criteria. For each probe, identify relevant and required record IDs, any missing required memory,
+and whether the captured context faithfully preserves the claim and conditions. A relevant-looking
+but unsupported memory, an irrelevant extra, an unmet requirement or unfaithful context fails the
+reviewed recall check. Null labels remain pending. Older reports without captured context receive
+no recall-quality rate. Model/arm labels are omitted from packets, but content can reveal origin;
+reviewer identity and independence are declarations, not authenticated facts. No model is called,
+no production memory is changed, and existing output files are never overwritten.
+
+The [saved blocked-run review](../research/2026-10-01-memory-quality-review-blocked.json) has zero
+completed cases out of six and no quality percentages. Empty, unfinished and partially reviewed
+denominators do not count as success. Semantic review remains separate from actual native delivery,
+notebook faithfulness and paired coding-task outcomes; this tool does not satisfy those release gates.
+
+Recent evidence reinforces this distinction. A developer-history study reports limited and
+inconsistent gains from personalized skills compared with its controls; its replay uses a simulated
+developer and model-based grading. [Huang et al., August 2026](https://arxiv.org/abs/2608.10319).
+VibeMemBench instead grades executable repository outcomes and reports that most tested memory
+configurations did not improve on matched memory-off runs. [Fan et al., September 2026](https://arxiv.org/abs/2609.23570).
+Our inference is to include a generic-guidance control on the representative comparison subset and
+use direct injection of independently reviewed relevant knowledge to diagnose where extraction,
+retrieval or application fails. These controls are proposed comparisons, not results for Harness.
+
 Run both directions, Claude → Codex and Codex → Claude, with:
 
 1. Memory disabled, to measure ordinary task ability.

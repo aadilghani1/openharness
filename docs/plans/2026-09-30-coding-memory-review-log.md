@@ -289,6 +289,11 @@ The first PR #539 CI run passed 8,001 CLI tests but failed the existing `cli.ts`
 
 The permitted local full run completed with **8,043 passed, 6 failed and 38 skipped**. One failure was that timer assertion; all **61 checks across the switch, runtime, settings and local settings-route files** passed after its correction. The remaining five failures were the installed OpenCode TUI's missing `--auto`/`--agent` flags; the OpenCode implementation and flag tests are unchanged in this PR. The full local run is recorded as failed, not relabeled by focused rechecks. Native OpenCode compatibility and the memory model-quality gates are separate from the opt-in setting's validation.
 
+Later investigation for [PR #544](https://github.com/autonomous-ai/openharness/pull/544) corrected the
+missing-flag interpretation above: both flags appear in the installed binary's stderr help output.
+The unchanged test reads only stdout, which is empty. The recorded failures remain failures of that
+test; they are not evidence that the installed binary lacks those flags.
+
 PR #539 merged as `7be7ae16afca5ee44da03a8bc14c1effead6eebd` after all four jobs in
 [its final CI run](https://github.com/autonomous-ai/openharness/actions/runs/36857274078) passed on
 head `a20f41d86aa3d09a3c7f26f9f64f6cf2683b3b4e`. No release was published.
@@ -402,3 +407,42 @@ memories and 5,000 explicitly rated receiving contexts. Across 310 requests, war
 not retrieval quality or real hook latency. No personal store was seeded, native model called,
 running app replaced or release published. The held-out real-history and task-benefit requirements,
 real notebook faithfulness, native lifecycle coverage and fuller task/session navigation remain open.
+
+## Round 22 — distinguish recall presence from reviewed quality
+
+The next evidence question was whether the evaluation can distinguish an appropriate memory from
+any nonempty result. Its original recall probe could not: an unrelated returned record still passed
+the presence check. That mechanical result is now explicitly labelled as presence only. The learner
+diagnostic also records the exact bounded recall context so a review can examine the text an adapter
+would receive, including conditions and exceptions, rather than relying only on record IDs.
+
+An offline review tool binds source fixtures, native output and labels by exact file hashes. It
+provides source excerpts, frozen criteria, returned records and query context with blank judgements.
+It omits model/arm labels without claiming perfect blinding. Reviewers declare their identity, kind
+and independence; the tool does not authenticate those declarations. Unsupported or irrelevant
+content, missing required knowledge and unfaithful context cannot receive reviewed-recall credit.
+Incomplete annotations remain pending, and an empty or incomplete denominator never becomes 100%.
+Semantic judgements do not establish received native context, coding-task benefit or notebook quality.
+
+The latest primary-source research also argues for measuring outcomes and appropriate controls.
+The [developer-history study](https://arxiv.org/abs/2608.10319) compares personalization with generic
+and mismatched guidance, with limited personalization benefit in its setting. The
+[VibeMemBench paper](https://arxiv.org/abs/2609.23570) separates usable prior knowledge from what
+memory systems actually supply on executable coding tasks. Their findings inform our comparison
+design; neither evaluates Harness. No external dataset has been imported or counted toward our
+held-out requirement, and no actual programmer participated in this review.
+
+All **24 extraction/review tests** pass. They cover the old false-positive nonempty recall, irrelevant
+extras, missing needs, unsupported memories, unfaithful or missing context, modified files/probes,
+changed record versions, duplicate/invented IDs and incomplete extraction. A regression exposed a
+validator that rejected a partially filled annotation depending on field order; that case failed
+before the fix and now remains pending as intended. An initial missing brace in the test fixture was
+also corrected. CLI and standalone runner type checks are recorded with the final PR checks.
+
+The CLI was run against the actual saved quota-blocked diagnostic, using only its frozen synthetic
+sources. Its [review result](../research/2026-10-01-memory-quality-review-blocked.json) correctly has
+zero completed cases out of six and null memory, recall and abstention rates. A second write to the
+same path was refused and the original report hash remained unchanged. The scorer hash was checked
+against the source file. No native inference, private history scan, production memory write, app
+replacement, firmware change or release occurred. Real model quality and the full release evidence
+remain unproven; a reviewed synthetic diagnostic will not substitute for them.
