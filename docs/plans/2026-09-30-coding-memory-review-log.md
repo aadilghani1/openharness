@@ -506,3 +506,77 @@ No private history was scanned, native model called, production memory seeded, i
 app replaced or release published. Real extraction and notebook faithfulness, cross-framework
 task benefit, native lifecycle coverage, task/session navigation and the held-out rollout gates
 remain open. This change makes existing recall inspectable; it does not establish those outcomes.
+
+## Native compatibility and first consented capture check — October 1
+
+The next check stayed on native transport and real-data intake. Claude Code 2.1.286 print-mode
+and Codex 0.159.3 trusted interactive probes both carried fresh synthetic memory on the next
+user prompt after resume, manual compaction and a model change. The
+[native results](../research/2026-10-01-memory-native-lifecycle.json) preserve the outgoing-request
+observations and their limits. Codex also sent unidentified requests without the marker; this
+does not certify every request, automatic mid-turn compaction, account/profile changes or
+usefulness. No actual practitioner participated in this validation.
+
+The prompt-recall gate now includes Codex 0.159.3. Its background extraction gate remains
+unchanged: a separate restricted-command probe received startup error items for missing old-model
+metadata and for the disabled code-mode host on a current model. Explicitly disabling the two
+code-mode feature flags did not remove that error. The adapter still rejects error items and does
+not choose a different model or enable execution. The probe's initial classifier was too permissive
+about startup errors; it was corrected before any extraction compatibility change. The saved
+diagnostics report failure, including normal text output that followed an error.
+
+All **156 focused memory and hook checks** passed, and CLI type checking passed. The new
+0.159.3 prompt-recall case failed before the gate change. An initial sandboxed hook test run
+could not bind its loopback servers and was stopped; the socket-enabled rerun passed. Both
+checked-in lifecycle probes were run with disposable native configuration, fake credentials
+and local mock endpoints. Native Codex folder/hook trust was reviewed under the user's existing
+explicit authorization. No installed app or production configuration was replaced.
+
+The user then explicitly requested testing on their real sessions. A private, read-only audit of
+the live memory store found no learned memories and deferred/unavailable inference. The selected
+companion was Codex / gpt-6-astra / max; the corresponding native account reported exhausted usage.
+The original transcripts and selected excerpts were kept outside the repository.
+
+A private replay of two recent coding sessions through the actual capture implementation preserved
+all **26 user messages**, but **20 belonged to source_incomplete episodes** and only six to queued
+episodes. Twelve incomplete transitions were caused by the bounded-chunk limit; fourteen first
+record-incomplete transitions were also observed. These are capture-availability counts, not
+memory-quality percentages. An independently authored six-item expectation list and abstention
+checks are saved privately for later native extraction. No Tim response or extraction-quality
+score was fabricated, and no source text or expected personal memory was seeded into production.
+The next data-intake work must preserve useful instructions in long sessions while retaining
+explicit uncertainty about genuinely missing context.
+
+### Long-session capture repair
+
+Four structural regressions reproduced the loss before the fix: a byte limit, a source-count
+limit, oversized user input followed by intact instructions, and a missing tool result between
+two intact instructions. Capture now closes intact segments as bounded context, isolates
+unreadable records, and carries that distinction through restart until a native turn boundary.
+The v4 extraction prompt describes the gaps. The durable publication check permits only explicit
+user-stated preferences, constraints, decisions or learning goals from bounded context; editing
+lease metadata cannot authorize assistant evidence, inferred preferences or execution outcomes.
+
+A [fixed-window before/after replay](../research/2026-10-01-memory-consented-capture.json) used the
+same two consented sessions and the original cutoff. Before: 26 user events captured, six queued,
+20 source-incomplete. After: all 26 captured and queued, with 20 explicitly marked bounded and
+six in complete context. All six manually authored expected-memory source spans are now available
+for learning. This proves availability only: no native model response, paraphrase-quality score,
+task benefit or production backfill was produced. Raw transcripts, quotations and expected personal
+memories remain private and outside git. The first comparison script used the wrong sample ID field;
+that harness error was corrected before recording the fixed-window results.
+
+Store schema 2 prevents old readers from treating these queued segments as complete conversations.
+The additive upgrade preserves existing records, sources, controls and exclusions; the previous
+main revision was also run against a disposable upgraded store and returned `schema_unsupported`.
+An older app cannot use the upgraded coding-memory store; it is not an automatic downgrade path.
+The installed review app and production store were left untouched. Historical source-incomplete
+jobs are not silently reclassified or replayed.
+
+Validation: the final memory suite passed **346 checks** across 26 files, including upgrade
+preservation, unsupported-version refusal and restart across a gap. Type checking passed.
+A fresh host check at 16:21 UTC showed the user had switched the companion from Codex to
+**OpenCode**, which the current memory intelligence does not support. Both existing Claude and
+Codex accounts still reported exhausted weekly limits; neither was substituted for the selected
+companion. OpenCode integration is now the immediate requirement for the requested end-to-end
+test. Actual Tim extraction and the held-out quality/rollout gates remain open.

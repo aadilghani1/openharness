@@ -1,6 +1,13 @@
 # Coding memory across agent frameworks
 
-Status: implementation in progress, 2026-09-30. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Development-gated host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes demonstrated one hook-delivery path in Claude 2.1.286 and trusted interactive Codex 0.159.0. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
+Status: experimental implementation available for review, 2026-10-01; quality validation remains incomplete. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Opt-in host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes cover next-user-prompt delivery after resume, manual compaction and a model change in Claude 2.1.286 and trusted interactive Codex 0.159.3. The older Codex 0.159.0 prompt certificate remains. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
+
+Codex **0.159.3 prompt delivery and background extraction have separate status**. Its trusted prompt
+hook can receive existing memory, but its restricted extraction command remains uncertified. Local
+mock checks observed native startup error items for both an old model label with missing metadata and
+a current model with code-mode hosting disabled. The adapter continues to reject those error items;
+it does not switch models or enable execution to make the check pass. See the
+[native lifecycle and extraction evidence](../research/2026-10-01-memory-native-lifecycle.json).
 
 The executable [six-case extraction diagnostic](../research/2026-09-30-memory-extraction-cases.json) now exercises the actual learner, admission and recall. Its [first native attempt](../research/2026-09-30-memory-extraction-baseline.json) stopped with native login unavailable. That result was traced to missing OS login names in the restricted adapter environment and fixed. The [latest attempt](../research/2026-10-01-memory-native-quality-blocked.json) then stopped at the selected Claude account’s weekly usage limit: **zero completed extractions**, no quality score. This is separate from the 64 design scenarios and from the required held-out evaluation.
 
@@ -73,6 +80,20 @@ Reuse Harness's admitted native transcript paths and engine formats for permitte
 Persist an ingestion cursor and normalized event before acknowledging capture. Deduplicate by native session/event identity plus revision, not just text: the same words in two independent conversations can be legitimate supporting evidence. Preserve source-root lineage through replays, forks, imports, and memory injections so echoed content cannot reinforce itself.
 
 Build episodes around a completed user request and its work, not arbitrary groups of eight truncated turns. An episode records intent, relevant correction/decision, attempted actions, verification, and unresolved questions. Retrieve only the evidence spans needed for a candidate. Long episodes can be chunked, but each extraction knows the missing boundaries and cannot claim an unseen outcome.
+
+The capture implementation now marks intact segments of long turns as **bounded context** instead
+of source-incomplete. Oversized or unreadable records remain in separate incomplete episodes.
+Extraction from bounded context is limited to self-contained explicit user preferences, constraints,
+decisions and learning goals; the publication transaction rejects inferred knowledge, outcome claims
+and non-user evidence from those segments. Context survives restart and is reset at the next native
+turn boundary. This is a structural limit, not proof that the model's paraphrase is faithful.
+
+The queue context requires store schema 2. Opening a schema-1 store adds the metadata and preserves
+records, evidence, controls and privacy settings in one transaction. Existing memory records keep
+their version-1 format. Older runtimes refuse the upgraded store rather than misreading bounded
+segments as complete work; rolling back the app therefore makes coding memory unavailable until a
+compatible runtime is used. The wider migration/rollback rollout gate remains open. No production
+store was upgraded during the private replay.
 
 When present, preserve the considered alternatives, explicit rationale, expected result, observed result, and reasons to revisit a choice. Do not invent missing alternatives or request private model reasoning traces. User-facing explanations, reviewable artifacts, and observable work are sufficient sources. Capture a benchmark's conditions and a test's coverage rather than promoting a success message into a universal technical conclusion.
 
@@ -260,8 +281,8 @@ Scope and identity are bound by Harness to the authenticated local session; tool
 
 | Adapter | Capture | Automatic recall | Initial support commitment |
 | --- | --- | --- | --- |
-| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | UserPromptSubmit task recall is development-gated. Resume/compact refresh and optional tool-boundary refresh still need validation. | A synthetic 2.1.286 print-mode probe observed hook context in the outgoing request. It does not certify every TUI/lifecycle path. |
-| Codex | Existing normalized reader; supported hook events identify prompt/turn boundaries. | UserPromptSubmit recall is development-gated to tested 0.159.0. Native folder and hook trust remain required. | After explicit user approval, a trusted interactive probe observed developer-role hook context in the outgoing request. The earlier untrusted exec probe emitted none; resume/compaction and other requests remain unverified. |
+| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | Opt-in UserPromptSubmit task recall is certified for 2.1.286. | Synthetic print-mode probes observed fresh context on the next user prompt after resume, manual compaction and a model change. Automatic mid-turn compaction, profile changes and other TUI paths remain unverified. |
+| Codex | Existing normalized reader; supported hook events identify prompt/turn boundaries. | Opt-in UserPromptSubmit recall supports tested 0.159.0 and 0.159.3. Native folder and hook trust remain required. | Trusted interactive 0.159.3 probes observed developer-role context on the next user prompt after resume, manual compaction and a model change. Additional unidentified requests omitted the marker. Automatic mid-turn compaction and profile changes remain unverified; extraction is still certified only for 0.159.0. |
 | Other Harness engines | Existing readers where available. | CLI/MCP and the existing runtime context bootstrap; native hooks added individually. | Search/manual recall only until automatic delivery is demonstrated. No blanket compatibility claim. |
 
 These hook mechanisms are supported by the [Claude documentation](https://code.claude.com/docs/en/hooks) and [Codex documentation](https://learn.chatgpt.com/docs/hooks). Installing a hook does not establish that it is trusted or firing. Setup merges only Harness-owned entries, preserves other hooks, and exposes required native trust steps. Never bypass the agent's trust controls.

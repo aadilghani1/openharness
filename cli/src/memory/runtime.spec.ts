@@ -221,9 +221,9 @@ it.each(['claude', 'codex'] as const)('keeps %s prompt delivery unavailable on a
   expect((await runtime.recall('agent', { query: 'coding changes' })).items).toHaveLength(1)
 })
 
-it('prepares Codex prompt memory only for its tested native release', async () => {
+it.each(['0.159.0', '0.159.3'])('prepares Codex prompt memory for tested native release %s', async cliVersion => {
   await learn()
-  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion: '0.159.0' }
+  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion }
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
   expect(prepared.packet.items).toHaveLength(1)
   expect(prepared.receipt?.delivery).toBe('unverified')

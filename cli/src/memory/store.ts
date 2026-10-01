@@ -30,7 +30,10 @@ interface Controls { learn: boolean; recall: boolean; generation: number; captur
 export interface MemoryPreferences { learn: boolean; recall: boolean }
 interface Compaction { compactedSources: number; deletedSources: number; removedBytes: number }
 
-const SCHEMA = 1
+// v2 distinguishes intact bounded context from completed turns. A v1 reader must
+// refuse this store rather than review queued segments as complete conversations.
+// Memory records retain their v1 format; the upgrade only adds queue metadata.
+const SCHEMA = 2
 const EMPTY = (status: RecallPacket['status'] = 'ok'): RecallPacket => ({ status, items: [], text: '', estimatedTokens: 0 })
 const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'not', 'to', 'of', 'for', 'in', 'on', 'is', 'it', 'with', 'this', 'that', 'please', 'can', 'you', 'we', 'our', 'my'])
 
@@ -81,7 +84,7 @@ export class CodingMemoryStore {
         const owner = db.prepare("SELECT value FROM memory_meta WHERE key = 'profile'").get()?.value
         const version = db.prepare("SELECT value FROM memory_meta WHERE key = 'schema'").get()?.value
         if (owner !== options.profileId) throw new MemoryError('profile_mismatch')
-        if (version !== String(SCHEMA)) throw new MemoryError('schema_unsupported')
+        if (version !== '1' && version !== String(SCHEMA)) throw new MemoryError('schema_unsupported')
       }
       // No long-lived WAL containing deleted text. Both ordinary pages and FTS segments are scrubbed.
       db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;')
@@ -168,7 +171,7 @@ export class CodingMemoryStore {
           ${NOTEBOOK_SCHEMA}
         `)
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('profile', ?)").run(options.profileId)
-        db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('schema', ?)").run(String(SCHEMA))
+        db!.prepare("INSERT INTO memory_meta(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(SCHEMA))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('controls', ?)").run(JSON.stringify({ learn: false, recall: false, generation: 0, captureEpoch: 0, learnSince: null }))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('preferences',?)").run(JSON.stringify({ learn: true, recall: true }))
         db!.exec("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('knowledge_epoch','0')")

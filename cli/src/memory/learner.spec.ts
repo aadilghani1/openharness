@@ -91,10 +91,25 @@ it('shows separate episode boundaries and original roles while using a single pr
   const prompt = vi.mocked(provider.run).mock.calls[0][0]
   const boundaries = JSON.parse(prompt.split('Episode boundaries: ')[1].split('\n')[0])
   const sources = JSON.parse(prompt.split('Captured source events: ')[1])
-  expect(boundaries).toEqual([{ episodeId: 'episode', sourceIndexes: [0] }, { episodeId: 'other_episode', sourceIndexes: [1] }])
+  expect(boundaries).toEqual([{ episodeId: 'episode', sourceIndexes: [0], context: 'complete' },
+    { episodeId: 'other_episode', sourceIndexes: [1], context: 'complete' }])
   expect(sources).toEqual([event, reply])
   expect(prompt).toContain('Never treat a reply in one episode as acceptance of a statement in another')
   expect(store.learning.status().jobs).toEqual({ learned: 1, no_useful_memory: 1 })
+})
+
+it('labels bounded context for extraction and rejects unsupported outcomes from it', async () => {
+  const partial = { ...event, id: 'partial', nativeEventId: 'partial', rootIds: ['partial'] }
+  store.learning.capture({ streamId: 'stream', engine: 'codex', sessionId: 'session', projectId: 'project', episodeId: 'partial',
+    from: '1', to: '2', events: [partial], boundary: 'bounded' })
+  const draft = { ...proposal, assertionType: 'temporary_state',
+    evidence: [{ ...proposal.evidence[0], sourceEventId: partial.id }] }
+  const provider = inference(JSON.stringify({ proposals: [draft] }))
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'failed', reason: 'bounded_context_evidence' })
+  const prompt = vi.mocked(provider.run).mock.calls[0][0]
+  expect(prompt).toContain('"context":"bounded"')
+  expect(prompt).toContain('A user request establishes requested behavior, not implemented behavior')
+  expect(store.list(access)).toEqual([])
 })
 
 it('records a no-useful-memory result separately from unavailable intelligence', async () => {

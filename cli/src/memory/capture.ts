@@ -20,6 +20,8 @@ const cursorSchema = z.object({ v: z.literal(1), f: z.string().length(24), o: z.
   e: z.string().uuid().nullable(), l: z.number().int().nonnegative(), i: z.boolean(), s: z.boolean(),
   q: z.number().int().nonnegative().default(0),
   p: z.number().int().nonnegative().default(0),
+  // This native turn has been split or has a gap. Later intact segments remain bounded context.
+  g: z.boolean().default(false),
   n: z.number().int().nonnegative(), b: z.number().int().nonnegative() }).strict()
 type Cursor = z.infer<typeof cursorSchema>
 const FRAME_BYTES = 256 * 1024
@@ -58,7 +60,7 @@ export class NativeMemoryCapture {
         try { cursor = cursorSchema.parse(JSON.parse(raw)) } catch { throw new MemoryError('capture_cursor_invalid') }
       }
       const base = { streamId, engine: session.engine, sessionId: session.sessionId, projectId: session.projectId, generation: controls.generation }
-      const commit = async (next: Cursor, events: SourceEvent[] = [], boundary: 'open' | 'complete' | 'incomplete' = 'open', episodeOverride?: string): Promise<void> => {
+      const commit = async (next: Cursor, events: SourceEvent[] = [], boundary: 'open' | 'complete' | 'bounded' | 'incomplete' = 'open', episodeOverride?: string): Promise<void> => {
         const to = JSON.stringify(next)
         const episodeId = episodeOverride ?? cursor?.e ?? next.e
         if (raw === to && !events.length) return
@@ -66,9 +68,10 @@ export class NativeMemoryCapture {
         else await this.memory.request('checkpoint', [{ ...base, from: raw, to }])
         raw = to; cursor = next
       }
-      const seal = async (incomplete = false): Promise<void> => {
+      const seal = async (boundary: 'complete' | 'bounded' | 'incomplete' = 'complete'): Promise<void> => {
         if (!cursor?.e) return
-        await commit({ ...cursor, e: null, i: false, n: 0, b: 0 }, [], incomplete || cursor.i ? 'incomplete' : 'complete')
+        const context = boundary === 'incomplete' || cursor.i ? 'incomplete' : boundary === 'bounded' || cursor.g ? 'bounded' : 'complete'
+        await commit({ ...cursor, e: null, i: false, n: 0, b: 0, g: context !== 'complete' }, [], context)
       }
       if (cursor?.e && !await this.memory.request('episodeOpen', [streamId, cursor.e])) {
         // Keep the acknowledged byte position. A cancelled episode must never be replayed under
@@ -81,7 +84,7 @@ export class NativeMemoryCapture {
       const changed = cursor && (cursor.f !== identity || stat.size < cursor.o || await anchor(handle, cursor.o) !== cursor.a)
       const paused = cursor && (cursor.l !== controls.captureEpoch || cursor.q !== controls.sessionEpoch || cursor.p !== controls.projectEpoch)
       if (!cursor || changed || paused) {
-        if (cursor?.e) await seal(true)
+        if (cursor?.e) await seal('incomplete')
         // New sessions start at byte zero. Enabling learning in an old conversation reads only its
         // recent tail, and the native timestamps below reject anything before consent.
         // Rewritten transcripts establish a new EOF baseline; replay is not new independent evidence.
@@ -91,7 +94,7 @@ export class NativeMemoryCapture {
           start = first?.end ?? stat.size
         }
         await commit({ v: 1, f: identity, o: start, a: await anchor(handle, start), e: null, l: controls.captureEpoch,
-          q: controls.sessionEpoch, p: controls.projectEpoch, i: false, s: false, n: 0, b: 0 })
+          q: controls.sessionEpoch, p: controls.projectEpoch, i: false, s: false, g: false, n: 0, b: 0 })
         if (changed) return { state: 'source_changed', sources: 0, reason: 'transcript_rewritten' }
       }
       if (!cursor) throw new MemoryError('capture_cursor_invalid')
@@ -107,20 +110,28 @@ export class NativeMemoryCapture {
             sessionId: session.sessionId, rootIds: [id], eligibility: 'coding' }
         })
         const bytes = events.reduce((sum, event) => sum + Buffer.byteLength(JSON.stringify(event)), 0)
-        if (cursor.e && (cursor.n + events.length > 128 || cursor.b + bytes > 90_000)) await seal(true)
         if (bytes > 90_000) { events.length = 0; record.incomplete = true }
+        // Keep unreadable records in their own incomplete episode. Never let one large tool
+        // result discard every intact user instruction before or after it in a long native turn.
+        if (cursor.e && !cursor.i && record.incomplete) await seal('bounded')
+        if (cursor.e && cursor.i && !record.incomplete && (events.length || record.ended)) await seal('incomplete')
+        if (cursor.e && (cursor.n + events.length > 128 || cursor.b + bytes > 90_000)) await seal('bounded')
         const episode = cursor.e ?? (events.length || record.incomplete ? randomUUID() : null)
         const next: Cursor = { ...cursor, o: line.end, a: await anchor(handle, line.end), s: line.continued,
-          e: episode, i: cursor.i || record.incomplete, n: cursor.n + events.length, b: cursor.b + (events.length ? bytes : 0) }
+          e: episode, i: cursor.i || record.incomplete, g: cursor.g || record.incomplete,
+          n: cursor.n + events.length, b: cursor.b + (events.length ? bytes : 0) }
         const ended = record.ended && episode !== null
-        await commit(ended ? { ...next, e: null, i: false, n: 0, b: 0 } : next, events,
-          ended ? next.i ? 'incomplete' : 'complete' : next.i ? 'incomplete' : 'open', episode ?? undefined)
+        await commit(record.ended ? { ...next, e: null, i: false, g: false, n: 0, b: 0 } : next, events,
+          ended ? next.i ? 'incomplete' : next.g ? 'bounded' : 'complete' : next.i ? 'incomplete' : 'open', episode ?? undefined)
         captured += events.length
       }
       // Native Claude transcripts sometimes rely on a Stop hook instead of a final stop_reason.
       // The host's settled state plus an unchanged file closes that episode without inventing a reply.
       const after = await handle.stat()
-      if (cursor.e && cursor.o === after.size && !cursor.s && !session.busy && this.now() - after.mtimeMs >= 5_000) await seal()
+      if (cursor.e && cursor.o === after.size && !cursor.s && !session.busy && this.now() - after.mtimeMs >= 5_000) {
+        await seal()
+        await commit({ ...cursor, g: false })
+      }
       return { state: captured ? 'captured' : 'idle', sources: captured }
     } catch (error) {
       return { state: 'unavailable', sources: captured, reason: error instanceof MemoryError ? error.code : 'source_unavailable' }

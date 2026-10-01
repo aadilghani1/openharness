@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CodingMemoryStore } from './store.js'
+import { builtinSqlite } from '../lib/sqliteRead.js'
 import type { MemoryAccess, MemoryDraft, SourceEvent } from './types.js'
 
 const access: MemoryAccess = { profileId: 'owner', projectIds: ['project_a'], includeProfile: true }
@@ -55,6 +56,38 @@ beforeEach(() => {
 afterEach(() => {
   for (const handle of opened.splice(0)) handle.close()
   rmSync(directory, { recursive: true, force: true })
+})
+
+it('upgrades v1 queue metadata while preserving memories, evidence, controls and privacy', () => {
+  const record = learn()
+  store.setProjectIncluded('project_b', false)
+  const controls = store.controls()
+  store.close()
+  const Database = builtinSqlite()!
+  const db = new Database(join(directory, 'memory.sqlite'), { readOnly: false })
+  try { db.exec("DROP TABLE memory_job_context; UPDATE memory_meta SET value='1' WHERE key='schema'") } finally { db.close() }
+  store = open()
+  expect(store.read(record.id, access)).toEqual(record)
+  expect(store.source('event_a', access)?.text).toBe(source().text)
+  expect(store.controls()).toEqual(controls)
+  expect(store.capturePolicy('project_b', 'claude', 'session_b').included).toBe(false)
+  const upgraded = new Database(join(directory, 'memory.sqlite'), { readOnly: true })
+  try { expect(upgraded.prepare("SELECT value FROM memory_meta WHERE key='schema'").all()[0]?.value).toBe('2') }
+  finally { upgraded.close() }
+})
+
+it('refuses an unknown store version without changing its data or version', () => {
+  const record = learn()
+  store.close()
+  const Database = builtinSqlite()!
+  const db = new Database(join(directory, 'memory.sqlite'), { readOnly: false })
+  try { db.exec("UPDATE memory_meta SET value='999' WHERE key='schema'") } finally { db.close() }
+  expect(CodingMemoryStore.open({ directory, profileId: 'owner' })).toEqual({ ok: false, reason: 'schema_unsupported' })
+  const unchanged = new Database(join(directory, 'memory.sqlite'), { readOnly: true })
+  try {
+    expect(unchanged.prepare("SELECT value FROM memory_meta WHERE key='schema'").all()[0]?.value).toBe('999')
+    expect(JSON.parse(String(unchanged.prepare('SELECT data FROM memories WHERE id=?').all(record.id)[0]?.data))).toEqual(record)
+  } finally { unchanged.close() }
 })
 
 describe('session privacy', () => {

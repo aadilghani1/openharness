@@ -18,6 +18,10 @@ export const QUEUE_SCHEMA = `
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS memory_jobs_ready ON memory_jobs(state, available_at, priority, created_at);
+  CREATE TABLE IF NOT EXISTS memory_job_context (
+    job_id TEXT PRIMARY KEY REFERENCES memory_jobs(id) ON DELETE CASCADE,
+    context TEXT NOT NULL CHECK(context='bounded')
+  );
   CREATE TABLE IF NOT EXISTS memory_job_sources (
     job_id TEXT NOT NULL REFERENCES memory_jobs(id) ON DELETE CASCADE,
     source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL,
@@ -41,7 +45,7 @@ const cursor = z.string().min(1).max(256)
 const captureSchema = z.object({
   streamId: id, engine: id, sessionId: id, projectId: id.nullable(), episodeId: id,
   from: cursor.nullable(), to: cursor, events: z.array(sourceSchema).max(64),
-  boundary: z.enum(['open', 'complete', 'incomplete']), priority: z.enum(['routine', 'important']).default('routine'),
+  boundary: z.enum(['open', 'complete', 'bounded', 'incomplete']), priority: z.enum(['routine', 'important']).default('routine'),
   generation: z.number().int().nonnegative().optional(),
 }).strict()
 const checkpointSchema = captureSchema.pick({ streamId: true, engine: true, sessionId: true, projectId: true, from: true, to: true })
@@ -62,7 +66,7 @@ export interface LearningLease {
   jobId: string; token: string; until: number; generation: number; contextKey: string
   sources: SourceEvent[]; access: MemoryAccess
   /** Explicit boundaries; the store's durable membership remains the publication authority. */
-  episodes: Array<{ jobId: string; sourceIds: string[] }>
+  episodes: Array<{ jobId: string; sourceIds: string[]; context: 'complete' | 'bounded' }>
 }
 export type ClaimResult = { state: 'claimed'; lease: LearningLease }
   | { state: 'idle' | 'learning_off' | 'foreground_busy' | 'waiting_for_model' | 'budget_deferred' | 'source_incomplete'; retryAt?: number }
@@ -127,6 +131,7 @@ export class MemoryQueue {
       if (sources.length > MAX_REVIEW_SOURCES || Buffer.byteLength(JSON.stringify(sources)) > MAX_REVIEW_SOURCE_BYTES) throw new MemoryError('episode_too_large')
       const state: JobState = batch.boundary === 'open' ? 'open' : batch.boundary === 'incomplete' ? 'source_incomplete'
         : sources.length ? 'queued' : 'cancelled'
+      if (batch.boundary === 'bounded') db.prepare("INSERT OR IGNORE INTO memory_job_context(job_id,context) VALUES(?,'bounded')").run(batch.episodeId)
       db.prepare('UPDATE memory_jobs SET state = ?, priority = MAX(priority, ?), updated_at = ? WHERE id = ?')
         .run(state, batch.priority === 'important' ? 1 : 0, now(), batch.episodeId)
       return { disposition: 'captured' as const, sourceCount: sources.length, state }
@@ -232,7 +237,8 @@ export class MemoryQueue {
           .run(token, until, controls.generation, contextKey, digest(member.sources), now(), member.job.id)
         db.prepare('INSERT INTO memory_inference_jobs(call_id, job_id, ordinal) VALUES(?, ?, ?)').run(token, member.job.id, ordinal)
       })
-      const episodes = group.map(member => ({ jobId: String(member.job.id), sourceIds: member.sources.map(source => source.id) }))
+      const episodes = group.map(member => ({ jobId: String(member.job.id), sourceIds: member.sources.map(source => source.id),
+        context: this.context(String(member.job.id)) }))
       return { state: 'claimed' as const, lease: { jobId, token, until, generation: controls.generation, contextKey, sources, access, episodes } }
     })
   }
@@ -259,12 +265,23 @@ export class MemoryQueue {
           if (!Array.isArray(proposals) || proposals.length > 8) throw new MemoryError('invalid_proposals')
           const sources = uniqueSources(group.flatMap(member => member.sources))
           const sourceIds = new Set(sources.map(source => source.id))
+          const boundedIds = new Set(group.filter(member => this.context(String(member.job.id)) === 'bounded')
+            .flatMap(member => member.sources.map(source => source.id)))
+          const userIds = new Set(sources.filter(source => source.role === 'user').map(source => source.id))
           const access: MemoryAccess = { profileId: this.deps.profileId,
             projectIds: jobs[0].project_id === null ? [] : [String(jobs[0].project_id)], includeProfile: true,
             ...commonScope(sources),
           }
           const records = proposals.map(proposal => {
             if (!Array.isArray(proposal?.evidence) || proposal.evidence.some(evidence => !sourceIds.has(evidence.sourceEventId))) throw new MemoryError('episode_evidence')
+            // Intact statements can survive a long turn or a gap in tool output. They do not
+            // establish execution outcomes or acceptance inferred from omitted conversation.
+            // Read durable context here; a caller cannot upgrade a segment by editing the lease.
+            if (proposal.evidence.some(evidence => boundedIds.has(evidence.sourceEventId))
+              && (proposal.evidenceClass !== 'user_stated'
+                || !['working_preference', 'project_decision'].includes(proposal.kind)
+                || !['stated_preference', 'project_constraint', 'accepted_decision', 'learning_goal'].includes(proposal.assertionType)
+                || proposal.evidence.some(evidence => !userIds.has(evidence.sourceEventId)))) throw new MemoryError('bounded_context_evidence')
             return this.deps.propose(proposal, access, controls.generation).record
           })
           const used = new Set(proposals.flatMap(proposal => proposal.evidence.map(evidence => evidence.sourceEventId)))
@@ -346,6 +363,10 @@ export class MemoryQueue {
       .map(row => this.deps.source(String(row.source_id)))
     // Never quietly turn a partly private or missing episode into a different conversation.
     return sources.every((source): source is SourceEvent => source !== null) ? sources : []
+  }
+
+  private context(jobId: string): 'complete' | 'bounded' {
+    return this.deps.db.prepare('SELECT context FROM memory_job_context WHERE job_id=?').get(jobId) ? 'bounded' : 'complete'
   }
 
   private members(lease: LearningLease): Record<string, unknown>[] {
