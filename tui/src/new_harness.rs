@@ -576,6 +576,7 @@ fn compatible_rows(app: &App, machine: &str, dsh: &str) -> Vec<Row> {
         .collect()
 }
 fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
+    const PER_MACHINE: usize = 50;
     let mut rows = vec![];
     if draft.what.engine != "terminal" {
         rows.push(Row::new("clone", "Clone Repository"));
@@ -592,18 +593,26 @@ fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
         .collect();
     agents.sort_by_key(|a| {
         (
-            a.machine_id != app.fleet.local_id,
+            app.fleet.launch_machine_id(&a.machine_id) != app.fleet.local_id,
             std::cmp::Reverse(a.recency()),
+            a.cwd.as_str(),
+            a.machine_id.as_str(),
         )
     });
-    // Search every known folder. Capping this local-first list before filtering can hide
-    // every remote project when the local machine has a large history.
+    // Each destination gets its own recent-folder allowance. Duplicate sessions and local
+    // shell aliases share that allowance; a large local history cannot consume a remote's.
     let mut seen = std::collections::HashSet::new();
+    let mut counts = HashMap::new();
     for a in agents {
         let machine = app.fleet.launch_machine_id(&a.machine_id);
         if !seen.insert((machine.to_string(), a.cwd.clone())) {
             continue;
         }
+        let count = counts.entry(machine).or_insert(0);
+        if *count >= PER_MACHINE {
+            continue;
+        }
+        *count += 1;
         let short = short_path(
             &a.cwd,
             app.homes
@@ -1716,7 +1725,7 @@ mod tests {
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
         child(&mut app, &mut form, Choice::Project, "");
-        assert_eq!(form.child.as_ref().unwrap().picker.rows.iter().filter(|r| r.id.starts_with("at:")).count(), 102);
+        assert_eq!(form.child.as_ref().unwrap().picker.rows.iter().filter(|r| r.id.starts_with("at:")).count(), 52);
         for machine in ["office", "m2"] {
             for query in [format!("{machine} harness"), format!("harness {machine}")] {
                 let picker = &mut form.child.as_mut().unwrap().picker;
@@ -1731,6 +1740,50 @@ mod tests {
             assert!(matches!(&form.draft.project, Project::Folder(path) if path == "/home/dev/harnesses/autonomous-harness-2026-000"));
             child(&mut app, &mut form, Choice::Project, "");
         }
+    }
+
+    #[tokio::test]
+    async fn project_limits_count_unique_folders_per_machine_by_recent_activity() {
+        let mut app = app();
+        let shell = crate::local::MACHINE;
+        for (id, local) in [(shell, true), ("office", false)] {
+            app.fleet.machines.push(crate::fleet::Machine {
+                id: id.into(), name: id.into(), local,
+                status: "running".into(), reach: crate::fleet::Reach::Ready,
+            });
+        }
+        for machine in ["local", "office"] {
+            for i in 0..70 {
+                let mut agent = crate::fleet::agent_from(machine, &json!({
+                    "id": format!("agent-{i}"), "engine": "codex",
+                    "project": {"cwd": format!("/home/dev/repo-{i:02}")},
+                }), None);
+                agent.updated_at = 1000 - i;
+                app.fleet.agents.insert(agent.key(), agent);
+            }
+            // Many sessions in the oldest folder make it most recent but use just one slot.
+            // A local shell is the same destination as its registered local daemon.
+            let source = if machine == "local" { shell } else { machine };
+            for i in 0..10 {
+                let mut agent = crate::fleet::agent_from(source, &json!({
+                    "id": format!("duplicate-{i}"), "engine": "terminal",
+                    "project": {"cwd": "/home/dev/repo-69"},
+                }), None);
+                agent.active_at = 2000 + i;
+                app.fleet.agents.insert(agent.key(), agent);
+            }
+        }
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        let rows = project_rows(&app, &form.draft);
+        for machine in ["local", "office"] {
+            let prefix = format!("at:{machine}\t");
+            let actual: Vec<_> = rows.iter().filter(|r| r.id.starts_with(&prefix)).map(|r| r.id.clone()).collect();
+            let expected: Vec<_> = std::iter::once(69).chain(0..49)
+                .map(|i| format!("at:{machine}\t/home/dev/repo-{i:02}")).collect();
+            assert_eq!(actual, expected);
+        }
+        assert!(!rows.iter().any(|r| r.id.starts_with(&format!("at:{shell}\t"))));
     }
 
     #[tokio::test]

@@ -49,7 +49,8 @@ const agents = DEMO ? {
 if (process.env.MOCK_PROJECT_SEARCH === '1') {
   // A large local history must not keep remote folders out of the project picker.
   for (let i = 0; i < 70; i++) {
-    agents[LOCAL].push(project(agent(`project-search-${i}`, `Local project ${i}`, 'codex'),
+    const older = new Date(Date.parse(now) - (i + 1) * 60_000).toISOString()
+    agents[LOCAL].push(project({ ...agent(`project-search-${i}`, `Local project ${i}`, 'codex'), createdAt: older, updatedAt: older },
       `autonomous-harness-2026-${String(i).padStart(3, '0')}`, 'main'))
   }
 }
