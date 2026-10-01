@@ -8,6 +8,7 @@ import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
 import 'control_chord.dart';
+import 'screen_snapshot.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
@@ -161,6 +162,11 @@ class TerminalSession extends ChangeNotifier {
   /// spending it on a no-op.
   final Future<bool> Function()? onOpenStalled;
 
+  /// When the transport last heard from this session's MACHINE — a frame it sealed, not the
+  /// relay's own (`WsConn.lastHeardFromMachineAt`). Null hook: the open watchdog keeps its old,
+  /// impatient rule (see [_openPatience]).
+  final DateTime? Function()? lastHeardFromMachine;
+
   /// This client's own introduction, sent with every `terminal_open`; null
   /// for a viewer that never takes control and so is never anyone's taker.
   final TerminalClientDescriptor? client;
@@ -174,6 +180,7 @@ class TerminalSession extends ChangeNotifier {
     required this.sendBinary,
     this.client,
     this.onOpenStalled,
+    this.lastHeardFromMachine,
     this.resyncTimeout = const Duration(seconds: 4),
     this.takeover = true,
   }) {
@@ -294,6 +301,27 @@ class TerminalSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [snapshot] — a screen kept on the phone, from this run or an earlier one ([ScreenSnapshot]) —
+  /// drawn into a terminal built like this session's own, and shown as [seedScreen] shows one.
+  ///
+  /// Never over something better: a screen already on show (a live frame, or the exact terminal
+  /// kept from a moment ago) stays.
+  void seedSnapshot(ScreenSnapshot snapshot) {
+    if (hasScreen || _disposed) return;
+    final kept = _newTerminal(bindCallbacks: false)
+      ..resize(_clampCols(snapshot.cols), _clampRows(snapshot.rows))
+      ..write(snapshot.ansi);
+    seedScreen(kept);
+  }
+
+  /// This session's screen as a [ScreenSnapshot] to keep, or null with nothing live to keep — a
+  /// screen still standing in from a kept one is not news, and keeping it again would only
+  /// refresh its date.
+  ScreenSnapshot? snapshotForKeeping() {
+    if (_disposed || !hasRenderedFrame) return null;
+    return ScreenSnapshot.capture(terminal);
+  }
+
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -309,6 +337,21 @@ class TerminalSession extends ChangeNotifier {
   int _resyncAttempts = 0;
   int _autoReopenAttempts = 0;
   bool _openStallRecovered = false;
+
+  /// When the open now in flight first left — kept through its resends, so its patience
+  /// ([_openPatience]) counts from the first ask rather than starting over at each one.
+  DateTime? _openSentAt;
+
+  /// How long an unanswered open waits while its machine is SILENT before [_handleOpenTimeout]
+  /// redials — and while the machine is answering other things, the longer [_openSlowPatience].
+  static const _openSilentPatience = Duration(seconds: 10);
+  static const _openSlowPatience = Duration(seconds: 20);
+
+  /// When this session last reopened itself after an open of this same device took its stream —
+  /// see [_takenBySelf]. Spaced by [_ownTakeoverCooldown].
+  DateTime? _ownTakeoverReopenedAt;
+  static const _ownTakeoverCooldown = Duration(seconds: 30);
+
   bool _disposed = false;
   int _generation = 0;
   bool _remoteCursorVisible = true;
@@ -438,6 +481,7 @@ class TerminalSession extends ChangeNotifier {
     _cursorBlinkPhaseVisible = true;
     _resyncRequested = false;
     _resyncAttempts = 0;
+    _openSentAt = null;
     if (resetRecovery) {
       _autoReopenAttempts = 0;
       _openStallRecovered = false;
@@ -511,6 +555,7 @@ class TerminalSession extends ChangeNotifier {
       transportLost('Could not send terminal_open');
       return;
     }
+    _openSentAt ??= DateTime.now();
     // An immediate ready/keyframe can arrive before send() resolves. Its
     // watchdog or live stream must not be replaced by an open timeout.
     if (status != TerminalSessionStatus.opening || streamId != null) return;
@@ -527,6 +572,8 @@ class TerminalSession extends ChangeNotifier {
   /// itself succeeded — the relay session was silently stale (ciphertext for a dead E2EE session gets
   /// dropped, not rejected). Force a fresh dial and resend the SAME open request (same `requestId`, so
   /// a late reply for the original still matches) before giving up.
+  ///
+  /// Unless the machine is only SLOW — see [_openPatience], which this waits out first.
   Future<void> _handleOpenTimeout(
     Map<String, dynamic> openPayload,
     int generation,
@@ -534,6 +581,15 @@ class TerminalSession extends ChangeNotifier {
     if (!_isCurrent(generation) ||
         status != TerminalSessionStatus.opening ||
         streamId != null) {
+      return;
+    }
+    final patience = _openPatience();
+    if (patience != null) {
+      _resyncTimer?.cancel();
+      _resyncTimer = Timer(
+        patience,
+        () => unawaited(_handleOpenTimeout(openPayload, generation)),
+      );
       return;
     }
     final sent = await _recoverAndResend(openPayload, generation);
@@ -556,6 +612,37 @@ class TerminalSession extends ChangeNotifier {
           ? 'Terminal did not reopen after resync failed.'
           : 'Harness did not respond — check your connection.',
     );
+  }
+
+  /// How much longer the open in flight may go unanswered before [_handleOpenTimeout] treats its
+  /// session as stale and redials — null once it has waited long enough, or when there is no way to
+  /// tell ([lastHeardFromMachine] absent, or the open not sent yet): the old rule, no patience.
+  ///
+  /// ⚠️ **Why the watchdog waits now (owner, 2026-10-01).** It redialled four seconds after any
+  /// unanswered open, on the theory that only a session that went stale behind a live relay stays
+  /// that quiet. A launch measured on a busy machine said otherwise: the relay was slow — 5 to 7
+  /// seconds each way while it carried the launch's other traffic — and the redial made it worse
+  /// every time. It threw away every request in flight, started a fresh handshake and agent list
+  /// on top of what was queued, and resent the open, which then reached the machine TWICE (the
+  /// first copy had been on its way all along); the later copy took the terminal off the earlier
+  /// one and the screen sat taken over by its own phone. The terminal that answered in about 8
+  /// seconds was shown at 22, or not at all.
+  ///
+  /// So the redial waits for evidence: a machine that has sealed ANY frame to this connection since
+  /// the open left is alive and only behind, and gets [_openSlowPatience]; one that has said
+  /// nothing at all gets [_openSilentPatience] — still the stale session's cure, ten seconds in
+  /// rather than four. Counted from the open's first send, so a resend does not start the clock
+  /// again, and in steps no longer than [resyncTimeout].
+  Duration? _openPatience() {
+    final sentAt = _openSentAt;
+    final heard = lastHeardFromMachine;
+    if (sentAt == null || heard == null) return null;
+    final lastHeard = heard();
+    final answering = lastHeard != null && lastHeard.isAfter(sentAt);
+    final limit = answering ? _openSlowPatience : _openSilentPatience;
+    final left = limit - DateTime.now().difference(sentAt);
+    if (left <= Duration.zero) return null;
+    return left < resyncTimeout ? left : resyncTimeout;
   }
 
   /// Shared recovery for both open-failure paths (`send()` itself failing, and `terminal_ready` never
@@ -602,11 +689,27 @@ class TerminalSession extends ChangeNotifier {
     if (_disposed) return false;
     switch (type) {
       case 'terminal_ready':
-        if (status != TerminalSessionStatus.opening ||
+        // ⚠️ **A reply to the open this session gave up waiting for is still taken (owner,
+        // 2026-10-01).** [_handleOpenTimeout] ends an open nobody answered in `error`, and the reply
+        // used to be dropped when it came after all — on a slow relay it does, seconds later — so
+        // the stream the machine had just opened was left running for nobody while this session
+        // asked for another. Only for THAT open ([_openRequestId] is the last one sent) and only
+        // while nothing has replaced it: a reopen since has a new request id, and the reply to the
+        // old one is then rightly ignored.
+        final lateReply =
+            status == TerminalSessionStatus.error &&
+            errorCode == 'TERMINAL_RESYNC_TIMEOUT' &&
+            streamId == null;
+        if ((status != TerminalSessionStatus.opening && !lateReply) ||
             payload['requestId'] != _openRequestId ||
             payload['agentId'] != agentId ||
             payload['protocolVersion'] != protocolVersion) {
           return true;
+        }
+        if (lateReply) {
+          status = TerminalSessionStatus.opening;
+          errorCode = null;
+          errorMessage = null;
         }
         streamId = payload['streamId'] as String?;
         if (streamId == null || streamId!.isEmpty) {
@@ -717,6 +820,7 @@ class TerminalSession extends ChangeNotifier {
         linkMode = null;
         _abortActiveUpload();
         notifyListeners();
+        if (takenOver && _takenBySelf(takenOverBy)) _reopenAfterOwnTakeover();
         return true;
       case 'terminal_error':
         final errorStream = payload['streamId'];
@@ -1686,6 +1790,41 @@ class TerminalSession extends ChangeNotifier {
     errorMessage = message;
     _abortActiveUpload();
     notifyListeners();
+  }
+
+  /// Whether [by] — who took this stream — is this very device: the introduction it sends with
+  /// every open ([client]), by kind and name, and by machine where both name one.
+  bool _takenBySelf(TerminalClientDescriptor? by) {
+    final me = client;
+    if (me == null || by == null) return false;
+    if (by.kind != me.kind || by.name != me.name) return false;
+    final mine = me.machineId;
+    final theirs = by.machineId;
+    return mine == null || theirs == null || mine == theirs;
+  }
+
+  /// Taken over by an open of this same device: open again, politely, once.
+  ///
+  /// ⚠️ **A takeover is a person's to answer — except one this phone did to itself (owner,
+  /// 2026-10-01).** [takenOver] is a dead end on purpose (see `_paneNeedsAttach`): reopening it
+  /// automatically would have two apps trading one terminal back and forth. But an open of THIS
+  /// device can reach the machine after the one now showing — a copy of a resent open, delivered
+  /// late from a connection the phone had already dropped. It takes the terminal, its own
+  /// connection is gone a moment later, and the screen sat on "iPhone 16 Pro connected to this
+  /// terminal", taken by itself, with nobody holding the terminal at all. Measured at launch on a
+  /// slow relay, where it left the first screen on its skeleton until it was tapped.
+  ///
+  /// Polite ([takeover] false), so it never takes the terminal from anybody: free, it opens as
+  /// usual; held, it watches, with the band offering it back. And at most once per
+  /// [_ownTakeoverCooldown], because two phones can share a name, and against a daemon that
+  /// ignores the polite flag the two would otherwise take the terminal from each other for ever.
+  void _reopenAfterOwnTakeover() {
+    final now = DateTime.now();
+    final last = _ownTakeoverReopenedAt;
+    if (last != null && now.difference(last) < _ownTakeoverCooldown) return;
+    _ownTakeoverReopenedAt = now;
+    takeover = false;
+    unawaited(reopen());
   }
 
   /// A polite open was refused — see [takeover]. The same dead end as a stream that was taken

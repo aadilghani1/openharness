@@ -1,7 +1,15 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'models.dart';
 import 'snapshot_store.dart';
+
+/// One machine as [MachineCache._parseDocument] reads it: what the launch uses, and its agents as the
+/// daemon sent them, for the next save.
+typedef _ParsedMachine = ({
+  CachedMachine cached,
+  List<Map<String, dynamic>> rawAgents,
+});
 
 /// The machines this account had at the end of the last run, so the next launch
 /// can start dialling before `/api/machines` answers.
@@ -77,19 +85,75 @@ class MachineCache {
   /// cache at all, which is always safe — the fetch fills it in.
   static const _version = 1;
 
-  /// What the last run saw, or empty when there is nothing usable.
+  /// What the last run saw, or empty when there is nothing usable — [readRaw], then [parse].
   ///
   /// Never throws: a cache that cannot be read is a cache that is not there.
   Future<List<CachedMachine>> read() async {
+    final raw = await readRaw();
+    return raw == null ? const [] : parse(raw);
+  }
+
+  /// The cache file's text, unparsed — or null when there is none.
+  ///
+  /// Its own step so a launch can act on the text before paying for the parse: the machine to dial
+  /// first is known from the last-opened record, and the text says whether this account still had it
+  /// (`AppNotifier._warmStartMachines`). Never throws.
+  Future<String?> readRaw() async {
     try {
       final raw = await _store.read();
-      if (raw == null || raw.isEmpty) return const [];
+      return raw == null || raw.isEmpty ? null : raw;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Below this many characters [parse] stays on the calling isolate: spawning one costs more than
+  /// a small document does to parse.
+  static const _parseOffThreadFrom = 64 * 1024;
+
+  /// [raw] as the machines it lists. Never throws.
+  ///
+  /// ⚠️ **Parsed off the UI isolate once the file is large (owner, 2026-10-01).** Every agent of
+  /// every machine is in here, verbatim, and the whole of it was decoded and turned into [Agent]s
+  /// on the thread drawing the launch: measured at 273ms for 103 agents and 629ms for 131, during
+  /// which the first frame and the dial both waited. The account the phone is built for has seven
+  /// or eight machines of ten to twenty sessions each, which is worse again. Parsed in a background
+  /// isolate, the work still takes as long, but nothing on screen waits for it; a small file is
+  /// parsed in place, as before, since an isolate's start-up would cost more than it saves.
+  Future<List<CachedMachine>> parse(String raw) async {
+    List<_ParsedMachine> parsed;
+    if (raw.length < _parseOffThreadFrom) {
+      parsed = _parseDocument(raw);
+    } else {
+      try {
+        parsed = await Isolate.run(() => _parseDocument(raw));
+      } on Object {
+        // An isolate that would not start is a parse done here instead, never a cache lost.
+        parsed = _parseDocument(raw);
+      }
+    }
+    // Kept for the next [save], on this isolate — see [_agents] and [_capabilities].
+    for (final entry in parsed) {
+      final machineId = entry.cached.machine.machineId;
+      _agents[machineId] = entry.rawAgents;
+      // Carried forward so a launch that reads the cache and is closed
+      // before any machine answers still writes back what it knew.
+      final capabilities = entry.cached.capabilities;
+      if (capabilities != null) _capabilities[machineId] = capabilities;
+    }
+    return [for (final entry in parsed) entry.cached];
+  }
+
+  /// The document in [raw], parsed — pure, so it can run on any isolate ([parse]). Empty for a
+  /// document that is not this version's, or not one at all.
+  static List<_ParsedMachine> _parseDocument(String raw) {
+    try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return const [];
       if (decoded['version'] != _version) return const [];
       final machines = decoded['machines'];
       if (machines is! List) return const [];
-      final parsed = <CachedMachine>[];
+      final parsed = <_ParsedMachine>[];
       for (final item in machines) {
         if (item is! Map<String, dynamic>) continue;
         try {
@@ -110,22 +174,17 @@ class MachineCache {
           }
           final rawCaps = item['capabilities'];
           final capabilities = rawCaps is Map<String, dynamic> ? rawCaps : null;
-          parsed.add(
-            CachedMachine(
+          parsed.add((
+            cached: CachedMachine(
               machine: machine,
               agents: agents,
               capabilities: capabilities,
             ),
-          );
-          _agents[machine.machineId] = [
-            for (final entry in (rawAgents is List ? rawAgents : const []))
-              if (entry is Map<String, dynamic>) entry,
-          ];
-          // Carried forward so a launch that reads the cache and is closed
-          // before any machine answers still writes back what it knew.
-          if (capabilities != null) {
-            _capabilities[machine.machineId] = capabilities;
-          }
+            rawAgents: [
+              for (final entry in (rawAgents is List ? rawAgents : const []))
+                if (entry is Map<String, dynamic>) entry,
+            ],
+          ));
         } on Object {
           // One malformed entry does not discard the rest; the fetch will
           // correct whatever this cache got wrong either way.

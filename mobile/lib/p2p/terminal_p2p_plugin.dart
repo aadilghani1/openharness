@@ -171,6 +171,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     }
   }
 
+  /// Whether this connection may run P2P — the backend sent a policy and the peer speaks this
+  /// build's version — settled as its session comes up ([onSessionReady]).
+  bool _p2pEligible = false;
+
+  /// Whether the first negotiation has been started — by the first terminal to open
+  /// ([prepareOpen]). Every later one is [_scheduleRetry]'s, budget and all.
+  bool _p2pStarted = false;
+
   @override
   void onSessionReady() {
     if (_disposed) return;
@@ -186,7 +194,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         ' v$terminalP2pProtocolVersion — no data channel is possible, ws relay only',
       );
     } else {
-      _startP2p();
+      // ⚠️ **Not started here any more — on the first terminal instead (owner, 2026-10-01).**
+      // Every machine the phone reached used to negotiate the moment its session came up: ICE
+      // gathering, STUN and TURN, and the offer and answer over the relay, for each of seven or
+      // eight machines at once at launch, when one terminal on one of them is all anybody is
+      // waiting for. A data channel only carries terminals, so a machine with none open has no
+      // use for one; the first open on it starts it ([prepareOpen]), rides the relay meanwhile as
+      // every open made before the channel is up does, and moves over once it is.
+      _p2pEligible = true;
     }
   }
 
@@ -540,10 +555,16 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// out, and the channel's own outcome is still reported when it lands or gives up.
   @override
   Future<bool> prepareOpen(String requestId) async {
-    final link = _link;
-    if (link == null || _policy == null || _disposed || !link.isReady) {
-      return false;
+    if (_disposed) return false;
+    // The connection's first terminal is what starts its channel — see [onSessionReady]. Once
+    // only: a channel that failed or was demoted since is [_scheduleRetry]'s to bring back.
+    if (_p2pEligible && !_p2pStarted) {
+      _p2pStarted = true;
+      _log('starting · first terminal on this machine');
+      _startP2p();
     }
+    final link = _link;
+    if (link == null || _policy == null || !link.isReady) return false;
     _pendingOpens.add(requestId);
     return true;
   }

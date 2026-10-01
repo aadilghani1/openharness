@@ -45,6 +45,11 @@ class LastOpenedAgent {
   /// the prefetch and the screen share one read rather than racing for the lock.
   void prefetch() => _read ??= _load();
 
+  /// The [prefetch] in flight or landed, WITHOUT taking it — for the launch to learn which machine
+  /// to dial first (`AppNotifier._warmStartMachines`), while [read] stays the home screen's own
+  /// one-shot. Null when nothing was prefetched, or the home screen has already taken it.
+  Future<AgentRef?>? get prefetched => _read;
+
   /// What the previous run left, or null. Anything malformed reads as nothing — a missing
   /// preference must never hold the app on its launch screen.
   ///

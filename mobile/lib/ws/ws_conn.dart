@@ -141,6 +141,19 @@ class WsConn {
 
   bool get isReady => _ready && _channel != null;
 
+  /// When this connection last opened a frame its MACHINE sealed — proof the end-to-end session
+  /// with the machine is alive, as against the relay merely being up. Null until the first.
+  ///
+  /// ⚠️ **Sealed frames only, never the relay's own.** `node_status`, `machines_status` and the
+  /// handshake come from the backend, and keep coming while the session behind them is dead (the
+  /// machine's Harness restarted and dropped it); counted, they would make a stale session look
+  /// like a slow one. Read by a terminal's open watchdog (`TerminalSession.lastHeardFromMachine`)
+  /// and by the agent-list timeout, to tell a machine that is slow from one that is gone.
+  DateTime? get lastHeardFromMachineAt => _lastHeardFromMachineAt;
+  DateTime? _lastHeardFromMachineAt;
+
+  void _heardFromMachine() => _lastHeardFromMachineAt = DateTime.now();
+
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
   Future<void> waitUntilReady({required Duration timeout}) {
@@ -370,6 +383,8 @@ class WsConn {
           .then((_) async {
             final local = codec == null ? bytes : codec.decodeBinary(bytes);
             if (local == null) return;
+            // Every relay binary frame is sealed by the machine — see [lastHeardFromMachineAt].
+            if (codec != null) _heardFromMachine();
             await _plugin?.observeWsBinary(local);
             await onBinaryFrame?.call(local);
           })
@@ -517,6 +532,9 @@ class WsConn {
     }
     final clear = codec.decodeFrame(message);
     if (clear == null) return;
+    // Only a frame that arrived sealed and opened: the relay's own frames pass through
+    // [RelayCodec.decodeFrame] in the clear — see [lastHeardFromMachineAt].
+    if (payload['__e2e'] is Map) _heardFromMachine();
     final plain = <String, dynamic>{
       ...clear,
       'payload': (clear['payload'] as Map<String, dynamic>?) ?? {},
@@ -1075,6 +1093,8 @@ class _PluginHost implements TerminalTransportHost {
 
   @override
   Future<void> deliverBinary(Uint8List localFrame) async {
+    // Opened from the data channel with this session's keys: the machine's own, as on the relay.
+    _conn._heardFromMachine();
     await _conn.onBinaryFrame?.call(localFrame);
   }
 }

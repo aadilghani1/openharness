@@ -62,10 +62,11 @@ class _AgentsListPageState extends State<AgentsListPage> {
   @override
   void initState() {
     super.initState();
-    // Same warm [PhoneSearchResults] does on open, and for the same reason: the previews are what
-    // fill each row's second line, and reading them only as rows scroll into view would fill the
-    // list in visibly, line by line. Prioritised — this screen is on top, so its agents are the
-    // ones worth the next reads.
+    // ⚠️ **The one screen that reads previews, and only once it is opened (owner, 2026-10-01).**
+    // Nothing reads them in the background any more — see `AppNotifier.sessionPreviews` — so a
+    // person who comes here has asked for them, and gets them for the recent agents at once
+    // rather than line by line as rows scroll in. Prioritised — this screen is on top, so its
+    // agents are the ones worth the next reads.
     final notifier = widget.notifier;
     notifier.sessionPreviews.warm([
       for (final entry in recentAgents(agentIndex(notifier)))

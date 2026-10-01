@@ -40,6 +40,7 @@ import '../terminal/terminal_session.dart';
 import '../terminal/remote_media_download.dart';
 import '../widgets/engine_identity.dart' show allEngines, engineIdentity;
 import 'dial_status.dart';
+import 'kept_screens.dart';
 import 'retarget_refusal.dart';
 import 'pane_layout_store.dart';
 import 'session_preview.dart';
@@ -274,17 +275,23 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, Timer> _turnActivityWatchdogs = {};
 
   /// What each agent was last asked and answered, as search matches it — the
-  /// desktop's own store (see `session_preview.dart`), fed the same two ways:
-  /// a small `agent_recent` read whenever the agent list arrives, and every
-  /// turn event this socket carries, so a reply is findable the moment it lands.
+  /// desktop's own store (see `session_preview.dart`), fed by every turn event
+  /// this socket carries, so a reply is findable the moment it lands, and by an
+  /// `agent_recent` read ONLY where a screen asks for one (`agents_list_page.dart`).
+  ///
+  /// ⚠️ **No reads in the background, on purpose (owner, 2026-10-01).** It used
+  /// to be read for every agent whenever an agent list arrived (32 a machine, again
+  /// after every reconnect), for every agent a push updated, and for every row
+  /// Find drew — a hundred-odd reads at launch on one machine, and several hundred
+  /// on eight, all on the same relay socket as the terminal somebody was waiting
+  /// for. A launch measured with them showed that socket going silent for 4–7s
+  /// with the terminal's open queued behind them. What they fed is gone (the recap
+  /// under Find's rows) or answered by the machines themselves (`session_search`
+  /// finds what a session said), so the reads went and the store stayed.
   ///
   /// Read again after [freshFor] at the soonest, not the desktop's minute: a
   /// phone pays for the bytes, and the live events already keep a connected
   /// machine's agents current.
-  ///
-  /// Four reads out at once, not the desktop's two: Find reads them as its rows come into view, so
-  /// its search can match what each session said, and each read is one small relay round trip —
-  /// two at a time left a screenful of rows waiting on the latency rather than on the bytes.
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
     freshFor: const Duration(minutes: 5),
@@ -317,10 +324,6 @@ class AppNotifier extends ChangeNotifier {
               agent.id == key.agentId && agent.sessionId == key.sessionId,
         );
   }
-
-  void _warmPreviews(MachineState machine) => sessionPreviews.warm(
-    machine.agents.map((agent) => previewKey(machine.machine.machineId, agent)),
-  );
 
   /// Has the next warm re-read [agent]'s content when its machine says the
   /// conversation moved since [before] — a turn this phone may have slept
@@ -959,9 +962,15 @@ class AppNotifier extends ChangeNotifier {
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
     MachineCache? machineCache,
+    KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
+       // On the machine cache's terms, below: a real app keeps screens on disk, a test only when
+       // it hands over a store of its own.
+       _keptScreenStore =
+           keptScreenStore ??
+           (paneLayoutStore == null ? null : KeptScreenStore()),
        // On the same terms as the stores below: no layout store means a test,
        // which must never reach the OS notification centre.
        agentNotices = AgentAnnouncer(
@@ -1258,6 +1267,13 @@ class AppNotifier extends ChangeNotifier {
     // than when that screen mounts — several state-file operations later, behind
     // every one of their locks. See [LastOpenedAgent.prefetch].
     lastOpenedAgent.prefetch();
+    // The screens kept from the last run, read beside it: the agent that record names is drawn
+    // from them the moment its tile exists. A tile attached before the read lands is drawn when
+    // it does ([_seedWaitingTiles]).
+    final keptScreens = _keptScreenStore;
+    if (keptScreens != null) {
+      unawaited(keptScreens.load().then((_) => _seedWaitingTiles()));
+    }
     // Before the machines, deliberately: the tiles are intent, they render as
     // "waiting for that machine" on their own, and each attaches as its machine
     // answers. Waiting for the machine list first would leave the window empty
@@ -1382,6 +1398,10 @@ class AppNotifier extends ChangeNotifier {
     pendingPairing = null;
     _desk.reset();
     zoo.reset();
+    _forgetLaunchHold();
+    // Signed out from elsewhere: the kept screens go as on a sign-out here (see [logout]).
+    _keptScreens.clear();
+    unawaited(_keptScreenStore?.clear());
     unawaited(_pool?.closeAll());
     _pool = null;
     _lastError = message;
@@ -1485,6 +1505,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(cliLogin.logout());
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _forgetLaunchHold();
     // Tiles go, the saved layout stays: signing out and back in is the same
     // person at the same desk, and the file is only read once machines exist.
     await _closeAllPanes(persist: false);
@@ -1518,6 +1539,8 @@ class AppNotifier extends ChangeNotifier {
     // Not awaited: sign-out must not wait on a disk write, and the cache is only
     // ever read after a sign-in that this clears the way for.
     unawaited(_machineCache?.clear());
+    // The screens kept on disk are this account's terminals — they go with it, as the cache does.
+    unawaited(_keptScreenStore?.clear());
     sessionPreviews.clear();
     agentNotices.reset();
     expandedMachines.clear();
@@ -1704,6 +1727,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
     for (final machine in machines) {
+      final isNew = !machineStates.containsKey(machine.machineId);
       final state = machineStates.update(
         machine.machineId,
         (state) => state..machine = machine,
@@ -1714,6 +1738,9 @@ class AppNotifier extends ChangeNotifier {
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
         unawaited(_applyNodeStatus(state, reportedOnline));
       }
+      // The launch's machine may already be dialled with no state to report to — when this fetch
+      // beats the cache parse it was dialled ahead of. See [_adoptConnection].
+      if (isNew) _adoptConnection(state);
     }
     _autoConnectAndLoadMachines();
     // The list that just landed is what the NEXT launch starts from. Never
@@ -2198,6 +2225,12 @@ class AppNotifier extends ChangeNotifier {
         StartupTrace.mark('skipped offline machine ${machine.machineId}');
         continue;
       }
+      // Held until the launch's own terminal is up — see [_launchMachineId]. The cached ones were
+      // held by the warm start already; this catches the machines the cache did not know.
+      if (_heldForLaunch(machine.machineId)) {
+        _heldMachines.add(machine.machineId);
+        continue;
+      }
       _connectMachine(state);
       // ⚠️ **Only ask a machine that is already answering.** `_connectMachine`
       // starts a dial; it does not finish one. Asking here regardless meant
@@ -2342,6 +2375,14 @@ class AppNotifier extends ChangeNotifier {
     return _pool?[machineId]?.isReady == true;
   }
 
+  /// [machineId]'s connection as the app already HOLDS it, or null — never one built for the
+  /// asking, for the same reason as [_connectionReady].
+  WsConn? _heldConnection(String machineId) {
+    final testConnection = connectionForTest;
+    if (testConnection != null) return testConnection(machineId);
+    return _pool?[machineId];
+  }
+
   // Every machine hands over the same loopback (HTRL) frames: the relay codec has opened the E2EE
   // envelope before a frame gets here (see `ws/relay_codec.dart`), so there is no per-machine
   // branching left here at all.
@@ -2387,6 +2428,125 @@ class AppNotifier extends ChangeNotifier {
     return _conn(machineId).sendTerminalBinary(encoded);
   }
 
+  /// How long a `terminal_open` waits for its machine's handshake — see [_sendTerminalFrame].
+  /// The dial's own limit and a select's, near enough: past it the socket is not about to be up.
+  static const _openWaitsForHandshake = Duration(seconds: 15);
+
+  /// A terminal frame for [machineId]'s connection — a `terminal_open` held until the handshake
+  /// is done, every other frame sent (or refused) at once, as before.
+  ///
+  /// ⚠️ **Why the open waits (owner, 2026-10-01).** A launch builds its terminal from the cached
+  /// agent and capabilities, so the open is made while the socket is still handshaking, and the
+  /// socket refused it: the session gave up on it ("Could not send terminal_open"), and nothing
+  /// asked again until the machine answered `terminal_capabilities` or its agent list, which reattach
+  /// waiting panes — measured at 0.6–0.75s after the socket was ready, every launch. Held here
+  /// instead, it leaves the moment the handshake lands, with the request it was made with. Bounded:
+  /// a handshake that does not land in [_openWaitsForHandshake] refuses it as before, and the
+  /// usual reattach on connect takes over.
+  Future<bool> _sendTerminalFrame(
+    String machineId,
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    final connection = _conn(machineId);
+    if (type == 'terminal_open' && !connection.isReady) {
+      try {
+        await connection.waitUntilReady(timeout: _openWaitsForHandshake);
+      } catch (_) {
+        // Timed out, or the connection was closed meanwhile: the socket refuses the frame below,
+        // which is the answer the session already knows how to take.
+      }
+    }
+    return connection.sendTerminalFrame(type, payload);
+  }
+
+  /// The machine a launch dials ALONE — the one the phone last had an agent open on — while every
+  /// other machine waits in [_heldMachines]; null once they have been let go, and on a launch that
+  /// had nothing to put first.
+  ///
+  /// ⚠️ **Why a launch dials one machine first (owner, 2026-10-01).** Every machine the account
+  /// had was dialled at once: a relay socket, an E2EE handshake, `terminal_capabilities`, a full
+  /// agent list and a P2P negotiation EACH, seven or eight of them on a phone, all in the same
+  /// second as the one terminal the person is waiting to see — which is on one machine. On one
+  /// machine a launch measured 3.3s to a ready socket; the work on the others added nothing anybody
+  /// was looking at. The rest are let go the moment that terminal shows its first frame
+  /// ([_releaseOnFirstFrame]), when Find opens ([reachAllMachines]), or after
+  /// [_heldMachinesRelease] whatever happens; and a machine is dialled the moment one of its own
+  /// agents is opened, held or not ([_conn] dials what it does not hold).
+  ///
+  /// What it costs: for those few seconds the other machines' sessions read from the cache, as
+  /// `connecting`, and anything they announce in that time (a finished turn, a question) arrives
+  /// as soon as they are dialled rather than at once.
+  String? _launchMachineId;
+  final Set<String> _heldMachines = {};
+  Timer? _heldMachinesTimer;
+  static const _heldMachinesRelease = Duration(seconds: 5);
+
+  /// Whether [machineId] is one the launch is holding back — see [_launchMachineId].
+  bool _heldForLaunch(String machineId) =>
+      _launchMachineId != null && machineId != _launchMachineId;
+
+  /// Dial every machine the launch held back. Idempotent; [why] goes to the startup timeline.
+  void _releaseHeldMachines(String why) {
+    if (_launchMachineId == null) return;
+    _launchMachineId = null;
+    _heldMachinesTimer?.cancel();
+    _heldMachinesTimer = null;
+    final held = _heldMachines.toList();
+    _heldMachines.clear();
+    if (_disposed) return;
+    StartupTrace.mark('launch: dialling ${held.length} held machine(s) · $why');
+    for (final machineId in held) {
+      final state = machineStates[machineId];
+      // Gone from the account since — `_refreshMachines` dropped it.
+      if (state == null) continue;
+      final listed = machines
+          .where((machine) => machine.machineId == machineId)
+          .firstOrNull;
+      // Down as the account last said: the launch skips those too ([_autoConnectAndLoadMachines]).
+      if (listed != null && _nodeOnlineFromStatus(listed.status) == false) {
+        continue;
+      }
+      _connectMachine(state);
+    }
+  }
+
+  /// A state just made for a machine whose socket the app ALREADY holds — dialled before there was
+  /// a state to report to (`_warmStartMachines` dials the launch's machine ahead of the cache parse).
+  /// Whatever that socket said meanwhile went nowhere ([_onConnectionStatus] needs the state), so it
+  /// is said again here: a socket that is up replays its `connected`, which is what starts the agent
+  /// list, the sync timer and the rest; one still dialling is at least shown as dialling.
+  void _adoptConnection(MachineState state) {
+    final machineId = state.machine.machineId;
+    final connection = _pool?[machineId];
+    if (connection == null) return;
+    if (connection.isReady) {
+      _onConnectionStatus(machineId, ConnectionStatus.connected);
+    } else if (state.connectionStatus == ConnectionStatus.disconnected) {
+      state.connectionStatus = ConnectionStatus.connecting;
+    }
+  }
+
+  /// Drop the launch's hold without dialling anything — signing out, or the notifier going away.
+  void _forgetLaunchHold() {
+    _launchMachineId = null;
+    _heldMachines.clear();
+    _heldMachinesTimer?.cancel();
+    _heldMachinesTimer = null;
+  }
+
+  /// Let the held machines go once [terminal] shows its first frame — the screen a launch is for
+  /// is up, and nothing on it is waiting any more. See [_launchMachineId].
+  void _releaseOnFirstFrame(TerminalSession terminal) {
+    void check() {
+      if (!terminal.hasRenderedFrame) return;
+      terminal.removeListener(check);
+      _releaseHeldMachines('first terminal live');
+    }
+
+    terminal.addListener(check);
+  }
+
   /// Start dialling last run's machines without waiting for `/api/machines`.
   ///
   /// ⚠️ **The whole point is the socket, not the list.** A relay dial plus the
@@ -2417,10 +2577,98 @@ class AppNotifier extends ChangeNotifier {
     final cache = _machineCache;
     if (cache == null || _disposed) return;
     final revision = _authRevision;
-    final cached = await StartupTrace.time('boot.machineCache', cache.read);
-    if (cached.isEmpty || _disposed || !_authWorkCurrent(revision)) return;
-    // The fetch got there first — it is the truth, and this has nothing to add.
-    if (machines.isNotEmpty || machineStates.isNotEmpty) return;
+    // Taken before the cache read so the two overlap: the record was prefetched at the top of the
+    // bootstrap and is normally on hand by the time the cache is.
+    final launchRead = lastOpenedAgent.prefetched;
+    final raw = await StartupTrace.time('boot.machineCacheRead', cache.readRaw);
+    if (raw == null || _disposed || !_authWorkCurrent(revision)) return;
+    AgentRef? launchAgent;
+    if (launchRead != null) {
+      try {
+        // Bounded: a record slower than the cache is not worth holding the dial for, and a launch
+        // without it simply dials everything, as it always did.
+        launchAgent = await launchRead.timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => null,
+        );
+      } catch (_) {
+        launchAgent = null;
+      }
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    final launchMachine = launchAgent?.machineId;
+    // ⚠️ **The launch's machine is dialled before the cache is parsed (owner, 2026-10-01).** A dial
+    // needs nothing but the id, and the parse of every agent of every machine is the longest step
+    // before it (273–629ms measured, more on a bigger account). Only when the text names that
+    // machine, which means this account had it, up, at the end of the last run — the cache keeps
+    // nothing else. The state for it is made below, from the parse, and adopts the socket
+    // ([_adoptConnection]); a parse that turns out not to list it closes the socket again.
+    //
+    // The hold on the other machines ([_launchMachineId]) starts here too, not after the parse:
+    // `/api/machines` can land while the cache is still being parsed, and the dial-everything it
+    // does then ([_autoConnectAndLoadMachines]) has to find the hold already in place.
+    String? dialledEarly;
+    if (launchMachine != null &&
+        machines.isEmpty &&
+        machineStates.isEmpty &&
+        raw.contains('"$launchMachine"')) {
+      _launchMachineId = launchMachine;
+      _heldMachinesTimer?.cancel();
+      _heldMachinesTimer = Timer(
+        _heldMachinesRelease,
+        () => _releaseHeldMachines('launch budget spent'),
+      );
+      if (_pool != null) {
+        dialledEarly = launchMachine;
+        StartupTrace.mark('launch: dialling its machine before the cache parse');
+        _conn(launchMachine);
+      }
+    }
+    final cached = await StartupTrace.time(
+      'boot.machineCache',
+      () => cache.parse(raw),
+    );
+    // A socket dialled above for a machine nothing went on to make a state for — closed, or it
+    // would redial for the rest of the session with nobody listening.
+    void dropUnclaimedDial() {
+      final machineId = dialledEarly;
+      if (machineId != null && !machineStates.containsKey(machineId)) {
+        unawaited(_pool?.closeMachine(machineId));
+      }
+    }
+
+    if (_disposed || !_authWorkCurrent(revision)) {
+      dropUnclaimedDial();
+      return;
+    }
+    if (cached.isEmpty) {
+      // Nothing usable after all: the hold has no machine to put first, so it is let go — the
+      // fetch dials everything, as a launch with no cache always did.
+      _releaseHeldMachines('cache unreadable');
+      dropUnclaimedDial();
+      return;
+    }
+    // The fetch got there first — it is the truth, and this has nothing to add. Its own dial
+    // honoured the hold; a launch machine the account no longer lists ends it.
+    if (machines.isNotEmpty || machineStates.isNotEmpty) {
+      final first = _launchMachineId;
+      if (first != null && !machineStates.containsKey(first)) {
+        _releaseHeldMachines('launch machine not on the account');
+      }
+      dropUnclaimedDial();
+      return;
+    }
+    // The text named the launch machine, but the parse did not list it as one to dial — a match
+    // elsewhere in the document. Nothing to put first, then.
+    final first = _launchMachineId;
+    if (first != null &&
+        !cached.any(
+          (entry) =>
+              entry.machine.machineId == first &&
+              entry.machine.authMode == MachineAuthMode.remote,
+        )) {
+      _releaseHeldMachines('launch machine not cached');
+    }
     var warmed = 0;
     var warmedAgents = 0;
     final warmMachines = <Machine>[];
@@ -2494,10 +2742,20 @@ class AppNotifier extends ChangeNotifier {
       // to have the socket ALREADY OPEN when that happens, which is where its
       // second and a half comes from; the request itself was never the part
       // worth racing.
-      _connectMachine(state);
+      //
+      // Except for a machine the launch holds back — see [_launchMachineId]. Its cached
+      // agents are on screen all the same; only the socket waits.
+      if (_heldForLaunch(machine.machineId)) {
+        _heldMachines.add(machine.machineId);
+      } else {
+        _connectMachine(state);
+        // Its socket may have come up before this state existed — see `dialledEarly` above.
+        if (machine.machineId == dialledEarly) _adoptConnection(state);
+      }
       warmMachines.add(machine);
       warmed++;
     }
+    dropUnclaimedDial();
     if (warmed == 0) return;
     // ⚠️ Published to `machines` as well, because every screen indexes agents
     // through THAT list (`agentIndex`, `filterableMachines`) rather than through
@@ -2554,6 +2812,9 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     final connection = _conn(machine.machine.machineId);
     final deadline = Stopwatch()..start();
+    // When the list was asked for — what a timeout is measured against, to tell a machine that
+    // went quiet from one that is answering everything else first (see the catch below).
+    DateTime? listAskedAt;
     debugPrint('agents_list start: ${machine.machine.machineId}');
     try {
       const inventoryTimeout = Duration(seconds: 10);
@@ -2605,6 +2866,7 @@ class AppNotifier extends ChangeNotifier {
         connection,
         revision,
       );
+      listAskedAt = DateTime.now();
       final response = await StartupTrace.time(
         'agents.list',
         () => connection.request(
@@ -2660,7 +2922,20 @@ class AppNotifier extends ChangeNotifier {
     } catch (error) {
       if (!_machineWorkCurrent(machine, revision)) return;
       machine.agentsRefreshing = false;
-      if (error is WsRequestTimeout) {
+      final heard = connection.lastHeardFromMachineAt;
+      if (error is WsRequestTimeout &&
+          listAskedAt != null &&
+          heard != null &&
+          heard.isAfter(listAskedAt)) {
+        // ⚠️ **Slow, not gone (owner, 2026-10-01).** The machine sealed frames to this connection
+        // after the list was asked for, so its session is alive and the list is only behind the
+        // rest of its traffic. Read as offline, this took the machine down — its agents off every
+        // screen, the one on Home included — and redialled, which started the whole launch over
+        // on a relay already behind. Nothing is reported; the list is asked again shortly, while
+        // the cached one, if any, keeps standing in.
+        machine.agentsLoadError = null;
+        if (!hadAgents) _askSlowMachineAgain(machine, revision);
+      } else if (error is WsRequestTimeout) {
         machine.agentsLoadError =
             'Harness is offline — run harness start on that machine';
         _recoverStaleSession(machine, connection);
@@ -2700,6 +2975,17 @@ class AppNotifier extends ChangeNotifier {
     _attachPendingPanes(machine, intent: AttachIntent.automatic);
     _autoPickFirstAgent();
     notifyListeners();
+  }
+
+  /// A machine whose list timed out while it was plainly alive — see the catch in
+  /// [_performMachineDataLoad] — is asked again after a short pause, rather than left to the
+  /// minute-long sync. Only a list never confirmed: a confirmed one stands until that sync.
+  void _askSlowMachineAgain(MachineState machine, int revision) {
+    Timer(const Duration(seconds: 2), () {
+      if (_disposed || !_machineWorkCurrent(machine, revision)) return;
+      if (machine.agentLoadStatus == AgentLoadStatus.loaded) return;
+      unawaited(_loadMachineData(machine, force: true));
+    });
   }
 
   /// An RPC timed out on a machine whose transport still calls itself connected:
@@ -2925,6 +3211,8 @@ class AppNotifier extends ChangeNotifier {
       (agent) => !nextIds.contains(agent.id),
     )) {
       sessionPreviews.removeAgent(machine.machine.machineId, old.id);
+      // Gone from its machine's list: its kept screen is a terminal nobody can open again.
+      _keptScreenStore?.remove('${machine.machine.machineId}/${old.id}');
     }
     for (final agent in agents) {
       sessionPreviews.retainAgent(
@@ -2960,7 +3248,7 @@ class AppNotifier extends ChangeNotifier {
       machine.pendingProcessingSessions.remove(sessionId);
       _markAgentProcessing(machine, agentId);
     }
-    _warmPreviews(machine);
+    // No preview reads from here — see [sessionPreviews].
   }
 
   void _upsertAgent(MachineState machine, Agent agent) {
@@ -2977,8 +3265,8 @@ class AppNotifier extends ChangeNotifier {
       agent.id,
       agent.sessionId,
     );
+    // Marked, not read: the next screen that asks reads it again — see [sessionPreviews].
     _staleIfMoved(machine, previous, agent);
-    sessionPreviews.warm([previewKey(machine.machine.machineId, agent)]);
     machine.sessionAgentIds.removeWhere((_, id) => id == agent.id);
     final sessionId = agent.sessionId;
     if (sessionId != null) {
@@ -3014,6 +3302,8 @@ class AppNotifier extends ChangeNotifier {
         .where((agent) => agent.id != agentId)
         .toList();
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
+    _keptScreens.remove('${machine.machine.machineId}/$agentId');
+    _keptScreenStore?.remove('${machine.machine.machineId}/$agentId');
     agentNotices.forgetAgent((
       machineId: machine.machine.machineId,
       agentId: agentId,
@@ -3032,7 +3322,8 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     for (final pane in allPanes.toList()) {
       if (pane.machineId != machineId || pane.agentId != agentId) continue;
-      await _detachSession(pane, sendClose: false);
+      // Not kept: the agent is deleted, and its screen was just forgotten above.
+      await _detachSession(pane, sendClose: false, keepScreen: false);
       for (final swarm in swarms) {
         swarm.remove(pane);
       }
@@ -3212,6 +3503,9 @@ class AppNotifier extends ChangeNotifier {
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
     // would build one out of a null pool.
     if (_disposed || (_pool == null && connectionForTest == null)) return;
+    // Somebody is looking for a session, on any machine: the launch's hold is over — see
+    // [_launchMachineId]. Before the reloads below, so the held ones dial with the rest.
+    _releaseHeldMachines('search opened');
     await Future.wait([
       for (final machine in machines) reloadMachineData(machine.machineId),
     ]);
@@ -4876,8 +5170,13 @@ class AppNotifier extends ChangeNotifier {
       engineId: agent.engine,
       client: phoneClientDescriptor(),
       send: (type, payload) =>
-          _conn(pane.machineId).sendTerminalFrame(type, payload),
+          _sendTerminalFrame(pane.machineId, type, payload),
       sendBinary: (frame) => _sendTerminalBinary(pane.machineId, frame),
+      // What tells the open watchdog a SLOW machine from a gone one — see
+      // [TerminalSession.lastHeardFromMachine]. Read off the connection the pane
+      // already has, never one built for the asking.
+      lastHeardFromMachine: () =>
+          _heldConnection(pane.machineId)?.lastHeardFromMachineAt,
       // ⚠️ **A socket that has not finished its handshake is not a stalled one,
       // and forcing a reconnect on it destroys the dial that was about to
       // succeed.** `terminal_open` can now be sent very early — the agent and
@@ -4907,9 +5206,19 @@ class AppNotifier extends ChangeNotifier {
     );
     pane.session = terminal;
     // Back to an agent read a moment ago: its last screen, at once, until the stream's arrives.
-    final kept = _keptScreens.remove('${pane.machineId}/${agent.id}');
-    if (kept != null) terminal.seedScreen(kept);
+    final keptKey = '${pane.machineId}/${agent.id}';
+    final kept = _keptScreens.remove(keptKey);
+    if (kept != null) {
+      terminal.seedScreen(kept);
+    } else {
+      // Or the screen kept on disk — from a moment ago, or from the last run. See
+      // [_keptScreenStore]: this is what puts a launch's agent on screen before its machine answers.
+      final saved = _keptScreenStore?.read(keptKey);
+      if (saved != null) terminal.seedSnapshot(saved);
+    }
     terminal.addListener(notifyListeners);
+    // The launch's held machines go once a terminal is live — see [_launchMachineId].
+    if (_launchMachineId != null) _releaseOnFirstFrame(terminal);
     notifyListeners();
     // Wait for the pane's actual measured viewport before asking the daemon to open anything.
     // Sending the 80x24 fallback here used to make the daemon spawn the remote TTY (and render its
@@ -4924,20 +5233,25 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _detachSession(
     TerminalPane pane, {
     required bool sendClose,
+
+    /// False where the screen must not outlive the stream: a sign-out, a reset, a deleted agent.
+    bool keepScreen = true,
   }) async {
     final terminal = pane.session;
     pane.session = null;
     if (terminal == null) return;
     terminal.removeListener(notifyListeners);
-    // The screen as the reader left it, for the next time this agent opens — see [_keptScreens].
+    // The screen as the reader left it, for the next time this agent opens — see [_keptScreens],
+    // and [_keptScreenStore] for the next launch.
     final agentId = pane.agentId;
-    if (agentId != null && terminal.hasRenderedFrame) {
+    if (keepScreen && agentId != null && terminal.hasRenderedFrame) {
       final key = '${pane.machineId}/$agentId';
       _keptScreens.remove(key);
       _keptScreens[key] = terminal.terminal;
       while (_keptScreens.length > _keptScreenLimit) {
         _keptScreens.remove(_keptScreens.keys.first);
       }
+      _keepScreen(key, terminal);
     }
     if (sendClose) await terminal.close();
     terminal.dispose();
@@ -5019,8 +5333,52 @@ class AppNotifier extends ChangeNotifier {
   final _keptScreens = <String, Terminal>{};
   static const _keptScreenLimit = 3;
 
+  /// The visible screens of the agents opened most recently, kept on disk for the NEXT launch as
+  /// well as this run — see [KeptScreenStore]. Where [_keptScreens] has no exact terminal for an
+  /// agent (it holds three, and nothing past a relaunch), this has the screen it showed. Null in
+  /// tests that do not hand one over.
+  final KeptScreenStore? _keptScreenStore;
+
+  /// [terminal]'s screen into [_keptScreenStore] under [key], when it has a live one to keep.
+  void _keepScreen(String key, TerminalSession terminal) {
+    final store = _keptScreenStore;
+    if (store == null) return;
+    final snapshot = terminal.snapshotForKeeping();
+    if (snapshot != null) store.put(key, snapshot);
+  }
+
+  /// Every tile's live screen into [_keptScreenStore], written now — the app is going to the
+  /// background, and a closed app keeps nothing it had not written.
+  void _keepLiveScreens() {
+    final store = _keptScreenStore;
+    if (store == null) return;
+    for (final pane in allPanes) {
+      final agentId = pane.agentId;
+      final terminal = pane.session;
+      if (agentId == null || terminal == null) continue;
+      _keepScreen('${pane.machineId}/$agentId', terminal);
+    }
+    unawaited(store.flush());
+  }
+
+  /// Draw a kept screen behind every tile that has nothing to show yet — the store's read lands a
+  /// moment into a launch, possibly after the launch's own tile was attached ([_attachSession] seeds
+  /// the ones attached after it).
+  void _seedWaitingTiles() {
+    final store = _keptScreenStore;
+    if (store == null || _disposed) return;
+    for (final pane in allPanes) {
+      final agentId = pane.agentId;
+      final terminal = pane.session;
+      if (agentId == null || terminal == null || terminal.hasScreen) continue;
+      final snapshot = store.read('${pane.machineId}/$agentId');
+      if (snapshot != null) terminal.seedSnapshot(snapshot);
+    }
+  }
+
   Future<void> _closeAllPanes({bool persist = true}) async {
-    // Everything closing at once is a sign-out or a reset: nothing of it is kept.
+    // Everything closing at once is a sign-out or a reset: nothing of it is kept — not in memory,
+    // and not on disk ([_detachSession]'s `keepScreen`).
     _keptScreens.clear();
     final open = allPanes.toList();
     for (final swarm in swarms) {
@@ -5029,7 +5387,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.zoomedPaneId = null;
     }
     for (final pane in open) {
-      await _detachSession(pane, sendClose: true);
+      await _detachSession(pane, sendClose: true, keepScreen: false);
     }
     if (persist) _persistLayout();
   }
@@ -5719,7 +6077,18 @@ class AppNotifier extends ChangeNotifier {
   /// The app went into a pocket: stop the reads that only make sense in front
   /// of somebody. The sockets are left to the OS, which suspends them anyway —
   /// [handleAppResumed] is what puts both back.
-  void handleAppPaused() => _desk.pause();
+  ///
+  /// And keep every tile's screen on disk now ([_keepLiveScreens]): this is the last moment the app
+  /// is sure to run, since closing it from the app switcher starts by sending it here.
+  void handleAppPaused() {
+    _desk.pause();
+    _keepLiveScreens();
+  }
+
+  /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
+  /// only the screens are kept ([_keepLiveScreens]), because the switcher is where an app is
+  /// closed, and closing it there need not pass through [handleAppPaused] first.
+  void handleAppInactive() => _keepLiveScreens();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -5746,6 +6115,7 @@ class AppNotifier extends ChangeNotifier {
     _closedHistory.clear();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _forgetLaunchHold();
     _clearAllTurnActivity();
     for (final pane in allPanes) {
       pane.session?.removeListener(notifyListeners);
@@ -5755,6 +6125,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
+    _keptScreenStore?.dispose();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

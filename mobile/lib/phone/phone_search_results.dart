@@ -7,8 +7,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
-import 'package:harness_mobile/state/session_preview.dart'
-    show SessionPreviewKey;
 
 import 'agent_index.dart';
 import 'desk_groups.dart';
@@ -148,40 +146,12 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(notifier.reachAllMachines());
     });
-    // No warm of the previews here: each row asks for its own as it is built — see [_want].
-  }
-
-  /// The sessions whose rows this frame built, read once it is over — see [_want].
-  final _wanted = <SessionPreviewKey>{};
-  bool _warmScheduled = false;
-
-  /// Asks for what [key]'s session last said, because its row is on screen or about to be — what
-  /// the search matches a session's words against (`phone_search_rank.dart`), no longer drawn under
-  /// the row: the recap that was, is gone (owner, 2026-09-30).
-  ///
-  /// ⚠️ **By the rows built, not the agents known.** Warming the first 32 agents by recency, as
-  /// this did on open, read rows in an order Find does not draw them in — needs you, the frozen
-  /// open order, paused last — and never reached a row past the 32nd: a list of a hundred sessions
-  /// held two thirds of its previews empty however far it was scrolled. The list is lazy, so the rows
-  /// built are the ones in view and the next few below; asked for top first and ahead of anything
-  /// already queued, they fill in in the order they are read.
-  ///
-  /// After the frame, in one batch: warming mid-build would start reads from inside a layout, and a
-  /// row at a time would reorder the store's queue once per row. Asked again on every rebuild —
-  /// the store skips what is in flight or fresh, so that costs a lookup a row, and a row still on
-  /// screen after [SessionPreviewStore.freshFor] is read again.
-  void _want(SessionPreviewKey key) {
-    _wanted.add(key);
-    if (_warmScheduled) return;
-    _warmScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _warmScheduled = false;
-      final keys = _wanted.toList();
-      _wanted.clear();
-      if (mounted) {
-        widget.notifier.sessionPreviews.warm(keys, prioritize: true);
-      }
-    });
+    // ⚠️ **No `agent_recent` reads from Find, not on open and not per row (owner, 2026-10-01).**
+    // Each row used to ask for its session's last words as it was built, so opening Find — or
+    // the app, which opens on it — put a read per visible session on the relay beside the
+    // terminal being attached. What a session said is found by the machines' own index
+    // (`session_search`, [PhoneSearchController.contentHitFor]); the store still answers from
+    // the live events and from whatever the agents list read. See `AppNotifier.sessionPreviews`.
   }
 
   @override
@@ -357,10 +327,9 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final newHarness = widget.onNewHarness;
     final project = search.projectMatch;
     // ⚠️ **Built as they scroll in, not all at once.** Each entry makes its widget only when the
-    // list asks for it, so a hundred sessions cost the rows in view: their state words, their lit
-    // matches — and the read that fetches each one's preview ([_want]). An eager list did all
-    // of that for every row on every rebuild, and this screen rebuilds on every preview the store
-    // publishes.
+    // list asks for it, so a hundred sessions cost the rows in view: their state words and their
+    // lit matches. An eager list did that for every row on every rebuild, and this screen rebuilds
+    // on every preview the store publishes.
     final items = <Widget Function()>[];
     // Where each session's entry is, so a row keeps its own element when the ranking moves it.
     final rowAt = <String, int>{};
@@ -450,12 +419,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     );
   }
 
-  /// One session's entry in the list: its row, and a read of what the session last said for the
-  /// search to match against ([_want]).
+  /// One session's entry in the list: its row.
   ///
-  /// ⚠️ **No recap under it any more (owner, 2026-09-30).** The row used to carry a chevron that
-  /// unfolded the session's last reply beneath it; it was removed, and with it the room kept at the
-  /// end of every first line for that chevron. The read stays — the search still needs the words.
+  /// ⚠️ **No recap under it any more (owner, 2026-09-30),** and no read of what the session last
+  /// said either (2026-10-01) — see the note at the end of [initState].
   ///
   /// Keyed by the row's id — what [ListView.builder]'s `findChildIndexCallback` looks it up by — so
   /// the row keeps its element when a match moves it up the list.
@@ -466,9 +433,6 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     Tty tty, {
     required bool selected,
   }) {
-    if (row.isAgent) {
-      if (row.previewKey case final key?) _want(key);
-    }
     return KeyedSubtree(
       key: ValueKey(row.id),
       child: _findRow(row, terms, now, tty, selected: selected),
@@ -756,10 +720,20 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // walks exactly what the query returned, in the order the person was
     // looking at when they tapped.
     final search = widget.controller;
+    final tab = _tab(_tabs(search));
+    // ⚠️ **The tab picked here is the tab Home opens in (owner, 2026-10-01).** The chips narrowed
+    // this list to one tab, and the session tapped is that tab's — but Home chose its tab on its
+    // own, from the tab the phone was last in ([activeDeskGroup]), so a session that sits in two
+    // tabs opened in the other one, and the swipe then walked that tab's panes rather than the ones
+    // just looked at. Selected before the open, so the pager is built in it. Only for a session the
+    // tab holds, and never on All: there the phone's own last tab still decides.
+    if (tab != null && tab.holds(entry)) {
+      widget.notifier.selectDeskTab(tab.id);
+    }
     openAgentPager(
       context,
       widget.notifier,
-      phoneSearchAgentEntries(_narrowed(search.rows, _tab(_tabs(search)))),
+      phoneSearchAgentEntries(_narrowed(search.rows, tab)),
       entry,
     );
   }

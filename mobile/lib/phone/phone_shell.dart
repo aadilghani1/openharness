@@ -133,6 +133,12 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// who was looking straight at it, with a network that would have answered at once.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      // The app switcher coming up is `inactive`, and a swipe there can end the app without it
+      // ever reaching `paused` — so the screens are kept here as well. See [AppNotifier.handleAppInactive].
+      widget.notifier.handleAppInactive();
+      return;
+    }
     if (state == AppLifecycleState.paused) {
       // The other half of the resume below: work that only makes sense in
       // front of somebody stops here. The sockets are not touched — the OS
