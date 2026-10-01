@@ -7,7 +7,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/companions/coding_memory_library.dart';
+import 'package:harness/companions/coding_memory_connection.dart';
 import 'package:harness/companions/coding_memory_view.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/theme/color_palette.dart';
 
@@ -101,6 +103,193 @@ void main() {
       await File('$output/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
       image.dispose();
     });
+  }
+
+  testWidgets(
+    'feedback rates the exact recall, preserves the open detail and can be changed or cleared',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+      expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+      final revision = transport.record['revision'];
+      final evidence = transport.record['evidence'];
+      final changes = library.changes;
+      await tap(tester, 'Helpful');
+      expect(transport.previewed, {
+        'kind': 'feedback',
+        'id': 'synthetic-memory',
+        'revision': 1,
+        'receiptId': 'synthetic-receipt',
+        'value': 'helpful',
+        'expected': 0,
+      });
+      expect(find.text('Your coding memory'), findsNWidgets(2));
+      expect(find.text('Clear feedback'), findsOneWidget);
+      expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+      final helpful = tester.widget<DesktopPill>(
+        find.widgetWithText(DesktopPill, 'Helpful'),
+      );
+      expect(helpful.selected, isTrue);
+      expect(helpful.focusNode!.hasFocus, isTrue);
+      expect(library.changes, changes);
+      await tap(tester, 'Not helpful');
+      expect(transport.previewed!['expected'], 1);
+      expect(transport.recalls.single['feedback']['value'], 'unhelpful');
+      await tap(tester, 'Clear feedback');
+      expect(transport.previewed!['expected'], 2);
+      expect(transport.recalls.single['feedback']['value'], isNull);
+      expect(find.text('Clear feedback'), findsNothing);
+      expect(transport.record['revision'], revision);
+      expect(transport.record['evidence'], evidence);
+      expect(library.items, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'pending feedback disables controls and a changed owner prevents apply',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      final pending = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async =>
+          p['action'] == 'preview' ? pending.future : transport.respond(p);
+      await tester.ensureVisible(find.text('Helpful'));
+      await tester.tap(find.text('Helpful'));
+      await tester.pump();
+      expect(
+        tester
+            .widget<DesktopPill>(
+              find.widgetWithText(DesktopPill, 'Not helpful'),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Close'))
+            .onPressed,
+        isNull,
+      );
+      transport.invalidate();
+      pending.complete({
+        'ok': true,
+        'capability': 'a' * 32,
+        'expiresInMs': 120000,
+        'preview': {},
+      });
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Delivery not confirmed'), findsNothing);
+      expect(find.text('Helpful'), findsNothing);
+      expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'a lost save reply is checked by refreshing without retrying the rating',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      transport.handle = (p) async {
+        final result = transport.respond(p);
+        if (p['action'] == 'apply') throw const CodingMemoryFailure('TIMEOUT');
+        return result;
+      };
+      await tap(tester, 'Helpful');
+      expect(
+        find.textContaining('refresh to check whether it finished'),
+        findsOneWidget,
+      );
+      expect(
+        transport.calls.where((c) => c['action'] == 'apply'),
+        hasLength(1),
+      );
+      transport.handle = null;
+      await tap(tester, 'Refresh recent recall');
+      expect(
+        tester
+            .widget<DesktopPill>(find.widgetWithText(DesktopPill, 'Helpful'))
+            .selected,
+        isTrue,
+      );
+      expect(
+        transport.calls.where((c) => c['action'] == 'apply'),
+        hasLength(1),
+      );
+    },
+  );
+
+  testWidgets(
+    'stale feedback is refreshed explicitly and a reconnect during preview cannot apply',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      transport.refuseApply = 'FEEDBACK_CHANGED';
+      await tap(tester, 'Helpful');
+      expect(find.textContaining('feedback changed elsewhere'), findsOneWidget);
+      transport.refuseApply = null;
+      transport.recalls.single['feedback'] = {
+        'value': 'unhelpful',
+        'version': 5,
+        'updatedAt': 1790762402000,
+      };
+      await tap(tester, 'Refresh recent recall');
+      expect(
+        tester
+            .widget<DesktopPill>(
+              find.widgetWithText(DesktopPill, 'Not helpful'),
+            )
+            .selected,
+        isTrue,
+      );
+      final count = transport.calls.where((c) => c['action'] == 'apply').length;
+      transport.handle = (p) async {
+        final result = transport.respond(p);
+        if (p['action'] == 'preview') transport.reconnect();
+        return result;
+      };
+      await tap(tester, 'Helpful');
+      expect(find.textContaining('connection changed'), findsOneWidget);
+      expect(
+        transport.calls.where((c) => c['action'] == 'apply'),
+        hasLength(count),
+      );
+    },
+  );
+
+  for (final brightness in Brightness.values) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'recall feedback wraps long projects in ${brightness.name} at $scale text',
+        (tester) async {
+          transport.recalls.add({
+            ...syntheticRecall(value: 'helpful'),
+            'project': {
+              'name': 'Editor accessibility and collaboration research',
+              'location': '/synthetic/workspaces/very-long-project-directory/desktop-editor',
+            },
+          });
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: const Size(620, 850),
+          );
+          await tap(tester, 'Read memory');
+          await tester.ensureVisible(find.text('Recent recall'));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'feedback-${brightness.name}-${scale}x');
+          await tap(tester, 'Not helpful');
+          expect(transport.recalls.single['feedback']['value'], 'unhelpful');
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
   }
 
   testWidgets(

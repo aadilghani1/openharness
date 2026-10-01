@@ -2041,6 +2041,10 @@ class AppNotifier extends ChangeNotifier {
   /// When each of the account's keys last opened a session (`{pub: ms}`), for the Devices page.
   Future<Map<String, int>> devicesLastSeen() => api.deviceKeysSeen();
 
+  /// The account's devices as this phone verified them. A seam of its own so a test can answer
+  /// without a real device log.
+  Future<DeviceLogListing> deviceListing() async => await _deviceLog?.list() ?? DeviceLogListing.empty;
+
   DateTime? _deviceLogReadAt;
 
   /// A socket came back: a `device_keys_changed` sent while this phone was offline reached nobody, so

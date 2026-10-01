@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'device_detail_page.dart';
+import 'device_rows.dart';
 import 'devices_page.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'tty.dart';
@@ -49,9 +51,18 @@ class NewDeviceBanner extends StatelessWidget {
                 child: const Text('Mine'),
               ),
               TextButton(
+                // One new device goes straight to its key code; several go to the list, where each is a row.
                 onPressed: () => unawaited(
                   navigator.currentState?.push(
-                    phoneRoute((_) => DevicesPage(notifier: notifier)),
+                    phoneRoute(
+                      (_) => more == 0
+                          ? DeviceDetailPage(
+                              notifier: notifier,
+                              row: rowFromMember(m),
+                              isNew: true,
+                            )
+                          : DevicesPage(notifier: notifier),
+                    ),
                   ),
                 ),
                 child: const Text('Review'),

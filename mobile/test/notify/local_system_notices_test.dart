@@ -41,6 +41,32 @@ void main() {
     expect(shown.details!.android!.channelId, 'account-device');
     expect(shown.details!.iOS!.threadIdentifier, 'account-device');
     expect(decodeAgentPayload(shown.payload), isNull);
+    // A tap opens that device's page: the payload names the device, never an agent.
+    expect(shown.payload, 'device:pub-1');
+  });
+
+  test('a tap on a device notice opens that device, not an agent', () async {
+    await notices.showAccountNotice(key: 'pub-1', title: 'New device on your account', body: 'iPad signed in.');
+    plugin.onResponse!(
+      const NotificationResponse(
+        notificationResponseType: NotificationResponseType.selectedNotification,
+        payload: 'device:pub-1',
+      ),
+    );
+    expect(notices.openedDevice.value, 'pub-1');
+    expect(notices.opened.value, isNull);
+  });
+
+  test('a tap on an agent notice opens no device', () async {
+    await notices.show(message(NoticeKind.done));
+    plugin.onResponse!(
+      NotificationResponse(
+        notificationResponseType: NotificationResponseType.selectedNotification,
+        payload: encodeAgentPayload(ref),
+      ),
+    );
+    expect(notices.opened.value, ref);
+    expect(notices.openedDevice.value, isNull);
   });
 
   test('nothing starts until a notice is first needed', () {

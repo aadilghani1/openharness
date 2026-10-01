@@ -91,6 +91,9 @@ pub struct Picker {
     pub heading: Option<String>,
     pub placeholder: String,
     pub query: String,
+    /// Include hidden row text in fuzzy matching and ranking. Compact project labels use
+    /// this so a machine's real name stays searchable when the label says "local".
+    pub search_extra: bool,
     pub rows: Vec<Row>,
     /// (row index, label char indices matched)
     pub visible: Vec<(usize, Vec<u32>)>,
@@ -242,6 +245,7 @@ impl Picker {
             heading: None,
             placeholder: placeholder.into(),
             query: String::new(),
+            search_extra: false,
             rows: Vec::new(),
             visible: Vec::new(),
             cursor: 0,
@@ -366,7 +370,12 @@ impl Picker {
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled || self.excluded.contains(&row.id) || !offered(row) { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
-                let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
+                let mut chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
+                let shown_chars = chars.len();
+                if self.search_extra && !row.extra.is_empty() {
+                    chars.push(' ');
+                    chars.extend(row.extra.chars());
+                }
                 let seen = line(row);
                 let with_keywords = !o.no_extended && q.matches_with_extra(&chars, |word, sensitive, inverse| {
                     let keyword = (word.chars().count() >= 3 || STATE_WORDS.contains(&word)) && names_word(&keywords, word, sensitive);
@@ -382,7 +391,7 @@ impl Picker {
                         let mut rank = crate::fzf::rank(&hit, &chars, if self.live { &live_tiebreak } else { &o.tiebreak });
                         // --tac: the input read bottom-up, ties too.
                         rank.push(if o.tac { -(index as i64) } else { index as i64 });
-                        scored.push((rank, index, hit.positions.iter().map(|p| *p as u32).collect()));
+                        scored.push((rank, index, hit.positions.iter().filter(|p| **p < shown_chars).map(|p| *p as u32).collect()));
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.

@@ -59,7 +59,7 @@ export interface DeviceLogListing {
   head: DevLogHead | null
   frozen: DevLogFreeze | null
   self: string
-  members: Array<DevLogMember & { fingerprint: string; self: boolean }>
+  members: Array<DevLogMember & { fingerprint: string; self: boolean; firstSeen?: number }>
   /** Machines whose own copy of the log is frozen, as their last `group_sync` said. */
   frozenPeers: string[]
 }
@@ -165,6 +165,17 @@ export class DeviceLogSyncer {
     }
   }
 
+  /** `firstSeen` plus now for each newly applied key, minus keys no longer active (keeps the file small). */
+  private stamp(prev: Record<string, number> | undefined, added: readonly DevLogMember[], state: DevLogState): Record<string, number> {
+    const at = this.now()
+    const out: Record<string, number> = {}
+    for (const pub of Object.keys(state.active)) {
+      const t = prev?.[pub] ?? (added.some((m) => m.pub === pub) ? at : undefined)
+      if (t !== undefined) out[pub] = t
+    }
+    return out
+  }
+
   /** Apply entries that continue this machine's log; freeze on anything that does not. */
   private accept(entries: readonly unknown[], bootstrap: boolean): boolean {
     const file = this.deps.store.read()
@@ -186,6 +197,7 @@ export class DeviceLogSyncer {
       recent: [...file.recent, ...parsed].slice(-DEVLOG_RECENT),
       frozen: null,
       notifiedUpTo: applied.state.head.seq,
+      firstSeen: bootstrap ? file.firstSeen : this.stamp(file.firstSeen, applied.added, applied.state),
     })
     this.trustState(applied.state, bootstrap ? Object.values(applied.state.active) : [...applied.added, ...applied.relabeled])
     for (const m of applied.removed) this.deps.drop(m.pub)
@@ -298,7 +310,10 @@ export class DeviceLogSyncer {
     const removed = Object.values(before).filter((m) => !next.active[m.pub])
     if (confirm) {
       const parsed = entries.map((e) => parseDevLogEntry(e)).filter((e): e is DevLogEntry => e !== null)
-      this.deps.store.write({ state: next, recent: parsed.slice(-DEVLOG_RECENT), frozen: null, notifiedUpTo: next.head.seq })
+      this.deps.store.write({
+        state: next, recent: parsed.slice(-DEVLOG_RECENT), frozen: null, notifiedUpTo: next.head.seq,
+        firstSeen: this.stamp(file.firstSeen, added, next),
+      })
       this.trustState(next, Object.values(next.active))
       for (const m of removed) this.deps.drop(m.pub)
       this.deps.changed?.()
@@ -353,6 +368,8 @@ export class DeviceLogSyncer {
       .map((m) => ({ ...m, fingerprint: fingerprint(b64d(m.pub)), self: m.pub === selfPub }))
     const labels = new Map(members.map((m) => [m.pub, m.label]))
     const frozenPeers = [...this.frozenPeers].filter(([, frozen]) => frozen).map(([pub]) => labels.get(pub) ?? fingerprint(b64d(pub)))
-    return { head: file.state?.head ?? null, frozen: file.frozen, self: selfPub, members, frozenPeers }
+    // Each row carries when this machine first applied it (never the entry's self-chosen `at`).
+    const withSeen = members.map((m) => (file.firstSeen?.[m.pub] === undefined ? m : { ...m, firstSeen: file.firstSeen[m.pub] }))
+    return { head: file.state?.head ?? null, frozen: file.frozen, self: selfPub, members: withSeen, frozenPeers }
   }
 }

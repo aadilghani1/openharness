@@ -1,6 +1,7 @@
 /** Owner-facing library contracts. These are not model tools or scope capabilities. */
 import { z } from 'zod'
 import { conditionsSchema, draftSchema, type MemoryRecord, type MemoryScope, type MemorySupport, type SourceEvent } from './types.js'
+import type { MemoryRecallUse, RecallFeedback } from './receipts.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 export const libraryQuerySchema = z.object({
@@ -34,6 +35,7 @@ export interface LibraryDetail {
   sources: Array<Pick<SourceEvent, 'id' | 'engine' | 'sessionId' | 'role' | 'observedAt'>>
   scopeChanges: ScopeChange[]
   project: LibraryProject | null
+  recalls: Array<Omit<MemoryRecallUse, 'projectId'> & { project: LibraryProject | null; canFeedback: boolean }>
 }
 export interface ScopeChange { revision: number; from: MemoryScope; to: MemoryScope; changedAt: number; actor: 'owner' }
 
@@ -57,6 +59,8 @@ export const libraryCommandSchema = z.discriminatedUnion('kind', [
     supersede: z.array(z.object({ id, revision }).strict()).max(32).optional() }).strict(),
   z.object({ kind: z.literal('forget'), id, revision }).strict(),
   z.object({ kind: z.literal('narrow'), id, revision, projectId: id }).strict(),
+  z.object({ kind: z.literal('feedback'), id, revision, receiptId: id,
+    value: z.enum(['helpful', 'unhelpful']).nullable(), expected: z.number().int().nonnegative().safe() }).strict(),
   z.object({ kind: z.literal('configure'), preferences, expected: preferences }).strict(),
 ])
 export type LibraryCommand = z.infer<typeof libraryCommandSchema>
@@ -73,6 +77,7 @@ export interface LibraryPreview {
     scopeChange?: ScopeChange
     project?: LibraryProject
     conflicts?: MemorySummary[]
+    feedback?: RecallFeedback
   }
 }
 

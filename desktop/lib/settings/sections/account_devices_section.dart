@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/relative_time.dart';
 import '../../shared/theme/app_theme.dart' as grid;
-import '../../shared/widgets/app_dialog.dart';
+import '../../shared/widgets/fingerprint_text.dart';
+import '../../shared/widgets/section_heading.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../shared/widgets/skeleton.dart';
 import '../../state/account_devices.dart';
 import '../../state/app_state.dart';
+import 'account_device_detail.dart';
 
 /// Settings ▸ Your devices — every computer and app signed in to this account. Signing in on one is
 /// what makes the others trust it (the device key log), so this list is also the one place to see a
@@ -29,12 +32,17 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
   final Set<String> _removing = {};
   String? _error;
 
+  /// The devices that were new when this list opened: they keep their `New` badge for the visit, though
+  /// opening the list clears the banner that announced them.
+  late final Set<String> _newPubs;
+
   AppNotifier get _app => widget.notifier;
 
   @override
   void initState() {
     super.initState();
     _app.addListener(_changed);
+    _newPubs = {for (final d in _app.newDevices) d.pub};
     unawaited(_load());
     // Looking at the list IS reviewing the new devices: the banner that pointed here is done.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,10 +72,10 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
 
   Future<void> _remove(AccountDevice device) async {
     final name = device.label.isEmpty ? 'this device' : device.label;
-    final confirmed = await _confirm(
+    final confirmed = await confirmDeviceAction(
+      context,
       'Remove $name?',
-      'It stops reaching your machines on every device, and is signed out. '
-          'Signing in on it again adds it back as a new device.',
+      removeDeviceDetail,
       'Remove',
       destructive: true,
     );
@@ -87,9 +95,10 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
   bool _removingUnused = false;
 
   Future<void> _removeUnused(List<AccountDevice> unused) async {
-    final confirmed = await _confirm(
+    final confirmed = await confirmDeviceAction(
+      context,
       'Remove ${unused.length} unused app${unused.length == 1 ? '' : 's'}?',
-      [for (final d in unused) '${d.label.isEmpty ? 'Unnamed app' : d.label} — last seen ${_date(d.lastSeen!)}'].join('\n'),
+      [for (final d in unused) '${d.label.isEmpty ? 'Unnamed app' : d.label} — last active ${relativeAgo(d.lastSeen!, DateTime.now())}'].join('\n'),
       'Remove',
       destructive: true,
     );
@@ -120,7 +129,8 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
       for (final name in preview.added) '+ $name',
       for (final name in preview.removed) '− $name',
     ];
-    final confirmed = await _confirm(
+    final confirmed = await confirmDeviceAction(
+      context,
       'Trust this device list again?',
       lines.isEmpty
           ? 'It changes no device. Continue only if you expected this.'
@@ -131,39 +141,16 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
     await _app.rebaselineDevices(confirm: true);
   }
 
-  Future<bool> _confirm(String title, String detail, String action, {bool destructive = false}) async =>
-      await showAppDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: SizedBox(
-            width: 360,
-            child: Text(detail, style: grid.AppType.body(height: 1.4)),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              style: TextButton.styleFrom(
-                foregroundColor: grid.AppPalette.textSecondary,
-                overlayColor: grid.AppSurface.hoverFill,
-              ),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              key: const Key('account-device-confirm'),
-              style: destructive
-                  ? FilledButton.styleFrom(
-                      backgroundColor: grid.AppPalette.dangerFill,
-                      overlayColor: const Color(0x1FFFFFFF),
-                    )
-                  : null,
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(action),
-            ),
-          ],
-        ),
-      ) ??
-      false;
+  void _open(AccountDevice device) => unawaited(
+    showAccountDeviceDetail(
+      context,
+      _app,
+      pub: device.pub,
+      device: device,
+      isNew: _newPubs.contains(device.pub),
+      onMine: () => setState(() => _newPubs.remove(device.pub)),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -203,23 +190,56 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
                 'The device list is not available here yet.',
                 style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               )
-            else
-              for (final device in devices.devices)
+            else ...[
+              if (devices.self case final self?) ...[
+                const SectionHeading('This device'),
+                const SizedBox(height: 8),
+                SettingRow(
+                  key: const Key('account-device-this'),
+                  title: self.label.trim().isEmpty ? 'Unnamed device' : self.label,
+                  detail: 'This is the code your other devices show for this device.',
+                  control: const SizedBox.shrink(),
+                  footer: FingerprintText(self.fingerprint, large: false, copyKey: const Key('this-device-copy')),
+                ),
+                const SizedBox(height: 16),
+              ],
+              for (final device in devices.listed(_newPubs))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: SettingRow(
-                    key: ValueKey('account-device-${device.pub}'),
-                    title: '${device.label.isEmpty ? 'Unnamed device' : device.label}${device.self ? '  (this device)' : ''}',
-                    detail: '${device.isMachine ? 'Computer' : 'App'} · added ${_date(device.addedAt)}'
-                        '${device.lastSeen != null ? ' · last seen ${_date(device.lastSeen!)}' : ''} · ${device.fingerprint}',
-                    control: device.self
-                        ? const SizedBox.shrink()
-                        : OutlinedButton(
-                            onPressed: _removing.contains(device.pub) ? null : () => unawaited(_remove(device)),
-                            child: Text(_removing.contains(device.pub) ? 'Removing…' : 'Remove'),
-                          ),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _open(device),
+                      child: SettingRow(
+                        key: ValueKey('account-device-${device.pub}'),
+                        title: device.label.trim().isEmpty ? 'Unnamed device' : device.label,
+                        badge: _newPubs.contains(device.pub) ? 'New' : null,
+                        detail: deviceDetailLine(
+                          device,
+                          now: DateTime.now(),
+                          sameName: devices.sharedNames.contains(device.label.trim()),
+                        ),
+                        control: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TextButton(
+                              key: ValueKey('account-device-details-${device.pub}'),
+                              onPressed: () => _open(device),
+                              child: const Text('Details'),
+                            ),
+                            const SizedBox(width: 6),
+                            OutlinedButton(
+                              onPressed: _removing.contains(device.pub) ? null : () => unawaited(_remove(device)),
+                              child: Text(_removing.contains(device.pub) ? 'Removing…' : 'Remove'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
+            ],
           ],
         ),
       ),
@@ -267,9 +287,4 @@ class _FrozenLine extends StatelessWidget {
       ),
     );
   }
-}
-
-String _date(DateTime at) {
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${at.year}-${two(at.month)}-${two(at.day)}';
 }

@@ -36,8 +36,12 @@ abstract interface class SystemNotices {
   /// null by whoever acts on it.
   ValueNotifier<AgentRef?> get opened;
 
+  /// The key of the device whose notice was tapped last — what the shell opens. Reset to null by
+  /// whoever acts on it.
+  ValueNotifier<String?> get openedDevice;
+
   /// News about the ACCOUNT rather than an agent: a device joined it. [key] names the notice, so the
-  /// same news posted twice replaces itself. Tapping it just opens the app, where the banner waits.
+  /// same news posted twice replaces itself. Tapping it opens that device's page ([key] is its key).
   Future<void> showAccountNotice({required String key, required String title, required String body});
 }
 
@@ -45,6 +49,9 @@ abstract interface class SystemNotices {
 class SilentSystemNotices implements SystemNotices {
   @override
   final opened = ValueNotifier<AgentRef?>(null);
+
+  @override
+  final openedDevice = ValueNotifier<String?>(null);
 
   @override
   Future<void> requestPermission() async {}
@@ -59,6 +66,10 @@ class SilentSystemNotices implements SystemNotices {
   Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
 }
 
+/// What a device notice's payload starts with; the device's key follows. An agent notice's payload
+/// is `machine\nagent`, so the two never read as each other.
+const _devicePayload = 'device:';
+
 /// The real centre, through flutter_local_notifications.
 ///
 /// Started lazily on first use, so a launch that never needs it — and every
@@ -72,6 +83,9 @@ class LocalSystemNotices implements SystemNotices {
 
   @override
   final opened = ValueNotifier<AgentRef?>(null);
+
+  @override
+  final openedDevice = ValueNotifier<String?>(null);
 
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
@@ -121,6 +135,11 @@ class LocalSystemNotices implements SystemNotices {
   }
 
   void _open(String? payload) {
+    // A device notice carries `device:<key>` — no newline, so it never reads as an agent's payload.
+    if (payload != null && payload.startsWith(_devicePayload)) {
+      openedDevice.value = payload.substring(_devicePayload.length);
+      return;
+    }
     final agent = decodeAgentPayload(payload);
     if (agent != null) opened.value = agent;
   }
@@ -195,6 +214,7 @@ class LocalSystemNotices implements SystemNotices {
           ),
           iOS: DarwinNotificationDetails(threadIdentifier: 'account-device'),
         ),
+        payload: '$_devicePayload$key',
       );
     } catch (error) {
       appLog.warn('notify', 'account notice failed', error: error);

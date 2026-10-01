@@ -89,7 +89,7 @@ async function run() {
   try { await (await open(output!, 'wx', 0o600)).close() } catch { throw new MemoryError('evaluation_report_unavailable_or_exists') }
   const temporary = await mkdtemp(join(tmpdir(), 'memory-extraction-eval-'))
   const sourceFiles = ['learner.ts', 'context.ts', 'types.ts', 'admission.ts', 'store.ts', 'queue.ts', 'evaluation.ts',
-    'claudeInference.ts', 'inference.ts', 'inferenceProcess.ts']
+    'account.ts', 'claudeInference.ts', 'inference.ts', 'inferenceProcess.ts']
   const sourceHashes = Object.fromEntries(await Promise.all(sourceFiles.map(async name => [name, digest(await readFile(join(cli, 'src/memory', name), 'utf8'))])))
   const report: Record<string, any> = { schemaVersion: 1, suite: suite.suite, suiteSha256: digest(suiteText),
     promptVersion: EXTRACTION_PROMPT_VERSION, contextVersion: MEMORY_CONTEXT_VERSION,

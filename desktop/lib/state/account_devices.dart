@@ -1,3 +1,6 @@
+import '../core/relative_time.dart';
+import '../e2ee/bytes.dart';
+import '../e2ee/keys.dart' as keys;
 import '../viewer/device_log.dart';
 import '../viewer/device_log_sync.dart';
 
@@ -79,6 +82,43 @@ class AccountDevices {
       if (!d.self && !d.isMachine && d.lastSeen != null && now.difference(d.lastSeen!) > unusedAfter) d,
   ];
 
+  /// This computer (or app): shown on its own in the "This device" card, so the list below leaves it out.
+  AccountDevice? get self {
+    for (final d in devices) {
+      if (d.self) return d;
+    }
+    return null;
+  }
+
+  /// The rows under the "This device" card: the new devices (those in [newPubs]) first, newest first,
+  /// then the rest by last activity. Ties keep log order — `List.sort` is not stable, so the index breaks them.
+  List<AccountDevice> listed(Set<String> newPubs) {
+    final rows = [
+      for (var i = 0; i < devices.length; i++)
+        if (!devices[i].self) (index: i, device: devices[i], isNew: newPubs.contains(devices[i].pub)),
+    ];
+    rows.sort((a, b) {
+      if (a.isNew != b.isNew) return a.isNew ? -1 : 1;
+      final byTime = (b.isNew ? b.device.addedAt : b.device.lastSeen ?? b.device.addedAt).compareTo(
+        a.isNew ? a.device.addedAt : a.device.lastSeen ?? a.device.addedAt,
+      );
+      return byTime != 0 ? byTime : a.index.compareTo(b.index);
+    });
+    return [for (final r in rows) r.device];
+  }
+
+  /// Names more than one device goes by (trimmed; an empty name counts as one name). Their rows add the
+  /// start of the key code, since two rows that read the same cannot be told apart otherwise.
+  Set<String> get sharedNames {
+    final seen = <String>{};
+    final shared = <String>{};
+    for (final d in devices) {
+      final name = d.label.trim();
+      if (!seen.add(name)) shared.add(name);
+    }
+    return shared;
+  }
+
   AccountDevices withLastSeen(Map<String, int> seen) => AccountDevices(
     devices: [
       for (final d in devices)
@@ -132,11 +172,25 @@ class DevicesRebaseline {
 
 /// A device that joined the account and this end had never trusted: "New device: X".
 class NewDeviceNotice {
-  const NewDeviceNotice({required this.pub, required this.label, required this.kind});
+  const NewDeviceNotice({required this.pub, required this.label, required this.kind, this.frameFingerprint});
 
   final String pub;
   final String label;
   final String kind;
+
+  /// The key code the `device_key_added` frame carried, when it did.
+  final String? frameFingerprint;
+
+  /// The key code to compare on the device itself: the frame's, else worked out from the key.
+  String get fingerprint {
+    final fromFrame = frameFingerprint;
+    if (fromFrame != null && fromFrame.isNotEmpty) return fromFrame;
+    try {
+      return keys.fingerprint(b64d(pub));
+    } catch (_) {
+      return '';
+    }
+  }
 
   String get sentence {
     final name = label.isEmpty ? 'A device' : label;
@@ -154,3 +208,13 @@ Map<String, int> parseLastSeen(Object? raw) => {
     for (final e in raw.entries)
       if (e.key is String && e.value is int) e.key as String: e.value as int,
 };
+
+/// The line under a device's name in the list: `Computer · active now`, `App · last active 2 days ago`.
+/// With [sameName] — another device goes by the same name — it ends in the first group of the key code,
+/// the one thing that tells the two apart without putting the whole code in the row.
+String deviceDetailLine(AccountDevice d, {required DateTime now, required bool sameName}) {
+  final what = d.isMachine ? 'Computer' : 'App';
+  final when = activityPhrase(lastSeen: d.lastSeen, addedAt: d.addedAt, now: now);
+  final tail = sameName && d.fingerprint.isNotEmpty ? ' · ${d.fingerprint.split('·').first}…' : '';
+  return '$what · $when$tail';
+}

@@ -25,6 +25,8 @@ import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart' show confirmSwitchAnyway;
 import '../widgets/session_close_dialog.dart';
+import '../notify/system_notifications.dart';
+import '../settings/sections/account_device_detail.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -612,6 +614,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.systemNotifications.onTap = (machineId, agentId) async {
       await revealWindow();
       if (!mounted) return;
+      // A device notice puts its marker where an agent's machine goes and the device's key where the
+      // agent goes: the click opens that device.
+      if (machineId == SystemNotifications.deviceNoticeMachine) {
+        unawaited(
+          showAccountDeviceDetail(
+            context,
+            app,
+            pub: agentId,
+            isNew: app.newDevices.any((d) => d.pub == agentId),
+          ),
+        );
+        return;
+      }
       try {
         await app.revealAgentFromAlert(machineId, agentId);
       } catch (_) {

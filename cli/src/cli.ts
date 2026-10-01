@@ -235,7 +235,8 @@ import {
 import type { CableAgent } from './cable/cableSession.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
-import { E2eeStore } from './lib/e2ee/store.js'
+import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
+import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
@@ -491,7 +492,9 @@ every future connect, until you change or clear it:
   harness group remove <id>    drop a member (machine id, # or fingerprint) from every member
   harness devices list         the account's devices — signing in on one is what makes the others trust
                                it; a device you do not recognise is someone else signed in as you
-  harness devices remove <fp>  take a device (# or fingerprint) out of the account on every device
+  harness devices show <#|fp>  one device in full: its key code and how to check it on that device
+  harness devices remove <fp>  take a device out of the account on every device, by key code (or its
+                               first 4+ characters); a # or a shorter start asks first, --yes skips it
   harness devices rebaseline   the device list froze (the backend served one that does not match what
                                this machine verified): show what changed, --yes to trust it again
   (both \`remote-password set\` and \`link connect\` prompt for the password interactively, or read one
@@ -690,6 +693,19 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   return next
 }
 
+/** The name this machine goes by in the account's device list — what the daemon registers itself as. */
+const thisDeviceLabel = (): string => hostname().slice(0, 60)
+
+/** This machine's device key code. Signing in is what puts the key into the account, so `create` makes
+ *  the identity when it is missing; the read-only commands (`status`, `auth status`) only look, and
+ *  show nothing rather than mint a key. Null whenever it cannot be had. */
+function thisDeviceFingerprint(create: boolean): string | null {
+  try {
+    const pub = create ? b64e(new E2eeStore().init().pub) : peekIdentityPub()
+    return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null
+  } catch { return null }
+}
+
 /** `harness auth status --json` — one JSON line, always exit 0; logged-out is a valid answer, not a
  *  process failure. Reuses AuthSessionManager.accessToken() (not a raw file read) so a session that's
  *  on-disk-but-about-to-expire gets refreshed here rather than reporting loggedIn:true and 401ing on
@@ -718,6 +734,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   }
   const latest = readAuthSession()
   const signedIn = loggedIn && latest !== null
+  const fingerprintNow = thisDeviceFingerprint(false)
   const payload = {
     loggedIn: signedIn,
     ...(signedIn && offline ? { offline: true } : {}),
@@ -726,6 +743,8 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
+    // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
+    ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
   else {
@@ -815,9 +834,17 @@ async function loginCommand(
   // browser — and never as a side effect of signing in to Harness.
   const succeed = async (alreadySignedIn: boolean, email?: string): Promise<SignInOutcome> => {
     if (opts.chained) return { signedIn: true, alreadySignedIn }
-    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true } : { type: 'result', status: 'success', ...(email ? { email } : {}) })
-    else if (alreadySignedIn) console.log('\n  ✓ Already signed in. Run `harness start` to connect this computer.\n')
-    else console.log(`\n  ✓ Signed in${email ? ` as ${email}` : ''}. Run \`harness start\` to connect this computer.\n`)
+    // The key code is what the person compares on their other devices, so it is said at the moment the
+    // machine joins them. Left out when it cannot be computed: the line is then exactly what it was.
+    const fp = thisDeviceFingerprint(true)
+    const device = fp ? ` · ${fp}` : ''
+    if (json) emit(alreadySignedIn ? { type: 'result', status: 'success', alreadySignedIn: true, ...(fp ? { fingerprint: fp } : {}) } : { type: 'result', status: 'success', ...(email ? { email } : {}), ...(fp ? { fingerprint: fp } : {}) })
+    else {
+      const hint = '    Run `harness start` to connect this computer.'
+      if (!fp) console.log(alreadySignedIn ? '\n  ✓ Already signed in. Run `harness start` to connect this computer.\n' : `\n  ✓ Signed in${email ? ` as ${email}` : ''}. Run \`harness start\` to connect this computer.\n`)
+      else if (alreadySignedIn) console.log(`\n  ✓ Already signed in — this machine is "${thisDeviceLabel()}"${device}\n${hint}\n`)
+      else console.log(`\n  ✓ Signed in${email ? ` as ${email}` : ''} — this machine joins your devices as "${thisDeviceLabel()}"${device}\n${hint}\n`)
+    }
     return { signedIn: true, alreadySignedIn }
   }
   // SSO in the browser, or a QR the phone scans. Asked only of a person at a terminal with no flag; a
@@ -4599,7 +4626,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   devLogSyncer = new DeviceLogSyncer({
     store: new DeviceLogStore(),
     identity: () => { const id = relayIdentityStore.getIdentity(); return { pub: b64e(id.pub), priv: id.priv } },
-    self: () => ({ machineId: readAuthSession()?.machineId ?? null, label: hostname().slice(0, 60) }),
+    self: () => ({ machineId: readAuthSession()?.machineId ?? null, label: thisDeviceLabel() }),
     fetch: async (since) => {
       const r = await proxyBackend('GET', `/api/device-keys?since=${since}`)
       const data = r.status === 200 ? r.body.data as Partial<DeviceLogFetched> | undefined : undefined
@@ -7442,6 +7469,8 @@ async function runningDaemonVersion(): Promise<string> {
 // "● connected", never a one-shot never-updating "connecting…"); `status` prints running/stopped.
 function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
+  /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
+  device?: string
 }): void {
   const row = (k: string, v: string): string => `   ${k.padEnd(10)} ${v}`
   const rule = '  ' + '─'.repeat(37)
@@ -7454,6 +7483,7 @@ function printInfoBlock(opts: {
     try { return readFileSync(MACHINE_NAME_FILE, 'utf-8').trim() } catch { return '' }
   })()
   if (machineName) console.log(row('machine', machineName))
+  if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
   console.log(row('backend', readAuthSession() ? env.BACKEND_WS_URL : 'not signed in · harness login'))
   console.log(row('agents', `${opts.sessions} available`))
@@ -8174,7 +8204,7 @@ async function groupCommand(sub: string | undefined, arg: string | undefined, js
   process.exit(1)
 }
 
-/** `harness devices list|remove|rebaseline` — the account's device key log, as this machine verified it. */
+/** `harness devices list|show|remove|rebaseline` — the account's device key log, as this machine verified it. */
 async function devicesCommand(sub: string | undefined, arg: string | undefined, flags: string[]): Promise<void> {
   const json = flags.includes('--json')
   const call = async (method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
@@ -8186,7 +8216,7 @@ async function devicesCommand(sub: string | undefined, arg: string | undefined, 
       process.exit(1)
     }
   }
-  type Row = { pub: string; label: string; kind: string; machineId: string; addedAt: number; fingerprint: string; self: boolean }
+  type Row = { pub: string; label: string; kind: string; machineId: string; addedAt: number; fingerprint: string; self: boolean; seq?: number; firstSeen?: number }
   const listing = async (): Promise<{ members: Row[]; frozen: { reason: string } | null; frozenPeers: string[]; lastSeen?: Record<string, number> }> => {
     const { status, json: out } = await call('GET', '/api/devices')
     if (status !== 200) { console.error('\n  ✗ The device list is not available (is this machine signed in?).\n'); process.exit(1) }
@@ -8197,25 +8227,61 @@ async function devicesCommand(sub: string | undefined, arg: string | undefined, 
     if (json) { console.log(JSON.stringify(out)); process.exit(0) }
     if (out.frozen) console.log(`\n  ⚠ FROZEN (${out.frozen.reason}): the backend served a device list that does not match what this machine verified. No device is added until you review it: harness devices rebaseline`)
     if (out.frozenPeers.length) console.log(`\n  ⚠ Frozen on: ${out.frozenPeers.join(', ')}`)
-    console.log('\n  Devices on this account — each one trusts every other:\n')
-    out.members.forEach((m, i) => {
-      const what = m.kind === 'machine' ? `machine ${m.machineId.slice(0, 8)}` : 'app'
-      const seen = out.lastSeen?.[m.pub]
-      console.log(`   ${String(i + 1).padStart(2)}. ${m.label || '(no name)'}  ${what}  ${m.fingerprint}  added ${new Date(m.addedAt).toLocaleString()}`
-        + `${seen ? `  last seen ${new Date(seen).toLocaleDateString()}` : ''}${m.self ? '  (this machine)' : ''}`)
-    })
-    console.log('\n  Not yours? harness devices remove <#|fingerprint>\n')
+    // This machine's own code is shown even before the log holds it, from the key on disk (read-only).
+    const pub = peekIdentityPub()
+    const selfFp = pub ? thisDeviceFingerprint(false) : null
+    for (const line of formatDeviceList(out, Date.now(), selfFp ? { label: thisDeviceLabel(), fp: selfFp } : undefined)) console.log(line)
+    process.exit(0)
+  }
+  // A device by its number in the list (its place in the log, which `list` prints on each row and
+  // which only shifts when a device is removed) or by the start of its fingerprint; `show` and
+  // `remove` resolve it the same way. The number is NOT the display position: that moves with activity.
+  //
+  // An all-digit argument is a list number, never a key-code prefix, unless it has 4 or more digits and
+  // names no device in the list: then it is the start of a key code ("1111·2222" typed as 1111). A short
+  // number out of range is an error rather than a prefix match, because `remove` cannot be undone and
+  // `remove 4` must not take out whichever device's key code happens to start with 4.
+  // Decided on the selector as matched (spaces and separators dropped), so " 1" is #1 and not the
+  // key code starting with 1. `key` is what `remove` echoes when it is a number.
+  const resolve = (arg: string, members: Row[]): { row: Row; byNumber: boolean; key: string } => {
+    const norm = (v: string): string => v.toUpperCase().replace(/[·\s-]/g, '')
+    const key = norm(arg)
+    // Only spaces and separators: an empty prefix would match every device.
+    if (key === '') { console.error('Usage: harness devices show|remove <#|fingerprint>   (see: harness devices list)'); process.exit(1) }
+    const ordered = logOrder(members)
+    if (/^\d+$/.test(key)) {
+      const byIndex = ordered[Number(key) - 1]
+      if (byIndex) return { row: byIndex, byNumber: true, key }
+      if (key.length < 4) { console.error(`\n  ✗ No device #${key} (see: harness devices list)\n`); process.exit(1) }
+    }
+    const matches = ordered.filter((m) => norm(m.fingerprint).startsWith(key))
+    if (matches.length !== 1) { console.error(`\n  ✗ ${matches.length ? 'More than one device matches' : 'No device matches'} "${arg}".\n`); process.exit(1) }
+    return { row: matches[0], byNumber: false, key }
+  }
+  if (sub === 'show') {
+    if (!arg) { console.error('Usage: harness devices show|remove <#|fingerprint>   (see: harness devices list)'); process.exit(1) }
+    const { members, lastSeen } = await listing()
+    const { row: target } = resolve(arg, members)
+    if (json) { console.log(JSON.stringify({ ...target, lastSeen: lastSeen?.[target.pub] })); process.exit(0) }
+    for (const line of formatDeviceDetail(target, lastSeen?.[target.pub], Date.now())) console.log(line)
     process.exit(0)
   }
   if (sub === 'remove') {
-    if (!arg) { console.error('Usage: harness devices remove <#|fingerprint>   (see: harness devices list)'); process.exit(1) }
+    if (!arg) { console.error('Usage: harness devices show|remove <#|fingerprint>   (see: harness devices list)'); process.exit(1) }
     const { members } = await listing()
-    const norm = (v: string): string => v.toUpperCase().replace(/[·\s-]/g, '')
-    const byIndex = /^\d+$/.test(arg) ? members[Number(arg) - 1] : undefined
-    const matches = byIndex ? [byIndex] : members.filter((m) => norm(m.fingerprint).startsWith(norm(arg)))
-    if (matches.length !== 1) { console.error(`\n  ✗ ${matches.length ? 'More than one device matches' : 'No device matches'} "${arg}".\n`); process.exit(1) }
-    const target = matches[0]
+    const { row: target, byNumber, key } = resolve(arg, members)
     if (target.self) { console.error('\n  ✗ That is this machine. Sign out with: harness logout\n'); process.exit(1) }
+    // A number or a short (under 4) key-code start is echoed and confirmed first (see removeConfirmation);
+    // a longer start of the key code needs no echo.
+    const confirm = removeConfirmation({ byNumber, key }, { yes: flags.includes('--yes'), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) })
+    if (confirm === 'refuse') {
+      console.error(`\n  ✗ Not removing "${arg}" without a terminal to confirm. Use the key code instead: harness devices remove ${target.fingerprint}\n`)
+      process.exit(1)
+    }
+    if (confirm === 'ask') {
+      const answer = await askLine(`\n  Remove "${target.label || '(no name)'}"  ${target.fingerprint}?  It is signed out and its key is spent. [y/N] `)
+      if (!confirmsRemoval(answer)) { console.log('\n  Cancelled — nothing removed.\n'); process.exit(0) }
+    }
     const { status, json: out } = await call('POST', '/api/devices/remove', { pub: target.pub })
     if (status !== 200) { console.error(`\n  ✗ Could not remove ${target.label}: ${String(out.error ?? status)}${out.detail ? ` (${String(out.detail)})` : ''}\n`); process.exit(1) }
     console.log(`\n  ✓ Removed ${target.label}. Every device stops trusting it; it is signed out.\n`)
@@ -8393,6 +8459,20 @@ async function status(): Promise<void> {
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
+    // Read from disk, not the daemon: it answers the same with the daemon stopped.
+    // Signed out, devlog.json is the last account's copy: claiming membership from it would be wrong.
+    // It is left on disk at logout on purpose: clearing it would drop the freeze and the rollback
+    // protection with it. The stale window is after signing in again, possibly to a different account:
+    // devlog.json still holds the previous account's log until the devlog syncer replaces it, so
+    // `status` can say "(in your account)" from it for a while; that window is accepted.
+    // A retired key with none in its place still says something, though: being removed from the
+    // account is itself what signs a machine out (the daemon clears the session as it spends the key).
+    device: deviceStatusValue(
+      thisDeviceFingerprint(false),
+      session
+        ? deviceRegistration(peekIdentityPub(), new DeviceLogStore().read(), identitySpent())
+        : !peekIdentityPub() && identitySpent() ? 'removed' : null,
+    ) ?? undefined,
   })
   process.exit(0)
 }

@@ -121,6 +121,21 @@ describe('DeviceLogSyncer', () => {
     expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: box2.pub, label: 'box2' }))
   })
 
+  it('records when it first applied a new key, ignoring the entry\'s own backdated time, and not for the first read', async () => {
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    expect(t.store.read().firstSeen?.[box2.pub]).toBeUndefined()
+    t.backend.add(phone, 'viewer', '', 'phone', 1) // the adding device claims it happened long ago
+    await t.syncer.refresh()
+    const file = t.store.read()
+    expect(file.firstSeen?.[phone.pub]).toBe(5_000) // this machine's clock (setup `now`)
+    expect(t.syncer.list().members.find((m) => m.pub === phone.pub)).toMatchObject({ firstSeen: 5_000, addedAt: 1 })
+    expect(t.syncer.list().members.find((m) => m.pub === box2.pub)?.firstSeen).toBeUndefined()
+    t.backend.removeBy(phone.pub, me)
+    await t.syncer.refresh()
+    expect(t.store.read().firstSeen?.[phone.pub]).toBeUndefined()
+  })
+
   it('does not announce a device this machine already trusted before the log', async () => {
     t = setup({ known: [box2.pub] })
     await t.syncer.register()
