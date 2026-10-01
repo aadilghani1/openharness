@@ -147,6 +147,9 @@ jobs:
       - name: Real tmux question polling and answer routing
         working-directory: cli
         run: node --import tsx scripts/question-poll-native.ts "$RUNNER_TEMP/question-poll.json"
+      - name: Native fixture process cleanup and ownership isolation
+        working-directory: cli
+        run: node --import tsx scripts/check-native-fixture-git.mjs
       - name: Real tmux byte streaming, paste and resize
         working-directory: cli
         env:
