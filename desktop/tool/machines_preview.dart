@@ -116,6 +116,7 @@ class _App extends AppNotifier {
   Future<Map<String, dynamic>> localModels(
     String machineId, {
     bool refresh = false,
+    bool setup = false,
   }) async => {
     'models': _models,
     'memoryBytes': 32 * 1024 * 1024 * 1024,
