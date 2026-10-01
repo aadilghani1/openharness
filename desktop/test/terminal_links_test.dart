@@ -311,6 +311,37 @@ void main() {
       return terminal;
     }
 
+    for (final (style, indent) in [('4', ''), ('94', '  ')]) {
+      test('joins a standalone painted URL without a label (SGR $style)', () {
+        const head = 'https://example.com/';
+        const tail = 'path/image.png';
+        final terminal = ink([
+          'A wider unrelated tool heading precedes the URL',
+          '$indent\x1b[${style}m$head\x1b[0m',
+          '$indent\x1b[${style}m$tail\x1b[0m',
+          'The next sentence is ordinary output.',
+        ], width: 60);
+        const target = '$head$tail';
+        for (final row in [1, 2]) {
+          final cell = CellOffset(indent.length + 3, row);
+          expect(terminalLinkAt(terminal, cell), target);
+          expect(terminalLinkSpans(terminal, cell, target), [
+            (
+              row: 1,
+              start: indent.length,
+              end: indent.length + head.length - 1,
+            ),
+            (
+              row: 2,
+              start: indent.length,
+              end: indent.length + tail.length - 1,
+            ),
+          ]);
+        }
+        expect(terminalLinkAt(terminal, const CellOffset(3, 3)), isNull);
+      });
+    }
+
     test('spans every row of a cut URL for the hover underline', () {
       final terminal = ink([
         '  Command Code here: https://commandc',
