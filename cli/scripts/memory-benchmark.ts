@@ -12,10 +12,11 @@ import type { RecallPacket, RecallRequest } from '../src/memory/types.js'
 
 const receiptMode = process.argv.includes('--receipts')
 const notebookMode = process.argv.includes('--notebooks')
-if (receiptMode && notebookMode) throw new Error('Choose one benchmark mode')
+const feedbackMode = process.argv.includes('--feedback')
+if ([receiptMode, notebookMode, feedbackMode].filter(Boolean).length > 1) throw new Error('Choose one benchmark mode')
 const directory = await mkdtemp(join(tmpdir(), 'harness-memory-benchmark-'))
 const binding = { engine: 'codex' as const, sessionId: 'synthetic_session', projectId: 'project_1', route: 'prompt_hook' as const }
-const access = { profileId: 'benchmark', projectIds: ['project_1'], includeProfile: receiptMode }
+const access = { profileId: 'benchmark', projectIds: ['project_1'], includeProfile: receiptMode || feedbackMode }
 const query = { query: 'fixture_5321', conditions: { taskType: 'debugging' } }
 let client: MemoryClient | undefined
 async function recall(request: RecallRequest): Promise<RecallPacket> {
@@ -51,6 +52,17 @@ try {
       const first = store.prepareRecall(query, binding, access).receipt!
       for (let i = 0; i < 5_000; i++) store.prepareRecall(query, binding, access)
       if (store.recallEmitted(first.id, binding, access)) throw new Error('receipt_cap_not_applied')
+    }
+    if (feedbackMode) {
+      for (let index = 0; index < 5_000; index++) {
+        const received = store.prepareRecall(query, { ...binding, sessionId: `rated_${index}` }, access)
+        const record = received.packet.items.find(item => item.claim.includes('fixture_5321'))
+        if (!received.receipt || !record) throw new Error('feedback_recall_missing')
+        const command = { kind: 'feedback' as const, id: record.id, revision: record.revision,
+          receiptId: received.receipt.id, value: index % 3 ? 'helpful' as const : 'unhelpful' as const, expected: 0 }
+        const preview = store.libraryPreview('benchmark', command)
+        store.libraryApply('benchmark', command, preview.version, false)
+      }
     }
   } finally { store.close() }
   const seedMs = performance.now() - seededAt
@@ -141,8 +153,8 @@ try {
     values.sort((a, b) => a - b)
     return { p50Ms: values[Math.ceil(values.length * .5) - 1], p95Ms: values[Math.ceil(values.length * .95) - 1], maxMs: values.at(-1) }
   }
-  console.log(JSON.stringify({ kind: 'synthetic-memory-performance', mode: receiptMode ? 'prepare-with-full-receipt-history' : 'recall',
-    retainedReceipts: receiptMode ? 5_000 : 0, records: count, projects: 10, node: process.version,
+  console.log(JSON.stringify({ kind: 'synthetic-memory-performance', mode: feedbackMode ? 'recall-with-contextual-feedback' : receiptMode ? 'prepare-with-full-receipt-history' : 'recall',
+    retainedReceipts: receiptMode || feedbackMode ? 5_000 : 0, ratedContexts: feedbackMode ? 5_000 : 0, records: count, projects: 10, node: process.version,
     platform: platform(), arch: arch(), seedMs, cold: summary(cold), warm: summary(warm), requests: cold.length + warm.length,
     timeouts, largestPacketBytes: largestPacket, parentEventLoopP95Ms: lag.percentile(95) / 1e6,
     limitations: ['Synthetic lexical matches, not a retrieval-quality benchmark.', 'Cold means a new worker, not an emptied OS disk cache.',

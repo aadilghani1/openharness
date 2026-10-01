@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { digest } from './admission.js'
 import type { Database } from './database.js'
 import { visibleEvidenceSql } from './visibility.js'
-import { MemoryError, parse, type MemoryAccess, type MemoryRecord, type RecallPacket, type RecallRequest } from './types.js'
+import { MemoryError, parse, type Conditions, type MemoryAccess, type MemoryRecord, type RecallPacket, type RecallRequest } from './types.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 const bindingSchema = z.object({ engine: z.enum(['claude', 'codex']), sessionId: id, projectId: id.nullable(),
@@ -32,6 +32,7 @@ export interface MemoryRecallUse {
   receiptId: string; revision: number; engine: MemoryDeliveryBinding['engine']; projectId: string | null
   route: MemoryDeliveryBinding['route']; preparedAt: number; emittedAt: number | null; delivery: 'unverified'
   feedback: RecallFeedback
+  canGuideRecall: boolean
 }
 interface Deps {
   db: Database; profileId: string; now(): number
@@ -60,6 +61,10 @@ export const RECEIPT_SCHEMA = `
     context_key TEXT NOT NULL, session_key TEXT NOT NULL, engine TEXT NOT NULL, project_id TEXT
   );
   CREATE INDEX IF NOT EXISTS memory_receipt_session ON memory_receipt_context(session_key);
+  CREATE TABLE IF NOT EXISTS memory_receipt_relevance (
+    receipt_id TEXT PRIMARY KEY REFERENCES memory_receipt_context(receipt_id) ON DELETE CASCADE,
+    relevance_key TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS memory_recall_feedback (
     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
     context_key TEXT NOT NULL, receipt_id TEXT NOT NULL REFERENCES memory_receipt_context(receipt_id) ON DELETE CASCADE,
@@ -108,6 +113,10 @@ export class MemoryReceipts {
         digest([this.deps.profileId, binding.engine, binding.sessionId, binding.projectId,
           access.taskId ?? null, access.branchId ?? null, request.conditions ?? {}]),
         this.sessionKey(binding.engine, binding.sessionId), binding.engine, binding.projectId)
+      // Compatibility across frameworks must not guess scope or conditions from legacy hashes.
+      // This key excludes engine/session/route but keeps the exact receiving project and context.
+      const relevance = this.relevanceKey(access, request.conditions ?? {})
+      if (relevance) this.deps.db.prepare('INSERT INTO memory_receipt_relevance VALUES(?,?)').run(receiptId, relevance)
       this.prune()
       return { packet, receipt: { id: receiptId, route: binding.route, preparedAt, emittedAt: null, delivery: 'unverified',
         queryDigest, contextDigest, packetDigest, bytes, estimatedTokens: packet.estimatedTokens,
@@ -159,7 +168,10 @@ export class MemoryReceipts {
       WHERE i.memory_id=? AND i.revision=? AND r.prepared_at>?
         AND c.session_key NOT IN (SELECT value FROM json_each(?))
         AND (c.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.included=1)))
-      SELECT r.*,f.value,f.version,f.updated_at FROM recent r LEFT JOIN memory_recall_feedback f
+      SELECT r.*,f.value,f.version,f.updated_at,
+        EXISTS (SELECT 1 FROM memory_receipt_relevance eligibility WHERE eligibility.receipt_id=
+          CASE WHEN f.value IS NULL THEN r.id ELSE f.receipt_id END) AS can_guide_recall
+      FROM recent r LEFT JOIN memory_recall_feedback f
         ON f.memory_id=? AND f.revision=? AND f.context_key=r.context_key
         AND EXISTS (SELECT 1 FROM memory_receipts rated WHERE rated.id=f.receipt_id AND rated.prepared_at>?)
       WHERE r.position=1 ORDER BY r.prepared_at DESC,r.id DESC LIMIT 10`)
@@ -168,7 +180,7 @@ export class MemoryReceipts {
         receiptId: String(row.id), revision, engine: row.engine as MemoryDeliveryBinding['engine'],
         projectId: row.project_id === null ? null : String(row.project_id), route: row.route as MemoryDeliveryBinding['route'],
         preparedAt: Number(row.prepared_at), emittedAt: row.emitted_at === null ? null : Number(row.emitted_at),
-        delivery: 'unverified', feedback: feedbackFrom(row),
+        delivery: 'unverified', feedback: feedbackFrom(row), canGuideRecall: row.can_guide_recall === 1,
       })))
   }
 
@@ -195,9 +207,40 @@ export class MemoryReceipts {
     return next
   }
 
+  /** A bounded owner-reported utility adjustment, never evidence or an eligibility override.
+   * Call only for already eligible lexical candidates. No rating is inferred from repeat recall.
+   * One stored rating per receiving context survives; source revisions and receiver privacy remain
+   * separate gates. Missing legacy context and ambiguous multi-project requests stay neutral.
+   */
+  usefulness(records: Array<Pick<MemoryRecord, 'id' | 'revision'>>, access: MemoryAccess, conditions: Conditions): Map<string, number> {
+    const relevance = this.relevanceKey(access, conditions)
+    if (!records.length || !relevance) return new Map()
+    return this.deps.transaction(() => {
+      const rows = this.deps.db.prepare(`SELECT f.memory_id,
+        SUM(CASE WHEN f.value='helpful' THEN 1 ELSE -1 END) AS utility, COUNT(*) AS ratings
+        FROM json_each(?) candidate CROSS JOIN memory_recall_feedback f
+          ON f.memory_id=json_extract(candidate.value,'$.id') AND f.revision=json_extract(candidate.value,'$.revision')
+        JOIN memory_receipt_context c ON c.receipt_id=f.receipt_id
+        JOIN memory_receipt_relevance eligibility ON eligibility.receipt_id=f.receipt_id AND eligibility.relevance_key=?
+        JOIN memory_receipts r ON r.id=f.receipt_id
+        WHERE f.value IS NOT NULL AND r.prepared_at>? AND r.prepared_at<=?
+          AND c.session_key NOT IN (SELECT value FROM json_each(?))
+          AND (c.project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.included=1))
+        GROUP BY f.memory_id`).all(JSON.stringify(records), relevance,
+          this.deps.now() - RETENTION_MS, this.deps.now(), this.privateSessionKeys())
+      // Shrink sparse ratings toward neutral and cap their influence below 12.5% of lexical score.
+      // This is a provisional ranking policy to evaluate, not a learned probability of correctness.
+      return new Map(rows.map(row => [String(row.memory_id), .125 * Number(row.utility) / (Number(row.ratings) + 4)]))
+    })
+  }
+
   /** Keep opaque withdrawal receipts, but remove receiver activity and its feedback permanently. */
   withholdSession(engine: string, sessionId: string): void {
     this.deps.db.prepare('DELETE FROM memory_receipt_context WHERE session_key=?').run(this.sessionKey(engine, sessionId))
+  }
+
+  withholdProject(projectId: string): void {
+    this.deps.db.prepare('DELETE FROM memory_receipt_context WHERE project_id=?').run(projectId)
   }
 
   prune(): void {
@@ -221,6 +264,11 @@ export class MemoryReceipts {
   }
 
   private key(binding: MemoryDeliveryBinding): string { return digest([this.deps.profileId, binding]) }
+  private relevanceKey(access: MemoryAccess, conditions: Conditions): string | null {
+    if (access.profileId !== this.deps.profileId || access.projectIds.length > 1) return null
+    return digest(['recall-usefulness-v1', this.deps.profileId, access.projectIds[0] ?? null,
+      access.taskId ?? null, access.branchId ?? null, conditions])
+  }
   private sessionKey(engine: string, sessionId: string): string { return digest([this.deps.profileId, engine, sessionId]) }
   private privateSessionKeys(): string {
     // Read the original policy, including changes made by an earlier daemon version that does

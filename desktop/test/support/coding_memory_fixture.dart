@@ -15,6 +15,7 @@ Map<String, dynamic> syntheticRecall({
   'preparedAt': 1790762400000,
   'emittedAt': 1790762401000,
   'canFeedback': true,
+  'canGuideRecall': true,
   'project': {
     'id': 'synthetic-project',
     'name': 'editor',

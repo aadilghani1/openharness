@@ -72,6 +72,8 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
       Text(
         widget.recalls.isEmpty
             ? 'No recent recall history is available for this version.'
+            : widget.recalls.any((recall) => recall['canGuideRecall'] == true)
+            ? 'Was this useful in that session? Feedback helps choose memories for matching work. Correct the memory separately if the fact is wrong.'
             : 'Was this useful in that session? Your feedback stays with this version. Correct the memory separately if the fact is wrong.',
         style: AppType.caption(color: AppPalette.textSecondary, height: 1.5),
       ),
@@ -155,6 +157,22 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
               height: 1.5,
             ),
           ),
+          if (recall['canGuideRecall'] == true)
+            Text(
+              'Guides recall for this version in the same project and matching conditions. Clear feedback to remove its effect.',
+              style: AppType.caption(
+                color: AppPalette.textSecondary,
+                height: 1.5,
+              ),
+            )
+          else if (recall['canGuideRecall'] == false && value != null)
+            Text(
+              'Saved in history. This earlier rating does not affect future recall.',
+              style: AppType.caption(
+                color: AppPalette.textSecondary,
+                height: 1.5,
+              ),
+            ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,

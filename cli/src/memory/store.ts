@@ -262,7 +262,11 @@ export class CodingMemoryStore {
   setProjectIncluded(projectId: string, included: boolean): void {
     if (typeof included !== 'boolean' || !this.db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new MemoryError('unknown_project')
     this.transaction(() => {
-      if (this.included(projectId) === included) return
+      const previous = this.included(projectId)
+      // An older writer may have changed privacy without removing receiver activity.
+      // Reinclusion must not revive ratings from the excluded period.
+      if (!previous || !included) this.receipts.withholdProject(projectId)
+      if (previous === included) return
       this.db.prepare('UPDATE projects SET included = ? WHERE id = ?').run(included ? 1 : 0, projectId)
       this.db.prepare(`INSERT INTO memory_project_policy(project_id,epoch,live_from) VALUES(?,1,?)
         ON CONFLICT(project_id) DO UPDATE SET epoch=epoch+1,live_from=excluded.live_from`).run(projectId, this.now())
@@ -298,6 +302,7 @@ export class CodingMemoryStore {
     if (typeof included !== 'boolean') throw new MemoryError('invalid_input')
     this.transaction(() => {
       const previous = this.sessionPolicy(engine, sessionId)
+      if (!previous.included || !included) this.receipts.withholdSession(engine, sessionId)
       if (previous.included === included) return
       this.db.prepare(`INSERT INTO memory_session_policy(engine,session_id,included,epoch,live_from) VALUES(?,?,?,?,?)
         ON CONFLICT(engine,session_id) DO UPDATE SET included=excluded.included, epoch=excluded.epoch, live_from=excluded.live_from`)
@@ -308,7 +313,6 @@ export class CodingMemoryStore {
         last_error='session_privacy_changed', updated_at=? WHERE stream_id IN
         (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ${TERMINAL_JOB_STATES}`)
         .run(this.now(), engine, sessionId)
-      if (!included) this.receipts.withholdSession(engine, sessionId)
       // Derived input can belong to a different stream while retaining this session's source roots.
       if (!included) this.cancelHiddenSources()
       else this.reconcileVisibleConflicts()
@@ -741,7 +745,7 @@ export class CodingMemoryStore {
     // Drive the join from FTS once. A scope-index-first plan reruns MATCH for every project row
     // (measured at ~160 ms for 10k rows); the fixed join order still filters access before LIMIT.
     const rows = this.db.prepare(`WITH context(actual) AS (VALUES (?))
-      SELECT m.data FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
+      SELECT m.id,m.revision,m.data,bm25(memory_fts, 4, 1, 3) AS lexical_rank FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
       WHERE memory_fts MATCH ? AND m.state = 'active' AND ${filter.sql}
       AND ${visibleEvidenceSql()}
       AND ${applicabilitySql("json_extract(m.data, '$.applicability')")}
@@ -765,6 +769,11 @@ export class CodingMemoryStore {
       ${excluded.length ? `AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''}
       ORDER BY bm25(memory_fts, 4, 1, 3), m.rowid DESC LIMIT 120`)
       .all(JSON.stringify(actual), terms.map(term => `"${term}"`).join(' OR '), ...filter.params, now, now, ...specific.params, now, now, ...excluded)
+    const utility = this.receipts.usefulness(rows.map(row => ({ id: String(row.id), revision: Number(row.revision) })), access, actual)
+    if (utility.size) {
+      const score = (row: Record<string, unknown>) => Number(row.lexical_rank) * (1 + (utility.get(String(row.id)) ?? 0))
+      rows.sort((left, right) => score(left) - score(right))
+    }
     const packet = EMPTY()
     const maxBytes = bounded(request.maxBytes, 3_000, 0, 16_000)
     const maxItems = bounded(request.maxItems, 6, 0, 6)

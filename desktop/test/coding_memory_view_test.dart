@@ -316,6 +316,7 @@ void main() {
       await mount(tester);
       await tap(tester, 'Read memory');
       expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+      expect(find.textContaining('matching conditions'), findsOneWidget);
       expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
       final revision = transport.record['revision'];
       final evidence = transport.record['evidence'];
@@ -350,6 +351,25 @@ void main() {
       expect(library.items, hasLength(1));
     },
   );
+
+  testWidgets('legacy feedback stays visibly separate from recall guidance', (
+    tester,
+  ) async {
+    transport.recalls.add({
+      ...syntheticRecall(value: 'helpful'),
+      'canGuideRecall': false,
+    });
+    await mount(tester);
+    await tap(tester, 'Read memory');
+    expect(
+      find.textContaining('earlier rating does not affect'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('matching conditions'), findsNothing);
+    await tap(tester, 'Clear feedback');
+    expect(find.textContaining('earlier rating does not affect'), findsNothing);
+    expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+  });
 
   testWidgets(
     'pending feedback disables controls and a changed owner prevents apply',
