@@ -58,14 +58,14 @@ class WorkspaceSubscriptionUsage {
       final remaining = row['remainingPercent'];
       final figure = remaining is num && remaining.isFinite
           ? '${(100 - remaining).clamp(0, 100).round()}%'
-          : '--';
+          : '-';
       segments.add((
-        text: '${segments.isEmpty ? '' : '    '}$name ',
+        text: '${segments.isEmpty ? '' : '  '}$name ',
         tone: WorkspaceUsageTone.normal,
       ));
       segments.add((text: figure, tone: WorkspaceUsageTone.normal));
       details.add(
-        '$name${account.isNotEmpty && counts[engine] == 1 ? ' ($account)' : ''}: ${figure == '--' ? status : '$figure used'}',
+        '$name${account.isNotEmpty && counts[engine] == 1 ? ' ($account)' : ''}: ${figure == '-' ? status : '$figure used'}',
       );
       final windows = row['details'];
       if (windows is List) details.addAll(windows.whereType<String>());

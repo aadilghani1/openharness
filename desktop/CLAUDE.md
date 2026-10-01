@@ -275,7 +275,7 @@ all connected owned hosts every three seconds while the hardware popover is open
 while hidden. Readings expire in 45 seconds and clear on disconnect, replacement or hide.
 CPU is normalized host utilization; RAM excludes reclaimable cache where available. GPU is
 the busiest reported device, with individual devices in the popover alongside pressure,
-swap and disk free. Missing telemetry is `--`. Additive `machine_resources` RPC fields allow
+swap and disk free. Missing telemetry is `-`. Additive `machine_resources` RPC fields allow
 mixed old/new CLIs. See `design/workspace-status-bar.md` for the complete scope/format contract.
 
 ### Command dock

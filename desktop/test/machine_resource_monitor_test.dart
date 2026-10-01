@@ -117,7 +117,7 @@ void main() {
       monitor.start();
       await tester.pump();
       expect(monitor.scopeName, 'M2');
-      expect(monitor.label, 'M2    CPU  20%    RAM  50%    GPU  10%');
+      expect(monitor.label, 'M2  CPU 20%  RAM 50%  GPU 10%');
       app.focusedPaneId = 2;
       app.changed();
       await tester.pump();
@@ -319,7 +319,7 @@ void main() {
         expect(find.text('M2'), findsOneWidget);
         expect(
           tester.widget<Tooltip>(find.byType(Tooltip).first).message,
-          contains('GPU  10%'),
+          contains('GPU 10%'),
         );
         final metricText = tester
             .widgetList<Text>(find.byType(Text))

@@ -1821,7 +1821,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'text': _machineResources.label,
         'label': _machineResources.detail,
         'detail': _machineResources.detail,
-        'scopeDisclosure': true,
         'segments': [
           {'text': _machineResources.scopeName},
           {'text': _machineResources.metricsLabel()},

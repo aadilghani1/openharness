@@ -240,7 +240,7 @@ The experimental branch remains unmerged for the user's visual review.
   [status-bar contract](workspace-status-bar.md) uses global harness count,
   scoped host CPU/RAM/GPU and neutral allowance-used percentages, separated by
   whitespace. Deduplicated accounts, limiting windows and Subscriptions actions
-  stay shared with Models. Unknown readings show `--`. The right side retains
+  stay shared with Models. Unknown readings show `-`. The right side retains
   the focused machine/project/branch/PR and their actions.
 - Final suite: **4,702 passed, 16 skipped**. New Harness has **3,948/3,948**
   covered executable lines and the resource picker **1,271/1,271** (both 100%).

@@ -1265,7 +1265,6 @@ private final class SwarmContextButton: SwarmIconButton {
   private var iconWidth: CGFloat { iconAsset == nil ? 0 : textFont.pointSize + cellWidth }
   private var segments: [SwarmStatusSegment] = []
   private var segmented = false
-  private var scopeDisclosure = false
   private var roundedSeparators = false
   private var roundedStart = false
   private var roundedEnd = false
@@ -1279,7 +1278,7 @@ private final class SwarmContextButton: SwarmIconButton {
   private var naturalWidths: [CGFloat] {
     segments.enumerated().map { index, segment in
       workspaceBarTextWidth(segment.text, font: textFont) + (segment.branchSymbol ? cellWidth * 2 : 0)
-        + (index == 0 ? iconWidth + (scopeDisclosure ? cellWidth * 2 : 0) : 0)
+        + (index == 0 ? iconWidth : 0)
     }
   }
   var preferredWidth: CGFloat {
@@ -1292,7 +1291,6 @@ private final class SwarmContextButton: SwarmIconButton {
     let asset = context?["iconAsset"] as? String
     iconAsset = asset.flatMap { SwarmHistoryIcons.pullRequestAssets.contains($0) ? $0 : nil }
     iconColor = statusColor(context?["iconColor"], fallback: foreground)
-    scopeDisclosure = context?["scopeDisclosure"] as? Bool == true
     segmented = context?["segmented"] as? Bool == true
     roundedSeparators = context?["roundedSeparators"] as? Bool == true
     roundedStart = context?["roundedStart"] as? Bool == true
@@ -1426,17 +1424,9 @@ private final class SwarmContextButton: SwarmIconButton {
       if segmented {
         line.append(attributed(text, foreground, alignment: textAlignment))
       } else {
-        for (index, segment) in segments.enumerated() {
+        for segment in segments {
           if segment.branchSymbol { line.append(branchAttachment(segment.foreground)) }
           line.append(attributed(segment.text, segment.foreground, alignment: textAlignment))
-          if scopeDisclosure && index == 0 {
-            line.append(attributed(" ", segment.foreground, alignment: textAlignment))
-            let attachment = NSTextAttachment()
-            attachment.image = HarnessControlSymbols.image("chevron.down")?
-              .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [segment.foreground]))
-            attachment.bounds = NSRect(x: 0, y: 1, width: cellWidth, height: cellWidth)
-            line.append(NSAttributedString(attachment: attachment))
-          }
         }
       }
       let inset = min(contentPadding, bounds.width / 2)

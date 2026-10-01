@@ -100,13 +100,11 @@ class MachineGpu {
   }
 }
 
-String resourcePercent(double? value, {bool padded = false}) {
-  final text = value == null ? '--' : '${value.round()}%';
-  return padded ? text.padLeft(4) : text;
-}
+String resourcePercent(double? value) =>
+    value == null ? '-' : '${value.round()}%';
 
 String resourceBytes(double? value) {
-  if (value == null) return '--';
+  if (value == null) return '-';
   if (value == 0) return '0 GB';
   if (value < 1000000000) return '${(value / 1000000).round()} MB';
   return '${(value / 1000000000).round()} GB';

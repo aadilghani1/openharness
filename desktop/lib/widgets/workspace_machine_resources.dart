@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/workspace_bar_style.dart';
 import '../state/machine_resource_monitor.dart';
 import 'workspace_bar_control.dart';
@@ -30,8 +29,7 @@ class WorkspaceMachineResources extends StatelessWidget {
                     context,
                     monitor.scopeName + candidate,
                   ).width +
-                  cell * 2 +
-                  18 <=
+                  cell * 2 <=
               constraints.maxWidth) {
             metrics = candidate;
             break;
@@ -56,8 +54,6 @@ class WorkspaceMachineResources extends StatelessWidget {
                       style: workspaceBarTextStyle(emphasized: emphasized),
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  const Icon(AppIcons.chevronDown, size: 14),
                   if (metrics.isNotEmpty)
                     Text(
                       metrics,

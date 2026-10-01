@@ -381,14 +381,14 @@ void main() {
           subscription('claude', 'aaaaaa', 0),
           subscription('codex', 'bbbbbb', 50),
         ]).text,
-        'Claude 100%    Codex 50%',
+        'Claude 100%  Codex 50%',
       );
       final all = WorkspaceSubscriptionUsage.fromRows([
         subscription('claude', 'aaaaaa', 0),
         subscription('claude', 'cccccc', .3, status: '<1% remaining'),
         subscription('codex', 'bbbbbb', null, status: 'Usage unavailable'),
       ]);
-      expect(all.text, 'Claude aaaaaa 100%    Claude cccccc 100%    Codex --');
+      expect(all.text, 'Claude aaaaaa 100%  Claude cccccc 100%  Codex -');
       expect(all.detail, contains('Codex (bbbbbb): Usage unavailable'));
       expect(all.segments.map((part) => part.tone), [
         WorkspaceUsageTone.normal,
@@ -475,14 +475,14 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        const label = 'Claude 100%    Codex 87%';
+        const label = 'Claude 100%  Codex 87%';
         if (native) {
           expect(updates.last['subscriptionUsage']['text'], label);
           final parts = updates.last['subscriptionUsage']['segments'] as List;
           expect(parts.map((part) => part['text']), [
             'Claude ',
             '100%',
-            '    Codex ',
+            '  Codex ',
             '87%',
           ]);
           expect(parts[0]['foreground'], parts[2]['foreground']);

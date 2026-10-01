@@ -2509,11 +2509,11 @@ private extension SwarmTabStrip {
   func checkHarnessMonitor() throws {
     var state: [String: Any] = ["enabled": true,
       "harnessMonitor": ["text": "10 harnesses", "segments": [["text": "10 harnesses"]], "label": "Harness Monitor", "detail": "View running harnesses", "interactive": true],
-      "machineResources": ["text": "M2    CPU 20%    RAM 50%    GPU 10%", "label": "M2 machine resources", "detail": "Follows the focused pane", "scopeDisclosure": true, "interactive": true,
-        "segments": [["text": "M2"], ["text": "    CPU 20%    RAM 50%    GPU 10%"]],
-        "compactSegments": [["text": "M2"], ["text": "    CPU 20%    RAM 50%"]],
+      "machineResources": ["text": "M2  CPU 20%  RAM 50%  GPU 10%", "label": "M2 machine resources", "detail": "Follows the focused pane", "interactive": true,
+        "segments": [["text": "M2"], ["text": "  CPU 20%  RAM 50%  GPU 10%"]],
+        "compactSegments": [["text": "M2"], ["text": "  CPU 20%  RAM 50%"]],
         "minimalSegments": [["text": "M2"]]],
-      "subscriptionUsage": ["text": "Claude 100%    Codex 90%", "segments": [["text": "Claude 100%    Codex 90%"]], "interactive": true],
+      "subscriptionUsage": ["text": "Claude 100%  Codex 90%", "segments": [["text": "Claude 100%  Codex 90%"]], "interactive": true],
       "focusedContext": ["text": "M2 > openharness > main", "segments": [["text": "M2 > openharness > main"]], "interactive": true],
       "tabs": [["id": "work", "name": "Work"]], "activeId": "work"]
     var calls: [String] = []

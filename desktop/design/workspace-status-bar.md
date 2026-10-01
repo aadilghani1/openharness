@@ -14,7 +14,7 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-118 harnesses    M2 v    CPU 20%    RAM 50%    GPU 10%    Claude 100%    Codex 90%
+118 harnesses  M2  CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%
                                                      M2 > project > branch > #439
 ```
 
@@ -24,7 +24,10 @@ there are live sessions to inspect.
 
 The left side has three independent scopes: a global count of running harnesses,
 hardware for one named machine, and subscription allowance used per account.
-Separate fields with whitespace, without dots, decimal percentages or `+` suffixes.
+Use one space between each title and value, and two spaces between complete
+parts, including the harness count and machine name. Do not pad numbers to a
+fixed width. No dots, decimal percentages or `+` suffixes. Adjacent controls each
+contribute one space of horizontal padding, matching the two-space group gap.
 Use neutral workspace ink at every usage level. The context on the right still
 follows the focused pane, even when a hardware scope is pinned elsewhere.
 
@@ -33,7 +36,7 @@ Include running sessions on connected owned machines even when none of this
 window's tabs show them. Saved history remains in All and Saved. Its RAM and CPU
 columns can be sorted highest first; tokens reuse existing agent updates.
 
-The machine name and small disclosure arrow group CPU, RAM and GPU. Default to
+The plain, clickable machine name groups CPU, RAM and GPU; it has no arrow. Default to
 the focused pane's machine, falling back to the selected/local connected machine
 when no pane is focused. Clicking opens an anchored popover: one owned machine
 per row, with CPU/RAM/GPU columns. Selecting a row pins that machine for this
@@ -54,8 +57,10 @@ root-disk free space and individual GPUs. Disk capacity is available on demand,
 not a permanent SSD percentage. Pressure comes from the OS, not a threshold
 invented from RAM usage. macOS uses IORegistry GPU counters; Linux/Windows use
 NVIDIA driver telemetry where available. Unsupported/expired/invalid readings
-show `--`, including older daemons' missing fields. Preserve valid zero. An
-offline pinned machine keeps its name with unknown values, never another host's
+show a single `-`, including older daemons' missing fields. Keep the pair
+visible so unavailable data is distinct from 0%; do not hide it when a reading
+temporarily disappears. Preserve valid zero. An offline pinned machine keeps
+its name with unknown values, never another host's
 cached readings. Hardware freshness expires after 45 seconds.
 
 Sample only the selected host every 15 seconds with the popover closed; sample
@@ -227,7 +232,7 @@ The footer shows subscription allowance **used**, alongside scoped hardware.
 Read the same deduplicated account rows as Models: each percentage uses the
 limiting window and expires under the same rules. Compute used = 100 − remaining
 and round to a whole percentage. Different accounts remain distinct. Unknown
-usage shows `--`; exhausted allowance shows `100%`. Names and percentages use
+usage shows `-`; exhausted allowance shows `100%`. Names and percentages use
 the same neutral ink. Hover explains usage, account identity and reset windows;
 click opens Subscriptions. Do not invent account or usage readings.
 

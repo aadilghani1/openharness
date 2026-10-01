@@ -123,7 +123,7 @@ void main() {
       expect(invalid.swapUsedBytes, isNull);
       expect(invalid.diskFreeBytes, isNull);
       expect(resourcePercent(19.8), '20%');
-      expect(resourcePercent(null), '--');
+      expect(resourcePercent(null), '-');
       expect(resourcePercent(0), '0%');
     },
   );

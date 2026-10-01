@@ -191,13 +191,13 @@ class _MachineResourcePanelState extends State<MachineResourcePanel> {
                                     'normal' => 'Normal',
                                     'warning' => 'High',
                                     'critical' => 'Critical',
-                                    _ => '--',
+                                    _ => '-',
                                   },
                                 ),
                                 _detail(
                                   'Memory used',
                                   reading?.memoryUsedBytes == null
-                                      ? '--'
+                                      ? '-'
                                       : '${resourceBytes(reading!.memoryUsedBytes)} / ${resourceBytes(reading.memoryTotalBytes)}',
                                 ),
                                 _detail(

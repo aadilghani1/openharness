@@ -350,11 +350,12 @@ Titles stay quiet when several panes are visible. Do not repeat branches in pane
 headers, or model/effort in the footer. Context honors the selected status face,
 fields, colors and shell/Powerline treatment. Recent-harness context uses its
 monochrome presentation.
-Use whole percentages with whitespace between fields, e.g. `CPU 20% RAM 50%
-GPU 10% Claude 100% Codex 90%`. All labels and numbers use neutral readable ink;
+Use whole percentages, one space between title and value, and two between parts:
+`CPU 20%  RAM 50%  GPU 10%  Claude 100%  Codex 90%`.
+All labels and numbers use neutral readable ink;
 no severity color, dot separators, trailing plus or decimal figures. Subscription
 figures mean allowance used. Preserve Models' deduplicated accounts, limiting
-window and freshness rules. Unknown values show `--`, never fabricated zero.
+window and freshness rules. Unknown values show `-`, never fabricated zero.
 Hover explains scope, account identity and reset windows; click opens the
 corresponding hardware or Subscriptions panel without switching a model.
 At narrow widths hide complete metric groups rather than clipping percentages.

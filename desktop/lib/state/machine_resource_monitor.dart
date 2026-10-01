@@ -60,9 +60,9 @@ class MachineResourceMonitor extends ChangeNotifier {
   String get scopeName => selected?.machine.displayName ?? 'Resources';
   String metricsLabel({bool gpu = true}) {
     final value = reading(selected);
-    return '    CPU ${resourcePercent(value?.cpuPercent, padded: true)}'
-        '    RAM ${resourcePercent(value?.memoryPercent, padded: true)}'
-        '${gpu ? '    GPU ${resourcePercent(value?.busiestGpu?.utilizationPercent, padded: true)}' : ''}';
+    return '  CPU ${resourcePercent(value?.cpuPercent)}'
+        '  RAM ${resourcePercent(value?.memoryPercent)}'
+        '${gpu ? '  GPU ${resourcePercent(value?.busiestGpu?.utilizationPercent)}' : ''}';
   }
 
   String get label {
@@ -76,7 +76,7 @@ class MachineResourceMonitor extends ChangeNotifier {
         'CPU and RAM show this machine’s usage, including other apps.\n'
         '${value?.busiestGpu == null ? 'GPU reading unavailable.' : 'GPU shows the busiest device: ${value!.busiestGpu!.name}.'}\n'
         '${state != null && !available(state) ? 'Machine disconnected. ' : ''}'
-        'Click to compare machines. Unavailable readings show --.';
+        'Click to compare machines. Unavailable readings use a dash.';
   }
 
   void selectMachine(String? id) {
