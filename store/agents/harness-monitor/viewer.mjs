@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { pause, resume } from './lib/actions.mjs'
+import { stop, open } from './lib/actions.mjs'
 import { cleanupReviews } from './lib/cleanup.mjs'
 import { closeBridges } from './lib/bridge.mjs'
 import { collect as collectFleet, summarize, tilde } from './lib/inventory.mjs'
@@ -14,9 +14,9 @@ import { DEFAULT_POLICY, decide, normalizePolicy } from './lib/policy.mjs'
 import { pin, readLog, readState, record, savePolicyValues, writeState, writeVerdict } from './lib/state.mjs'
 
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
-const VERBS = new Set(['pause', 'resume', 'pin', 'unpin'])
+const VERBS = new Set(['stop', 'open', 'pin', 'unpin'])
 
-export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { pause, resume }, cleanup = cleanupReviews() }) {
+export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { stop, open }, cleanup = cleanupReviews() }) {
   const token = randomBytes(24).toString('base64url')
   const clients = new Set()
   const cache = new Map()
@@ -119,7 +119,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
     const explicit = manual === true && targets.length === 1
     const reviewed = new Map((Array.isArray(expected) ? expected : snapshot.rows).filter(row => row && typeof row.id === 'string').map(({ id, sessionId, lastActivity }) => [id, { sessionId, lastActivity }]))
     // Bulk actions are restricted to what is still in the reviewed cleanup plan.
-    if (verb === 'pause' && !explicit) {
+    if (verb === 'stop' && !explicit) {
       await polling
       await poll({ immediate: true, forceRemote: true })
     }
@@ -130,23 +130,23 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
 
     let next = state
     const results = targets.filter(id => !rows.some(row => row.id === id)).map(id => ({ id, name: id, action: verb, ok: false, refused: true, detail: 'This session is no longer in the current view.' }))
-    const eligible = new Set(snapshot.plan.filter(entry => entry.action === 'pause').map(entry => entry.id))
+    const eligible = new Set(snapshot.plan.filter(entry => entry.action === 'stop').map(entry => entry.id))
     for (const row of rows) {
       const review = reviewed.get(row.id)
-      if (verb === 'pause' && (!review || review.sessionId !== row.sessionId || (!explicit && review.lastActivity !== row.lastActivity))) {
+      if (verb === 'stop' && (!review || review.sessionId !== row.sessionId || (!explicit && review.lastActivity !== row.lastActivity))) {
         results.push({ id: row.id, name: row.name, action: verb, ok: false, refused: true, detail: 'This session changed since you reviewed it. Refresh and review it again.' })
         continue
       }
-      if (verb === 'pause' && !explicit && !eligible.has(row.id)) {
+      if (verb === 'stop' && !explicit && !eligible.has(row.id)) {
         results.push({ id: row.id, name: row.name, action: verb, ok: false, refused: true, detail: 'This session is no longer eligible for cleanup. Review the new plan.' })
         continue
       }
       if (verb === 'pin' || verb === 'unpin') {
         next = pin(next, row.id, verb === 'pin')
-        results.push({ ok: true, action: verb, id: row.id, name: row.name, detail: verb === 'pin' ? 'never paused by the policy' : 'the policy may pause it again' })
+        results.push({ ok: true, action: verb, id: row.id, name: row.name, detail: verb === 'pin' ? 'never stopped by the policy' : 'the policy may stop it again' })
         continue
       }
-      const result = verb === 'pause' ? await verbs.pause(row, { policy, force: explicit }) : await verbs.resume(row)
+      const result = verb === 'stop' ? await verbs.stop(row, { policy, force: explicit }) : await verbs.open(row)
       results.push(result)
     }
     if (verb === 'pin' || verb === 'unpin') await writeState(workspace, next)
@@ -159,7 +159,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
   async function savePolicy(raw) {
     // Only the keys the pane can change, and only valid values: the file is a person's, and the pane is a
     // guest in it. Everything else in it — comments included — is left exactly as it was.
-    const allowed = ['pauseAfterIdle', 'hideAfterIdle', 'runningCeiling']
+    const allowed = ['stopAfterIdle', 'hideAfterIdle', 'runningCeiling']
     const values = Object.fromEntries(Object.entries(raw ?? {}).filter(([key]) => allowed.includes(key)))
     const state = await readState(workspace)
     let policy

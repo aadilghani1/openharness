@@ -24,9 +24,10 @@ test('formatters distinguish zero from unknown and handle future timestamps', ()
 })
 
 test('opens with active sessions only and never treats saved history as processes', () => {
-  const history = { id: 'saved', name: 'Old', state: 'paused', activity: 'stopped', live: false }
+  const history = { id: 'saved', name: 'Old', state: 'stopped', activity: 'stopped', live: false }
   assert.deepEqual(visibleRows([...rows, history]).map(r => r.id).sort(), ['m1/a', 'm2/a'])
   assert.equal(visibleRows([...rows, history], { filter: 'all' }).length, 3)
+  assert.deepEqual(visibleRows([...rows, history], { filter: 'stopped' }).map(r => r.id), ['saved'])
   assert.equal(visibleRows(rows, { machine: 'missing' }).length, 0)
 })
 test('shared and nested workspace paths count once on each owning machine', () => {

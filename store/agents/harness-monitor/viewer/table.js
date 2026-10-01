@@ -2,7 +2,7 @@
 export const ACTIVITY = {
   needsInput: ['?', 'Needs you'], failed: ['✗', 'Failed'], working: ['⠋', 'Working'],
   starting: ['◌', 'Starting'], done: ['✓', 'Done'], idle: ['', 'Idle'],
-  stopped: ['Ⅱ', 'Stopped'], offline: ['⊘', 'Offline'], unknown: ['—', 'Unknown'],
+  stopped: ['×', 'Stopped'], offline: ['⊘', 'Offline'], unknown: ['—', 'Unknown'],
 }
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 export const COLUMNS = [
@@ -42,7 +42,7 @@ export const PRESETS = {
 export const isLive = row => row.live ?? (['running', 'terminal'].includes(row.state) || (!row.state && !['stopped', 'offline'].includes(row.activity)))
 export function visibleRows(rows, { query = '', filter = 'active', machine = 'all', sort = 'rssBytes', direction = -1 } = {}) {
   const q = query.trim().toLocaleLowerCase(), rank = Object.keys(ACTIVITY)
-  return rows.filter(row => isLive(row) && (machine === 'all' || row.machineId === machine)
+  return rows.filter(row => (isLive(row) || (filter === 'stopped' && row.activity === 'stopped')) && (machine === 'all' || row.machineId === machine)
     && (filter === 'all' || (filter === 'active' ? row.online !== false && row.activity !== 'offline' : row.activity === filter))
     && (!q || [row.name, row.title, row.engine, row.machine, row.project, row.branch, row.model, row.agentId, row.sessionId, row.home]
       .some(v => String(v ?? '').toLocaleLowerCase().includes(q))))

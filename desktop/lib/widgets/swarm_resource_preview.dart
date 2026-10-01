@@ -462,7 +462,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             SessionFilter.all => 'Show all harnesses',
             SessionFilter.needsInput => 'Show harnesses needing input',
             SessionFilter.running => 'Show running harnesses',
-            SessionFilter.paused => 'Show paused harnesses',
+            SessionFilter.paused => 'Show stopped harnesses',
           },
           () => widget.search.setSessionFilter(filter),
           command: 'picker.filter.${filter.name}',
@@ -565,17 +565,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   void _toggleHarness() {
     final session = _session;
     if (session == null || !session.canControl) return;
+    if (session.agent.isStopped) {
+      _open();
+      return;
+    }
     final search = widget.search;
     search.holdRow(row!);
     unawaited(
       _run(() async {
         try {
-          if (session.agent.isStopped) {
-            return (await app.resumeAgent(
-              session.machineId,
-              session.agent.id,
-            )).error;
-          }
           return await app.pauseAgent(session.machineId, session.agent.id);
         } finally {
           search.releaseRow(session.id);
@@ -773,6 +771,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final selected = row;
     if (selected == null) return const [];
     final busy = _pending.contains(selected.id);
+    if (selected.isAgentChoice) {
+      return [
+        _ResourceAction(
+          search.actionLabel(selected),
+          search.canAccept && !busy ? _open : null,
+          command: 'picker.accept',
+        ),
+      ];
+    }
     if (search.isModelDownloadsRow(selected)) {
       return [
         _ResourceAction(
@@ -961,19 +968,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             ? 'Answer'
             : selected.isProject
             ? 'Harnesses'
-            : session?.agent.isStopped == true
-            ? 'Resume & open'
             : 'Open',
         search.canAccept && !busy && !pendingControl ? _open : null,
         command: 'picker.accept',
       ),
-      if (session != null)
+      if (session != null && !session.agent.isStopped)
         _ResourceAction(
-          busy || pendingControl
-              ? 'Working…'
-              : session.agent.isStopped
-              ? 'Resume'
-              : 'Pause',
+          busy || pendingControl ? 'Working…' : 'Stop',
           !busy && !pendingControl && session.canControl
               ? _toggleHarness
               : null,
@@ -981,7 +982,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           hint:
               session.controlUnavailable ??
               (session.agent.resumesFreshConversation
-                  ? 'Resumes as a new conversation.'
+                  ? 'Opens as a new conversation.'
                   : null),
         ),
     ];
@@ -1113,7 +1114,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               SessionFilter.all => 'All',
               SessionFilter.needsInput => 'Needs input',
               SessionFilter.running => 'Running',
-              SessionFilter.paused => 'Paused',
+              SessionFilter.paused => 'Stopped',
             }}',
             () => search.setSessionFilter(
               SessionFilter.values[(search.sessionFilter.index + 1) %
@@ -1858,6 +1859,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                       )
                     : widget.search.showsTypeHints
                     ? _typeHints()
+                    : row?.isAgentChoice == true
+                    ? _details([
+                        row!.title,
+                        row!.detail,
+                        if (widget.search.canAccept && !row!.current) ...[
+                          '',
+                          'Saves the current conversation, then starts a new one in the same folder. Your panes stay in place.',
+                        ],
+                      ])
                     : row?.isCreate == true
                     ? _details([
                         ...widget.search.createDescription.split('\n'),

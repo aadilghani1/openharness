@@ -1,3 +1,5 @@
+import '../core/permission_modes.dart';
+
 import 'dart:async';
 import 'dart:io' show Directory, Platform, exit, pid;
 import 'dart:math' show Random;
@@ -213,6 +215,18 @@ class AgentForkAttempt {
 
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
+class _AgentChange {
+  _AgentChange(this.source, this.engine, this.revision);
+  final Agent source;
+  final String engine;
+  final int revision;
+  final creation = AgentCreationAttempt(background: true);
+  Future<String?>? pending;
+  bool preservingViews = false;
+  String? companionTarget;
+  bool launchFailed = false;
+}
+
 class AgentCreationAttempt {
   AgentCreationAttempt({this.background = false});
   String _id = _newCreationId();
@@ -1445,6 +1459,12 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> showCompanionTerminal(String? machineId, String? agentId) async {
+    if (_agentChanges.values.any(
+      (change) =>
+          change.source.dsh == 'autonomous/pair' && change.preservingViews,
+    )) {
+      return;
+    }
     final tab = swarms.where((s) => s.isCompanions).firstOrNull;
     final viewer = tab?.panes.where((p) => p.isCompanion).firstOrNull;
     if (tab == null || viewer == null) return;
@@ -2395,6 +2415,7 @@ class AppNotifier extends ChangeNotifier {
   void _loginWaitingChanged() {
     if (!_disposed) notifyListeners();
   }
+
   bool openingLoginBrowser = false;
   String? loginBrowserError;
   int _loginBrowserRevision = 0;
@@ -4468,6 +4489,7 @@ class AppNotifier extends ChangeNotifier {
   /// In particular, multiple emptied tabs must not prevent the next restore.
   void _clearAccountWorkspace() {
     experimentalFeatures.bind(null);
+    _agentChanges.clear();
     ++_layoutRevision;
     // Sign-out sends the desk nothing: the tabs closing here are this window
     // leaving the account, not the person closing them.
@@ -4849,7 +4871,13 @@ class AppNotifier extends ChangeNotifier {
   /// Sign in by a QR a signed-in phone approves, then a yes here to the account it names.
   Future<void> loginWithPhone() async {
     final client = cliLogin;
-    if (_disposed || signingIn || signingOut || signOutError != null || client is! PhoneSignInClient) return;
+    if (_disposed ||
+        signingIn ||
+        signingOut ||
+        signOutError != null ||
+        client is! PhoneSignInClient) {
+      return;
+    }
     final wasGuest = isGuest;
     final revision = _invalidateAuthWork();
     previousAccountEmail = currentUser?.email;
@@ -4886,7 +4914,9 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
       signedIn = true;
       await _finishBootstrapSignedIn();
-      if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) return;
+      if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
+        return;
+      }
       _guestDeskRestorePending = false;
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
@@ -6073,7 +6103,8 @@ class AppNotifier extends ChangeNotifier {
     systemNotifications.postNotice(
       id: 'harness-device:${notice.pub}',
       title: 'New device on your account',
-      body: '${notice.sentence} Not yours? Remove it in Settings ▸ Your devices.',
+      body:
+          '${notice.sentence} Not yours? Remove it in Settings ▸ Your devices.',
       devicePub: notice.pub,
     );
     notifyListeners();
@@ -8053,7 +8084,10 @@ class AppNotifier extends ChangeNotifier {
       if (!owned) continue;
       // The explicit Close owns these panes until its disk-safe acknowledgement,
       // so it can preserve recently-closed layout and composer history normally.
-      if (_closingViewAgents.containsKey((machineId, agentId))) continue;
+      if (_closingViewAgents.containsKey((machineId, agentId)) ||
+          _agentChanges[(machineId, agentId)]?.preservingViews == true) {
+        continue;
+      }
       for (final swarm in swarms) {
         if (swarm.panes.contains(pane)) {
           affected.add(swarm);
@@ -8098,6 +8132,9 @@ class AppNotifier extends ChangeNotifier {
   /// belongs to. Nothing is persisted — see [PaneKind.web].
   bool _syncViewerPane(MachineState machine, Agent agent) {
     final machineId = machine.machine.machineId;
+    if (_agentChanges[(machineId, agent.id)]?.preservingViews == true) {
+      return false;
+    }
     final url = agent.viewerUrl;
     final viewerState = url ?? agent.viewerError;
     final dismissed =
@@ -8154,10 +8191,6 @@ class AppNotifier extends ChangeNotifier {
         ownerAgentId: agent.id,
       );
       swarm.panes.insert(insertion, pane);
-      if (agent.dsh == harnessMonitorId) {
-        swarm.zoomedPaneId = pane.id;
-        swarm.focusedPaneId = pane.id;
-      }
       // The same bookkeeping a split does when it grows the grid by one:
       // pins past the insertion slide right, and the shape is re-derived.
       swarm.pinnedSlots.updateAll(
@@ -8165,9 +8198,8 @@ class AppNotifier extends ChangeNotifier {
       );
       swarm.arranged = null;
       swarm.arrangedKey = null;
-      // Alone with its terminal, the viewer takes two thirds of the tab — a
-      // board or a part wants the width, and a third is the least a coding
-      // agent's interface reads well at. Only when nobody has sized this pair
+      // Alone with its terminal, the viewer takes 70% of the tab and the
+      // assistant keeps 30%. Only when nobody has sized this pair
       // by hand: a manual layout is the user's.
       if (swarm.panes.length == 2 && swarm.paneSizes['2:manual'] == null) {
         swarm.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
@@ -8178,8 +8210,8 @@ class AppNotifier extends ChangeNotifier {
     return changed;
   }
 
-  /// The monitor opens as a full-width table; the OpenCode terminal remains its DSH owner.
-  void showHarnessMonitorTable(String machineId, String agentId) {
+  /// Opening a monitor reveals its ordinary DSH pair. Zoom is an explicit pane action.
+  void showHarnessMonitor(String machineId, String agentId) {
     final pane = activeSwarm.panes
         .where(
           (p) =>
@@ -8188,7 +8220,7 @@ class AppNotifier extends ChangeNotifier {
         .firstOrNull;
     if (pane == null) return;
     focusPane(pane.id);
-    zoomedPaneId = pane.id;
+    zoomedPaneId = null;
     _persistLayout();
     notifyListeners();
   }
@@ -10106,7 +10138,7 @@ class AppNotifier extends ChangeNotifier {
     final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
     if (machine == null || agent == null || !agent.canPauseAndResume) {
       return Future.value(
-        'This harness has no supported saved conversation to resume.',
+        'This harness has no supported saved conversation to open.',
       );
     }
     if (agent.isStopped) return Future.value(null);
@@ -10301,7 +10333,7 @@ class AppNotifier extends ChangeNotifier {
     if (pendingAgentPause(machineId, agentId) != null) {
       return Future.value(
         const RestartAgentResult(
-          error: 'The harness is still pausing. Try again in a moment.',
+          error: 'The harness is still stopping. Try again in a moment.',
         ),
       );
     }
@@ -10391,7 +10423,7 @@ class AppNotifier extends ChangeNotifier {
     final resuming = attempt.agent?.isStopped == true;
     final unknown = RestartAgentResult(
       error: resuming
-          ? 'Still waiting for the resume response. Select the harness again to check status.'
+          ? 'Still waiting for the Open response. Select the harness again to check status.'
           : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
     );
     Map<String, dynamic> result;
@@ -10689,6 +10721,217 @@ class AppNotifier extends ChangeNotifier {
       // clone is another tile beside the one it came from.
       placement: HarnessPlacement.currentTab,
     );
+  }
+
+  final _agentChanges = <(String, String), _AgentChange>{};
+
+  bool _keepsSwitchPane(TerminalPane pane) =>
+      _agentChanges[(pane.machineId, pane.agentId ?? pane.ownerAgentId)]
+          ?.preservingViews ==
+      true;
+
+  Future<Map<String, dynamic>> Function(String sourceId, String engine)?
+  changeCompanionAgent;
+  bool Function(String machineId, String agentId)? canChangeCompanionAgent;
+  void Function(String machineId, String agentId)? openAgentPicker;
+
+  List<String> agentSwitchEngines(String machineId, Agent source) {
+    if (source.dsh == 'autonomous/pair') {
+      return const ['opencode', 'codex', 'claude'];
+    }
+    final supported = source.dsh == null
+        ? allEngines.map((engine) => engine.id).toList()
+        : stateOf(machineId)?.dsh[source.dsh!]?.supportedEngines ??
+              [source.engine ?? ''];
+    return [
+      if (supported.contains('opencode')) 'opencode',
+      ...supported.where((id) => id != 'opencode'),
+    ];
+  }
+
+  /// One switch intent owns its creation receipt. All views move together only
+  /// after the new agent is ready and the old conversation can be saved safely.
+  Future<String?> changeAgent(String machineId, String agentId, String engine) {
+    final source = stateOf(machineId)?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    if (source == null) {
+      return Future.value('This harness is no longer available.');
+    }
+    if (source.engine == engine) return Future.value();
+    if (stateOf(machineId)?.machine.isShared != false) {
+      return Future.value('Shared harnesses are view-only.');
+    }
+    if (!agentSwitchEngines(machineId, source).contains(engine)) {
+      return Future.value(
+        'This agent is not supported by the installed harness.',
+      );
+    }
+    final key = (machineId, agentId);
+    if (source.dsh == 'autonomous/pair' &&
+        _agentChanges[key] == null &&
+        (changeCompanionAgent == null ||
+            canChangeCompanionAgent?.call(machineId, agentId) != true)) {
+      return Future.value(
+        'Open this collection in Companions before changing its agent.',
+      );
+    }
+    var operation = _agentChanges[key];
+    if (operation?.pending case final pending?) {
+      return operation!.engine == engine
+          ? pending
+          : Future.value('The agent is already switching.');
+    }
+    if (operation != null &&
+        ((!operation.preservingViews) ||
+            operation.launchFailed ||
+            (operation.creation._finished &&
+                operation.creation.agentId == null))) {
+      _agentChanges.remove(key);
+      operation = null;
+    }
+    if (operation != null && operation.engine != engine) {
+      return Future.value(
+        'Check the pending switch to ${operation.engine} before choosing another agent.',
+      );
+    }
+    final change = operation ??= _AgentChange(source, engine, _authRevision);
+    _agentChanges[key] = change;
+    return change.pending = _changeAgent(
+      machineId,
+      change,
+    ).whenComplete(() => change.pending = null);
+  }
+
+  Future<String?> _changeAgent(String machineId, _AgentChange change) async {
+    final machine = stateOf(machineId);
+    final source = change.source;
+    if (machine == null || !_machineWorkCurrent(machine, change.revision)) {
+      return 'This switch is no longer active.';
+    }
+    final current = machine.agents.where((a) => a.id == source.id).firstOrNull;
+    if (current == null ||
+        current.createdAt != source.createdAt ||
+        current.sessionId != source.sessionId) {
+      return 'The conversation changed. Reopen Change agent.';
+    }
+    final folder = source.project?.cwd ?? machine.projectOf(source)?.cwd;
+    if (folder == null) {
+      return 'This harness has no project folder to open with another agent.';
+    }
+    final close = prepareSessionClose(machineId, source);
+    change.preservingViews = true;
+    if (!current.isStopped) {
+      final saved = await close('now');
+      if (saved['closed'] != true) {
+        change.preservingViews = false;
+        return saved['detail'] as String? ??
+            'Could not save and stop this conversation. Its agent has not been changed.';
+      }
+    }
+    if (!_machineWorkCurrent(machine, change.revision)) {
+      return 'This switch is no longer active.';
+    }
+    final modes = permissionModesOf(change.engine);
+    final mode = modes.any((mode) => mode.id == source.permissionMode)
+        ? source.permissionMode
+        : 'ask';
+    String? nextId;
+    if (source.dsh == 'autonomous/pair') {
+      if (change.companionTarget == null) {
+        final result = await changeCompanionAgent?.call(
+          source.id,
+          change.engine,
+        );
+        if (result?['ok'] != true) {
+          return result?['detail'] as String? ??
+              'Could not change the companion agent.';
+        }
+        if (!_machineWorkCurrent(machine, change.revision)) {
+          return 'This switch is no longer active.';
+        }
+        change.companionTarget = result!['agentId'] as String?;
+      }
+      nextId = change.companionTarget;
+      await reloadMachineData(machineId);
+    } else {
+      final error = await createAgent(
+        machineId,
+        engine: change.engine,
+        folder: folder,
+        dsh: source.dsh,
+        name: source.displayName,
+        permissionMode: mode,
+        bypassPermission: mode == 'auto' || mode == 'full',
+        attempt: change.creation,
+      );
+      if (error != null) return error;
+      nextId = change.creation.agentId;
+    }
+    if (nextId == null) {
+      return 'The new agent has not confirmed its start yet. Choose it again to check.';
+    }
+    Agent? next() => machine.agents.where((a) => a.id == nextId).firstOrNull;
+    for (var i = 0; i < 60 && next()?.launchState == 'starting'; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
+    }
+    final target = next();
+    if (target == null ||
+        target.launchState != 'ready' ||
+        !target.terminalAvailable) {
+      change.launchFailed = target?.launchState == 'failed';
+      return target?.launchDetail ??
+          'The new agent is still starting. Choose it again to check.';
+    }
+    final terminals = allPanes
+        .where((p) => p.machineId == machineId && p.agentId == source.id)
+        .toList();
+    final viewers = allPanes
+        .where((p) => p.machineId == machineId && p.ownerAgentId == source.id)
+        .toList();
+    if (terminals.isEmpty) {
+      return 'The original pane was closed. Open the new agent from Harness Monitor.';
+    }
+    // The old process has stopped and its panes were retained through the
+    // acknowledgement. Replace their references without changing geometry.
+    for (final pane in terminals) {
+      await _detachSession(pane, sendClose: true);
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
+      if (allPanes.contains(pane) && pane.agentId == source.id) {
+        pane.agentId = nextId;
+      }
+    }
+    for (final pane in viewers) {
+      if (allPanes.contains(pane)) pane.ownerAgentId = nextId;
+    }
+    _agentChanges.remove((machineId, source.id));
+    _syncViewerPane(machine, target);
+    // Publish the replacement before yielding: a peer may already have
+    // pruned the stopped source from the shared desk.
+    _persistLayout();
+    notifyListeners();
+    await agentPreference.selectLaunch(change.engine, harnessId: source.dsh);
+    if (!_machineWorkCurrent(machine, change.revision)) {
+      return 'This switch is no longer active.';
+    }
+    for (final pane in terminals) {
+      if (allPanes.contains(pane)) {
+        unawaited(
+          _attachSession(
+            pane,
+            intent: panes.contains(pane) && pane.id == focusedPaneId
+                ? AttachIntent.person
+                : AttachIntent.automatic,
+          ),
+        );
+      }
+    }
+    return null;
   }
 
   /// A fork keeps the originating tab and creation receipt while its prompt is
@@ -12620,7 +12863,35 @@ class AppNotifier extends ChangeNotifier {
   /// Called from [_persistLayout]: whatever just changed, said to the desk as ops.
   void _deskQueueDiff() {
     if (!_desk.enabled) return;
-    final projection = _deskProjection();
+    // A peer can prune the stopped source while its replacement starts.
+    // Keep that pane locally, but never advertise the stopped reference
+    // again. The successful switch publishes the replacement in its slot.
+    final projection = <DeskTab>[];
+    for (final tab in _deskProjection()) {
+      final synced = _desk.synced.where((t) => t.id == tab.id).firstOrNull;
+      final known = {for (final p in synced?.panes ?? <DeskPaneRef>[]) p.key};
+      final panes = tab.panes
+          .where(
+            (p) =>
+                known.contains(p.key) ||
+                _agentChanges[(p.machineId, p.agentId)]?.preservingViews !=
+                    true,
+          )
+          .toList();
+      if (panes.length == tab.panes.length) {
+        projection.add(tab);
+      } else if (synced != null || panes.isNotEmpty) {
+        projection.add(
+          DeskTab(
+            id: tab.id,
+            name: tab.name,
+            nameIsCustom: tab.nameIsCustom,
+            panes: panes,
+            layout: synced?.layout,
+          ),
+        );
+      }
+    }
     final ops = deskDiff(_desk.synced, projection);
     if (ops.isEmpty) return;
     // Optimistic: this window believes its own edit. The desk's answer (or a
@@ -12747,8 +13018,17 @@ class AppNotifier extends ChangeNotifier {
     final kept = <Swarm>[];
     for (final swarm in swarms) {
       if (_deskTracks(swarm) && !targetById.containsKey(swarm.id)) {
-        released.addAll(swarm.panes);
-        continue;
+        if (!swarm.panes.any(_keepsSwitchPane)) {
+          released.addAll(swarm.panes);
+          continue;
+        }
+        // Only the in-flight replacement owns a temporary local slot.
+        // Other panes still follow closures from another window.
+        for (final pane in swarm.panes.toList()) {
+          if (_keepsSwitchPane(pane)) continue;
+          swarm.remove(pane);
+          released.add(pane);
+        }
       }
       kept.add(swarm);
     }
@@ -12775,6 +13055,7 @@ class AppNotifier extends ChangeNotifier {
       for (final pane in swarm.panes.toList()) {
         if (pane.agentId == null) continue;
         if (wanted.contains('${pane.machineId}\u0000${pane.agentId}')) continue;
+        if (_keepsSwitchPane(pane)) continue;
         swarm.remove(pane);
         released.add(pane);
         for (final viewer in swarm.panes.toList()) {
@@ -12864,7 +13145,14 @@ class AppNotifier extends ChangeNotifier {
       // At the join a desk that holds no layout for a tab this window has one
       // for learns this window's (the diff sends it up); it does not wipe it.
       final deskHasOne = tab.layout != null && !tab.layout!.isEmpty;
+      final holdingSlot = swarm.panes.any(
+        (pane) =>
+            pane.agentId != null &&
+            _keepsSwitchPane(pane) &&
+            !wanted.contains('${pane.machineId}\u0000${pane.agentId}'),
+      );
       if (layoutMoved &&
+          !holdingSlot &&
           (deskHasOne || !joining) &&
           _layoutFingerprintOf(tab.layout) !=
               _layoutFingerprintOf(_deskLayoutOf(swarm))) {
@@ -12882,7 +13170,9 @@ class AppNotifier extends ChangeNotifier {
     // Tab order: the desk's, with this window's local-only tabs where they were.
     final localOnly = <(int, Swarm)>[];
     for (var i = 0; i < kept.length; i++) {
-      if (!_deskTracks(kept[i])) localOnly.add((i, kept[i]));
+      if (!_deskTracks(kept[i]) || !targetById.containsKey(kept[i].id)) {
+        localOnly.add((i, kept[i]));
+      }
     }
     final ordered = <Swarm>[
       for (final tab in target) swarms.firstWhere((s) => s.id == tab.id),

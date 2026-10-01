@@ -1,4 +1,5 @@
 import 'package:harness/shared/theme/app_icons.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -197,7 +198,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
             if (!mounted ||
                 current == null ||
                 Uri.tryParse(current)?.origin !=
-                      Uri.tryParse(widget.pane.url ?? '')?.origin) {
+                    Uri.tryParse(widget.pane.url ?? '')?.origin) {
               return;
             }
             final action = jsonDecode(message.message);
@@ -389,14 +390,6 @@ class _WebPanePanelState extends State<WebPanePanel> {
               ),
             ),
             const SizedBox(width: 8),
-            if (_isMonitor && !widget.zoomed)
-              TextButton(
-                onPressed: () => widget.notifier.showHarnessMonitorTable(
-                  widget.pane.machineId,
-                  widget.pane.ownerAgentId!,
-                ),
-                child: const Text('Hide assistant'),
-              ),
             // coverage:ignore-start
             // Only a real webview's navigation sets _loading; none under test.
             if (_loading)

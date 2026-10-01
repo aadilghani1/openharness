@@ -1,4 +1,5 @@
 import '../core/models.dart';
+import '../core/harness_defaults.dart';
 import '../core/project_folder.dart';
 import 'app_state.dart';
 
@@ -91,9 +92,13 @@ class HarnessMonitorController {
             label: 'harness-monitor',
             at: DateTime.now(),
           );
+          await app.agentPreference.load();
+          if (!_current(owner)) return null;
           final error = await app.createAgent(
             machineId,
-            engine: 'opencode',
+            engine:
+                app.agentPreference.engineFor(harnessMonitorId) ??
+                defaultHarnessEngine,
             folder: null,
             projectFolder: _folder,
             dsh: harnessMonitorId,
@@ -133,7 +138,7 @@ class HarnessMonitorController {
       if (!app.viewerPaneShown(machineId, agent.id)) {
         await app.toggleViewerPane(machineId, agent.id);
       }
-      app.showHarnessMonitorTable(machineId, agent.id);
+      app.showHarnessMonitor(machineId, agent.id);
       return null;
     } catch (_) {
       return _current(owner)

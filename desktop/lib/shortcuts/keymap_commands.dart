@@ -704,7 +704,7 @@ final harnessCommands = <HarnessCommand>[
       context: KeymapContext.picker,
     ),
   for (final (name, key, label) in [
-    ('toggle', 'ctrl+s', 'Pause or resume the selected harness or model'),
+    ('toggle', 'ctrl+s', 'Stop the selected harness or start/stop a model'),
     ('more', 'ctrl+period', 'Search actions for the selected resource'),
     ('rename', 'ctrl+shift+r', 'Rename the selected machine'),
     ('settings', 'ctrl+l', 'Open the selected machine’s connection settings'),

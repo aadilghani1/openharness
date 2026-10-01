@@ -4,7 +4,7 @@
  *
  * Everything the agent does, a person can do by hand, with the same words and the same receipts: this
  * file is the only entry point, and the viewer calls the same library underneath. Verbs are the ones a
- * developer already has muscle memory for — `ls`, `pause`, `resume`, `gc`, `log` — and every one of them
+ * developer already has muscle memory for — `ls`, `stop`, `open`, `gc`, `log` — and every one of them
  * takes `--json` so the agent beside it never has to parse a table meant for eyes.
  *
  * Explicit cleanup closes hidden harnesses through the owning daemon and preserves history.
@@ -12,7 +12,7 @@
 
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
-import { pause, resume } from '../lib/actions.mjs'
+import { stop, open } from '../lib/actions.mjs'
 import { closeHidden, previewCleanup } from '../lib/cleanup.mjs'
 import { closeBridges } from '../lib/bridge.mjs'
 import { collect, resolveRef, summarize } from '../lib/inventory.mjs'
@@ -29,23 +29,23 @@ const USAGE = `hps — sessions on this machine, running or stopped
 
   hps                                the list, freshest first (like \`docker ps\`)
   hps top                            the same list, refreshing
-  hps [--all] [--state running|paused|shell|gone] [--project NAME] [--engine NAME]
+  hps [--all] [--state running|stopped|shell|gone] [--project NAME] [--engine NAME]
             [--idle 4h] [--sort idle|mem|name|project] [--limit N] [--watch [SECONDS]]
             [--machines]           include linked machines for reads and actions
   hps show <ref>                     one harness in full, with the last thing on its pane
-  hps pause <ref…>               stop the process and retain history and launch settings
-  hps resume <ref…>                  reopen with the saved engine configuration
-  hps pause --policy                 what the rules would do to the fleet right now, and why
-  hps pause --policy --apply         do it
-  hps pause --idle 8h                one threshold instead of all of them
-  hps resume --paused                everything that is paused, back in one line
+  hps stop <ref…>               stop the process and retain history and launch settings
+  hps open <ref…>                  reopen with the saved engine configuration
+  hps stop --policy                 what the rules would do to the fleet right now, and why
+  hps stop --policy --apply         do it
+  hps stop --idle 8h                one threshold instead of all of them
+  hps open --stopped                everything that is stopped, back in one line
   hps attach <ref>                   hand this terminal to that pane (tmux attach, screen -r)
   hps cleanup [--machines]           preview harnesses outside all open tabs
   hps cleanup [--machines] --apply   close them and keep history; ends unfinished work
 
   <ref> is a row number from the last list, a %pane, an agent-id prefix, or part of a name.
   Add --json to any command. --force gets past a guard; --dry-run shows what would happen.
-  \`park\`/\`wake\` alias pause/resume. \`prune\`, \`gc\` and \`policy\` alias \`pause --policy\`.
+  \`prune\`, \`gc\` and \`policy\` alias \`stop --policy\`.
 
   The rules are a config file: ~/.config/harness/policy.jsonc. Edit it and review Cleanup in the table.
   Nothing here writes it for you — a setter subcommand was only ever a worse text editor. To exempt one
@@ -118,13 +118,9 @@ function pick(refs, rows) {
   return { picked, errors }
 }
 
-// `park`/`wake` stay as aliases: muscle memory is real and an alias costs nothing.
-// `park`/`wake` and `hibernate` stay as aliases: an alias costs nothing, and muscle memory is real.
-// `stop` is deliberately NOT an alias: `harness stop` already means "stop the daemon", and teaching the
-// wrong habit here would collide the day these verbs move into the real CLI.
-const ALIASES = { park: 'pause', wake: 'resume', revive: 'resume', unpause: 'resume', hibernate: 'pause', top: 'ls', ps: 'ls', prune: 'pause', gc: 'pause', policy: 'pause' }
+const ALIASES = { top: 'ls', ps: 'ls', prune: 'stop', gc: 'stop', policy: 'stop' }
 // `observe` is plumbing: the workspace init script calls it to write the first verdict. Not in the help.
-const COMMANDS = new Set(['ls', 'show', 'pause', 'resume', 'attach', 'cleanup', 'observe', 'help', ...Object.keys(ALIASES)])
+const COMMANDS = new Set(['ls', 'show', 'stop', 'open', 'attach', 'cleanup', 'observe', 'help', ...Object.keys(ALIASES)])
 
 async function main() {
   // `hps` on its own is the list — `docker ps`, not `docker ps ls`. A leading flag is a flag, not a verb,
@@ -134,16 +130,16 @@ async function main() {
   let command = ALIASES[typed] ?? typed
   const argv = args
   const { flags, rest } = parseArgs(argv)
-  // `prune`, `gc` and `policy` all arrive as `pause`; what they meant was "the whole plan".
+  // `prune`, `gc` and `policy` all arrive as `stop`; what they meant was "the whole plan".
   if (['prune', 'gc', 'policy'].includes(typed)) {
     flags.policy = true
     if (rest[0] === 'apply') { rest.shift(); flags.apply = true }
   }
   // ANY BULK SELECTION IS A DRY RUN UNTIL `--apply`. A named ref acts at once — you typed the name, so you
   // meant that one — but `--policy` and `--idle` can select forty harnesses from one line. The first
-  // version of this defaulted the other way and paused thirty-five of them on a live machine; reversible
+  // version of this defaulted the other way and stopped thirty-five of them on a live machine; reversible
   // is not the same as asked for.
-  if ((flags.policy || flags.idle || flags['over-ceiling'] || flags.paused) && !flags.apply) flags['dry-run'] = true
+  if ((flags.policy || flags.idle || flags['over-ceiling'] || flags.stopped) && !flags.apply) flags['dry-run'] = true
   if (flags.help || command === 'help' || command === '--help') { out(USAGE); return }
 
   if (command === 'cleanup') {
@@ -211,13 +207,13 @@ async function main() {
     return
   }
 
-  if (['pause', 'resume'].includes(command)) {
+  if (['stop', 'open'].includes(command)) {
     const { rows, policy, plan, summary, problems } = await world({ includeRemote: Boolean(flags.machines) })
     let targets = []
-    // `resume --paused` is the undo button: everything this ever paused, back in one line. A dry run first,
+    // `open --stopped` is the undo button: everything this ever stopped, back in one line. A dry run first,
     // like every other bulk selection.
-    if (command === 'resume' && flags.paused) {
-      targets = rows.filter((row) => row.state === 'paused')
+    if (command === 'open' && flags.stopped) {
+      targets = rows.filter((row) => row.state === 'stopped')
     } else if (flags.policy || flags.idle || flags['over-ceiling']) {
       // The rules select the rows. `--idle` is the same shape with one threshold instead of all of them.
       const chosen = flags.idle
@@ -242,7 +238,7 @@ async function main() {
       if (flags.policy) {
         out(planLines(plan.entries, { tty: TTY }))
         out('')
-        out(`Would ${command} ${plan.totals.pause} — handing back ${gb(plan.totals.frees)} and leaving ${plan.totals.runningAfter} running.`)
+        out(`Would ${command} ${plan.totals.stop} — handing back ${gb(plan.totals.frees)} and leaving ${plan.totals.runningAfter} running.`)
         out(`Nothing has moved. Run \`hps ${command} --policy --apply\` to do it.`)
       } else {
         out(targets.map((row) => `${command} ${row.name} — idle ${humanIdle(row.idleMs)}, ${row.state}${row.rssBytes ? `, ${gb(row.rssBytes)}` : ''}`).join('\n') || 'Nothing matches.')
@@ -253,7 +249,7 @@ async function main() {
     const options = { policy, force: Boolean(flags.force) }
     const results = []
     for (const row of targets) {
-      const result = command === 'pause' ? await pause(row, options) : await resume(row)
+      const result = command === 'stop' ? await stop(row, options) : await open(row)
       results.push(result)
     }
     await commit(results.map((result) => ({ ...result, by: flags.by ?? 'cli' })))

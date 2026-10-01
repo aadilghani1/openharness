@@ -1,6 +1,6 @@
 ---
 name: fleet-operations
-description: Inspect Harness sessions, explain activity and resource readings, preview cleanup, and stop or resume explicitly selected sessions through their owning daemons.
+description: Inspect Harness sessions, explain activity and resource readings, preview cleanup, and stop or open explicitly selected sessions through their owning daemons.
 ---
 
 # Fleet operations
@@ -15,22 +15,22 @@ are ambiguous. Missing measurements are unknown; an offline machine is not a sto
 ## Actions
 
 - `hps show <ref> --machines --json` reads one session.
-- `hps pause <ref> --machines --json` asks its owning daemon to stop the process and retain history.
-- `hps resume <ref> --machines --json` restores saved launch settings. Check `resumeMode`: conversation,
+- `hps stop <ref> --machines --json` asks its owning daemon to stop the process and retain history.
+- `hps open <ref> --machines --json` restores saved launch settings. Check `resumeMode`: conversation,
   fresh conversation, or shell. Do not promise every engine resumes the same conversation.
-- `hps pause --policy --machines --json` previews cleanup; `--apply` applies the current plan.
+- `hps stop --policy --machines --json` previews cleanup; `--apply` applies the current plan.
 - `hps cleanup --machines --json` previews harnesses outside all open tabs; `--apply` closes them.
   Background tabs and local utility tabs such as Companions stay open.
-- `hps resume --paused --machines --json` previews reopening stopped sessions; `--apply` executes it.
+- `hps open --stopped --machines --json` previews reopening stopped sessions; `--apply` executes it.
 
 For more than two sessions, show the dry run with reasons and obtain approval before applying it, unless those targets are already authorized.
 Recheck the plan after approval; if the targets changed, present the new targets. Named actions must
 still correspond to the person's request. Never use `--force` unless explicitly requested for those
 sessions. The row's × button is an explicit single-session stop and may interrupt work in progress.
 
-The daemon owns process identity, stopping and resume configuration on local and linked machines.
+The daemon owns process identity, stopping and open configuration on local and linked machines.
 Do not signal PIDs, reconstruct engine flags, respawn a tmux pane, or edit the registry. After a timeout,
-read the original resume receipt; do not invent a new operation to compensate. Explain refusals and
+read the original open receipt; do not invent a new operation to compensate. Explain refusals and
 uncertain outcomes. Receipts are recorded in `~/.harness/monitor/log.jsonl`.
 
 ## Close harnesses outside tabs

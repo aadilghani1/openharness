@@ -9,9 +9,8 @@
  * conversation is kept; the next talk resumes it). Never a tile anyone picks (hidden from the catalog),
  * never counted as a person's turn (zooTurns), never a notification, never watched by the sensor.
  *
- * Safe by construction: mode `ask`, pinned in its manifest (`DSH_PERMISSION_MODE`), so every write tool
- * call is a permission prompt in its own pane; the control interface then asks for the per-launch token,
- * the autonomy dial and the floor. The token rotates at every launch (start or resume).
+ * New conversations use the product's automatic approvals. The control interface still checks the
+ * per-launch token, the autonomy dial and the floor. The token rotates at every launch (start or resume).
  *
  * "Files plus a shell; MCP optional": the instructions also teach `harness pair <verb> --json`, which the
  * engine's shell can run with the same token (`HARNESSD_PAIR_TOKEN_FILE`).
@@ -24,18 +23,20 @@ import { MCP_SERVER_NAME } from './mcp.js'
 import { PAIR_TOKEN_FILE_ENV, type PairToken } from './token.js'
 import { rosterDaemon } from './voice.js'
 import type { BundledFiles } from '../dsh/builtins.js'
+import { DEFAULT_HARNESS_ENGINE, DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../lib/harnessDefaults.js'
 
 export const PAIR_HARNESS_ID = 'autonomous/pair'
-export type PairEngine = 'claude' | 'codex'
+export type PairEngine = 'claude' | 'codex' | 'opencode'
 /** Paused after this long with no turn and no talk. */
 export const PAIR_IDLE_MS = 10 * 60_000
 const IDLE_CHECK_MS = 60_000
 
-/** The read tools, pre-approved for Claude so a conversation flows; every write still prompts (mode ask). */
+/** The read tools, pre-approved for Claude; write tools also obey the control interface's policy. */
 const READ_TOOLS = CONTROL_TOOLS.filter((tool) => tool.kind !== 'write').map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`)
 
 /** The engine argv that puts the harnessd MCP server in front of the pair (the gridWebMcp.ts paths). */
 export function pairEngineArgs(engine: PairEngine, mcpCommand: readonly string[], tokenFile: string): string[] {
+  if (engine === 'opencode') return [] // MCP is supplied in its launch configuration.
   const [command, ...prefix] = mcpCommand
   const args = [...prefix, 'pair', 'mcp', '--token-file', tokenFile]
   if (engine === 'claude') {
@@ -158,11 +159,14 @@ export function pairPackage(input: PairPackageInput): BundledFiles {
     engine: input.engine,
     agent: {
       instructions: 'AGENTS.md',
-      env: {
-        // Mode ask, whatever launched it: every write tool call is a permission prompt in its pane.
-        DSH_PERMISSION_MODE: 'ask',
+      env: freshHarnessEnvironment(input.engine, {
+        DSH_PERMISSION_MODE: DEFAULT_HARNESS_PERMISSION,
         [PAIR_TOKEN_FILE_ENV]: input.tokenFile,
-      },
+        ...(input.engine === 'opencode' ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          mcp: { [MCP_SERVER_NAME]: { type: 'local',
+            command: [...input.mcpCommand, 'pair', 'mcp', '--token-file', input.tokenFile], enabled: true } },
+        }) } : {}),
+      }),
       args: pairEngineArgs(input.engine, input.mcpCommand, input.tokenFile),
     },
   }
@@ -180,6 +184,7 @@ export interface PairHarnessRow {
   agentId: string
   status: 'live' | 'stopped'
   engine?: PairEngine
+  cwd?: string | null
   /** False while the engine is still at first-run setup, before any session exists. */
   hasConversation?: boolean
 }
@@ -257,11 +262,10 @@ export class PairHarness {
     if (!current()) return stale
     const previous = this.saved()
     const previousEngine = this.engine()
+    const previousFolder = this.deps.find().find(row => row.agentId === previous?.agentId)?.cwd
     const switching = !!requested.engine && requested.engine !== previousEngine
-    const saved = switching ? this.saved(requested.engine) : previous
+    const saved = switching ? null : previous
     const conversation = this.deps.find().find((row) => row.agentId === saved?.agentId) ?? null
-    if (switching && previous && this.deps.working(previous.agentId)) return { ok: false, error: 'BUSY',
-      detail: 'Finish or stop the current turn before switching agents.' }
     if (this.activeAgentId && this.activeAgentId !== previous?.agentId && this.deps.find().some(row => row.agentId === this.activeAgentId && row.status === 'live')) {
       await this.deps.stop(this.activeAgentId)
       if (!current()) return stale
@@ -270,10 +274,10 @@ export class PairHarness {
     // character, or updating its artwork must never replace the person's conversation.
     if (saved && !conversation) return { ok: false, error: 'CONVERSATION_UNAVAILABLE',
       detail: 'The collection’s saved conversation is unavailable. Its history has been kept.' }
-    const preferred = requested.engine ?? saved?.engine
+    const preferred = requested.engine ?? conversation?.engine ?? saved?.engine ?? DEFAULT_HARNESS_ENGINE
     const engine = switching ? await this.deps.engine(preferred) : conversation?.engine ?? saved?.engine ?? await this.deps.engine(preferred)
     if (!engine || (preferred && engine !== preferred)) return preferred
-      ? { ok: false, error: 'NO_ENGINE', detail: `${preferred === 'codex' ? 'Codex' : 'Claude Code'} is not installed on this computer.` }
+      ? { ok: false, error: 'NO_ENGINE', detail: `${preferred === 'codex' ? 'Codex' : preferred === 'opencode' ? 'OpenCode' : 'Claude Code'} is not installed on this computer.` }
       : { ok: false, error: 'ENGINE_REQUIRED', detail: 'Choose the agent that powers your companion.' }
     if (!current()) return stale
     const identity = this.deps.pairedUid?.()
@@ -318,7 +322,7 @@ export class PairHarness {
     }
     if (!current()) return stale
     this.deps.token.rotate()
-    const workspace = uid ? join(this.deps.workspace, `collection-${uid}`) : this.deps.workspace
+    const workspace = previousFolder ?? (uid ? join(this.deps.workspace, `collection-${uid}`) : this.deps.workspace)
     mkdirSync(workspace, { recursive: true, mode: 0o700 })
     const created = await this.deps.create({ engine, cwd: workspace, prompt: words, name: 'companions' })
     if (!created.ok) return created
@@ -445,7 +449,7 @@ export class PairHarness {
     return typeof row.agentId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.agentId) && typeof row.revision === 'string'
       ? { agentId: row.agentId, revision: row.revision, ...(typeof row.uid === 'string' ? { uid: row.uid } : {}),
         ...(Array.isArray(row.members) ? { members: row.members.filter(uid => typeof uid === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(uid)) } : {}),
-        ...(['claude', 'codex'].includes(row.engine ?? '') ? { engine: row.engine } : {}),
+        ...(['claude', 'codex', 'opencode'].includes(row.engine ?? '') ? { engine: row.engine } : {}),
         ...(typeof row.learningScope === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.learningScope) ? { learningScope: row.learningScope } : {}),
       } : null
   }

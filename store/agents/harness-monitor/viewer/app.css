@@ -109,3 +109,8 @@ p { line-height:1.5; }
 @media (max-width:540px) { header { flex-wrap:wrap; gap:12px; padding:14px 12px; } .search-field { width:100%; margin:0; } nav { padding:0 8px 10px; } .segmented { width:100%; margin:0 0 5px; } .segmented button { flex:1; } #inspect-content { grid-template-columns:1fr; } #summary { padding:12px; } footer { padding:8px 12px; } }
 @media (prefers-contrast: more) { :root { --muted:var(--text); --line:var(--text); } button,select,summary { border-color:var(--line); } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+
+#assistant-info { position:relative; flex:none; }
+#assistant-info .menu { position:absolute; right:0; z-index:5; width:310px; padding:12px; white-space:normal; line-height:1.5; }
+#assistant-info .menu p { margin:0 0 8px; }
+#assistant-info .menu p:last-child { margin-bottom:0; }

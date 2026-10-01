@@ -1,4 +1,5 @@
 import 'package:harness/core/dsh_catalog.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_monitor_controller.dart';
 
 import 'model_manager.dart';
@@ -51,6 +52,17 @@ class MonitorConnection extends ModelManagerConnection {
 
 class MonitorTestApp extends ModelManagerTestApp {
   MonitorTestApp(MonitorConnection super.connection);
+  void Function(String machineId, String agentId)? onReopen;
+
+  @override
+  Future<RestartAgentResult> resumeAgent(
+    String machineId,
+    String agentId,
+  ) async {
+    final result = await super.resumeAgent(machineId, agentId);
+    if (result.error == null) onReopen?.call(machineId, agentId);
+    return result;
+  }
 
   @override
   Future<void> probeDsh(String machineId, {bool force = false}) async {

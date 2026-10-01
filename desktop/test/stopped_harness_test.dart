@@ -52,7 +52,7 @@ void main() {
     expect(SwarmSearchController.action(row()), 'Open Harness');
     final picker = SwarmSearchController(app, const [], adding: true);
     addTearDown(picker.dispose);
-    expect(picker.actionLabel(row()), 'Resume & open');
+    expect(picker.actionLabel(row()), 'Open');
     expect(rankSwarmDestinations(rows, 'saved').single.agentId, 'saved');
     expect(app.allPanes, isEmpty);
     expect(connection.requests, isEmpty);
@@ -459,7 +459,7 @@ void main() {
     await tester.pump();
     // The preview offers the same action for pointer users; Return submits
     // directly from search without first opening a confirmation dialog.
-    expect(find.widgetWithText(TextButton, 'Resume & open'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
     expect(find.byType(AlertDialog), findsNothing);
     expect(connection.types, isEmpty);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

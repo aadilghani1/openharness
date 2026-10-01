@@ -9,7 +9,7 @@ const merge = (extra = {}, options = {}) => mergeRows([agent(extra)], { machine,
 test('machine and agent form the identity, including stopped work', () => {
   const a = merge({ status: 'stopped' }), b = merge({}, { machine: { machineId: 'm2' } })
   assert.equal(a.id, rowId('m1', 'a1')); assert.notEqual(a.id, b.id)
-  assert.equal(a.state, 'paused'); assert.equal(a.activity, 'stopped'); assert.equal(a.canStop, false); assert.equal(a.canOpen, true)
+  assert.equal(a.state, 'stopped'); assert.equal(a.activity, 'stopped'); assert.equal(a.canStop, false); assert.equal(a.canOpen, true)
   assert.equal(a.engine, 'claude'); assert.equal(a.sessionId, 's1')
 })
 test('activity and last active use owning daemon facts, not process guesses', () => {

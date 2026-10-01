@@ -32,11 +32,11 @@ Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
 The footer shows a global harness count, local host CPU/RAM/GPU and subscription
 allowance used on the left, all in neutral ink with whole percentages. Its
-right-hand context follows the focused pane: machine, project, branch and PR. Each pane header ends with model, split down, split right, zoom,
+right-hand context follows the focused pane: machine, project, branch and PR. Each pane header ends with agent, model, split down, split right, zoom,
 and close, in that order. The icons stay visible with quiet ink and no button
 chrome. Splitting opens New Harness directly with that pane's agent, machine,
 and project, then creates into the chosen split on submission. Clicking the
-model opens the shared Models picker for that harness;
+agent opens the shared `&` Agents picker; clicking the model opens the shared Models picker for that harness;
 the footer does not repeat model or effort. Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.

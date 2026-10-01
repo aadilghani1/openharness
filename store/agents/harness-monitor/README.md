@@ -2,21 +2,20 @@
 
 Inspect active harnesses across connected machines and decide what to stop. The workspace footer's
 Harnesses, CPU, RAM, GPU and SSD controls select the existing Harness Monitor tab, creating one when
-needed. Opening the table submits no model prompt. Open and resume belong in Open Harness (Cmd-P).
+needed. The tab uses the standard 70% viewer / 30% assistant split. Use the pane Zoom icon for a full-width table. Opening the table submits no model prompt.
 
 Every visit starts with active sessions; RAM is the initial default sort. Filter by machine or activity, search session
 metadata, and choose Overview, Resources or AI usage. Click a header to sort; unknown readings sort
 last in either direction. Drag a separator or use its arrow keys to resize a column. Columns and
 widths persist; search and status reset on entry. The harness name stays visible during horizontal
 scrolling. Arrow keys select; Enter or double-click opens the inspector. It includes process IDs,
-parent IDs and resource readings. No navigation, resume, assistant or bulk cleanup actions appear in
-the process table.
+parent IDs and resource readings. Open focuses one existing pane for the selected session, or starts stopped work in one new tab when no pane remains. The Stopped filter shows saved sessions.
 
 Stop… reviews one selected session before asking its owning daemon to stop the validated process.
 Conversation history, launch settings and files remain. The daemon checks conversation identity again
-before stopping. Offline or disconnected sessions cannot be stopped. Pause updates freezes the table
-without pausing work and disables Stop until updates resume. Offline sessions are an explicit filter;
-saved, stopped history remains in Open Harness.
+before stopping. Offline or disconnected sessions cannot be stopped. Freeze updates holds the displayed readings
+without affecting work, and disables Stop/Open until live updates return. Offline sessions are an explicit filter;
+saved history is also available in Open Harness (Cmd-P).
 
 ## Metric definitions
 
@@ -65,10 +64,11 @@ rounding, hidden polling and tab reuse; `tool/check_swarm_titlebar.sh` checks na
 Real Linux NVIDIA counters still require hardware validation; parser fixtures do not establish
 support for every driver.
 
-The backward-compatible hps CLI retains explicit pause/resume and reviewed cleanup commands.
+The hps CLI offers explicit stop/open and reviewed cleanup commands; old pause/resume names remain compatibility aliases.
 Rules/pins live in ~/.config/harness/policy.jsonc; receipts live under ~/.harness/monitor/.
-Nothing automatically stops sessions. The package's optional terminal keeps its saved OpenCode
-configuration; the viewer neither exposes an assistant action nor submits prompts.
+Nothing automatically stops sessions. The assistant keeps its saved configuration, and its header offers the shared agent and model controls.
+
+New OpenCode sessions use `opencode/muse-spark-1.3-contributor-free` with automatic approvals and xhigh effort. **Contributor permits Meta to train on prompts and responses.** The Assistant model disclosure keeps this visible. There is no automatic paid fallback, and existing sessions retain their saved agent/model settings.
 
 ## Credit and stewardship
 

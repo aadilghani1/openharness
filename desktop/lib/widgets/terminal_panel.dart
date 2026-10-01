@@ -44,6 +44,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'harness_agent_control.dart';
 import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
@@ -2732,7 +2733,8 @@ class _TerminalHeader extends StatelessWidget {
     // Engines without a picker keep their existing header width.
     final showModelPicker = modelPickerSupports(session.engineId);
     // The picker: a model id up to 220px and its padding.
-    final pickerWidth = showModelPicker ? 250.0 : 0.0;
+    final pickerWidth =
+        (showModelPicker ? 250.0 : 0.0) + (agent != null ? 90.0 : 0.0);
     final showSplit = compact || onSplitDown != null || onSplitRight != null;
     final showZoom = compact || onToggleZoom != null;
     final controlsWidth =
@@ -2809,7 +2811,10 @@ class _TerminalHeader extends StatelessWidget {
 
             final desiredRightWidth = narrow
                 ? math.max(
-                    controlsWidth + (showModelPicker ? 96.0 : 0.0) + badgeWidth,
+                    controlsWidth +
+                        (showModelPicker ? 96.0 : 0.0) +
+                        (agent != null ? 90.0 : 0.0) +
+                        badgeWidth,
                     constraints.maxWidth * .36,
                   )
                 : math.max(
@@ -2825,7 +2830,7 @@ class _TerminalHeader extends StatelessWidget {
                         math.min(
                           pickerWidth,
                           math.max(
-                            56.0,
+                            agent != null ? 180.0 : 56.0,
                             (constraints.maxWidth - controlsWidth) * .38,
                           ),
                         )
@@ -3006,6 +3011,16 @@ class _TerminalHeader extends StatelessWidget {
                     maxWidth: math.max(0, rightWidth - controlsWidth),
                   ),
                   child: PaneHeaderActions(
+                    agentPicker: agent == null
+                        ? null
+                        : HarnessAgentControl(
+                            app: notifier,
+                            machineId: session.machineId,
+                            agent: agent,
+                            enabled:
+                                machine?.machine.isShared == false &&
+                                machine?.nodeOnline != false,
+                          ),
                     trailing: showPr
                         ? ConstrainedBox(
                             constraints: BoxConstraints(maxWidth: badgeWidth),

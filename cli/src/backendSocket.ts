@@ -724,7 +724,7 @@ export class BackendSocket {
     >) | null = null
   /** Resume stopped work directly, or attach if it is already running. Never replaces a live
    * process and never falls back to a fresh conversation. */
-  onResumeAgent: BackendSocket['onRestartAgent'] = null
+  onResumeAgent: ((agentId: string, permissionMode?: string) => ReturnType<NonNullable<BackendSocket['onRestartAgent']>>) | null = null
   /** Called on `agent_fork` — cli.ts opens a NEW agent that starts with `agentId`'s whole history
    *  (lib/forkAgent.ts) and returns its process-agent, exactly as `agent_create` does. `level` says
    *  what the new agent actually got: the engine's own fork, or a handoff message. */
@@ -3118,12 +3118,19 @@ export class BackendSocket {
           const operation = type === 'agent_resume' ? 'resume' : 'restart'
           const restart = operation === 'resume' ? this.onResumeAgent : this.onRestartAgent
           if (!restart) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
+          const permissionMode = payload.permissionMode
+          if (permissionMode !== undefined && (operation !== 'resume' || typeof permissionMode !== 'string'
+            || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
+            reply(type, requestId, { error: 'INVALID_PERMISSION_MODE' }); return
+          }
+          const invoke = () => permissionMode === undefined ? restart(target) : this.onResumeAgent!(target, permissionMode)
           const creationId = payload.creationId
           if (creationId !== undefined) {
             if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
             try {
-              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target }), async () => {
-                const result = await restart(target)
+              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target,
+                ...(permissionMode === undefined ? {} : { permissionMode }) }), async () => {
+                const result = await invoke()
                 if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
                 // RESTART_FAILED can follow an unobserved relaunch. Never silently
                 // replace that process again when a caller checks this intent.
@@ -3137,7 +3144,7 @@ export class BackendSocket {
             }
             return
           }
-          const result = await restart(target)
+          const result = await invoke()
           if (!result.ok) {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
             return

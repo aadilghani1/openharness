@@ -2315,6 +2315,30 @@ describe('agent_restart RPC', () => {
     await socket.stop()
   })
 
+  it('binds an explicit resume permission choice to its operation receipt', async () => {
+    const { socket, frames } = localSocket()
+    const creationId = `resume-mode-${randomUUID()}`
+    const handler = vi.fn(async () => ({ ok: true as const, session: { ...BASE_SESSION, permissionMode: 'auto' }, resumed: true }))
+    socket.onResumeAgent = handler
+    vi.spyOn(registry, 'byAgent').mockReturnValue(BASE_SESSION)
+    for (const [requestId, permissionMode] of [['first', 'auto'], ['again', 'auto'], ['changed', 'ask']]) {
+      socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId, agentId: 'agent-1', creationId, permissionMode } })
+      await vi.waitFor(() => expect(frames.some(frame => (frame.payload as any).requestId === requestId)).toBe(true))
+    }
+    expect(handler).toHaveBeenCalledExactlyOnceWith('agent-1', 'auto')
+    expect(frames).toContainEqual({ type: 'agent_resume_result', payload: { requestId: 'changed', error: 'CREATION_CONFLICT' } })
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
+  it.each([7, '', 'allow', { auto: true }])('refuses invalid resume permission payload %j', async permissionMode => {
+    const { socket, frames } = localSocket()
+    socket.onResumeAgent = vi.fn()
+    socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId: 'bad-mode', agentId: 'agent-1', permissionMode } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'agent_resume_result', payload: { requestId: 'bad-mode', error: 'INVALID_PERMISSION_MODE' } }))
+    expect(socket.onResumeAgent).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
   it('replies MISSING_AGENT_ID when no agentId is given', async () => {
     const { socket, frames } = localSocket()
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1' } })

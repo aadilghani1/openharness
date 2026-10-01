@@ -265,8 +265,8 @@ or unconfirmed close keeps the pane. Older daemons retain their existing behavio
 
 `HarnessMonitor` supplies the global running-harness count without process sampling
 in the footer. Clicking it opens the reusable `autonomous/harness-monitor` DSH tab
-through `HarnessMonitorController`, with its viewer full width and the assistant
-terminal revealed only on request. The DSH table shares the daemon's resource sampler
+through `HarnessMonitorController`, with its viewer on the left at 70% and the assistant
+terminal on the right at 30%. Only the pane zoom action expands either pane. The DSH table shares the daemon's resource sampler
 and adds opt-in activity metadata to `agents_list`. RAM is process-tree RSS; CPU is
 interval use, with 100% representing one core. Unknown readings remain unknown.
 Shared Codex servers are listed separately and included once; token counts reuse
@@ -342,7 +342,7 @@ its headless debug timings do not establish native display or network latency.
   with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each pane ends with model, split down,
+  and quiet, with larger click targets. Each pane ends with agent, model, split down,
   split right, zoom, close. Split opens New Harness directly for the clicked pane.
   Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,

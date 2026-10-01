@@ -90,7 +90,7 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'View only'
       : agent.isStopped
-      ? (agent.canPauseAndResume ? 'Saved' : 'Resume unavailable')
+      ? (agent.canPauseAndResume ? 'Saved' : 'Open unavailable')
       : agent.launchState == 'failed'
       ? 'Start failed'
       : agent.launchState == 'starting'
@@ -111,11 +111,11 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'Shared harnesses are view-only.'
       // Only reachable against a daemon too old to report what its engines can
-      // resume; a current one offers Pause for every harness it runs.
+      // resume; a current one offers Stop for every harness it runs.
       : !agent.canPauseAndResume
       ? (agent.engine == 'claude' || agent.engine == 'codex'
-            ? 'Waiting for a saved conversation before enabling pause and resume.'
-            : 'Update the harness CLI on this machine to pause and resume this engine.')
+            ? 'Waiting for a saved conversation before enabling Stop and Open.'
+            : 'Update the harness CLI on this machine to stop and reopen this agent.')
       : !canControl
       ? agent.launchDetail ??
             agent.terminalUnavailableReason ??

@@ -97,6 +97,7 @@ import { PairControl, StartedHarnesses } from './pair/control.js'
 import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
+import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from './lib/harnessDefaults.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
@@ -4873,14 +4874,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.pairControl = pairControl
   // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
-  // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
+  // to it, stopped when idle. Automatic approvals, scoped harnessd MCP, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
     engine: async (preferred) => {
-      if (!preferred) return null // A new collection chooses its engine in the viewer.
+      preferred ??= 'opencode' // New collections share the product default.
       const found = await probeEngines([preferred]).catch(() => [])
       return found.some(e => e.engine === preferred && e.installed) ? preferred : null
     },
@@ -4897,14 +4898,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
       if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
       const created = await backend.onCreateAgent({
-        engine, cwd, bypassPermission: false, permissionMode: 'ask', grid: null, codexHome: null,
+        engine, cwd, bypassPermission: true, permissionMode: DEFAULT_HARNESS_PERMISSION, grid: null, codexHome: null,
         dsh: PAIR_HARNESS_DSH, prompt, name, agent: null,
       })
       return created.ok ? { ok: true, agentId: created.session.agentId } : created
@@ -4914,7 +4915,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const resumed = await backend.onResumeAgent(agentId)
       return resumed.ok ? { ok: true } : resumed
     },
-    stop: async (agentId) => { await backend.onDeleteAgent?.(agentId) },
+    stop: async (agentId) => {
+      const current = registry.byAgent(agentId)
+      if (!current) return
+      if (!backend.closeAgentService) throw new Error('Safe close is unavailable.')
+      const result = await backend.closeAgentService.request({ agentId, sessionId: current.sessionId,
+        createdAt: new Date(current.registeredAt).toISOString(), mode: 'now' })
+      if (!result.closed) throw new Error(result.detail ?? 'Could not save and stop the companion.')
+    },
     send: (agentId, text) => backend.onMessage?.(agentId, text, randomUUID()),
     working: (agentId) => {
       const sessionId = registry.resolve(agentId)?.sessionId
@@ -6362,7 +6370,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv), !!grid || !!resumeSessionId,
+        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       codexHome,

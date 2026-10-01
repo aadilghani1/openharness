@@ -574,6 +574,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
     _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
     app.reviewSessionClose = _reviewSessionClose;
+    app.changeCompanionAgent = _changeCompanionAgent;
+    app.canChangeCompanionAgent = _canChangeCompanionAgent;
+    app.openAgentPicker = _openPaneAgents;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -778,6 +781,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (app.reviewSessionClose == _reviewSessionClose) {
       app.reviewSessionClose = null;
     }
+    if (app.changeCompanionAgent == _changeCompanionAgent) {
+      app.changeCompanionAgent = null;
+    }
+    if (app.canChangeCompanionAgent == _canChangeCompanionAgent) {
+      app.canChangeCompanionAgent = null;
+    }
+    if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
@@ -3987,9 +3997,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _companionTerminalError = switch (result['error']) {
         'ENGINE_REQUIRED' => null,
         'UNSUPPORTED' => 'Update Harness CLI to open the companion terminal.',
-        'NO_ENGINE' =>
-          result['detail'] as String? ??
-              'Install Claude Code or Codex to talk with your companion.',
+        'NO_ENGINE' => result['detail'] as String? ?? 'Install OpenCode, Codex, or Claude Code to talk with your companion.',
         _ =>
           result['detail'] as String? ??
               'The terminal could not connect. Try opening it again.',
@@ -3999,9 +4007,54 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _scheduleCompanionWorkspace();
   }
 
+  bool _canChangeCompanionAgent(String machineId, String agentId) =>
+      _brain.active &&
+      !_zoo.isPreview &&
+      _companionOpeningKey == null &&
+      _pairHarness?.machineId == machineId &&
+      _pairHarness?.agentId == agentId;
+
+  Future<Map<String, dynamic>> _changeCompanionAgent(
+    String sourceId,
+    String engine,
+  ) async {
+    final local = app.localMachineState;
+    final current = local?.agents
+        .where((a) => a.id == _pairHarness?.agentId)
+        .firstOrNull;
+    final source = local?.agents.where((a) => a.id == sourceId).firstOrNull;
+    // A reply can be lost after the collection has adopted its replacement.
+    // Rechecking that same choice may return it, never create another one.
+    if (_companionOpeningKey != null ||
+        _pairHarness == null ||
+        (_pairHarness?.agentId != sourceId &&
+            (source?.project?.cwd == null ||
+                current?.project?.cwd != source?.project?.cwd ||
+                current?.engine != engine))) {
+      return {
+        'ok': false,
+        'detail': 'The companion changed or is already opening.',
+      };
+    }
+    final result = await _brain.openConversation(engine: engine);
+    if (!mounted) {
+      return {'ok': false, 'detail': 'The companion view was closed.'};
+    }
+    _scheduleCompanionWorkspace();
+    return result;
+  }
+
   void _selectCompanionEngine(String engine) {
     final uid = _zoo.paired?.uid;
     if (uid == null || _companionOpeningKey != null || _zoo.isPreview) return;
+    if (_pairHarness case final pair?) {
+      unawaited(
+        app.changeAgent(pair.machineId, pair.agentId, engine).then((error) {
+          if (mounted && error != null) _showPaneActionHint(error);
+        }),
+      );
+      return;
+    }
     final key = '${_zoo.scope}:$uid';
     setState(() {
       _companionAttemptedKey = key;
@@ -4975,6 +5028,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _togglePaneModels() => _toggleModels();
 
+  void _openPaneAgents(String machineId, String agentId) {
+    final pane = app.panes
+        .where((p) => p.machineId == machineId && p.agentId == agentId)
+        .firstOrNull;
+    if (pane == null) return;
+    app.focusPane(pane.id);
+    _openResourcePicker('&');
+    _search?.setAgentSelection(machineId, agentId);
+    final search = _search;
+    unawaited(
+      app.probeDsh(machineId).then((_) {
+        if (mounted && identical(search, _search)) {
+          search?.setAgentSelection(machineId, agentId);
+        }
+      }),
+    );
+  }
+
   void _openPaneModels(int paneId, String machineId, String agentId) {
     if (!_shortcutsEnabled) return;
     final pane = app.panes.where((pane) => pane.id == paneId).firstOrNull;
@@ -5260,6 +5331,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final word = search.query.trim().toLowerCase();
       if (word.length >= 3 && _zoo.isEasterWord(word)) _zoo.easter(word);
     }
+    if (search.isAgentMode && search.agentSelectionId == null) {
+      final focused = WorkspacePaneContext.focused(app);
+      if (focused?.agentId case final id?) {
+        search.setAgentSelection(focused!.pane.machineId, id);
+      }
+    }
     if (_machineSearchVisible != search.isMachineMode) {
       _machineSearchVisible = search.isMachineMode;
       if (_machineSearchVisible) unawaited(search.refreshMachineResources());
@@ -5479,6 +5556,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
           _previewControls.invoke('picker.focus_actions');
         }
       });
+      return;
+    }
+    if (choice.destination.agentEngine case final engine?) {
+      final search = _search!;
+      final machineId = search.agentSelectionMachineId,
+          agentId = search.agentSelectionId;
+      if (machineId == null || agentId == null) return;
+      _closeSearch(restoreFocus: true);
+      final error = await app.changeAgent(machineId, agentId, engine);
+      if (mounted && error != null) _showPaneActionHint(error);
       return;
     }
     if (choice.destination.storeId case final storeId?) {
@@ -6225,6 +6312,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
         pickerQuery: '@ ',
       ),
       SwarmDestination(
+        id: 'picker:agents',
+        title: '&  Agents',
+        detail: 'Change the focused harness’s agent',
+        swarmId: null,
+        current: false,
+        pickerQuery: '& ',
+      ),
+      SwarmDestination(
         id: 'picker:models',
         title: ':  Models',
         detail: 'Local models, shared models, subscriptions and APIs',
@@ -6247,7 +6342,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode(
         'harnesses.list',
         'Open Harness',
-        'Manage running and paused harnesses',
+        'Manage running and stopped harnesses',
       ),
       ?mode('terminal.new', 'New terminal', 'A shell where you are'),
       ?mode(

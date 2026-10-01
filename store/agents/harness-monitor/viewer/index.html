@@ -11,18 +11,23 @@
   <header>
     <div class="heading"><h1>Harness Monitor</h1><span id="live-status" class="live">Connecting</span></div>
     <div class="search-field"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="Search harnesses, agents, machines…" aria-label="Search harnesses" autocomplete="off" spellcheck="false"></div>
+    <details id="assistant-info"><summary>Assistant model</summary><div class="menu">
+      <p>New monitors use OpenCode with Muse Spark 1.3 Contributor Free. This limited-time free model allows Meta to use prompts and responses for training. Existing sessions keep their selected agent and model.</p>
+      <p>Use the assistant’s model menu to choose a different model. No prompt is sent when the table opens, and there is no automatic paid fallback.</p>
+    </div></details>
   </header>
   <nav aria-label="Monitor controls">
     <div class="segmented" role="group" aria-label="Column presets"><button data-preset="overview" aria-pressed="true">Overview</button><button data-preset="resources" aria-pressed="false">Resources</button><button data-preset="ai" aria-pressed="false">AI usage</button></div>
     <label class="sr-only" for="machine">Machine</label><select id="machine"><option value="all">All machines</option></select>
     <label class="sr-only" for="filter">Status</label><select id="filter">
       <option value="active">All active</option><option value="working">Working</option><option value="needsInput">Needs you</option>
-      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option><option value="offline">Offline</option><option value="all">Including offline</option>
+      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option><option value="stopped">Stopped</option><option value="offline">Offline</option><option value="all">Including offline</option>
     </select>
     <span class="spacer"></span>
-    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button><button id="stop" class="danger" disabled>Stop…</button>
+    <button id="open" disabled>Open</button>
+    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button><button id="stop" class="danger" disabled>× Stop…</button>
     <details id="columns"><summary>Columns</summary><div id="column-options" class="menu"></div></details>
-    <button id="pause" title="Freeze the table without pausing any harness">Pause updates</button><button id="refresh" title="Refresh all machines">Refresh</button>
+    <button id="freeze" title="Hold the displayed readings; running work continues">Freeze updates</button><button id="refresh" title="Refresh all machines">Refresh</button>
   </nav>
   <div id="problems" role="status" hidden></div>
   <main id="grid" tabindex="0" aria-label="Active harness sessions. Arrow keys select, Enter inspects, Delete reviews stopping.">
@@ -35,7 +40,7 @@
   <dialog id="inspector" aria-labelledby="inspect-title">
     <div class="dialog-heading"><h2 id="inspect-title">Harness details</h2><button id="inspect-close" aria-label="Close details">Close</button></div>
     <p id="inspect-context" class="muted"></p><div id="inspect-content"></div>
-    <div class="dialog-actions"><button id="inspect-stop" class="danger">Stop harness…</button></div>
+    <div class="dialog-actions"><button id="inspect-open" disabled>Open</button><button id="inspect-stop" class="danger">Stop harness…</button></div>
   </dialog>
   <dialog id="stop-dialog" aria-labelledby="stop-title">
     <h2 id="stop-title">Stop harness?</h2><p id="stop-context"></p><p>Its running work will end. Conversation history and workspace files are kept.</p>

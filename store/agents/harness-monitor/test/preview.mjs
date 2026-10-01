@@ -22,10 +22,10 @@ const rows = Array.from({ length: Number(process.env.PREVIEW_ROWS || 24) }, (_, 
 }], { machine: { machineId: i % 2 ? 'office' : 'm2', name: i % 2 ? 'Linux · 4090' : 'MacBook Pro' }, local: false, online: i % 17 !== 16 })[0])
 const viewer = createViewer({ workspace, port: Number(process.env.PREVIEW_PORT || 0), intervalMs: 3000,
   collect: async () => ({ rows, shared: [{ id: 'shared-codex', name: 'Shared Codex server', machine: 'MacBook Pro', machineId: 'm2', agentIds: ['session-0', 'session-4'], online: true, cpu: 2, rssBytes: 340000000, gpuPercent: null }], problems: [], machines: [] }),
-  verbs: { pause: async row => {
-    Object.assign(row, { state: 'paused', live: false, activity: 'stopped', canStop: false, cpu: 0, rssBytes: 0 })
-    return { ok: true, action: 'pause', id: row.id, name: row.name }
-  }, resume: async () => ({ ok: false, detail: 'Use the host integration fixture to resume.' }) },
+  verbs: { stop: async row => {
+    Object.assign(row, { state: 'stopped', live: false, activity: 'stopped', canStop: false, cpu: 0, rssBytes: 0 })
+    return { ok: true, action: 'stop', id: row.id, name: row.name }
+  }, open: async () => ({ ok: false, detail: 'Use the host integration fixture to open.' }) },
 })
 console.log('Synthetic preview: http://127.0.0.1:' + await viewer.start())
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => viewer.close().then(() => process.exit(0)))

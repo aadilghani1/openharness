@@ -48,9 +48,9 @@ export function mergeRows(agents, { state = {}, machine = null, local = true, no
       id, agentId: agent.id, sessionId: agent.sessionId || null,
       name: agent.name || agent.title || 'Untitled harness', title: agent.title || null,
       engine: agent.engine, ...parseModel(agent.selectedModel),
-      state: !online ? 'offline' : stopped ? 'paused' : terminalAvailable ? (agent.engine === 'terminal' ? 'terminal' : 'running') : 'gone',
+      state: !online ? 'offline' : stopped ? 'stopped' : terminalAvailable ? (agent.engine === 'terminal' ? 'terminal' : 'running') : 'gone',
       activity, activityKnown: monitor?.activityKnown === true,
-      stateSince: lastActivity, pausedAt: stopped ? lastActivity : null,
+      stateSince: lastActivity, stoppedAt: stopped ? lastActivity : null,
       pane: agent.tmuxPane || null, paneTarget: null,
       project, cwd, home: local ? tilde(cwd, home) : cwd, branch, remote,
       lastActivity, idleMs, idle: idleMs == null ? '—' : humanIdle(idleMs), createdAt: time(agent.createdAt),
@@ -153,7 +153,7 @@ export async function collect({
 
 export function summarize(rows) {
   const by = state => rows.filter(row => row.state === state).length
-  return { total: rows.length, running: by('running'), paused: by('paused'), gone: by('gone'), terminals: by('terminal'),
+  return { total: rows.length, running: by('running'), stopped: by('stopped'), gone: by('gone'), terminals: by('terminal'),
     needsInput: rows.filter(row => row.needsInput).length, working: rows.filter(row => row.working).length,
     held: rows.reduce((sum, row) => sum + (row.rssBytes ?? 0), 0),
     projects: new Set(rows.map(row => row.project)).size, machines: new Set(rows.map(row => row.machineId)).size }

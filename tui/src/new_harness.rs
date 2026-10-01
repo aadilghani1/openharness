@@ -411,7 +411,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
         .and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let engine = saved["engine"]
         .as_str()
-        .unwrap_or_else(|| current.map(|a| a.engine.as_str()).unwrap_or("codex"))
+        .unwrap_or("opencode")
         .to_string();
     let what = What {
         label: saved["label"]
