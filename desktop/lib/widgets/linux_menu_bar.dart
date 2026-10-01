@@ -209,11 +209,17 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
               ],
             ),
           ),
-          ListenableBuilder(
-            listenable: linuxTitleBarActions,
-            builder: (context, _) =>
-                linuxTitleBarActions.builder?.call(context) ??
-                const SizedBox.shrink(),
+          // The workspace's controls are built for the tab strip, inside its
+          // Material; up here they are above it, and the Store's label would
+          // fall back to Flutter's yellow-underlined "no text style" warning.
+          Material(
+            type: MaterialType.transparency,
+            child: ListenableBuilder(
+              listenable: linuxTitleBarActions,
+              builder: (context, _) =>
+                  linuxTitleBarActions.builder?.call(context) ??
+                  const SizedBox.shrink(),
+            ),
           ),
           const _WindowButtons(),
         ],

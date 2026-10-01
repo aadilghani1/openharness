@@ -20,6 +20,7 @@ import * as projectFolder from './lib/projectFolder.js'
 import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as storeCatalog from './dsh/catalog.js'
+import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
@@ -2604,11 +2605,20 @@ describe('agent_create with a prompt, a name and a named agent', () => {
   })
 
   it('passes the named agent through for opencode, and null when none was given', async () => {
+    // v1 — pinned, so the answer does not depend on the OpenCode installed where the suite runs.
+    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockReturnValue(1)
     const { seen, reply } = await create({ agent: 'harness-compute', name: 'Local model' })
     expect(seen).toEqual([expect.objectContaining({ engine: 'opencode', agent: 'harness-compute', name: 'Local model', prompt: null })])
     expect(reply).toMatchObject({ agent: expect.objectContaining({ id: 'named-1' }) })
     expect((await create({})).seen).toEqual([expect.objectContaining({ agent: null })])
     expect((await create({ agent: null })).seen).toEqual([expect.objectContaining({ agent: null })])
+  })
+
+  it('refuses a named agent for opencode v2, whose TUI exits 1 on --agent, before any pane exists', async () => {
+    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockReturnValue(2)
+    const { seen, reply } = await create({ agent: 'harness-compute' })
+    expect(reply).toMatchObject({ error: 'AGENT_UNSUPPORTED', detail: expect.stringContaining('opencode') })
+    expect(seen).toHaveLength(0)
   })
 
   it('refuses a named agent for an engine with no documented mechanism, naming the engine, before any pane exists', async () => {

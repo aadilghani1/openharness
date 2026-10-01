@@ -3,6 +3,10 @@
 //! ```toml
 //! prefix = "ctrl+a"              # instead of ctrl+space
 //! prefix2 = "C-b"                # a second one (⌘ keys reach only some terminals)
+//!
+//! [prefix_keys]                  # after the prefix (Alt-k in the command panel writes these)
+//! "h" = "new-harness"
+//! "N" = "none"
 //! desk = "read"                  # sync | read | off   (as HARNESS_TUI_DESK)
 //! predict = "off"                # auto | always | off (as HARNESS_TUI_PREDICT)
 //! notify = false                 # OS notifications through the terminal
@@ -42,6 +46,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub struct Chord { pub code: KeyCode, pub mods: KeyModifiers }
 
 impl Chord {
+    /// A key typed as itself — no Ctrl, ⌥ or ⌘ (Shift alone still types): `a`, `` ` ``, Enter, F12.
+    pub fn plain(&self) -> bool { !self.mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) }
+
     /// One spelling per key: letters lower-case with SHIFT as a modifier; a shifted symbol (`{`,
     /// `?`) is its own character, without SHIFT.
     pub fn normal(code: KeyCode, mods: KeyModifiers) -> Chord {
@@ -144,6 +151,8 @@ pub struct Config {
     /// A second prefix (tmux's prefix2), where the file names one: `prefix = "D-b"` (⌘B, which
     /// only some terminals pass on) with `prefix2 = "C-b"` works in every terminal.
     pub prefix2: Option<Chord>,
+    /// `[prefix_keys]`: keys after the prefix, each with its command (None: unbound).
+    pub prefix_keys: Vec<(Chord, Option<String>)>,
     pub keys: Vec<(Chord, Option<String>)>,
     /// The `[look]` table, if any.
     pub look: Option<Look>,
@@ -206,7 +215,7 @@ impl Look {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { prefix: Chord::normal(KeyCode::Char('b'), KeyModifiers::CONTROL), prefix_set: false, prefix2: None, keys: Vec::new(), look: None, problems: Vec::new() }
+        Config { prefix: Chord::normal(KeyCode::Char('b'), KeyModifiers::CONTROL), prefix_set: false, prefix2: None, prefix_keys: Vec::new(), keys: Vec::new(), look: None, problems: Vec::new() }
     }
 }
 
@@ -222,14 +231,18 @@ pub fn path() -> PathBuf {
 
 /// Read the file and fold its switches into the environment (the environment wins).
 pub fn load() -> Config {
+    let Ok(text) = std::fs::read_to_string(path()) else { return Config::default() };
+    // SAFETY: called from `main` before the async runtime (or any other thread) exists.
+    read(&text, |name, value| { if std::env::var(name).is_err() { unsafe { std::env::set_var(name, value) } } })
+}
+
+/// The file's [text] as [load] reads it, its switches handed to [setenv].
+fn read(text: &str, setenv: impl Fn(&str, &str)) -> Config {
     let mut config = Config::default();
-    let Ok(text) = std::fs::read_to_string(path()) else { return config };
     let value: toml::Value = match text.parse() {
         Ok(v) => v,
         Err(error) => { config.problems.push(format!("tui.toml: {}", error.to_string().lines().next().unwrap_or(""))); return config }
     };
-    // SAFETY: called from `main` before the async runtime (or any other thread) exists.
-    let setenv = |name: &str, value: &str| { if std::env::var(name).is_err() { unsafe { std::env::set_var(name, value) } } };
     if let Some(p) = value.get("prefix").and_then(|v| v.as_str()) {
         match crate::keys::parse(p) { Ok(c) => { config.prefix = c; config.prefix_set = true } Err(e) => config.problems.push(format!("tui.toml prefix: {e}")) }
     }
@@ -248,9 +261,97 @@ pub fn load() -> Config {
             }
         }
     }
+    // [prefix_keys]: after the prefix, a key and the command it runs ("none": nothing) — what
+    // Alt-k in the command panel writes.
+    if let Some(keys) = value.get("prefix_keys").and_then(|v| v.as_table()) {
+        for (chord, command) in keys {
+            let Some(command) = command.as_str() else { config.problems.push(format!("tui.toml prefix_keys.{chord}: expected a command")); continue };
+            match crate::keys::parse(chord) {
+                Ok(c) => config.prefix_keys.push((c, if command == "none" { None } else { Some(command.to_string()) })),
+                Err(e) => config.problems.push(format!("tui.toml prefix_keys: {e}")),
+            }
+        }
+    }
     if let Some(look) = value.get("look").and_then(|v| v.as_table()) { config.look = Some(look_of(look, &mut config.problems)) }
     config
 }
+
+// ── keys ──
+
+/// A TOML string: [s] quoted.
+fn toml_str(s: &str) -> String { format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")) }
+
+/// Whether [line] sets [key] (bare or quoted).
+fn sets(line: &str, key: &str) -> bool {
+    let t = line.trim_start();
+    let rest = t.strip_prefix(&toml_str(key)).or_else(|| t.strip_prefix(key).filter(|_| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')));
+    rest.is_some_and(|r| r.trim_start().starts_with('='))
+}
+
+/// The table [line] opens (`[ prefix_keys ]  # mine` opens `prefix_keys`), if it is a header.
+fn table_of(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('[')?;
+    let (name, after) = rest.split_once(']')?;
+    let after = after.trim_start();
+    (after.is_empty() || after.starts_with('#')).then(|| name.trim())
+}
+
+/// [text] with the top-level `key = "value"` set ([value] None: taken out), the rest as written.
+fn with_top(text: &str, key: &str, value: Option<&str>) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let end = lines.iter().position(|l| table_of(l).is_some() || is_section_header(l.trim())).unwrap_or(lines.len());
+    let line = value.map(|v| format!("{key} = {}", toml_str(v)));
+    match (lines[..end].iter().position(|l| sets(l, key)), line) {
+        (Some(i), Some(l)) => lines[i] = l,
+        (Some(i), None) => { lines.remove(i); }
+        (None, Some(l)) => {
+            // After the top's last setting (before the blank line that ends it).
+            let at = lines[..end].iter().rposition(|l| !l.trim().is_empty()).map(|i| i + 1).unwrap_or(0);
+            lines.insert(at, l);
+        }
+        (None, None) => {}
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// [text] with `"entry" = "value"` in [table] (made when there is none), the rest as written.
+fn with_entry(text: &str, table: &str, entry: &str, value: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let line = format!("{} = {}", toml_str(entry), toml_str(value));
+    let header = format!("[{table}]");
+    match lines.iter().position(|l| table_of(l) == Some(table)) {
+        Some(h) => {
+            let end = lines[h + 1..].iter().position(|l| table_of(l).is_some() || is_section_header(l.trim())).map(|i| h + 1 + i).unwrap_or(lines.len());
+            match lines[h + 1..end].iter().position(|l| sets(l, entry)) {
+                Some(i) => lines[h + 1 + i] = line,
+                None => { let at = lines[h + 1..end].iter().rposition(|l| !l.trim().is_empty()).map(|i| h + 2 + i).unwrap_or(h + 1); lines.insert(at, line) }
+            }
+        }
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) { lines.push(String::new()) }
+            lines.push(header);
+            lines.push(line);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+fn rewrite(change: impl FnOnce(&str) -> String) -> std::io::Result<()> {
+    let p = path();
+    let existing = std::fs::read_to_string(&p).unwrap_or_default();
+    if let Some(dir) = p.parent() { std::fs::create_dir_all(dir)? }
+    std::fs::write(p, change(&existing))
+}
+
+/// `prefix` / `prefix2` in tui.toml ([value] None: taken out).
+pub fn write_top(key: &str, value: Option<&str>) -> std::io::Result<()> { rewrite(|t| with_top(t, key, value)) }
+
+/// One key after the prefix in tui.toml's `[prefix_keys]`: its command, or "none".
+pub fn write_prefix_key(key: &str, command: &str) -> std::io::Result<()> { rewrite(|t| with_entry(t, "prefix_keys", key, command)) }
 
 /// The `[look]` table as read, a knob that is not a string said in [problems].
 fn look_of(look: &toml::Table, problems: &mut Vec<String>) -> Look {
@@ -460,5 +561,65 @@ mod tests {
         assert_eq!(get(&a, "status-position"), None);
         let top = Look { status_bar: Some("top".into()), ..Default::default() }.assignments();
         assert_eq!(get(&top, "status-position").as_deref(), Some("top"));
+    }
+
+    // ── keys ──
+
+    /// The prefix goes into tui.toml as the panel sets it: the top's `prefix` replaced (or added,
+    /// before the first table), `prefix2` added and taken out, every other line as it was.
+    #[test]
+    fn the_prefix_chosen_in_the_panel_is_written_into_tui_toml() {
+        let text = "# mine\nprefix = \"D-b\"\n\n[look]\nfocus = \"line\"\n";
+        let t = with_top(text, "prefix", Some("C-a"));
+        assert_eq!(t, "# mine\nprefix = \"C-a\"\n\n[look]\nfocus = \"line\"\n");
+        let t = with_top(&t, "prefix2", Some("C-b"));
+        assert_eq!(t, "# mine\nprefix = \"C-a\"\nprefix2 = \"C-b\"\n\n[look]\nfocus = \"line\"\n");
+        assert_eq!(with_top(&t, "prefix2", None), "# mine\nprefix = \"C-a\"\n\n[look]\nfocus = \"line\"\n");
+        // A file with only tables: the prefix goes on top, before them.
+        assert_eq!(with_top("[look]\nfocus = \"line\"\n", "prefix", Some("C-a")), "prefix = \"C-a\"\n[look]\nfocus = \"line\"\n");
+        let v: toml::Value = t.parse().unwrap();
+        assert_eq!(v["prefix"].as_str(), Some("C-a"));
+    }
+
+    /// A command's key goes into tui.toml as the panel sets it: `[prefix_keys]` made or added
+    /// to, every other line as it was — and read back at start as written.
+    #[test]
+    fn keys_chosen_in_the_panel_are_written_into_tui_toml() {
+        let text = "# mine\nprefix = \"C-a\"\n\n[look]\nfocus = \"line\"\n";
+        let t = with_entry(text, "prefix_keys", "h", "new-harness");
+        assert!(t.ends_with("focus = \"line\"\n\n[prefix_keys]\n\"h\" = \"new-harness\"\n"), "{t}");
+        let t = with_entry(&t, "prefix_keys", "N", "none");
+        let t = with_entry(&t, "prefix_keys", "h", "kill-pane");
+        assert!(t.starts_with("# mine\nprefix = \"C-a\"\n\n[look]\nfocus = \"line\"\n"), "{t}");
+        assert!(t.ends_with("[prefix_keys]\n\"h\" = \"kill-pane\"\n\"N\" = \"none\"\n"), "{t}");
+        // A key that is a quote itself.
+        assert!(with_entry("", "prefix_keys", "\"", "split-window").contains("\"\\\"\" = \"split-window\""));
+        // And read back as the start reads it: the prefix, and each key with its command (none: unbound).
+        let c = read(&t, |_, _| {});
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(crate::keys::name(&c.prefix), "C-a");
+        let mut keys: Vec<(String, Option<String>)> = c.prefix_keys.iter().map(|(k, v)| (crate::keys::name(k), v.clone())).collect();
+        keys.sort();
+        assert_eq!(keys, [("N".to_string(), None), ("h".to_string(), Some("kill-pane".to_string()))]);
+    }
+
+    /// `[prefix_keys]` is found however its header is written — spaced, or with a comment after
+    /// it — so a second table (which TOML refuses) is never added.
+    #[test]
+    fn the_prefix_keys_header_is_found_spaced_or_commented() {
+        for header in ["[ prefix_keys ]", "[prefix_keys]  # mine", "  [ prefix_keys ] # mine"] {
+            let text = format!("{header}\n\"h\" = \"new-harness\"\n\n[look] # the look\nfocus = \"line\"\n");
+            let t = with_entry(&text, "prefix_keys", "n", "none");
+            assert_eq!(t.matches("prefix_keys").count(), 1, "{t}");
+            assert_eq!(t, format!("{header}\n\"h\" = \"new-harness\"\n\"n\" = \"none\"\n\n[look] # the look\nfocus = \"line\"\n"));
+            let c = read(&t, |_, _| {});
+            assert!(c.problems.is_empty(), "{:?}", c.problems);
+            assert_eq!(c.prefix_keys.len(), 2);
+            let t = with_entry(&t, "prefix_keys", "h", "kill-pane");
+            assert!(t.contains("\"h\" = \"kill-pane\"\n\"n\" = \"none\"\n\n[look]"), "{t}");
+        }
+        // (Another table whose name only starts the same is not it.)
+        let t = with_entry("[prefix_keys_old]\n\"h\" = \"x\"\n", "prefix_keys", "n", "none");
+        assert!(t.ends_with("\n[prefix_keys]\n\"n\" = \"none\"\n"), "{t}");
     }
 }

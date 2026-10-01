@@ -564,6 +564,14 @@ describe('opening as a named agent', () => {
       .toEqual([engineBin('opencode'), '--session', 'ses_1', '--agent', 'harness-compute'])
   })
 
+  it('refuses opencode v2, whose TUI has no --agent (only `opencode run` does)', () => {
+    expect(supportsNamedAgent('opencode', 2)).toBe(false)
+    expect(() => namedAgentArgs('opencode', 'harness-compute', 2)).toThrow(NamedAgentUnsupportedError)
+    // v1, or a version not read, keeps the flag it always had.
+    expect(supportsNamedAgent('opencode', 1)).toBe(true)
+    expect(supportsNamedAgent('opencode', null)).toBe(true)
+  })
+
   it('refuses every other engine, naming it, rather than dropping the name', () => {
     for (const engine of ENGINES) {
       if (engine === 'opencode') continue

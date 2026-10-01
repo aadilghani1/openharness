@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
@@ -180,15 +181,20 @@ export class NamedAgentUnsupportedError extends Error {
   }
 }
 
-export function supportsNamedAgent(engine: AgentEngine): boolean {
+/**
+ * `opencodeMajor` is the installed OpenCode's major version (`engines/opencode/version.ts`), absent
+ * meaning v1. v2 moved `--agent` to `opencode run`; its TUI exits 1 on the flag, so v2 has no entry.
+ */
+export function supportsNamedAgent(engine: AgentEngine, opencodeMajor: number | null = null): boolean {
+  if (engine === 'opencode' && isOpencodeV2(opencodeMajor)) return false
   return NAMED_AGENT_ARGS[engine] !== null
 }
 
 /** The argv that opens `engine` as its named agent `agent`. Throws [NamedAgentUnsupportedError] for
  *  an engine with no contract, so a caller cannot build an argv that silently drops the name. */
-export function namedAgentArgs(engine: AgentEngine, agent: string): string[] {
+export function namedAgentArgs(engine: AgentEngine, agent: string, opencodeMajor: number | null = null): string[] {
   const lead = NAMED_AGENT_ARGS[engine]
-  if (lead === null) throw new NamedAgentUnsupportedError(engine)
+  if (lead === null || !supportsNamedAgent(engine, opencodeMajor)) throw new NamedAgentUnsupportedError(engine)
   return [...lead, agent]
 }
 

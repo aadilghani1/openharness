@@ -126,7 +126,7 @@ import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, isApiLaunch, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
@@ -266,7 +266,8 @@ import { CursorSubagentManager } from './engines/cursor/subagent.js'
 import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
 import { loadCursorPendingTasks, removeCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { OpencodeReader, readOpencodeMessages } from './engines/opencode/reader.js'
-import { opencodeModelFromArgv, setOpencodeSessionModel } from './engines/opencode/sessionModel.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId } from './engines/opencode/sessionModel.js'
+import { isOpencodeV2, opencodeMajorVersion } from './engines/opencode/version.js'
 import { lastOpencodeTurnText, opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
 import { KiloReader, readKiloMessages } from './engines/kilo/reader.js'
 import { kiloMessagesToEvents, lastKiloTurnText } from './engines/kilo/normalizer.js'
@@ -5615,8 +5616,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * machine: a `build()` that stats the filesystem answers differently on two of them, and its spec
    * would follow. What is DONE with the fact lives in the builder, so create, retarget and restore
    * cannot disagree about it.
+   *
+   * The other is which OpenCode is installed: v2's TUI exits 1 on v1's `-m` / `--agent`. Cached per
+   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read.
    */
-  const gridLaunchMachine = (): GridLaunchMachine => ({ hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR) })
+  const gridLaunchMachine = (): GridLaunchMachine => ({
+    hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
+    opencodeMajor: opencodeMajorVersion(),
+  })
 
   /**
    * What a relaunch of `session` must be given, beyond the engine's argv, to come back where it was —
@@ -6304,8 +6311,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
-    // checked for a contract at the wire (AGENT_UNSUPPORTED), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent) : []), ...resumeArgs]
+    // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencodeMajorVersion()) : []), ...resumeArgs]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     // Stopped mid-turn, the resumed conversation is told to carry on — by an engine that can open
@@ -6433,7 +6440,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       dshLabel = installed.manifest.name
     }
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
-    const extraArgs = [...dshArgs, ...(source.agent ? namedAgentArgs(engine, source.agent) : [])]
+    // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
+    // as a general session rather than handing the v2 TUI an `--agent` it exits on.
+    const forkMajor = opencodeMajorVersion()
+    const extraArgs = [...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {
       clearEnv: harnessEnvToClear(dshEnv),
@@ -6653,10 +6663,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the failure this handler exists to refuse — so it is refused here, before the pane is touched.
     // Only when the launch will name a model: a grid launch always does; a move home does only when
     // the remembered model carries its provider (`subscriptionModel.ts`), and otherwise the engine
-    // decides, as it always did.
+    // decides, as it always did. v2 switches the model through OpenCode's own API instead and needs no
+    // sqlite3 (`applyOpencodeSessionModel`).
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
-    if (rewritesOpencodeSession && !binaryOnPath('sqlite3')) {
+    const opencodeMajor = session.engine === 'opencode' ? opencodeMajorVersion() : null
+    if (rewritesOpencodeSession && !isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
       return {
         ok: false,
         error: 'OPENCODE_SQLITE_MISSING',
@@ -6722,11 +6734,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // already on it, with nothing typed into the pane. Before the live process is touched, so a
       // write that fails refuses the move with that process still on its old target. A session with
       // no user message yet has nothing to restore from and takes `-m` on launch, so it is skipped.
+      //
+      // OpenCode 2.0 has no `-m` on its TUI, keeps sessions in tables the SQL above never reads (it
+      // used to answer SESSION_NOT_FOUND there, read as success, and then respawn with `-m` into
+      // `Unrecognized flag: -m` and a dead pane), and ships its own writer: the service's
+      // `session.switchModel`. `applyOpencodeSessionModel` picks per version, and on v2 every
+      // failure refuses the move — with the live process still untouched.
       if (rewritesOpencodeSession) {
-        const model = opencodeModelFromArgv(built.overrides.extraArgs)
+        const model = built.overrides.sessionModel ? parseOpencodeModelId(built.overrides.sessionModel) : null
         if (model) {
-          const written = await setOpencodeSessionModel(OPENCODE_DB, session.sessionId, model)
-          if (!written.ok && written.code !== 'OPENCODE_SESSION_NOT_FOUND') {
+          const written = await applyOpencodeSessionModel({
+            opencodeMajor, dbPath: OPENCODE_DB, sessionId: session.sessionId, model, cwd: session.cwd ?? undefined,
+            // (A model of opencode's own is looked for in its catalogue; a grid's provider lives in
+            // the pane's own config, which the service never reads.)
+            checkCatalog: !grid,
+          })
+          if (!written.ok) {
             console.warn(`[grid] retarget ${sid(session.agentId)} refused · ${written.code} · ${written.detail}`)
             return { ok: false, error: written.code, detail: written.detail }
           }

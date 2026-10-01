@@ -1,6 +1,8 @@
 // The public character contract: reaction state, every mood/size, swapping, and
 // DMA damage replay. Uses the same immutable assets and renderer as the board.
 #include "../main/ui/habitat/character.h"
+#include "../main/ui/habitat/claude_pet.h"
+#include "../main/ui/habitat/focus.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -245,6 +247,12 @@ static void squeeze(char *text)
     for (const char *p = text; *p; p++) if (*p != ' ') *out++ = *p;
     *out = 0;
 }
+// The index of the pet frame whose pixels these are, or -1.
+static int pet_frame(const uint16_t *px)
+{
+    for (unsigned i = 0; i < ht_claude_pet_frame_count; i++) if (ht_claude_pet_frames[i].px == px) return (int)i;
+    return -1;
+}
 static void focus_face(void)
 {
     ht_character_t c = {0};
@@ -299,7 +307,7 @@ static void focus_face(void)
         for (int i = 0; i < scene.count; i++) {
             const ht_run_t *r = &scene.runs[i];
             if (r->arc == 1) { arc++; assert(r->font == &ht_mono_24); }
-            if (r->sprite.width == 56) mark++;
+            if (r->sprite.width == 56 || r->sprite.width == HT_PET_W) mark++;
             if (r->font == &ht_lv_geist_med_28.base && r->text[0]) {
                 lines++; last = r;
                 assert(ht_measure(r->font, r->text) <= r->w && r->w <= 346);
@@ -368,9 +376,12 @@ static void focus_face(void)
             ht_character_face(&scene, &c, &f, 0xffff, recaps[k]);
             const ht_run_t *name = &scene.runs[0], *mark = &scene.runs[1], *card = &scene.runs[2];
             assert(name->arc == 1 && !strcmp(name->text, "Payments refactor"));
-            assert(mark->sprite.pixels == ht_icon_engine56[0].px && mark->x == (466 - 56) / 2);
+            // The Claude pet, still (clock 0), centred in the 56 px mark's box: 60 x 45 at its step 0.
+            assert(pet_frame(mark->sprite.pixels) == ht_claude_pet_loops[HT_PET_IDLE][0].frame &&
+                   mark->x == (466 - HT_PET_W) / 2);
+            int mark_top = mark->y - (56 - HT_PET_H) / 2;
             assert(card->box.h == 192 && card->x == 41 && card->y == 179 && card->w == 384 && card->box.radius == 28);
-            int above = mark->y - TITLE_BOTTOM, below = card->y - (mark->y + 56);
+            int above = mark_top - TITLE_BOTTOM, below = card->y - (mark_top + 56);
             assert(above >= 0 && (below - above == 0 || below - above == 1));
             int lines = 0;
             for (int i = 3; i < 7; i++) if (scene.runs[i].text[0]) lines++;
@@ -386,7 +397,8 @@ static void focus_face(void)
         assert(scene.runs[7].y == 233 - 43 / 2 && scene.runs[7].font == &ht_lv_geist_med_32.base &&
                !strcmp(scene.runs[7].text, "Simmering\xe2\x80\xa6 34s"));   // the gerund for 30..35 s
         {
-            int above = scene.runs[1].y - TITLE_BOTTOM, below = scene.runs[7].y - (scene.runs[1].y + 56);
+            int top = scene.runs[1].y - (56 - HT_PET_H) / 2;
+            int above = top - TITLE_BOTTOM, below = scene.runs[7].y - (top + 56);
             assert(above > 0 && (below - above == 0 || below - above == 1));
         }
 
@@ -418,7 +430,8 @@ static void focus_face(void)
                 assert(known);
                 int h = (l2->text[0] ? 2 : 1) * 51;
                 assert(l1->y == 233 - h / 2);
-                int above = scene.runs[1].y - TITLE_BOTTOM, below = l1->y - (scene.runs[1].y + 56);
+                int top = scene.runs[1].y - (56 - HT_PET_H) / 2;
+                int above = top - TITLE_BOTTOM, below = l1->y - (top + 56);
                 assert(above > 0 && (below - above == 0 || below - above == 1));
                 if (!k && !again) snprintf(first, sizeof first, "%s", said);
                 else if (!again && strcmp(said, first)) distinct++;
@@ -432,6 +445,105 @@ static void focus_face(void)
         ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, "");
         assert(!scene.runs[1].sprite.width && !scene.runs[1].text[0]);
+    }
+
+    /*
+     * THE CLAUDE PET: every state, every step. The pet takes the mark's run (the count never moves),
+     * its frame and hop follow the face's own state and clock_ms, it stays on the glass, and only a
+     * Claude agent gets it.
+     */
+    {
+        int frame_at[HT_PET_STATES][HT_PET_STEPS];
+        for (int state = 0; state < HT_PET_STATES; state++)
+            for (int step = 0; step < HT_PET_STEPS; step++) {
+                ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude",
+                    .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
+                    .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff,
+                    .clock_ms = (uint32_t)step * ht_claude_pet_step_ms[state] + 1};
+                if (state == HT_PET_WORKING) { f.activity = "Working"; f.elapsed = 5; }
+                if (state == HT_PET_DONE) f.mood = HT_CHARACTER_DONE;
+                if (state == HT_PET_ASKING) f.asking = true;
+                ht_scene_t scene; ht_scene_clear(&scene, 0);
+                ht_character_face(&scene, &c, &f, 0xffff, state == HT_PET_DONE ? "Done." : "");
+                assert(scene.count == 1 + 1 + 1 + 4 + 1 + 2);
+                const ht_run_t *mark = &scene.runs[1];
+                int frame = pet_frame(mark->sprite.pixels);
+                const ht_pet_step_t *want = &ht_claude_pet_loops[state][step];
+                assert(frame == want->frame && mark->sprite.width == HT_PET_W && mark->sprite.height == HT_PET_H);
+                assert(mark->x == (466 - HT_PET_W) / 2);
+                // The 56 px box's top is where the same face with step 0 puts it: only dy moves the pet.
+                ht_character_face_t g = f; g.clock_ms = 1;
+                ht_scene_t rest; ht_scene_clear(&rest, 0);
+                ht_character_face(&rest, &c, &g, 0xffff, state == HT_PET_DONE ? "Done." : "");
+                assert(mark->y - rest.runs[1].y == want->dy - ht_claude_pet_loops[state][0].dy);
+                frame_at[state][step] = frame;
+                ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+                int ink = 0;
+                for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+                    if (full[y * HT_WIDTH + x]) {
+                        ink++;
+                        assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+                    }
+                assert(ink > 0);
+            }
+        // Each state moves: more than one frame (or a hop) over its loop, and one step_ms changes it.
+        for (int state = 0; state < HT_PET_STATES; state++) {
+            bool moves = false;
+            for (int step = 0; step < HT_PET_STEPS; step++)
+                moves |= frame_at[state][step] != frame_at[state][0] ||
+                         ht_claude_pet_loops[state][step].dy != ht_claude_pet_loops[state][0].dy;
+            assert(moves);
+        }
+        // The working legs change on the next step: 90 ms later is a different frame.
+        assert(frame_at[HT_PET_WORKING][0] != frame_at[HT_PET_WORKING][3]);
+        assert(frame_at[HT_PET_IDLE][0] != frame_at[HT_PET_IDLE][20]);   // the blink
+
+        // clock_ms 0, and a sleeping or offline mood, hold idle step 0 whatever the state says.
+        ht_character_face_t held[3] = {
+            {.recipient = "x", .engine = "claude", .activity = "Working", .elapsed = 5, .asking = true,
+             .mood = HT_CHARACTER_WORKING, .clock_ms = 0},
+            {.recipient = "x", .engine = "claude", .activity = "", .mood = HT_CHARACTER_ASLEEP, .clock_ms = 5000},
+            {.recipient = "x", .engine = "claude", .activity = "", .mood = HT_CHARACTER_OFFLINE, .clock_ms = 5000},
+        };
+        for (int k = 0; k < 3; k++) {
+            held[k].status = ""; held[k].hint = ""; held[k].detail = "";
+            ht_scene_t scene; ht_scene_clear(&scene, 0);
+            ht_character_face(&scene, &c, &held[k], 0xffff, "");
+            assert(scene.count == 1 + 1 + 1 + 4 + 1 + 2);
+            assert(pet_frame(scene.runs[1].sprite.pixels) == ht_claude_pet_loops[HT_PET_IDLE][0].frame);
+            assert(!ht_focus_pet_next_ms(&held[k], ""));
+        }
+
+        // Another engine keeps its own mark, in any state, and has no pet clock.
+        ht_character_face_t other = {.recipient = "x", .engine = "codex", .activity = "Working",
+            .elapsed = 5, .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING,
+            .clock_ms = 4321};
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &other, 0xffff, "");
+        assert(scene.runs[1].sprite.pixels == ht_icon_engine56[1].px && scene.runs[1].sprite.width == 56);
+        assert(!ht_focus_pet_next_ms(&other, ""));
+
+        // The time the face next changes: a later clock, where the drawn frame or hop really differs,
+        // and nothing differs one ms before it.
+        ht_character_face_t w = {.recipient = "x", .engine = "claude", .activity = "Working",
+            .status = "", .hint = "", .detail = "", .elapsed = 5, .mood = HT_CHARACTER_WORKING};
+        for (unsigned k = 0; k < 40; k++) {
+            w.clock_ms = k * 90 + 1;
+            uint32_t next = ht_focus_pet_next_ms(&w, "");
+            assert(next > w.clock_ms);
+            ht_character_face_t at = w, before = w;
+            at.clock_ms = next; before.clock_ms = next - 1;
+            ht_scene_t sa, sb, sw; ht_scene_clear(&sa, 0); ht_scene_clear(&sb, 0); ht_scene_clear(&sw, 0);
+            ht_character_face(&sa, &c, &at, 0xffff, "");
+            ht_character_face(&sb, &c, &before, 0xffff, "");
+            ht_character_face(&sw, &c, &w, 0xffff, "");
+            assert(sa.runs[1].sprite.pixels != sb.runs[1].sprite.pixels || sa.runs[1].y != sb.runs[1].y);
+            assert(sb.runs[1].sprite.pixels == sw.runs[1].sprite.pixels && sb.runs[1].y == sw.runs[1].y);
+        }
+        w.clock_ms = 1; w.mood = HT_CHARACTER_IDLE; w.activity = "";
+        assert(ht_focus_pet_next_ms(&w, "") > 1);
+        w.voice = true; assert(!ht_focus_pet_next_ms(&w, "")); w.voice = false;
+        w.clock_ms = 0; assert(!ht_focus_pet_next_ms(&w, ""));
     }
 
     // Stated as its parts rather than as a number: the curved name, the mark, the card, the recap
