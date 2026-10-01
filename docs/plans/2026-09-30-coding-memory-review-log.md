@@ -580,3 +580,30 @@ A fresh host check at 16:21 UTC showed the user had switched the companion from 
 Codex accounts still reported exhausted weekly limits; neither was substituted for the selected
 companion. OpenCode integration is now the immediate requirement for the requested end-to-end
 test. Actual Tim extraction and the held-out quality/rollout gates remain open.
+
+### OpenCode extraction transport, isolated and not enabled
+
+The capture repair merged in [PR 557](https://github.com/autonomous-ai/openharness/pull/557)
+as `a6f2bd0ebcfebfdfa594460609942a99c62ee204` after all four CI jobs passed for the
+exact submitted head. A fresh read of the running app still returned `DAEMONS_OFF`.
+No setting, selected model, installed app or production memory was changed to bypass that state.
+
+The new OpenCode adapter requires an explicit snapshot of the selected API account, provider,
+model definition and variant. It checks the binding before launch and after output, isolates
+native session storage, denies tools, and removes disposable state. Unknown versions, OAuth,
+unresolved configuration placeholders, non-bundled provider modules and system managed policy
+are unsupported. System policy is refused rather than overridden; native 1.18.34 loads it after
+inline configuration. This is a version-specific native transport, not a process sandbox.
+
+The [installed 1.18.34 probe](../research/2026-10-01-memory-opencode-inference.json) invoked the
+actual adapter with fake credentials and localhost responses. Normal text passed; forced shell
+and question tools were denied and rejected by the adapter, even though the native CLI retried
+the model after the denied attempt. Every request exposed zero tools and the selected synthetic
+credential/model. No forbidden file was created, and temporary session storage was removed.
+Twenty-two focused tests, the full 378-check memory/companion suite and TypeScript checking passed.
+
+This module is intentionally not connected to the companion yet. An authoritative observer for
+the foreground OpenCode account/configuration and the host runtime binding still need to be
+implemented. OpenCode capture and recall are separate remaining work. No real model evaluated
+the user's private sample, and no model-quality, useful-memory or task-benefit claim follows
+from the transport checks.
