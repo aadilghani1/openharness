@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { evaluateExtractionCase, type ExtractionCase } from './evaluation.js'
+import { evaluateExtractionCase, type ExtractionCase, type ExtractionBatchCase } from './evaluation.js'
 import { nativeMemoryUsage } from './inferenceProcess.js'
 import type { MemoryDraft } from './types.js'
 
@@ -64,6 +64,44 @@ it('marks recall probes inconclusive when the selected provider is unavailable',
   } })
   expect(result.probes.every(probe => probe.status === 'not_run' && probe.passed === null)).toBe(true)
   expect(result.checks.filter(check => check.name !== 'completed_extraction').every(check => check.passed === null)).toBe(true)
+})
+
+it('evaluates separate sessions together without leaking their rubric, and reports each episode outcome', async () => {
+  const { sources, ...base } = fixture
+  const batch: ExtractionBatchCase = { ...base, episodes: [{ id: 'preference', sources },
+    { id: 'unrelated', sources: [{ role: 'assistant', text: 'I used MongoDB for a throwaway experiment.' }, { role: 'user', text: 'Thanks.' }] }] }
+  const inference = provider([{ ...draft, evidence: [{ ...draft.evidence[0], sourceEventId: 'synthetic-preference-0' }] }])
+  const result = await evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference })
+  expect(result.checks.every(check => check.passed)).toBe(true)
+  expect(result.episodes).toEqual({ expected: 2, reviewed: 2, jobs: { learned: 1, no_useful_memory: 1 } })
+  expect(result.semanticReview.status).toBe('pending')
+  expect(inference.run).toHaveBeenCalledOnce()
+  const prompt = (inference.run.mock.calls[0] as unknown as [string])[0]
+  expect(prompt).not.toContain('SECRET_EXPECTATION_NOT_IN_PROMPT')
+  expect(prompt).not.toContain('"id":"negative"')
+  expect(prompt).toContain('synthetic-synthetic-preference')
+  expect(prompt).toContain('synthetic-synthetic-unrelated')
+})
+
+it('does not score a partial batch as successful abstention when input limits leave episodes queued', async () => {
+  const { sources: _sources, ...base } = fixture
+  const batch: ExtractionBatchCase = { ...base, expected: { ...base.expected, records: { min: 0, max: 0 }, scope: 'none' },
+    episodes: Array.from({ length: 4 }, (_, index) => ({ id: `large-${index}`, sources: [{ role: 'user', text: 'x'.repeat(32_000) }] })) }
+  const result = await evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference: provider([]) })
+  expect(result.outcome.state).toBe('no_useful_memory')
+  expect(result.episodes).toEqual({ expected: 4, reviewed: 2, jobs: { no_useful_memory: 2, queued: 2 } })
+  expect(result.checks[0]).toEqual({ name: 'completed_extraction', passed: false })
+  expect(result.checks.slice(1).every(check => check.passed === null)).toBe(true)
+  expect(result.probes.every(probe => probe.status === 'not_run')).toBe(true)
+  expect(result.semanticReview.status).toBe('not_reviewable')
+})
+
+it('rejects an oversized diagnostic group before invoking inference', async () => {
+  const { sources, ...base } = fixture
+  const inference = provider([])
+  const batch: ExtractionBatchCase = { ...base, episodes: Array.from({ length: 5 }, (_, index) => ({ id: `case-${index}`, sources })) }
+  await expect(evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference })).rejects.toThrow('invalid_evaluation_episodes')
+  expect(inference.run).not.toHaveBeenCalled()
 })
 
 it.each([undefined, {}, { input_tokens: 1 }, { input_tokens: -1, output_tokens: 2 },

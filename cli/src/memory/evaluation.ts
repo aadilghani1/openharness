@@ -2,7 +2,8 @@
 import { MemoryLearner, type MemoryInference } from './learner.js'
 import { CodingMemoryStore } from './store.js'
 import { QUEUE_OPERATIONS, type Arguments, type MemoryPort, type Operation, type Result } from './operations.js'
-import type { Conditions, MemoryRecord, SourceEvent } from './types.js'
+import { MemoryError, type Conditions, type MemoryRecord, type SourceEvent } from './types.js'
+import { MAX_EPISODES_PER_CALL } from './queue.js'
 
 export interface ExtractionCase {
   id: string
@@ -17,12 +18,20 @@ export interface ExtractionCase {
   probes: Array<{ id: string; query: string; projectIds: string[]; conditions: Conditions; expected: 'recall' | 'abstain' }>
 }
 export interface EvaluationCheck { name: string; passed: boolean | null }
+export interface ExtractionBatchCase extends Omit<ExtractionCase, 'sources'> {
+  episodes: Array<{ id: string; sources: ExtractionCase['sources'] }>
+}
+export type ExtractionScenario = ExtractionCase | ExtractionBatchCase
 
 /** Expectations and probes are never included in captured text or extraction input. */
 export async function evaluateExtractionCase(input: {
-  fixture: ExtractionCase; directory: string; inference: MemoryInference; engine: string
+  fixture: ExtractionScenario; directory: string; inference: MemoryInference; engine: string
 }) {
   const { fixture } = input
+  const batch = 'episodes' in fixture
+  const episodes = batch ? fixture.episodes : [{ id: fixture.id, sources: fixture.sources }]
+  if (!episodes.length || episodes.length > MAX_EPISODES_PER_CALL || new Set(episodes.map(episode => episode.id)).size !== episodes.length
+    || episodes.some(episode => !episode.sources.length)) throw new MemoryError('invalid_evaluation_episodes')
   const profileId = 'synthetic-owner'
   const opened = CodingMemoryStore.open({ directory: input.directory, profileId })
   if (!opened.ok) throw new Error(opened.reason)
@@ -32,22 +41,27 @@ export async function evaluateExtractionCase(input: {
     const projectIds = [...new Set([fixture.projectId, ...fixture.probes.flatMap(probe => probe.projectIds)].filter((id): id is string => id !== null))]
     for (const id of projectIds) store.registerProject(id)
     store.setControls({ learn: true, recall: true })
-    const sessionId = `synthetic-${fixture.id}`
-    const sources: SourceEvent[] = fixture.sources.map((source, index) => ({
-      ...source, id: `${fixture.id}-${index}`, nativeEventId: `${fixture.id}-${index}`, profileId,
-      projectId: fixture.projectId, engine: input.engine, sessionId, eligibility: 'coding',
-      observedAt: Date.now(), rootIds: [`${fixture.id}-${index}`],
-    }))
-    store.learning.capture({ streamId: fixture.id, episodeId: fixture.id, engine: input.engine, sessionId,
-      projectId: fixture.projectId, from: null, to: '1', events: sources, boundary: 'complete' })
+    for (const episode of episodes) {
+      const id = batch ? `${fixture.id}-${episode.id}` : fixture.id
+      const sessionId = `synthetic-${id}`
+      const sources: SourceEvent[] = episode.sources.map((source, index) => ({
+        ...source, id: `${id}-${index}`, nativeEventId: `${id}-${index}`, profileId,
+        projectId: fixture.projectId, engine: input.engine, sessionId, eligibility: 'coding',
+        observedAt: Date.now(), rootIds: [`${id}-${index}`],
+      }))
+      store.learning.capture({ streamId: id, episodeId: id, engine: input.engine, sessionId,
+        projectId: fixture.projectId, from: null, to: '1', events: sources, boundary: 'complete' })
+    }
     const memory: MemoryPort = { async request<K extends Operation>(operation: K, args: Arguments<K>): Promise<Result<K>> {
       const owner = (QUEUE_OPERATIONS as readonly string[]).includes(operation) ? store.learning : store
       return (owner as unknown as Record<string, (...args: unknown[]) => unknown>)[operation].apply(owner, args) as Result<K>
     } }
     const outcome = await new MemoryLearner(memory, input.inference).tick()
     const records = store.list({ profileId, projectIds, includeProfile: true })
-    const checks = extractionChecks(fixture, outcome.state, records)
-    const completed = ['learned', 'no_useful_memory'].includes(outcome.state)
+    const jobs = store.learning.status().jobs
+    const reviewed = (jobs.learned ?? 0) + (jobs.no_useful_memory ?? 0)
+    const completed = ['learned', 'no_useful_memory'].includes(outcome.state) && reviewed === episodes.length
+    const checks = extractionChecks(fixture, outcome.state, records, completed)
     const probes = fixture.probes.map(probe => {
       if (!completed) {
         checks.push({ name: `recall:${probe.id}`, passed: null })
@@ -59,14 +73,15 @@ export async function evaluateExtractionCase(input: {
       return { ...probe, status: result.status, returnedIds: result.items.map(item => item.id), passed }
     })
     return { id: fixture.id, durationMs: Date.now() - startedAt, outcome, checks, probes, records,
+      episodes: { expected: episodes.length, reviewed, jobs },
       // Mechanical success never claims semantic entailment, usefulness or independent review.
       semanticReview: { status: completed ? 'pending' as const : 'not_reviewable' as const, criteria: fixture.expected.review } }
   } finally { store.close() }
 }
 
-export function extractionChecks(fixture: ExtractionCase, state: string, records: MemoryRecord[]): EvaluationCheck[] {
+export function extractionChecks(fixture: ExtractionScenario, state: string, records: MemoryRecord[],
+  completed = ['learned', 'no_useful_memory'].includes(state)): EvaluationCheck[] {
   const { expected } = fixture
-  const completed = ['learned', 'no_useful_memory'].includes(state)
   return [
     { name: 'completed_extraction', passed: completed },
     { name: 'record_count', passed: completed ? records.length >= expected.records.min && records.length <= expected.records.max : null },

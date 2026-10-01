@@ -1,5 +1,6 @@
 // Dry run: node --import tsx scripts/memory-extraction-eval.ts
-// Native run: add --run-native --output <report.json>. At most six calls, no retries/fallback.
+// Add --batch for the frozen multi-episode suite. Native run: --run-native --output <report.json>.
+// At most six calls, no retries/fallback.
 // Synthetic data only. Reads selected companion metadata; never writes the production memory DB.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -11,7 +12,7 @@ import { promisify } from 'node:util'
 import { memoryAccountIdentity } from '../src/memory/account.js'
 import { claudeMemoryCapability, runClaudeMemoryInference } from '../src/memory/claudeInference.js'
 import { codexMemoryCapability, runCodexMemoryInference } from '../src/memory/inference.js'
-import { evaluateExtractionCase, type ExtractionCase } from '../src/memory/evaluation.js'
+import { evaluateExtractionCase, type ExtractionScenario } from '../src/memory/evaluation.js'
 import { EXTRACTION_PROMPT_VERSION } from '../src/memory/learner.js'
 import { MEMORY_CONTEXT_VERSION } from '../src/memory/context.js'
 import type { MemoryInferenceObservation, MemoryInferenceOptions } from '../src/memory/inferenceProcess.js'
@@ -20,20 +21,21 @@ import { MemoryError } from '../src/memory/types.js'
 const exec = promisify(execFile)
 const cli = fileURLToPath(new URL('..', import.meta.url))
 const root = dirname(cli)
-const suitePath = join(root, 'docs/research/2026-09-30-memory-extraction-cases.json')
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const args = process.argv.slice(2)
+const batch = args.includes('--batch')
+const suitePath = join(root, batch ? 'docs/research/2026-09-30-memory-batch-extraction-cases.json' : 'docs/research/2026-09-30-memory-extraction-cases.json')
 const native = args.includes('--run-native')
 const outputIndex = args.indexOf('--output')
 const output = outputIndex < 0 ? null : resolve(args[outputIndex + 1] ?? '')
-const allowed = new Set(['--run-native', '--output', ...(outputIndex < 0 ? [] : [args[outputIndex + 1]])])
+const allowed = new Set(['--batch', '--run-native', '--output', ...(outputIndex < 0 ? [] : [args[outputIndex + 1]])])
 if (args.some(arg => !allowed.has(arg)) || (native && (!output || !args[outputIndex + 1]))) throw new Error('Use --run-native --output <report.json>')
 const suiteText = await readFile(suitePath, 'utf8')
-const suite = JSON.parse(suiteText) as { suite: string; cases: ExtractionCase[] }
+const suite = JSON.parse(suiteText) as { suite: string; cases: ExtractionScenario[] }
 if (!Array.isArray(suite.cases) || suite.cases.length > 6) throw new Error('At most six frozen cases per diagnostic run')
 if (!native) {
   console.log(JSON.stringify({ suite: suite.suite, sha256: digest(suiteText), cases: suite.cases.map(row => row.id),
-    nativeCalls: 0, status: 'not_run', instructions: 'Add --run-native --output <report.json> to use the current companion model.' }, null, 2))
+    nativeCalls: 0, status: 'not_run', instructions: `Use ${batch ? '--batch ' : ''}--run-native --output <report.json> with the current companion model.` }, null, 2))
 } else {
   try { await run() } catch (error) {
     console.error(JSON.stringify({ status: 'not_run', error: error instanceof MemoryError ? error.code : 'evaluation_unavailable' }))
