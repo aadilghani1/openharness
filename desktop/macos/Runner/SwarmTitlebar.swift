@@ -128,7 +128,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "resourceMonitor", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -1856,8 +1856,10 @@ private final class SwarmTabStrip: NSView {
     statusBar.addSubview(harnessMonitorButton)
     machineResourcesLabel.isBordered = false
     machineResourcesLabel.textAlignment = .left
-    machineResourcesLabel.setAccessibilityRole(.staticText)
-    machineResourcesLabel.setAccessibilityLabel("Machine resources")
+    machineResourcesLabel.target = self
+    machineResourcesLabel.action = #selector(openHarnessMonitor)
+    machineResourcesLabel.setAccessibilityRole(.button)
+    machineResourcesLabel.setAccessibilityLabel("Harness resources — Open Harness Monitor")
     machineResourcesLabel.isHidden = true
     statusBar.addSubview(machineResourcesLabel)
     pullRequestButton.isBordered = false
@@ -2084,7 +2086,7 @@ private final class SwarmTabStrip: NSView {
     machineResourcesLabel.foreground = terminalForeground
     machineResourcesLabel.contentPadding = harnessMonitorButton.contentPadding
     machineResourcesLabel.groupGapCells = resourceGroupGapCells
-    machineResourcesLabel.update(machineResourcesState, enabled: false)
+    machineResourcesLabel.update(machineResourcesState, enabled: actionsEnabled)
     machineResourcesLabel.isHidden = machineResourcesState == nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
@@ -2327,12 +2329,12 @@ private final class SwarmTabStrip: NSView {
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
     let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4 - resourceGap * 2)
     let monitorWidth = harnessMonitorButton.isHidden ? 0 : min(harnessMonitorButton.preferredWidth, usageBudget * 0.4)
-    let hardwareBudget = usageBudget * 0.42
+    let hardwareBudget = usageBudget * 0.52
     if var resource = machineResourcesState {
-      for key in ["segments", "compactSegments", "minimalSegments"] {
+      for key in ["segments", "noStorageSegments", "compactSegments", "minimalSegments"] {
         guard let segments = machineResourcesState?[key] else { continue }
         resource["segments"] = segments
-        machineResourcesLabel.update(resource, enabled: false)
+        machineResourcesLabel.update(resource, enabled: actionsEnabled)
         if machineResourcesLabel.preferredWidth <= hardwareBudget { break }
       }
     }

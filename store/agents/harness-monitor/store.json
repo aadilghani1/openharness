@@ -1,6 +1,6 @@
 {
   "license": "MIT",
-  "tagline": "Manage sessions across your machines",
+  "tagline": "Monitor resources and AI usage across your machines",
   "examples": [
     {
       "prompt": "Show me every harness on this machine, then pause everything nobody has touched in a day.",

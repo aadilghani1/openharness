@@ -49,7 +49,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
       return
     }
     const policy = normalizePolicy(state.policy, { home: homedir() })
-    const { rows, problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache, remote, remoteIntervalMs: forceRemote ? 0 : remoteIntervalMs })
+    const { rows, shared = [], machines = [], problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache, remote, remoteIntervalMs: forceRemote ? 0 : remoteIntervalMs })
 
     const plan = decide(rows, policy, { home: homedir(), now: now() })
     const summary = summarize(rows)
@@ -57,6 +57,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
       spec: 1,
       status: degraded ? 'degraded' : 'ok',
       rows,
+      shared,
+      machines,
       summary,
       policy: { ...policy },
       defaults: DEFAULT_POLICY,

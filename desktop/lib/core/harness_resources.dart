@@ -6,9 +6,14 @@ class HarnessResources {
     this.memoryBytes,
     this.cpuPercent,
     this.processCount,
+    this.gpuPercent,
+    this.workspaceBytes,
+    this.workspacePath,
   });
   final double? memoryBytes, cpuPercent;
   final int? processCount;
+  final double? gpuPercent, workspaceBytes;
+  final String? workspacePath;
 
   factory HarnessResources.fromJson(Map<String, dynamic> json) {
     double? number(String key) {
@@ -23,6 +28,11 @@ class HarnessResources {
       memoryBytes: number('memoryBytes'),
       cpuPercent: number('cpuPercent'),
       processCount: count is int && count >= 0 ? count : null,
+      gpuPercent: number('gpuPercent'),
+      workspaceBytes: number('workspaceBytes'),
+      workspacePath: json['workspacePath'] is String
+          ? json['workspacePath'] as String
+          : null,
     );
   }
 

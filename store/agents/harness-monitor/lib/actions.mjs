@@ -32,7 +32,7 @@ export async function pause(row, { policy = normalizePolicy({}), force = false, 
       if (guard) return receipt(row, 'pause', guard.why)
       if (current.lastActivity !== row.lastActivity) return receipt(row, 'pause', 'Activity changed since the cleanup preview. Review the new plan.')
     }
-    const reply = await rpc(row.machineId, 'agent_delete', { agentId: row.agentId })
+    const reply = await rpc(row.machineId, 'agent_delete', { agentId: row.agentId, expectedSessionId: row.sessionId || null })
     if (reply.deleted !== true) return receipt(row, 'pause', 'Stop was not confirmed. Refresh before trying again.')
     return receipt(row, 'pause', 'Stopped; history and launch configuration retained.', { ok: true, refused: false, freed: current.rssBytes })
   } catch (error) { return receipt(row, 'pause', error.message) }

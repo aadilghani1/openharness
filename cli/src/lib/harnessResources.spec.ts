@@ -98,3 +98,20 @@ it('counts a detached shared server once, without assigning its whole RAM to eve
   time += 3000
   expect((await read()).shared![0].cpuPercent).toBe(0)
 })
+
+it('attributes GPU and disk rates only to owned trees and validates counter identity', async () => {
+  let now = 10_000, readBytes = 1000
+  const telemetry = vi.fn(async () => new Map([
+    [10, { readBytes, writeBytes: readBytes * 2, gpuMemoryBytes: null, gpuPercent: null }],
+    [11, { readBytes: 0, writeBytes: 0, gpuMemoryBytes: 200, gpuPercent: 15 }],
+    [90, { readBytes: 9000, writeBytes: 9000, gpuMemoryBytes: 9000, gpuPercent: 80 }],
+  ]))
+  let snapshot = [row(10), row(11, 10), row(90)]
+  const read = createHarnessResourcesReader(() => [agent('a', 10)], { now: () => now, sample: async () => snapshot, telemetry })
+  expect((await read()).agents[0]).toMatchObject({ gpuMemoryBytes: 200, gpuPercent: 15, diskReadBytesPerSecond: null })
+  expect(telemetry).toHaveBeenCalledWith([10, 11])
+  now += 5000; readBytes += 1000
+  expect((await read()).agents[0]).toMatchObject({ diskReadBytesPerSecond: 200, diskWriteBytesPerSecond: 400, processCount: 2 })
+  now += 5000; snapshot = [row(10), { ...row(11, 10), start: 'replacement' }]
+  expect((await read()).agents[0].diskReadBytesPerSecond).toBeNull()
+})

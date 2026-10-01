@@ -56,6 +56,7 @@ import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.j
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
+import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
@@ -766,6 +767,7 @@ export class BackendSocket {
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
   harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
+  harnessStorageReader = createHarnessStorageReader()
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
    *  that lands meanwhile. */
   private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
@@ -2090,7 +2092,11 @@ export class BackendSocket {
         case 'machine_resources':
           // Sampling CPU must not hold up typing or other machine requests.
           void (payload.harnesses === true
-            ? this.harnessResourcesReader().then(harnesses => ({ harnesses }))
+            ? this.harnessResourcesReader().then(async harnesses => {
+              if (payload.storage !== true) return { harnesses }
+              const storage = await this.harnessStorageReader(registry.advertised())
+              return { harnesses: { ...harnesses, agents: harnesses.agents.map(row => ({ ...row, ...storage.get(row.agentId) })) } }
+            })
             : readMachineResources())
             .then(resources => reply(type, requestId, { ...resources }))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
@@ -2184,21 +2190,35 @@ export class BackendSocket {
             return
           }
           if (payload.monitor === true) {
-            const snapshot = await this.harnessResourcesReader().catch(() => ({ agents: [] }))
-            const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
-            const byId = new Map(sessions.map(s => [s.agentId, s]))
-            reply(type, requestId, { agents: projects.map(agent => {
-              const session = byId.get(agent.id)
-              const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
-              const reading = resources.get(agent.id)
-              return { ...agent, monitor: {
-                activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
-                activityKnown: this.monitorActivityProvider !== null,
-                rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
-                cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
-                pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
-              } }
-            }) })
+            // Optional telemetry must never hold the ordered terminal-input queue.
+            void (async () => {
+              const [snapshot, storage] = await Promise.all([
+                this.harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
+                this.harnessStorageReader(sessions).catch(() => new Map()),
+              ])
+              const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
+              const byId = new Map(sessions.map(s => [s.agentId, s]))
+              reply(type, requestId, { agents: projects.map(agent => {
+                const session = byId.get(agent.id)
+                const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
+                const reading = resources.get(agent.id)
+                return { ...agent, monitor: {
+                  activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
+                  activityKnown: this.monitorActivityProvider !== null,
+                  rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
+                  cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
+                  pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
+                  sampledAt: snapshot.sampledAt,
+                  processCount: reading?.processCount ?? null,
+                  gpuMemoryBytes: reading?.gpuMemoryBytes ?? null,
+                  gpuPercent: reading?.gpuPercent ?? null,
+                  diskReadBytesPerSecond: reading?.diskReadBytesPerSecond ?? null,
+                  diskWriteBytesPerSecond: reading?.diskWriteBytesPerSecond ?? null,
+                  processes: reading?.processes ?? [],
+                  ...(storage.get(agent.id) ?? {}),
+                } }
+              }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
+            })().catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           } else reply(type, requestId, { agents: projects })
           return
         }
@@ -3072,6 +3092,13 @@ export class BackendSocket {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           if (!this.onDeleteAgent) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          if (Object.hasOwn(payload, 'expectedSessionId')) {
+            const current = registry.byAgent(target)
+            if (!current || (current.sessionId || null) !== payload.expectedSessionId) {
+              reply(type, requestId, { error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.' })
+              return
+            }
+          }
           try { await this.onDeleteAgent(target) }
           catch (error) {
             if (!(error instanceof AgentStopError)) throw error

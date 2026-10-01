@@ -52,8 +52,7 @@ import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_monitor.dart';
-import '../state/machine_resource_monitor.dart';
-import '../widgets/workspace_machine_resources.dart';
+import '../widgets/workspace_harness_resources.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
 import '../state/harness_placement.dart';
@@ -574,8 +573,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
     _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
-    _machineResources = MachineResourceMonitor(app)
-      ..addListener(_monitorChanged);
     app.reviewSessionClose = _reviewSessionClose;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
@@ -717,7 +714,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         // Subscription usage is read ahead, so opening a menu shows it without waiting.
         _modelsMenu!.start();
         _harnessMonitor.start();
-        _machineResources.start();
       });
     }
     if (_menuHost) {
@@ -779,7 +775,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   @override
   void dispose() {
     _harnessMonitor.dispose();
-    _machineResources.dispose();
     if (app.reviewSessionClose == _reviewSessionClose) {
       app.reviewSessionClose = null;
     }
@@ -1481,7 +1476,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   late final HarnessMonitor _harnessMonitor;
-  late final MachineResourceMonitor _machineResources;
   void _monitorChanged() {
     if (!mounted) return;
     if (_menuHost) _syncNative();
@@ -1809,19 +1803,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'interactive': _shortcutsEnabled,
       },
       'machineResources': {
-        'text': _machineResources.label,
-        'label': _machineResources.detail,
-        'detail': _machineResources.detail,
+        'text': _harnessMonitor.metricsLabel(),
+        'label': _harnessMonitor.resourceDetail,
+        'detail': _harnessMonitor.resourceDetail,
         'segments': [
-          {'text': _machineResources.metricsLabel()},
+          {'text': _harnessMonitor.metricsLabel()},
+        ],
+        'noStorageSegments': [
+          {'text': _harnessMonitor.metricsLabel(storage: false)},
         ],
         'compactSegments': [
-          {'text': _machineResources.metricsLabel(gpu: false)},
+          {'text': _harnessMonitor.metricsLabel(gpu: false, storage: false)},
         ],
         'minimalSegments': [
-          {'text': _machineResources.metricsLabel(ram: false, gpu: false)},
+          {
+            'text': _harnessMonitor.metricsLabel(
+              ram: false,
+              gpu: false,
+              storage: false,
+            ),
+          },
         ],
-        'interactive': false,
+        'interactive': _shortcutsEnabled,
       },
       'footerCovered':
           !_showWorkspaceFooter ||
@@ -7031,7 +7034,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             cell.width * 2,
         resourceBudget * .4,
       );
-      final hardwareWidth = resourceBudget * .42;
+      final hardwareWidth = resourceBudget * .52;
       final usageWidth = constraints.maxWidth < 1050
           ? 0.0
           : resourceBudget * .22;
@@ -7115,9 +7118,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 SizedBox(width: resourceGap),
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: hardwareWidth),
-                  child: WorkspaceMachineResources(
+                  child: WorkspaceHarnessResources(
                     key: const ValueKey('workspace-machine-resources'),
-                    monitor: _machineResources,
+                    monitor: _harnessMonitor,
+                    onPressed: _shortcutsEnabled
+                        ? _toggleHarnessControls
+                        : null,
                   ),
                 ),
                 if (usageWidth > 0) ...[

@@ -458,3 +458,27 @@ unmerged.
   [narrow dark](../../docs/research/2026-10-01-session-close/dark-2.0x.png),
   [narrow light](../../docs/research/2026-10-01-session-close/light-2.0x.png).
   Live native interaction and VoiceOver are not claimed by these widget renders.
+
+
+### Harness Monitor and resource footer, 2026-10-01
+
+- The process table starts with active sessions, with machine/status filters, saved sortable and
+  resizable columns, resource/AI presets, an inspector and a reviewed Stop action. Open/resume and
+  assistant/cleanup controls are absent from the table. Stopping keeps history and files and checks
+  conversation identity on the owning daemon.
+- The footer now totals the counted harnesses across connected owned machines. CPU/GPU are whole
+  percentages; RAM/SSD are whole MB/GB. Shared servers and canonical workspace folders count once;
+  partial totals use ≥ and missing metrics use —. Every metric opens the same reusable monitor tab.
+  Foreground sampling runs every fifteen seconds and stops while hidden.
+- Synthetic browser review covered machine/status filters, selection, inspection, a confirmed stop,
+  paused/offline action availability, keyboard resizing, and light/dark layouts at 880×560. A 440×560
+  check found and fixed the Columns menu overflowing the left edge. No real harness was stopped.
+- Validation: 117 monitor tests, 214 focused daemon tests, 43 desktop tests and 4,221 native titlebar
+  checks passed. TypeScript checking, changed-file Flutter analysis and the macOS debug build passed.
+  The full CLI suite had 8,292 passing and 39 skipped tests; five unchanged installed-OpenCode flag
+  checks failed because the local binary did not advertise --auto/--agent. An isolated real macOS
+  process/folder smoke check measured CPU, RAM and disk and kept unsupported GPU readings unknown.
+- Linux NVIDIA utilization/allocation and procfs I/O parsing have fixtures; actual NVIDIA hardware
+  remains unverified. macOS per-process GPU and restricted driver counters display —. Token totals
+  and breakdowns currently come from Claude, Codex and OpenCode ledgers; other engines show missing
+  metrics explicitly. See the Harness Monitor README for definitions and research references.

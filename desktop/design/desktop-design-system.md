@@ -344,25 +344,24 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — global harness count, local CPU/RAM/GPU,
-then subscription allowance used at the left; focused machine, project, branch
-and PR at the right. Each context field keeps its existing action. The hardware
-scope always stays on the computer running the app, even when a remote pane is
-focused. Hardware is plain status text, with no machine filter, selection or
-resource panel. Never sum percentages across machines.
-Titles stay quiet when several panes are visible. Do not repeat branches in pane
-headers, or model/effort in the footer. Context honors the selected status face,
-fields, colors and shell/Powerline treatment. Recent-harness context uses its
-monochrome presentation.
-Use whole percentages, one space between title and value, and 2.5 character cells between parts:
-`Harnesses 118   CPU 20%   RAM 50%   GPU 10%   Claude 100%   Codex 90%`.
-All labels and numbers use neutral readable ink;
-no severity color, dot separators, trailing plus or decimal figures. Subscription
-figures mean allowance used. Preserve Models' deduplicated accounts, limiting
-window and freshness rules. Unknown values show `-`, never fabricated zero.
-Hover explains scope, account identity and reset windows. Hardware has no click
-action. Clicking subscription usage opens Subscriptions without switching a model.
-At narrow widths hide complete metric groups rather than clipping percentages.
+**Focused workspace footer** — running harness count and attributable CPU/RAM/GPU/SSD across
+connected owned machines, then subscription allowance used at the left; focused machine, project,
+branch and PR at the right. Each context field keeps its action. Harness count and every resource
+metric select the existing Harness Monitor tab or create it if absent. Process-tree CPU uses 100%
+per core; GPU sums reported process utilization, which can exceed 100%. Shared servers count once. Unsupported GPU
+attribution stays unknown. RAM/SSD are absolute, rounded whole MB/GB; shared/nested workspace
+folders count once per machine. See [workspace status bar](workspace-status-bar.md) for accounting.
+Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
+model/effort in the footer. Context honors the selected status face, fields, colors and shell/
+Powerline treatment. Recent-harness context uses its monochrome presentation.
+Use whole figures, one space between title and value, and 2.5 character cells between parts:
+`Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
+Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
+decimal figures. Harness metrics show — when unavailable and ≥ for partial totals. Subscription
+figures mean allowance used and preserve Models' deduplicated accounts, limiting window and
+freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
+without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
+
 Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls

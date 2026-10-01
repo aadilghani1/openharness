@@ -175,10 +175,11 @@ export async function withBridge(machineId, fn, { env = process.env, timeoutMs =
 /** The fleet as the daemon sees it, for one machine — on the kept session. A kept socket that has
  *  gone quiet (the daemon behind it restarted without closing it) is dropped and the read retried
  *  ONCE on a fresh one before the machine is reported silent. */
-export async function listAgents(machineId, options = {}) {
+export async function listInventory(machineId, options = {}) {
   const ask = async ({ session }) => {
     const reply = await session.rpc('agents_list', { includeStopped: true, monitor: true })
-    return Array.isArray(reply.agents) ? reply.agents : []
+    return { agents: Array.isArray(reply.agents) ? reply.agents : [],
+      shared: Array.isArray(reply.sharedResources) ? reply.sharedResources : [], sampledAt: reply.sampledAt ?? null }
   }
   const first = await bridgeSession(machineId, options)
   try {
@@ -190,6 +191,10 @@ export async function listAgents(machineId, options = {}) {
     const second = await bridgeSession(machineId, { ...options, forceReconnect: true })
     try { return await ask(second) } catch (again) { if (again?.timedOut) second.session.close(); throw again }
   }
+}
+
+export async function listAgents(machineId, options = {}) {
+  return (await listInventory(machineId, options)).agents
 }
 
 /** A single owner RPC. Only reads above reconnect/retry; callers reconcile uncertain writes by receipt. */

@@ -158,6 +158,51 @@ void main() {
   });
 
   test(
+    'an existing stopped monitor reopens in the same tab after focus changes',
+    () async {
+      await app.harnessMonitor.open();
+      final monitorTab = app.activeSwarmId;
+      app.stateOf('m')!.agents = [
+        const Agent(
+          id: 'manager',
+          name: harnessMonitorName,
+          engine: 'opencode',
+          dsh: harnessMonitorId,
+          status: 'stopped',
+        ),
+      ];
+      app.newSwarm(name: 'Other work');
+      app.selectedMachineId = 'other';
+      final count = app.swarms.length;
+      expect(await app.harnessMonitor.open(), isNull);
+      expect(app.resumes, 1);
+      expect(app.activeSwarmId, monitorTab);
+      expect(app.swarms, hasLength(count));
+      expect(connection.creations, hasLength(1));
+      app.resumeThrows = true;
+      expect(
+        await app.harnessMonitor.open(),
+        'Could not open Harness Monitor. Try again.',
+      );
+    },
+  );
+
+  test(
+    'an existing offline monitor is selected without creating another one',
+    () async {
+      await app.harnessMonitor.open();
+      final monitorTab = app.activeSwarmId;
+      app.stateOf('m')!.connectionStatus = ConnectionStatus.disconnected;
+      app.newSwarm(name: 'Other work');
+      app.selectedMachineId = 'other';
+      expect(await app.harnessMonitor.open(), isNull);
+      expect(app.activeSwarmId, monitorTab);
+      expect(app.resumes, 0);
+      expect(connection.creations, hasLength(1));
+    },
+  );
+
+  test(
     'Open refreshes the owning machine and reveals an existing tab',
     () async {
       app.stateOf('other')!
@@ -196,79 +241,87 @@ void main() {
   );
 
   for (final nativeTabs in [false, true]) {
-    testWidgets('management opens and reuses a DSH tab (native=$nativeTabs)', (
-      tester,
-    ) async {
-      const channel = MethodChannel('harness/swarm_tabs');
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        (_) async => null,
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          channel,
-          null,
-        ),
-      );
-      await mount(tester, app, nativeTabs: nativeTabs);
-      Future<void> open() async {
-        if (nativeTabs) {
-          tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-            channel.name,
-            const StandardMethodCodec().encodeMethodCall(
-              const MethodCall('harnessControls'),
-            ),
-            (_) {},
+    for (final resources in [false, true]) {
+      testWidgets(
+        'footer opens and reuses monitor (native=$nativeTabs resources=$resources)',
+        (tester) async {
+          const channel = MethodChannel('harness/swarm_tabs');
+          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            (_) async => null,
           );
-        } else {
-          await openWorkspaceManagement(tester, 'harnesses');
-        }
-        await tester.pumpAndSettle();
-      }
+          addTearDown(
+            () => tester.binding.defaultBinaryMessenger
+                .setMockMethodCallHandler(channel, null),
+          );
+          await mount(tester, app, nativeTabs: nativeTabs);
+          Future<void> open() async {
+            if (nativeTabs) {
+              tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+                channel.name,
+                const StandardMethodCodec().encodeMethodCall(
+                  MethodCall(resources ? 'resourceMonitor' : 'harnessControls'),
+                ),
+                (_) {},
+              );
+            } else if (resources) {
+              await tester.tap(
+                find.byKey(const ValueKey('workspace-machine-resources')),
+              );
+            } else {
+              await openWorkspaceManagement(tester, 'harnesses');
+            }
+            await tester.pumpAndSettle();
+          }
 
-      await open();
-      expect(app.activeSwarm.name, harnessMonitorName);
-      expect(find.byType(WebPanePanel), findsOneWidget);
-      expect(app.zoomedPaneId, app.panes.singleWhere((p) => p.isWeb).id);
-      final count = app.swarms.length;
-      await open();
-      expect(app.swarms, hasLength(count));
-      expect(connection.creations, hasLength(1));
-      final viewer = app.panes.singleWhere((p) => p.isWeb);
-      await app.handleHarnessMonitorAction(viewer, {'action': 'assistant'});
-      // The fixture terminal has no daemon to finish its attachment animation.
-      await tester.pump(const Duration(milliseconds: 350));
-      expect(find.text('Hide assistant'), findsOneWidget);
-      await tester.tap(find.text('Hide assistant'));
-      await tester.pumpAndSettle();
-      expect(app.zoomedPaneId, viewer.id);
-      expect(tester.takeException(), isNull);
-      final monitorTab = app.activeSwarm;
-      if (nativeTabs) {
-        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-          channel.name,
-          const StandardMethodCodec().encodeMethodCall(
-            MethodCall('close', {'id': monitorTab.id}),
-          ),
-          (_) {},
-        );
-      } else {
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: const Offset(1200, 700));
-        await mouse.moveTo(
-          tester.getCenter(find.byKey(ValueKey(monitorTab.id))),
-        );
-        await tester.pump();
-        await tester.tap(
-          find.byKey(ValueKey('tab-close:${monitorTab.id}')).hitTestable(),
-        );
-        await mouse.removePointer();
-      }
-      await tester.pumpAndSettle();
-      expect(app.swarms, isNot(contains(monitorTab)));
-      expect(connection.closes, isEmpty);
-      expect(find.text('OK'), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    });
+          await open();
+          expect(app.activeSwarm.name, harnessMonitorName);
+          expect(find.byType(WebPanePanel), findsOneWidget);
+          expect(app.zoomedPaneId, app.panes.singleWhere((p) => p.isWeb).id);
+          final count = app.swarms.length;
+          app.selectedMachineId = 'other';
+          await open();
+          expect(app.swarms, hasLength(count));
+          expect(connection.creations, hasLength(1));
+          final viewer = app.panes.singleWhere((p) => p.isWeb);
+          await app.handleHarnessMonitorAction(viewer, {'action': 'assistant'});
+          // The fixture terminal has no daemon to finish its attachment animation.
+          await tester.pump(const Duration(milliseconds: 350));
+          expect(find.text('Hide assistant'), findsOneWidget);
+          await tester.tap(find.text('Hide assistant'));
+          await tester.pumpAndSettle();
+          expect(app.zoomedPaneId, viewer.id);
+          expect(tester.takeException(), isNull);
+          final monitorTab = app.activeSwarm;
+          if (nativeTabs) {
+            tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+              channel.name,
+              const StandardMethodCodec().encodeMethodCall(
+                MethodCall('close', {'id': monitorTab.id}),
+              ),
+              (_) {},
+            );
+          } else {
+            final mouse = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+            );
+            await mouse.addPointer(location: const Offset(1200, 700));
+            await mouse.moveTo(
+              tester.getCenter(find.byKey(ValueKey(monitorTab.id))),
+            );
+            await tester.pump();
+            await tester.tap(
+              find.byKey(ValueKey('tab-close:${monitorTab.id}')).hitTestable(),
+            );
+            await mouse.removePointer();
+          }
+          await tester.pumpAndSettle();
+          expect(app.swarms, isNot(contains(monitorTab)));
+          expect(connection.closes, isEmpty);
+          expect(find.text('OK'), findsNothing);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
   }
 }

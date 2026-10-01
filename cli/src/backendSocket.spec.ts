@@ -2279,9 +2279,24 @@ describe('agent_restart RPC', () => {
     await vi.waitFor(() => expect(frames.filter(f => f.type === 'agents_list_result')).toHaveLength(2))
     const response = (id: string) => (frames.find(frame => (frame.payload as any).requestId === id)?.payload as any).agents
     expect(response('plain').every((agent: any) => agent.monitor === undefined)).toBe(true)
-    expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toEqual({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
+    expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toMatchObject({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
     expect(response('monitor').find((a: any) => a.id === 'stopped').monitor).toMatchObject({ rssBytes: 0, cpu: 0, pid: null })
     expect(socket.harnessResourcesReader).toHaveBeenCalledOnce()
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
+  it('rejects a stop when the reviewed conversation rotated before the command arrived', async () => {
+    const { socket, frames } = localSocket()
+    const stop = vi.fn(async () => {})
+    socket.onDeleteAgent = stop
+    vi.spyOn(registry, 'byAgent').mockReturnValue({ ...BASE_SESSION, sessionId: 'replacement' })
+    socket.handleLocalFrame('local:restart', { type: 'agent_delete', payload: {
+      requestId: 'stale-stop', agentId: BASE_SESSION.agentId, expectedSessionId: BASE_SESSION.sessionId,
+    } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'agent_delete_result', payload: {
+      requestId: 'stale-stop', error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.',
+    } }))
+    expect(stop).not.toHaveBeenCalled()
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 

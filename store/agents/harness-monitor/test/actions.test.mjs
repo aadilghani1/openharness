@@ -13,7 +13,7 @@ test('remote stop uses daemon identity, never a signal or tmux command', async (
   const calls = []
   const result = await pause(row(), { list: async () => [agent()], rpc: async (...args) => { calls.push(args); return { deleted: true } } })
   assert.equal(result.ok, true)
-  assert.deepEqual(calls, [['remote', 'agent_delete', { agentId: 'a1' }]])
+  assert.deepEqual(calls, [['remote', 'agent_delete', { agentId: 'a1', expectedSessionId: 's1' }]])
 })
 test('cleanup rechecks live questions, working and unknown activity', async () => {
   for (const activity of ['needsInput', 'working', null]) {

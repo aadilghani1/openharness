@@ -7035,7 +7035,7 @@ class AppNotifier extends ChangeNotifier {
       if (!connection.isReady) return null;
       final reply = await connection.request(
         'machine_resources',
-        payload: harnesses ? const {'harnesses': true} : const {},
+        payload: harnesses ? const {'harnesses': true, 'storage': true} : const {},
         timeout: const Duration(seconds: 3),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision) ||

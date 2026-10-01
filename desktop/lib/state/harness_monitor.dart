@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../core/harness_resources.dart';
 import '../core/models.dart';
+import '../shared/theme/workspace_bar_style.dart'
+    show workspaceBarGroupSeparator;
 import 'app_state.dart';
 import 'harness_sessions.dart';
 
@@ -15,6 +17,7 @@ class HarnessMonitor extends ChangeNotifier {
   final _samples = <String, (MachineState, MachineHarnessResources)>{};
   Timer? _timer;
   bool _started = false, _disposed = false, _busy = false, _expanded = false;
+  final _receivedAt = <String, DateTime>{};
   int _revision = 0;
 
   List<HarnessSession> get sessions => harnessSessions(app, includeLive: true);
@@ -24,10 +27,17 @@ class HarnessMonitor extends ChangeNotifier {
 
   HarnessResources? reading(HarnessSession row) {
     final snapshot = _samples[row.machineId];
-    return row.running && identical(snapshot?.$1, row.machine)
+    return row.running &&
+            identical(snapshot?.$1, row.machine) &&
+            _fresh(row.machineId)
         ? snapshot?.$2.agents[row.agent.id]
         : null;
   }
+
+  bool _fresh(String id) =>
+      _receivedAt[id] != null &&
+      DateTime.now().difference(_receivedAt[id]!) <=
+          const Duration(seconds: 45);
 
   /// Shared-server RSS belongs to the server, not to each conversation.
   /// Count it once per machine/profile and label it separately in the panel.
@@ -35,7 +45,8 @@ class HarnessMonitor extends ChangeNotifier {
     final rows = live;
     return [
       for (final entry in _samples.entries)
-        if (identical(app.stateOf(entry.key), entry.value.$1))
+        if (identical(app.stateOf(entry.key), entry.value.$1) &&
+            _fresh(entry.key))
           for (final shared in entry.value.$2.shared)
             if (rows.any(
               (row) =>
@@ -56,8 +67,77 @@ class HarnessMonitor extends ChangeNotifier {
 
   String get label => 'Harnesses ${live.length}';
 
+  /// CPU percentages share a denominator (one core), not host capacities.
+  /// Missing sessions make a known sum a lower bound, never a complete total.
+  String metricsLabel({bool ram = true, bool gpu = true, bool storage = true}) {
+    final readings = [...live.map(reading), ...sharedReadings];
+    String total(
+      double? Function(HarnessResources) value,
+      String Function(double) format,
+    ) {
+      final known = readings
+          .map((r) => r == null ? null : value(r))
+          .whereType<double>()
+          .toList();
+      if (readings.isEmpty) return format(0);
+      if (known.isEmpty) return '—';
+      return '${known.length < readings.length ? '≥' : ''}${format(known.fold(0, (a, b) => a + b))}';
+    }
+
+    final cpu = total((r) => r.cpuPercent, (v) => '${v.round()}%');
+    final memory = total((r) => r.memoryBytes, _wholeBytes);
+    final graphics = total((r) => r.gpuPercent, (v) => '${v.round()}%');
+    return 'CPU $cpu'
+        '${ram ? '${workspaceBarGroupSeparator}RAM $memory' : ''}'
+        '${gpu ? '${workspaceBarGroupSeparator}GPU $graphics' : ''}'
+        '${storage ? '${workspaceBarGroupSeparator}SSD ${_storageLabel()}' : ''}';
+  }
+
+  static String _wholeBytes(double bytes) => bytes >= 1e9
+      ? '${(bytes / 1e9).round()} GB'
+      : '${(bytes / 1e6).round()} MB';
+
+  String _storageLabel() {
+    final folders = <String, Map<String, double?>>{};
+    var missing = false;
+    for (final row in live) {
+      final resource = reading(row), path = resource?.workspacePath;
+      if (path == null || resource?.workspaceBytes == null) {
+        missing = true;
+        continue;
+      }
+      (folders[row.machineId] ??= {})[path] = resource!.workspaceBytes;
+    }
+    var bytes = 0.0, count = 0;
+    for (final machine in folders.values) {
+      final included = <String>[];
+      for (final path
+          in machine.keys.toList()
+            ..sort((a, b) => a.length.compareTo(b.length))) {
+        if (included.any(
+          (parent) => path == parent || path.startsWith('$parent/'),
+        )) {
+          continue;
+        }
+        included.add(path);
+        count++;
+        bytes += machine[path]!;
+      }
+    }
+    if (live.isNotEmpty && count == 0) return '—';
+    return '${missing ? '≥' : ''}${_wholeBytes(bytes)}';
+  }
+
+  String get resourceDetail =>
+      '${live.length} running harnesses across connected machines.\n'
+      '${metricsLabel()}\n'
+      'CPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\n'
+      'GPU: summed process utilization; can exceed 100% across processes or devices. Unsupported counters are unavailable. Cloud inference is not local GPU usage.\n'
+      'SSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\n'
+      '≥ means a partial total. — means unavailable. Click to open Harness Monitor.';
+
   String get detail =>
-      '${live.length} running across connected machines. Click to view harnesses.\n'
+      '${live.length} running across connected machines. Click to open Harness Monitor.\n'
       '${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the session monitor.'}';
 
   void start() {
@@ -72,7 +152,7 @@ class HarnessMonitor extends ChangeNotifier {
     if (_expanded == value) return;
     _expanded = value;
     _timer?.cancel();
-    if (_started && _expanded && app.foreground.value) unawaited(refresh());
+    if (_started && app.foreground.value) unawaited(refresh());
   }
 
   void _inventoryChanged() {
@@ -85,6 +165,7 @@ class HarnessMonitor extends ChangeNotifier {
     }).toList();
     for (final id in removed) {
       _samples.remove(id);
+      _receivedAt.remove(id);
     }
     if (removed.isNotEmpty) _revision++;
     notifyListeners();
@@ -93,7 +174,10 @@ class HarnessMonitor extends ChangeNotifier {
   void _environmentChanged() {
     _revision++;
     _timer?.cancel();
-    if (_expanded && app.foreground.value) unawaited(refresh());
+    _samples.clear();
+    _receivedAt.clear();
+    notifyListeners();
+    if (app.foreground.value) unawaited(refresh());
   }
 
   Future<void> refresh() async {
@@ -117,13 +201,14 @@ class HarnessMonitor extends ChangeNotifier {
       for (final (id, machine, result) in readings) {
         if (result != null && identical(machine, app.stateOf(id))) {
           _samples[id] = (machine, result);
+          _receivedAt[id] = DateTime.now();
         }
       }
       notifyListeners();
     } finally {
       _busy = false;
-      if (!_disposed && _started && _expanded && app.foreground.value) {
-        _timer = Timer(const Duration(seconds: 3), refresh);
+      if (!_disposed && _started && app.foreground.value) {
+        _timer = Timer(Duration(seconds: _expanded ? 3 : 15), refresh);
       }
     }
   }

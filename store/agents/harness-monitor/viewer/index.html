@@ -9,44 +9,38 @@
 </head>
 <body>
   <header>
-    <h1>Harness Monitor</h1>
-    <input id="search" type="search" placeholder="Search harnesses" aria-label="Search harnesses" autocomplete="off" spellcheck="false">
-    <button id="assistant">Ask assistant</button>
+    <div class="heading"><h1>Harness Monitor</h1><span id="live-status" class="live">Connecting</span></div>
+    <div class="search-field"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="Search harnesses, agents, machines…" aria-label="Search harnesses" autocomplete="off" spellcheck="false"></div>
   </header>
   <nav aria-label="Monitor controls">
-    <label>Status <select id="filter" aria-label="Filter by status">
-      <option value="all">All</option><option value="needsInput">Needs you</option>
-      <option value="working">Working</option><option value="done">Done</option>
-      <option value="idle">Idle</option><option value="starting">Starting</option>
-      <option value="failed">Failed</option><option value="stopped">Stopped</option><option value="offline">Offline</option><option value="unknown">Unknown</option>
-    </select></label>
+    <div class="segmented" role="group" aria-label="Column presets"><button data-preset="overview" aria-pressed="true">Overview</button><button data-preset="resources" aria-pressed="false">Resources</button><button data-preset="ai" aria-pressed="false">AI usage</button></div>
+    <label class="sr-only" for="machine">Machine</label><select id="machine"><option value="all">All machines</option></select>
+    <label class="sr-only" for="filter">Status</label><select id="filter">
+      <option value="active">All active</option><option value="working">Working</option><option value="needsInput">Needs you</option>
+      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option><option value="offline">Offline</option><option value="all">Including offline</option>
+    </select>
     <span class="spacer"></span>
+    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button><button id="stop" class="danger" disabled>Stop…</button>
     <details id="columns"><summary>Columns</summary><div id="column-options" class="menu"></div></details>
-    <button id="cleanup">Clean up…</button>
-    <button id="refresh" title="Refresh all machines">Refresh</button>
+    <button id="pause" title="Freeze the table without pausing any harness">Pause updates</button><button id="refresh" title="Refresh all machines">Refresh</button>
   </nav>
   <div id="problems" role="status" hidden></div>
-  <main id="grid" tabindex="0" aria-label="Harness sessions. Arrow keys select, Enter opens.">
-    <table id="table" aria-label="Harness sessions"><colgroup id="colgroup"></colgroup><thead id="head"></thead><tbody id="body"></tbody></table>
-    <p id="empty">Connecting to your machines…</p>
+  <main id="grid" tabindex="0" aria-label="Active harness sessions. Arrow keys select, Enter inspects, Delete reviews stopping.">
+    <table id="table" aria-label="Active harness sessions"><colgroup id="colgroup"></colgroup><thead id="head"></thead><tbody id="body"></tbody></table>
+    <div id="empty"><strong>Connecting to your machines…</strong><p>Active sessions will appear here.</p></div>
   </main>
+  <section id="summary" aria-label="Resource totals for shown sessions"></section>
+  <details id="shared" hidden><summary id="shared-title">Shared servers</summary><div id="shared-body"></div></details>
   <footer><span id="count"></span><span id="message" role="status" aria-live="polite"></span><span id="updated"></span></footer>
-  <dialog id="assistant-choice" aria-labelledby="assistant-title">
-    <h2 id="assistant-title">Ask assistant</h2>
-    <p>New monitors use OpenCode with <strong>Muse Spark 1.3 Contributor Free</strong>. This limited-time free model allows Meta to use prompts and responses for training. Existing sessions keep their selected engine and model.</p>
-    <p>Only what you send to the assistant, and information its tools read, enters the conversation. The table works without the assistant.</p>
-    <p class="muted">OpenCode may require a Zen login. If the free model is unavailable, choose a model yourself; Harness Monitor does not switch to a paid model automatically.</p>
-    <div class="dialog-actions"><button id="assistant-cancel">Cancel</button><button id="assistant-other">Choose another model</button><button id="assistant-free">Open assistant</button></div>
+  <dialog id="inspector" aria-labelledby="inspect-title">
+    <div class="dialog-heading"><h2 id="inspect-title">Harness details</h2><button id="inspect-close" aria-label="Close details">Close</button></div>
+    <p id="inspect-context" class="muted"></p><div id="inspect-content"></div>
+    <div class="dialog-actions"><button id="inspect-stop" class="danger">Stop harness…</button></div>
   </dialog>
-  <dialog id="cleanup-dialog" aria-label="Clean up harnesses">
-    <label class="cleanup-mode">Choose harnesses <select id="cleanup-mode">
-      <option value="hidden">Outside open tabs</option><option value="policy">By cleanup rules</option>
-    </select></label>
-    <p id="cleanup-summary" role="status" aria-live="polite"></p>
-    <p id="cleanup-explanation" class="muted"></p>
-    <div id="cleanup-plan"></div>
-    <p id="cleanup-problems" class="muted" hidden></p>
-    <div class="dialog-actions"><button id="cleanup-cancel">Cancel</button><button id="cleanup-apply">Close</button></div>
+  <dialog id="stop-dialog" aria-labelledby="stop-title">
+    <h2 id="stop-title">Stop harness?</h2><p id="stop-context"></p><p>Its running work will end. Conversation history and workspace files are kept.</p>
+    <p id="stop-result" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Stop harness</button></div>
   </dialog>
   <script type="module" src="app.js"></script>
 </body>
