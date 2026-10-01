@@ -3,10 +3,31 @@ import { StringDecoder } from 'node:string_decoder'
 import type { OneShotOptions } from '../lib/oneshot.js'
 import { MemoryError } from './types.js'
 
-export interface InferenceFrame { text?: string; completed?: boolean; error?: string }
+export interface MemoryInferenceObservation {
+  /** Native CLI report; an init event alone does not prove the provider executed this model. */
+  model?: string
+  usage?: { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }
+  reportedCostUsd?: number
+}
+export interface MemoryInferenceOptions extends OneShotOptions {
+  /** Optional diagnostic observer. Never receives source text, reasoning, credentials or raw events. */
+  observe?: (observation: MemoryInferenceObservation) => void | Promise<void>
+}
+export interface InferenceFrame { text?: string; completed?: boolean; error?: string; observation?: MemoryInferenceObservation }
+
+/** Only native usage counters; unknown/missing readings stay unknown, never a fabricated zero. */
+export function nativeMemoryUsage(value: unknown): MemoryInferenceObservation['usage'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+  if (!count(raw.input_tokens) || !count(raw.output_tokens)) return undefined
+  return { inputTokens: raw.input_tokens, outputTokens: raw.output_tokens,
+    ...(count(raw.cache_read_input_tokens ?? raw.cached_input_tokens) ? { cacheReadInputTokens: (raw.cache_read_input_tokens ?? raw.cached_input_tokens) as number } : {}),
+    ...(count(raw.cache_creation_input_tokens) ? { cacheCreationInputTokens: raw.cache_creation_input_tokens } : {}) }
+}
 
 /** Bounded JSONL process transport shared by the two certified native adapters. */
-export function runInferenceProcess(options: OneShotOptions, command: string, args: string[], env: NodeJS.ProcessEnv,
+export function runInferenceProcess(options: MemoryInferenceOptions, command: string, args: string[], env: NodeJS.ProcessEnv,
   decode: (event: Record<string, unknown>) => InferenceFrame): Promise<{ text: string }> {
   if (options.signal?.aborted) return Promise.reject(new MemoryError('inference_cancelled'))
   if (!options.model || Buffer.byteLength(options.prompt) > 120_000) return Promise.reject(new MemoryError('invalid_inference_input'))
@@ -39,6 +60,10 @@ export function runInferenceProcess(options: OneShotOptions, command: string, ar
         if (!event || typeof event !== 'object' || Array.isArray(event)) { settle('invalid_inference_output'); return }
         const frame = decode(event as Record<string, unknown>)
         if (frame.error) { settle(frame.error); return }
+        if (frame.observation) {
+          try { void Promise.resolve(options.observe?.(frame.observation)).catch(() => {}) }
+          catch { /* A diagnostic sink cannot change extraction. */ }
+        }
         if (frame.text !== undefined) {
           if (typeof frame.text !== 'string') { settle('invalid_inference_output'); return }
           answer = frame.text

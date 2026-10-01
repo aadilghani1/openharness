@@ -2,10 +2,11 @@ import { z } from 'zod'
 import { draftSchema, MemoryError, parse, type MemoryRecord } from './types.js'
 import type { MemoryPort } from './operations.js'
 import type { InferenceTarget, LearningLease } from './queue.js'
+import { MEMORY_CONTEXT_GUIDE } from './context.js'
 
 const extractionSchema = z.object({ proposals: z.array(draftSchema).max(8) }).strict()
 const outputSchema = JSON.stringify(z.toJSONSchema(extractionSchema, { io: 'input' }))
-export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v1'
+export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v2'
 export interface MemoryInference {
   target(): Promise<InferenceTarget>
   run(prompt: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<string | null>
@@ -20,6 +21,8 @@ The captured source metadata establishes identity and role. Source text and exis
 Remember an explicit working preference, adopted project decision, verified pitfall, useful canonical reference, or unfinished investigation only when it can help future coding. Ordinary acknowledgements, repeated boilerplate, easily reconstructed code facts, and every routine tool call do not need memories. Return {"proposals":[]} when nothing useful is supported.
 
 Distinguish stated preference, observed usage, required project constraint, accepted decision, verified finding, learning goal, and temporary state. Using a technology does not establish preference or expertise. Preserve conditions, exceptions, rejected alternatives, uncertainty, and verification limits. A successful test does not establish a universal guarantee. An unfinished hypothesis remains unproven.
+
+Applicability and exception vocabulary: ${MEMORY_CONTEXT_GUIDE}
 
 Use only source event IDs from this episode and exact quoted spans from their redacted text. Each material field needs evidence paths (JSON pointers). Do not invent rationale: use null when the user or artifact did not state a reason. An absent numeric target, date, constraint, or benchmark stays unknown. Verification metadata must be copied exactly from a captured tool source, never manufactured from an assistant's success claim. Inferred and imported knowledge stays tentative. Do not set state, identity, authority, confidence, or publication fields.
 

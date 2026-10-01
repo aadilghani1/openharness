@@ -61,3 +61,27 @@ it('preserves a Unicode response split across pipe chunks', async () => {
     process.stdout.write(bytes.subarray(0,split)); setTimeout(()=>process.stdout.write(bytes.subarray(split)),20);`)
   expect((await runClaudeMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model' })).text).toBe('{"claim":"café"}')
 })
+
+it('reports only the resolved model and native usage/cost, excluding source text and raw events', async () => {
+  program(`${emit({ type: 'system', subtype: 'init', tools: [], model: 'claude-opus-4-6', session_id: 'private-session' })}
+    ${emit({ type: 'assistant', message: { content: [{ type: 'thinking', text: 'private reasoning' }] } })}
+    ${emit({ type: 'result', subtype: 'success', result: '{"proposals":[]}', total_cost_usd: 0.12,
+      usage: { input_tokens: 4, output_tokens: 9, cache_read_input_tokens: 100, cache_creation_input_tokens: 20, private_field: 'private' } })}`)
+  const observations: unknown[] = []
+  await runClaudeMemoryInference({ cwd: directory, prompt: 'synthetic evidence', model: 'opus', observe: value => { observations.push(value) } })
+  expect(observations).toEqual([{ model: 'claude-opus-4-6' }, {
+    usage: { inputTokens: 4, outputTokens: 9, cacheReadInputTokens: 100, cacheCreationInputTokens: 20 }, reportedCostUsd: 0.12,
+  }])
+})
+
+it.each(['sync', 'async'])('leaves absent or invalid diagnostics unknown and ignores a %s observer failure', async mode => {
+  program(`${emit({ type: 'system', subtype: 'init', tools: [], model: 'unexpected\ntext' })}
+    ${emit({ type: 'result', subtype: 'success', result: '{"proposals":[]}', total_cost_usd: -1, usage: { input_tokens: 3 } })}`)
+  const observations: unknown[] = []
+  expect(await runClaudeMemoryInference({ cwd: directory, prompt: 'evidence', model: 'opus', observe: value => {
+    observations.push(value)
+    if (mode === 'async') return Promise.reject(new Error('diagnostic sink unavailable'))
+    throw new Error('diagnostic sink unavailable')
+  } })).toEqual({ text: '{"proposals":[]}' })
+  expect(observations).toEqual([{ usage: undefined }])
+})

@@ -1,10 +1,9 @@
 /** Restricted extraction through the selected native CLI, with no alternate model/account. */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { OneShotOptions } from '../lib/oneshot.js'
 import { memoryCodexHome, nativeMemoryEnvironment } from './account.js'
 import { MemoryError } from './types.js'
-import { runInferenceProcess } from './inferenceProcess.js'
+import { nativeMemoryUsage, runInferenceProcess, type MemoryInferenceOptions } from './inferenceProcess.js'
 
 const exec = promisify(execFile)
 // Certified with a local mock Responses endpoint. New releases require recertification of the tool catalog.
@@ -25,7 +24,7 @@ export async function codexMemoryCapability(signal?: AbortSignal): Promise<{ sup
 }
 
 /** The remaining request_user_input tool is unusable in exec mode; any error/tool item rejects this run. */
-export async function runCodexMemoryInference(options: OneShotOptions): Promise<{ text: string }> {
+export async function runCodexMemoryInference(options: MemoryInferenceOptions): Promise<{ text: string }> {
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
   const capability = await codexMemoryCapability(options.signal)
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
@@ -43,7 +42,7 @@ export async function runCodexMemoryInference(options: OneShotOptions): Promise<
     if (event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed') {
       if (!['agent_message', 'reasoning'].includes(item?.type ?? '')) return { error: 'inference_tool_or_error' }
       if (event.type === 'item.completed' && item?.type === 'agent_message') return { text: item.text ?? '' }
-    } else if (event.type === 'turn.completed') return { completed: true }
+    } else if (event.type === 'turn.completed') return { completed: true, observation: { usage: nativeMemoryUsage(event.usage) } }
     else if (event.type === 'error' || event.type === 'turn.failed') return { error: 'inference_unavailable' }
     else if (!['thread.started', 'turn.started'].includes(String(event.type))) return { error: 'inference_protocol_changed' }
     return {}

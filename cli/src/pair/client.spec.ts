@@ -183,6 +183,19 @@ describe('parsePairArgs: words to the payload', () => {
     expect(parsePairArgs('say', ['--create', '--dry-run']).payload).toEqual({ verb: 'say', line: '--create --dry-run' })
   })
 
+  it('passes typed, explicit recall conditions through the CLI without adding unknown context', () => {
+    expect(parsePairArgs('recall_memory', ['failing', 'test', '--conditions', '{"taskType":"debugging","productionIncident":false}', '--json']))
+      .toEqual({ json: true, payload: { verb: 'recall_memory', query: 'failing test', conditions: { taskType: 'debugging', productionIncident: false } } })
+    expect(parsePairArgs('recall_memory', ['database', '--conditions={"language":["TypeScript","Rust"]}']).payload)
+      .toEqual({ verb: 'recall_memory', query: 'database', conditions: { language: ['TypeScript', 'Rust'] } })
+    expect(parsePairArgs('recall_memory', ['database']).payload).toEqual({ verb: 'recall_memory', query: 'database' })
+  })
+
+  it.each(['not json', '[]', 'null', '{"taskType":{"guessed":"debugging"}}', '{"invalid-key":true}'])
+  ('rejects malformed recall context before contacting the daemon: %s', value => {
+    expect(() => parsePairArgs('recall_memory', ['test', '--conditions', value])).toThrow(PairUsageError)
+  })
+
   it('lessons: an unknown action, a missing id; --create only on approve, --dry-run only on export, no id on export', () => {
     expect(() => parsePairArgs('lessons', ['teach'])).toThrow('lessons has no "teach" (list, show, approve, skip, revert, restore, export, review_recent, cancel_review).')
     expect(() => parsePairArgs('lessons', ['show'])).toThrow('lessons show needs a lesson id (harness pair lessons list).')

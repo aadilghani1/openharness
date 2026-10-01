@@ -2,9 +2,8 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nativeMemoryEnvironment } from './account.js'
-import type { OneShotOptions } from '../lib/oneshot.js'
 import { MemoryError } from './types.js'
-import { runInferenceProcess } from './inferenceProcess.js'
+import { nativeMemoryUsage, runInferenceProcess, type MemoryInferenceOptions } from './inferenceProcess.js'
 
 const exec = promisify(execFile)
 const CERTIFIED_CLAUDE_VERSIONS = new Set(['2.1.285', '2.1.286'])
@@ -17,7 +16,7 @@ export async function claudeMemoryCapability(signal?: AbortSignal): Promise<{ su
   } catch { return { supported: false, version: null } }
 }
 
-export async function runClaudeMemoryInference(options: OneShotOptions): Promise<{ text: string }> {
+export async function runClaudeMemoryInference(options: MemoryInferenceOptions): Promise<{ text: string }> {
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
   const capability = await claudeMemoryCapability(options.signal)
   if (options.signal?.aborted) throw new MemoryError('inference_cancelled')
@@ -32,6 +31,9 @@ export async function runClaudeMemoryInference(options: OneShotOptions): Promise
     if (event.type === 'system') {
       if (event.subtype === 'init' && (!Array.isArray(event.tools) || event.tools.length)) return { error: 'inference_tool_or_error' }
       if (typeof event.subtype === 'string' && event.subtype.startsWith('hook_')) return { error: 'inference_tool_or_error' }
+      if (event.subtype === 'init' && typeof event.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:/@+\[\]-]{0,199}$/.test(event.model)) {
+        return { observation: { model: event.model } }
+      }
       return {}
     }
     if (event.type === 'assistant') {
@@ -42,7 +44,10 @@ export async function runClaudeMemoryInference(options: OneShotOptions): Promise
     if (event.type === 'result') {
       if (event.is_error || event.subtype !== 'success') return { error: /rate.?limit|quota|usage limit/i.test(JSON.stringify(event.errors))
         ? 'inference_usage_limit' : 'inference_unavailable' }
-      return typeof event.result === 'string' ? { text: event.result, completed: true } : { error: 'invalid_inference_output' }
+      return typeof event.result === 'string' ? { text: event.result, completed: true,
+        observation: { usage: nativeMemoryUsage(event.usage),
+          ...(typeof event.total_cost_usd === 'number' && Number.isFinite(event.total_cost_usd) && event.total_cost_usd >= 0
+            ? { reportedCostUsd: event.total_cost_usd } : {}) } } : { error: 'invalid_inference_output' }
     }
     if (event.type === 'rate_limit_event') return {}
     return { error: 'inference_protocol_changed' }

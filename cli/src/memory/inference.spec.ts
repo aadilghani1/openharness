@@ -76,3 +76,12 @@ it('cancels while checking the native version without misreporting an unsupporte
   setTimeout(() => controller.abort(), 50)
   await assertion
 })
+
+it('preserves native token counters without inventing a resolved model or price', async () => {
+  const complete = { type: 'turn.completed', usage: { input_tokens: 123, cached_input_tokens: 40, output_tokens: 22, private_field: 'private' } }
+  program(`${emit('item.completed', { type: 'agent_message', text: '{"proposals":[]}' })}
+    console.log(${JSON.stringify(JSON.stringify(complete))});`)
+  const observations: unknown[] = []
+  await runCodexMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model', observe: value => { observations.push(value) } })
+  expect(observations).toEqual([{ usage: { inputTokens: 123, outputTokens: 22, cacheReadInputTokens: 40 } }])
+})

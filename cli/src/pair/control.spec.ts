@@ -106,6 +106,9 @@ describe('each tool maps to the right call', () => {
     expect(w.deps.recallMemory).not.toHaveBeenCalled()
     expect(await w.call('recall_memory', { query: 'tests', requestId: 'request' })).toMatchObject({ context: 'personal preference' })
     expect(w.deps.recallMemory).toHaveBeenCalledWith({ query: 'tests' })
+    const conditions = { taskType: 'debugging', productionIncident: false }
+    await w.call('recall_memory', { query: 'tests', conditions, requestId: 'next' })
+    expect(w.deps.recallMemory).toHaveBeenLastCalledWith({ query: 'tests', conditions })
     expect(await w.call('memory', { action: 'list' })).toMatchObject({ error: 'PERSON_ONLY' })
     expect(w.deps.memory).toHaveBeenCalledWith(expect.objectContaining({ action: 'list' }), '')
   })
