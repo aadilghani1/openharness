@@ -269,6 +269,15 @@ sampler and adds opt-in activity metadata to `agents_list`. RAM is process-tree 
 readings remain unknown. Shared Codex servers are listed separately and included once in totals;
 token counts reuse existing agent data. The monitor never resumes sessions or scans transcripts.
 
+`MachineResourceMonitor` separately scopes host CPU/RAM/GPU to the focused
+pane's machine or a user-pinned owned machine. It samples the selected host every 15 seconds,
+all connected owned hosts every three seconds while the hardware popover is open, and none
+while hidden. Readings expire in 45 seconds and clear on disconnect, replacement or hide.
+CPU is normalized host utilization; RAM excludes reclaimable cache where available. GPU is
+the busiest reported device, with individual devices in the popover alongside pressure,
+swap and disk free. Missing telemetry is `--`. Additive `machine_resources` RPC fields allow
+mixed old/new CLIs. See `design/workspace-status-bar.md` for the complete scope/format contract.
+
 ### Command dock
 
 For app UI outside terminal panes, follow the [desktop design system](design/desktop-design-system.md).
@@ -327,7 +336,7 @@ its headless debug timings do not establish native display or network latency.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
 - The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
-  with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  with harness count, scoped hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
   and quiet, with larger click targets. Each pane ends with model, split down,
@@ -371,7 +380,7 @@ its headless debug timings do not establish native display or network latency.
   have spent. Each account shows its `tightest` window, the limit that stops the work first.
   The shared controller reads ahead at startup and every five minutes; opening a menu requests
   a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
-  and freshness rules, displaying the remaining percentage rather than the amount spent.
+  and freshness rules, displaying whole allowance-used percentages (100 − remaining) in neutral ink.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read

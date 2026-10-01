@@ -14,32 +14,83 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-10 live · 1.4 GB · 12% CPU               M2 > openharness > branch-name > #439
+118 harnesses    M2 v    CPU 20%    RAM 50%    GPU 10%    Claude 100%    Codex 90%
+                                                     M2 > project > branch > #439
 ```
 
 The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab keeps the footer when
 there are live sessions to inspect.
 
-Harness Monitor sits at the bottom left. Its counter opens the existing session
-manager above it, filtered to live sessions. RAM and CPU can be sorted highest
-first; tokens use the counts already carried by agent updates. Include live
-sessions on connected owned machines even when none of this window's tabs show
-them. Discovery must not open panes or start an engine. Saved history remains
-in the All and Saved views.
+The left side has three independent scopes: a global count of running harnesses,
+hardware for one named machine, and subscription allowance used per account.
+Separate fields with whitespace, without dots, decimal percentages or `+` suffixes.
+Use neutral workspace ink at every usage level. The context on the right still
+follows the focused pane, even when a hardware scope is pinned elsewhere.
 
-Each owning daemon takes one process snapshot for the whole list. Count nested
-registered engines once, retain process birth identities, and report missing
-readings as unknown. RAM is estimated resident memory including child processes;
-CPU measures the interval, with 100% representing one core. A `+` after a total
-means some session readings are unavailable. The tooltip explains these limits.
-Do not show GPU use, disk activity or token cost inferred from unrelated totals.
+`118 harnesses` opens the existing session manager, filtered to live sessions.
+Include running sessions on connected owned machines even when none of this
+window's tabs show them. Saved history remains in All and Saved. Its RAM and CPU
+columns can be sorted highest first; tokens reuse existing agent updates.
 
-The footer samples every 15 seconds while the app is foreground; an open monitor
-uses three seconds. Requests coalesce in the daemon. Hidden apps run no monitor
-polling, and inspecting tokens never starts another transcript scan. The native
-and Flutter controls share labels and behavior. Subscription usage remains
-beside the monitor in wide windows and accessible through Models at every size.
+The machine name and small disclosure arrow group CPU, RAM and GPU. Default to
+the focused pane's machine, falling back to the selected/local connected machine
+when no pane is focused. Clicking opens an anchored popover: one owned machine
+per row, with CPU/RAM/GPU columns. Selecting a row pins that machine for this
+window; `Follow focused pane` restores automatic scope. Arrow keys select rows;
+Escape or outside click dismisses and returns focus. Never open a pane, switch
+the focused harness, connect an offline machine or start an engine to inspect it.
+Shared machines do not expose host telemetry.
+
+CPU is total host utilization normalized to 0–100%, not a sum of per-process
+percentages. RAM is used physical memory divided by capacity, excluding
+reclaimable cache where the OS reports it. GPU is the busiest device with a
+valid utilization counter; list each GPU separately in the details, never add
+percentages across heterogeneous devices. All three include other applications
+on that machine. No cross-machine average or total appears in the footer.
+
+The selected machine's details show memory pressure, used/total memory, swap,
+root-disk free space and individual GPUs. Disk capacity is available on demand,
+not a permanent SSD percentage. Pressure comes from the OS, not a threshold
+invented from RAM usage. macOS uses IORegistry GPU counters; Linux/Windows use
+NVIDIA driver telemetry where available. Unsupported/expired/invalid readings
+show `--`, including older daemons' missing fields. Preserve valid zero. An
+offline pinned machine keeps its name with unknown values, never another host's
+cached readings. Hardware freshness expires after 45 seconds.
+
+Sample only the selected host every 15 seconds with the popover closed; sample
+connected owned hosts every three seconds while open. Coalesce daemon requests
+for two seconds. Clear hardware readings and stop polling when the app is hidden;
+refresh on return. Session process-tree sampling runs only while its own monitor
+is open (three seconds). A closed count requires no process scan. Inspecting
+tokens never starts a transcript scan.
+
+Each owning daemon's session snapshot counts nested engines once and retains
+process birth identities. Those session-manager figures remain process-tree
+resident memory and interval CPU, where 100% means one core. Shared Codex servers
+appear once, separately. Keep this distinct from the normalized host CPU in the
+footer. Unknown session readings retain the monitor's existing explanation.
+
+Native and Flutter footers share data and actions. At narrow widths remove GPU,
+then all hardware metrics as complete groups, leaving the machine selector and
+its full tooltip. Subscription usage remains visible in wide windows and
+accessible through Models at every size. Preserve room for focused context.
+
+![Hardware popover with synthetic readings for three machines](images/machine-resources.png)
+
+Validation covers scope following/pinning, unavailable and late responses, hidden
+app polling, keyboard dismissal, native and Flutter entry points, narrow windows,
+light/dark appearance and 2× text. Run `machine_resources_test.dart`,
+`machine_resource_monitor_test.dart`, `harness_resources_test.dart` and
+`workspace_status_test.dart`. Set `HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR` to
+capture the popover fixtures; `HARNESS_RESOURCE_CAPTURE_DIR` enables native footer
+captures in `tool/check_swarm_titlebar.sh`. CLI parser/failure/cache checks live in
+`machineHardware.spec.ts` and `machineResources.spec.ts`.
+
+The layout takes cues from [Stats' combined view](https://github.com/exelban/stats/blob/master/Stats/Views/CombinedView.swift)
+and [Mini widget](https://github.com/exelban/stats/blob/master/Kit/Widgets/Mini.swift):
+compact independent modules, whole percentages, optional separators and details
+on demand. The multi-machine scope above is Harness-specific.
 
 The optional Experimental creature sits after Store in a fixed 44pt slot.
 Tim and eggs use bundled bitmap art; hovering opens a full-size preview without
@@ -172,17 +223,13 @@ truncate without moving or covering the close target. Clicking the model focuses
 that pane and opens the same unified Models picker as Cmd-:, preserving the
 existing target and availability guards.
 
-The footer shows remaining subscription usage on the left and the focused
-harness's machine, project, branch and PR at the right. It does not repeat model
-or effort. Read the same deduplicated account rows as Models: each percentage
-uses the limiting window and expires under the same rules. Different accounts
-remain distinct. Unknown usage shows “—”; exhausted usage shows “0%”. Hover
-explains remaining percentages and reset windows; click opens Subscriptions.
-Separate accounts with whitespace, without dot separators. Provider names stay
-neutral; only percentages carry quiet amber ink from zero through 20%,
-neutral above 20% or when unavailable. Resolve the same readable colors for the
-Flutter and native footers against the chosen workspace background.
-No account or usage reading is invented for this footer.
+The footer shows subscription allowance **used**, alongside scoped hardware.
+Read the same deduplicated account rows as Models: each percentage uses the
+limiting window and expires under the same rules. Compute used = 100 − remaining
+and round to a whole percentage. Different accounts remain distinct. Unknown
+usage shows `--`; exhausted allowance shows `100%`. Names and percentages use
+the same neutral ink. Hover explains usage, account identity and reset windows;
+click opens Subscriptions. Do not invent account or usage readings.
 
 For the model label, prefer
 its local model ID or the daemon's observed subscription model (`selectedModel`),
@@ -334,7 +381,7 @@ rather than extra padding only above it. Native and Flutter reserve 37.5 pt and
 keep the same pane height, with equal space above and below the footer content.
 
 Show `machine  project`, then `(branch)` and PR when known at the right. Put the
-remaining subscription usage at the far left. The status row has one-cell outer gutters and no background fill or divider;
+harness count, scoped resources and subscription usage at the left. The status row has one-cell outer gutters and no background fill or divider;
 its controls sit directly on the workspace surface. The right side follows the
 focused pane; usage at the left covers all subscriptions independently of focus.
 Each context field preserves its existing action.

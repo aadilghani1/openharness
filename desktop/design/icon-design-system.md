@@ -65,11 +65,10 @@ to compensate for excess container padding.
 - Keep a selected state legible without color: checkmarks, labels and shape
   changes carry meaning. Zoom becomes Restore; loading can animate only while
   work is actually pending, respecting Reduce Motion.
-- Reserve red for errors and destructive actions. Workspace subscription
-  allowance at **0–20%** uses quiet amber (`AppPalette.usageLow`), including
-  exhausted allowance. Names and healthy/unknown percentages stay neutral.
-  The figure and tooltip explain the limit; color is secondary. The same
-  contrast-adjusted ink is sent to Flutter and the native footer.
+- Reserve red for errors and destructive actions. Workspace hardware and
+  subscription figures use neutral ink at every percentage, including exhausted
+  allowance. The figure and tooltip explain usage; the footer is not an alarm.
+  The same contrast-adjusted ink goes to Flutter and the native footer.
 
 ## Deliberate exceptions
 

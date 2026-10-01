@@ -236,11 +236,12 @@ The experimental branch remains unmerged for the user's visual review.
   The model opens the shared Models picker for that exact harness. Narrow panes
   retain the close target; stale or unavailable targets cannot switch an agent.
   Tab-strip close still appears on hover and yields to Command-held hints.
-- The footer's left side shows remaining subscription usage, such as
-  “Claude 0% · Codex 50%”, from the same deduplicated accounts and limiting
-  windows as Models. Unknown readings show “—”; distinct accounts remain
-  distinct. Hover explains the reading; click opens Subscriptions. The right
-  side retains the focused machine/project/branch/PR and their actions.
+- The footer originally showed remaining subscription usage. The current
+  [status-bar contract](workspace-status-bar.md) uses global harness count,
+  scoped host CPU/RAM/GPU and neutral allowance-used percentages, separated by
+  whitespace. Deduplicated accounts, limiting windows and Subscriptions actions
+  stay shared with Models. Unknown readings show `--`. The right side retains
+  the focused machine/project/branch/PR and their actions.
 - Final suite: **4,702 passed, 16 skipped**. New Harness has **3,948/3,948**
   covered executable lines and the resource picker **1,271/1,271** (both 100%).
   App, test and integration source analysis is clean. A whole-directory analysis

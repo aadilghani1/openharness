@@ -30,8 +30,9 @@ system menu bar; the window keeps Search and Store. Linux and browser bars
 retain their notification bell. Show a count badge only when something is unread.
 Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
-The footer shows remaining subscription usage on the left. Its right-hand context follows the focused pane: machine, project, branch, and PR
-at the right. Each pane header ends with model, split down, split right, zoom,
+The footer shows a global harness count, scoped host CPU/RAM/GPU and subscription
+allowance used on the left, all in neutral ink with whole percentages. Its
+right-hand context follows the focused pane: machine, project, branch and PR. Each pane header ends with model, split down, split right, zoom,
 and close, in that order. The icons stay visible with quiet ink and no button
 chrome. Splitting opens New Harness directly with that pane's agent, machine,
 and project, then creates into the chosen split on submission. Clicking the

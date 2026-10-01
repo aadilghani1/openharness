@@ -1,7 +1,6 @@
 import 'package:flutter/painting.dart';
 
 import '../shared/theme/status_line_style.dart';
-import '../shared/theme/app_theme.dart';
 
 enum WorkspaceUsageTone { normal, low, exhausted }
 
@@ -14,8 +13,8 @@ class WorkspaceSubscriptionUsage {
   String get text => segments.map((part) => part.text).join();
   final String detail;
 
-  /// Names stay neutral. Low and exhausted allowance share quiet amber;
-  /// a subscription limit is not an application error.
+  /// All footer figures report usage in the same neutral ink. Limit state and
+  /// reset windows remain available in the subscriptions panel and tooltip.
   List<StatusLinePaintSegment> paintSegments({
     required Color foreground,
     required Color surface,
@@ -23,11 +22,7 @@ class WorkspaceSubscriptionUsage {
     for (final part in segments)
       StatusLinePaintSegment(
         part.text,
-        statusLineInkOnSurface(switch (part.tone) {
-          WorkspaceUsageTone.normal => foreground,
-          WorkspaceUsageTone.low ||
-          WorkspaceUsageTone.exhausted => AppPalette.usageLow,
-        }, surface),
+        statusLineInkOnSurface(foreground, surface),
         null,
       ),
   ];
@@ -41,7 +36,7 @@ class WorkspaceSubscriptionUsage {
       counts.update(row['engine'], (count) => count + 1, ifAbsent: () => 1);
     }
     final segments = <({String text, WorkspaceUsageTone tone})>[];
-    final details = <String>['Remaining subscription usage'];
+    final details = <String>['Subscription allowance used'];
     final positions = <Object?, int>{};
     for (final row in accounts) {
       final engine = row['engine'];
@@ -62,24 +57,15 @@ class WorkspaceSubscriptionUsage {
       final status = row['status'] as String? ?? 'Usage unavailable';
       final remaining = row['remainingPercent'];
       final figure = remaining is num && remaining.isFinite
-          ? status.replaceFirst(RegExp(r' remaining$'), '')
-          : '—';
+          ? '${(100 - remaining).clamp(0, 100).round()}%'
+          : '--';
       segments.add((
-        text: '${segments.isEmpty ? '' : '  '}$name ',
+        text: '${segments.isEmpty ? '' : '    '}$name ',
         tone: WorkspaceUsageTone.normal,
       ));
-      segments.add((
-        text: figure,
-        tone: remaining is! num || !remaining.isFinite
-            ? WorkspaceUsageTone.normal
-            : remaining <= 0
-            ? WorkspaceUsageTone.exhausted
-            : remaining <= 20
-            ? WorkspaceUsageTone.low
-            : WorkspaceUsageTone.normal,
-      ));
+      segments.add((text: figure, tone: WorkspaceUsageTone.normal));
       details.add(
-        '$name${account.isNotEmpty && counts[engine] == 1 ? ' ($account)' : ''}: $status',
+        '$name${account.isNotEmpty && counts[engine] == 1 ? ' ($account)' : ''}: ${figure == '--' ? status : '$figure used'}',
       );
       final windows = row['details'];
       if (windows is List) details.addAll(windows.whereType<String>());
@@ -89,7 +75,7 @@ class WorkspaceSubscriptionUsage {
           ? const [(text: 'Subscriptions', tone: WorkspaceUsageTone.normal)]
           : List.unmodifiable(segments),
       segments.isEmpty
-          ? 'View subscriptions and remaining usage'
+          ? 'View subscription usage and reset times'
           : details.join('\n'),
     );
   }

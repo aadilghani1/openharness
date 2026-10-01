@@ -103,7 +103,7 @@ void main() {
       },
     ];
     await monitor.refresh();
-    expect(monitor.label, '1 live · 2.0 GB · 130% CPU');
+    expect(monitor.label, '1 harness');
     expect(monitor.sharedLabel, 'Shared Codex servers · 600 MB RAM');
     expect(monitor.detail, contains('included once'));
     ((connection.reply['harnesses'] as Map)['shared'] as List).first.remove(
@@ -111,9 +111,9 @@ void main() {
     );
     await monitor.refresh();
     expect(monitor.sharedLabel, 'Shared Codex servers · — RAM');
-    expect(monitor.label, '1 live · 1.4 GB+ · 130% CPU');
+    expect(monitor.label, '1 harness');
     app.machineStates['m']!.agents = [];
-    expect(monitor.label, '0 live');
+    expect(monitor.label, '0 harnesses');
     expect(monitor.sharedLabel, isNull);
   });
 
@@ -150,17 +150,17 @@ void main() {
       expect(connection.calls, [
         {'type': 'machine_resources', 'harnesses': true},
       ]);
-      expect(monitor.label, '2 live · 1.4 GB+ · 126%+ CPU');
+      expect(monitor.label, '2 harnesses');
       expect(monitor.reading(monitor.live.first)!.processCount, 3);
       expect(app.allPanes, isEmpty);
       connection.reply = {};
       await monitor.refresh();
-      expect(monitor.label, '2 live · — · —% CPU');
+      expect(monitor.label, '2 harnesses');
     },
   );
 
   testWidgets(
-    'polls slowly in the footer, faster only while open, and never while hidden',
+    'samples process trees only while the session manager is open and visible',
     (tester) async {
       final connection = _Connection();
       final app = createApp(
@@ -172,25 +172,25 @@ void main() {
         const Agent(id: 'a0', name: 'Work', terminalAvailable: true),
       ];
       monitor.start();
-      await tester.pump();
-      expect(connection.calls, hasLength(1));
-      await tester.pump(const Duration(seconds: 14));
-      expect(connection.calls, hasLength(1));
-      await tester.pump(const Duration(seconds: 1));
-      expect(connection.calls, hasLength(2));
+      await tester.pump(const Duration(seconds: 30));
+      expect(connection.calls, isEmpty);
       monitor.setExpanded(true);
       await tester.pump();
+      expect(connection.calls, hasLength(1));
       await tester.pump(const Duration(seconds: 3));
-      expect(connection.calls, hasLength(4));
+      expect(connection.calls, hasLength(2));
       app.appLifecycleChanged(AppLifecycleState.hidden);
       await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(4));
+      expect(connection.calls, hasLength(2));
       app.appLifecycleChanged(AppLifecycleState.resumed);
       await tester.pump();
-      expect(connection.calls, hasLength(5));
+      expect(connection.calls, hasLength(3));
+      monitor.setExpanded(false);
+      await tester.pump(const Duration(minutes: 2));
+      expect(connection.calls, hasLength(3));
       monitor.dispose();
       await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(5));
+      expect(connection.calls, hasLength(3));
       app.dispose();
     },
   );
@@ -218,12 +218,12 @@ void main() {
         ];
       connection.pending!.complete(connection.reply);
       await pending;
-      expect(monitor.label, '1 live · — · —% CPU');
+      expect(monitor.label, '1 harness');
       app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
       final before = connection.calls.length;
       await monitor.refresh();
       expect(connection.calls.length, before);
-      expect(monitor.label, '0 live');
+      expect(monitor.label, '0 harnesses');
     },
   );
 

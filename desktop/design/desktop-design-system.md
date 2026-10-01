@@ -341,23 +341,24 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — remaining subscription usage at the left,
-with machine, project, branch and PR together at the right following the focused pane. Each
-context field keeps its existing action, including the branch/PR chooser.
-Titles stay quiet when several panes are visible; do not repeat branches in
-pane headers. Do not repeat model or effort in the footer. Context honors Customize Harness's selected
-status face, fields, colors and shell/Powerline treatment. Recent-harness
-context uses that same renderer's monochrome presentation to stay secondary.
-Use compact labels such as “Claude 0%  Codex 50%”, separated by whitespace only.
-Provider names stay neutral. Color only the remaining percentage: quiet amber
-from 0% through 20%, neutral above 20% or when unavailable. Use shared
-semantic ink adjusted to remain readable on the selected workspace surface;
-the number always conveys the state independently of color. These percentages are
-remaining, not used. Use the same deduplicated accounts, limiting window and
-freshness rules as Models. Separate subscriptions remain separate; unknown or
-expired values show “—”, never a fabricated zero. Hover explains reset windows
-and account identity; clicking opens Subscriptions without switching a model.
-Companion and sharing controls sit after usage without shifting the context.
+**Focused workspace footer** — global harness count, explicitly scoped CPU/RAM/GPU,
+then subscription allowance used at the left; focused machine, project, branch
+and PR at the right. Each context field keeps its existing action. The hardware
+scope follows the focused pane until pinned in its popover. Never sum percentages
+across machines. Keep disk capacity, swap and memory pressure in that popover.
+Titles stay quiet when several panes are visible. Do not repeat branches in pane
+headers, or model/effort in the footer. Context honors the selected status face,
+fields, colors and shell/Powerline treatment. Recent-harness context uses its
+monochrome presentation.
+Use whole percentages with whitespace between fields, e.g. `CPU 20% RAM 50%
+GPU 10% Claude 100% Codex 90%`. All labels and numbers use neutral readable ink;
+no severity color, dot separators, trailing plus or decimal figures. Subscription
+figures mean allowance used. Preserve Models' deduplicated accounts, limiting
+window and freshness rules. Unknown values show `--`, never fabricated zero.
+Hover explains scope, account identity and reset windows; click opens the
+corresponding hardware or Subscriptions panel without switching a model.
+At narrow widths hide complete metric groups rather than clipping percentages.
+Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,

@@ -54,40 +54,12 @@ class HarnessMonitor extends ChangeNotifier {
     return 'Shared Codex servers · ${formatHarnessMemory(known.isEmpty ? null : memory)}${known.isNotEmpty && known.length < rows.length ? '+' : ''} RAM';
   }
 
-  String get label {
-    final rows = live;
-    if (rows.isEmpty) return '0 live';
-    (double?, bool) sum(double? Function(HarnessResources) value) {
-      double total = 0;
-      int known = 0;
-      for (final row in rows) {
-        final sample = reading(row);
-        final n = sample == null ? null : value(sample);
-        if (n != null) {
-          total += n;
-          known++;
-        }
-      }
-      final shared = sharedReadings;
-      for (final sample in shared) {
-        final n = value(sample);
-        if (n != null) {
-          total += n;
-          known++;
-        }
-      }
-      return (
-        known == 0 ? null : total,
-        known > 0 && known < rows.length + shared.length,
-      );
-    }
-
-    final memory = sum((r) => r.memoryBytes), cpu = sum((r) => r.cpuPercent);
-    return '${rows.length} live · ${formatHarnessMemory(memory.$1)}${memory.$2 ? '+' : ''} · ${cpu.$1 == null ? '—' : cpu.$1!.toStringAsFixed(0)}%${cpu.$2 ? '+' : ''} CPU';
-  }
+  String get label =>
+      '${live.length} ${live.length == 1 ? 'harness' : 'harnesses'}';
 
   String get detail =>
-      'Harness Monitor — $label\nLive sessions on connected machines. + means some readings are unavailable. ${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the total. These servers may also serve sessions outside Harness.'}';
+      '$label running across connected machines. Click to view harnesses.\n'
+      '${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the session monitor.'}';
 
   void start() {
     if (_started || _disposed) return;
@@ -101,7 +73,7 @@ class HarnessMonitor extends ChangeNotifier {
     if (_expanded == value) return;
     _expanded = value;
     _timer?.cancel();
-    if (_started && app.foreground.value) unawaited(refresh());
+    if (_started && _expanded && app.foreground.value) unawaited(refresh());
   }
 
   void _inventoryChanged() {
@@ -115,16 +87,14 @@ class HarnessMonitor extends ChangeNotifier {
     for (final id in removed) {
       _samples.remove(id);
     }
-    if (removed.isNotEmpty) {
-      _revision++;
-      notifyListeners();
-    }
+    if (removed.isNotEmpty) _revision++;
+    notifyListeners();
   }
 
   void _environmentChanged() {
     _revision++;
     _timer?.cancel();
-    if (app.foreground.value) unawaited(refresh());
+    if (_expanded && app.foreground.value) unawaited(refresh());
   }
 
   Future<void> refresh() async {
@@ -153,8 +123,8 @@ class HarnessMonitor extends ChangeNotifier {
       notifyListeners();
     } finally {
       _busy = false;
-      if (!_disposed && _started && app.foreground.value) {
-        _timer = Timer(Duration(seconds: _expanded ? 3 : 15), refresh);
+      if (!_disposed && _started && _expanded && app.foreground.value) {
+        _timer = Timer(const Duration(seconds: 3), refresh);
       }
     }
   }
