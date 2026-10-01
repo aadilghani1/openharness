@@ -98,6 +98,14 @@ class CodingMemoryLibrary extends ChangeNotifier {
   Future<Map<String, dynamic>> detail(String id) =>
       _request({'action': 'show', 'id': id});
 
+  Future<Map<String, dynamic>> notebooks({String? cursor}) => _request({
+    'action': 'notebooks',
+    'query': {'limit': 12, 'cursor': ?cursor},
+  });
+
+  Future<Map<String, dynamic>> notebook(String id) =>
+      _request({'action': 'notebook', 'id': id});
+
   Future<Map<String, dynamic>> projects({String search = '', int? before}) =>
       _request({
         'action': 'projects',
