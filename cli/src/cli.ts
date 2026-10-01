@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
 import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
@@ -25,7 +26,6 @@ import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import 'dotenv/config'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync, renameSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -66,7 +66,7 @@ import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
-import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
 import { ZooLessonReporter } from './lib/zooLessons.js'
 import { DAEMONS_OFF, DAEMONS_OFF_DETAIL, DaemonsSwitch, localKillSwitch, zooPassthrough, type ZooRead } from './lib/daemonsSwitch.js'
@@ -126,7 +126,7 @@ import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, isApiLaunch, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
@@ -143,6 +143,8 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
+import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
@@ -263,7 +265,8 @@ import { CursorSubagentManager } from './engines/cursor/subagent.js'
 import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
 import { loadCursorPendingTasks, removeCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { OpencodeReader, readOpencodeMessages } from './engines/opencode/reader.js'
-import { opencodeModelFromArgv, setOpencodeSessionModel } from './engines/opencode/sessionModel.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId } from './engines/opencode/sessionModel.js'
+import { isOpencodeV2, opencodeMajorVersion } from './engines/opencode/version.js'
 import { lastOpencodeTurnText, opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
 import { KiloReader, readKiloMessages } from './engines/kilo/reader.js'
 import { kiloMessagesToEvents, lastKiloTurnText } from './engines/kilo/normalizer.js'
@@ -2185,6 +2188,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const identityFile = join(env.ADAPTER_DATA_DIR, 'e2e', 'identity.json')
     try { renameSync(identityFile, `${identityFile}.removed-${Date.now()}`) } catch { /* already gone */ }
   }
+  const autonomousEnv = session?.autonomousEnv ?? env.AUTONOMOUS_ENV
   const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
@@ -2193,7 +2197,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error('[runtime-profile] connect reconcile failed:', err instanceof Error ? err.message : err)
     })
     onBackendConnected()
-  }, computerId())
+  }, computerId(), autonomousEnv)
   backendRef = backend
   backend.viewerTargetProvider = (agentId) => dshViewers.forwardingUrl(agentId)
 
@@ -2383,7 +2387,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const devinReaders = new Map<string, DevinReader>()
   const commandcodeNormalizers = new Map<string, CommandCodeNormalizer>()
   /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
-  const sessionTurnOpen = (sessionId: string): boolean =>
+  const sessionTurnState = (sessionId: string): boolean | undefined =>
     turnStates.get(sessionId)?.turnOpen
       ?? codexNormalizers.get(sessionId)?.turnOpen
       ?? cursorNormalizers.get(sessionId)?.turnOpen
@@ -2398,7 +2402,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? hermesReaders.get(sessionId)?.turnOpen
       ?? devinReaders.get(sessionId)?.turnOpen
       ?? commandcodeNormalizers.get(sessionId)?.turnOpen
-      ?? false
+  const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
   const watcher = new Watcher()
   const queuedSessionEvents: Array<{
     sessionId: string
@@ -4040,13 +4044,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     identity: sharingIdentity.getIdentity(),
     grants: new HarnessGrantStore(join(env.ADAPTER_DATA_DIR, 'harness-shares.json')),
     collaboration: new HarnessCollaborationStore(join(env.ADAPTER_DATA_DIR, 'harness-collaboration.json')),
-    autonomousEnv: env.AUTONOMOUS_ENV,
+    autonomousEnv,
     terminals, resolveAgent: (id) => registry.resolve(id),
     send: (id, type, payload) => backend.sendObserver(id, type, payload),
     publish: (method, path, body) => proxyBackend(method, path, body),
     watchViewer: (id, send) => sharedViewers.watch(id, send),
   })
-  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, env.AUTONOMOUS_ENV, async () => {
+  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, autonomousEnv, async () => {
     const result = await proxyBackend('GET', '/api/harness-shares')
     if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
@@ -4479,6 +4483,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // none could be opened; clients then stay on this port.
       localSocket: daemonBoot.localSocket?.path ?? null,
       backendUrl: env.BACKEND_WS_URL,
+      autonomousEnv,
+      dataDir: env.ADAPTER_DATA_DIR,
+      authDir: AUTH_DIR,
       webUrl: env.WEB_URL,
       connected: backend.isConnected(),
       deviceTransportConnected: backend.hasCommander(),
@@ -5586,8 +5593,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * machine: a `build()` that stats the filesystem answers differently on two of them, and its spec
    * would follow. What is DONE with the fact lives in the builder, so create, retarget and restore
    * cannot disagree about it.
+   *
+   * The other is which OpenCode is installed: v2's TUI exits 1 on v1's `-m` / `--agent`. Cached per
+   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read.
    */
-  const gridLaunchMachine = (): GridLaunchMachine => ({ hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR) })
+  const gridLaunchMachine = (): GridLaunchMachine => ({
+    hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
+    opencodeMajor: opencodeMajorVersion(),
+  })
 
   /**
    * What a relaunch of `session` must be given, beyond the engine's argv, to come back where it was —
@@ -6275,8 +6288,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
-    // checked for a contract at the wire (AGENT_UNSUPPORTED), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent) : []), ...resumeArgs]
+    // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencodeMajorVersion()) : []), ...resumeArgs]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     // Stopped mid-turn, the resumed conversation is told to carry on — by an engine that can open
@@ -6404,7 +6417,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       dshLabel = installed.manifest.name
     }
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
-    const extraArgs = [...dshArgs, ...(source.agent ? namedAgentArgs(engine, source.agent) : [])]
+    // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
+    // as a general session rather than handing the v2 TUI an `--agent` it exits on.
+    const forkMajor = opencodeMajorVersion()
+    const extraArgs = [...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {
       clearEnv: harnessEnvToClear(dshEnv),
@@ -6624,10 +6640,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the failure this handler exists to refuse — so it is refused here, before the pane is touched.
     // Only when the launch will name a model: a grid launch always does; a move home does only when
     // the remembered model carries its provider (`subscriptionModel.ts`), and otherwise the engine
-    // decides, as it always did.
+    // decides, as it always did. v2 switches the model through OpenCode's own API instead and needs no
+    // sqlite3 (`applyOpencodeSessionModel`).
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
-    if (rewritesOpencodeSession && !binaryOnPath('sqlite3')) {
+    const opencodeMajor = session.engine === 'opencode' ? opencodeMajorVersion() : null
+    if (rewritesOpencodeSession && !isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
       return {
         ok: false,
         error: 'OPENCODE_SQLITE_MISSING',
@@ -6693,11 +6711,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // already on it, with nothing typed into the pane. Before the live process is touched, so a
       // write that fails refuses the move with that process still on its old target. A session with
       // no user message yet has nothing to restore from and takes `-m` on launch, so it is skipped.
+      //
+      // OpenCode 2.0 has no `-m` on its TUI, keeps sessions in tables the SQL above never reads (it
+      // used to answer SESSION_NOT_FOUND there, read as success, and then respawn with `-m` into
+      // `Unrecognized flag: -m` and a dead pane), and ships its own writer: the service's
+      // `session.switchModel`. `applyOpencodeSessionModel` picks per version, and on v2 every
+      // failure refuses the move — with the live process still untouched.
       if (rewritesOpencodeSession) {
-        const model = opencodeModelFromArgv(built.overrides.extraArgs)
+        const model = built.overrides.sessionModel ? parseOpencodeModelId(built.overrides.sessionModel) : null
         if (model) {
-          const written = await setOpencodeSessionModel(OPENCODE_DB, session.sessionId, model)
-          if (!written.ok && written.code !== 'OPENCODE_SESSION_NOT_FOUND') {
+          const written = await applyOpencodeSessionModel({
+            opencodeMajor, dbPath: OPENCODE_DB, sessionId: session.sessionId, model, cwd: session.cwd ?? undefined,
+            // (A model of opencode's own is looked for in its catalogue; a grid's provider lives in
+            // the pane's own config, which the service never reads.)
+            checkCatalog: !grid,
+          })
+          if (!written.ok) {
             console.warn(`[grid] retarget ${sid(session.agentId)} refused · ${written.code} · ${written.detail}`)
             return { ok: false, error: written.code, detail: written.detail }
           }
@@ -6762,10 +6791,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
   const stopJobs = new Map<string, Promise<void>>()
-  backend.onDeleteAgent = createStopAgentService({
+  const stopAgent = createStopAgentService({
     registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
     forgetSession, markDeleted, clearDeleted,
   })
+  backend.onDeleteAgent = stopAgent
+  backend.closeAgentService = new CloseAgentService({
+    registry,
+    activity: async s => {
+      if (s.sessionId) await watcher.pollSession(s.sessionId)
+      const screen = await captureTerminal(s.agentId, 80)
+      return inspectCloseActivity(s.engine, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
+    },
+    checkpoint: async (s, explicitlyStopped, phase) => sessionCheckpoints.save(s, {
+      explicitlyStopped, screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
+    }),
+    stop: stopAgent,
+    changed: announceSession,
+  })
+  backend.closeAgentService.start()
 
   backend.onResumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
@@ -7427,18 +7471,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  * the one fact that tells a daemon on THIS sign-in from one left over from the previous account (see
  * startCommand). Null when the daemon does not say.
  */
-async function runningDaemonStatus(): Promise<{ version: string; sessions: number; machineId: string | null; connected: boolean } | null> {
+async function runningDaemonStatus(): Promise<{
+  version: string; sessions: number; machineId: string | null; connected: boolean
+  backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
+  dataDir: string | null; authDir: string | null
+} | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
       ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
     if (!body) return null
-    const status = body as { version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown } | null
+    const status = body as {
+      version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
+      backendUrl?: unknown; autonomousEnv?: unknown; signedIn?: unknown; dataDir?: unknown; authDir?: unknown
+    } | null
     const version = typeof status?.version === 'string' && status.version ? status.version : VERSION
     const sessions = Array.isArray(status?.sessions) ? status.sessions.length : 0
     const machineId = typeof status?.machineId === 'string' && status.machineId ? status.machineId : null
     // Missing on a daemon too old to report it — read as connected, as the desktop app does.
     const connected = status?.connected !== false
-    return { version, sessions, machineId, connected }
+    return {
+      version, sessions, machineId, connected,
+      backendUrl: typeof status?.backendUrl === 'string' ? status.backendUrl : null,
+      autonomousEnv: typeof status?.autonomousEnv === 'string' ? status.autonomousEnv : null,
+      signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
+      dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
+      authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+    }
   } catch {
     return null
   }
@@ -7454,6 +7512,7 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
 }): void {
   const row = (k: string, v: string): string => `   ${k.padEnd(10)} ${v}`
   const rule = '  ' + '─'.repeat(37)
@@ -7468,7 +7527,10 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
-  console.log(row('backend', readAuthSession() ? env.BACKEND_WS_URL : 'not signed in · harness login'))
+  console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
+  console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
+  if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
+  if (opts.connection.authDir) console.log(row('auth', tildify(opts.connection.authDir)))
   console.log(row('agents', `${opts.sessions} available`))
   console.log(row('pid', String(opts.pid)))
   console.log(row('logs', tildify(LOG_FILE)))
@@ -7593,6 +7655,13 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     version: daemonStatus?.version ?? VERSION,
+    connection: {
+      backendUrl: daemonStatus?.backendUrl ?? env.BACKEND_WS_URL,
+      autonomousEnv: daemonStatus?.autonomousEnv ?? session?.autonomousEnv ?? env.AUTONOMOUS_ENV,
+      signedIn: daemonStatus?.signedIn ?? session !== null,
+      dataDir: daemonStatus?.dataDir ?? env.ADAPTER_DATA_DIR,
+      authDir: daemonStatus?.authDir ?? AUTH_DIR,
+    },
   })
   if (!session) {
     console.log('  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.')
@@ -8417,6 +8486,7 @@ async function status(): Promise<void> {
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
+  const signedIn = daemonStatus?.signedIn ?? session !== null
   if (!alive) registry.load()
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
@@ -8430,7 +8500,7 @@ async function status(): Promise<void> {
       ? '○ stopped'
       : safeMode
         ? `◍ safe mode · start-up failed on v${safeMode.version} — waiting for a fixed build (${safeMode.error.split('\n')[0]})`
-      : !session
+      : !signedIn
         ? '● running · this computer only (not signed in)'
         : daemonStatus == null
           ? '● running · not answering yet'
@@ -8456,6 +8526,15 @@ async function status(): Promise<void> {
         ? deviceRegistration(peekIdentityPub(), new DeviceLogStore().read(), identitySpent())
         : !peekIdentityPub() && identitySpent() ? 'removed' : null,
     ) ?? undefined,
+    // A status command can run with different shell settings from the daemon. Report the daemon's
+    // connection, not those of this short-lived caller; missing fields on older daemons stay unknown.
+    connection: {
+      backendUrl: alive ? daemonStatus?.backendUrl ?? null : env.BACKEND_WS_URL,
+      autonomousEnv: alive ? daemonStatus?.autonomousEnv ?? null : session?.autonomousEnv ?? env.AUTONOMOUS_ENV,
+      signedIn,
+      dataDir: alive ? daemonStatus?.dataDir ?? null : env.ADAPTER_DATA_DIR,
+      authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
+    },
   })
   process.exit(0)
 }

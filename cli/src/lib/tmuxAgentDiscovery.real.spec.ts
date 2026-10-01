@@ -15,6 +15,7 @@ import {
 } from './engineBin.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { probeTmuxAgents } from './tmuxAgentDiscovery.js'
+import { probeTerminalAgents } from './terminalAgentDiscovery.js'
 import { HARNESS_SESSION_PREFIX } from './harnessSessionLabel.js'
 
 // Discovery only sees sessions named like agent_create's; a session outside the prefix is
@@ -112,6 +113,19 @@ realDescribe.sequential('real installed CLI process discovery', () => {
         })
         const capture = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '')
         expect(discovered, `${bin} was not discovered in ${pane}\n${capture}`).not.toBeNull()
+
+        // The daemon uses the backend-neutral scan. Exercise it against the same real process,
+        // not only the older tmux-specific reader, before checking that stop preserves the pane.
+        const current = await probeTerminalAgents([new TmuxBackend()], ['tmux'])
+        expect(current.processTableAvailable).toBe(true)
+        const matches = current.agents.filter(agent => agent.runtimes.some(runtime => runtime.paneId === pane))
+        expect(matches).toHaveLength(1)
+        // Node engines may change their process title between these snapshots.
+        // The PID and birth stamp prove this is still the same launched process.
+        expect(matches[0]).toMatchObject({ engine, processIdentity: {
+          pid: discovered!.processIdentity.pid,
+          startMarker: discovered!.processIdentity.startMarker,
+        } })
 
         const pid = discovered!.processIdentity.pid
         process.kill(pid, 'SIGTERM')

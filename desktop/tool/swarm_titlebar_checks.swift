@@ -1542,7 +1542,7 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
     try checkTitlebar(tabs[0].frame.width < 136 && tabs[0].displayLabel == "code",
       "Overflow tabs keep readable names without persistent number prefixes")
-    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 7 && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && harnessMonitorButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for control in controls {
@@ -2462,6 +2462,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try strip.checkShareAction()
+  try strip.checkHarnessMonitor()
   try strip.checkTopActions()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
@@ -2502,4 +2503,37 @@ do {
   let message = (error as? TitlebarCheckFailure)?.message ?? String(describing: error)
   FileHandle.standardError.write(Data("AppKit Tab titlebar failed: \(message)\n".utf8))
   exit(1)
+}
+
+private extension SwarmTabStrip {
+  func checkHarnessMonitor() throws {
+    var state: [String: Any] = ["enabled": true,
+      "harnessMonitor": ["text": "10 live · 1.4 GB · 12% CPU", "segments": [["text": "10 live · 1.4 GB · 12% CPU"]], "label": "Harness Monitor", "detail": "RAM includes child processes", "interactive": true],
+      "subscriptionUsage": ["text": "Claude 12% Codex 30%", "interactive": true],
+      "focusedContext": ["text": "Computer > project > branch", "interactive": true],
+      "tabs": [["id": "work", "name": "Work"]], "activeId": "work"]
+    var calls: [String] = []
+    emit = { method, _ in calls.append(method) }
+    for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!harnessMonitorButton.isHidden && harnessMonitorButton.isEnabled &&
+        harnessMonitorButton.frame.minX > 0 && harnessMonitorButton.frame.width > 0 &&
+        harnessMonitorButton.frame.maxX <= contextButton.frame.minX,
+        "Resource monitor stays at bottom left without overlapping context at width \(width)")
+      try checkTitlebar(harnessMonitorButton.accessibilityLabel() == "Harness Monitor",
+        "The resource counter names its action for VoiceOver")
+      try checkTitlebar(subscriptionUsageButton.isHidden == (width < 1050),
+        "Narrow footers retain the monitor while subscriptions remain accessible through Models")
+    }
+    harnessMonitorButton.performClick(nil)
+    try checkTitlebar(calls == ["resourceMonitor"], "The footer opens the session monitor, never a new agent")
+    state["enabled"] = false
+    update(state)
+    harnessMonitorButton.performClick(nil)
+    try checkTitlebar(calls.count == 1, "A covered or modal footer cannot open its monitor")
+    update([:])
+    try checkTitlebar(harnessMonitorButton.isHidden && !harnessMonitorButton.isEnabled,
+      "Clearing workspace state clears the counter and action")
+  }
 }

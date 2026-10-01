@@ -107,24 +107,30 @@ describe('buildEngineLaunchArgv', () => {
       expect(result.out).not.toContain('This pane is a shell now')
     })
     it('a take-over that waits says so, and starts the engine only once the other process is gone', () => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-wait-engine-'))
+      const binary = join(folder, 'codex')
+      // /bin/sh --help succeeds on macOS but fails with Ubuntu's dash. A
+      // simulated CLI needs its own help contract for the real startup probe.
+      writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n', { mode: 0o755 })
       // Not a child of this process, as the terminal's is not: an unreaped child never looks gone.
       const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 1 >/dev/null 2>&1 & echo $!']).toString().trim())
       try {
         const argv = buildEngineLaunchArgv('codex', { waitForPid: { pid, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
         const started = Date.now()
-        const result = run([argv[0], argv[1], argv[2], 'harness-engine', '/bin/sh', '-c', 'printf "%s\\n" "engine ran"'])
+        const result = run([argv[0], argv[1], argv[2], 'harness-engine', binary])
         expect(Date.now() - started).toBeGreaterThanOrEqual(800)
         expect(result.out).toContain('Waiting for the Codex in your terminal to finish its turn.')
         expect(result.out.indexOf('Waiting for')).toBeLessThan(result.out.indexOf('engine ran'))
         expect(result.status).toBe(0)
+        // Nothing to wait for: it starts at once.
+        const immediate = buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
+        const immediateStarted = Date.now()
+        expect(run([immediate[0], immediate[1], immediate[2], 'harness-engine', binary]).out).toContain('engine ran')
+        expect(Date.now() - immediateStarted).toBeLessThan(800)
       } finally {
         try { process.kill(pid) } catch { /* gone */ }
+        rmSync(folder, { recursive: true, force: true })
       }
-      // Nothing to wait for: it starts at once.
-      const argv = buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
-      const started = Date.now()
-      expect(run([argv[0], argv[1], argv[2], 'harness-engine', '/bin/sh', '-c', 'printf "%s\\n" "engine ran"']).out).toContain('engine ran')
-      expect(Date.now() - started).toBeLessThan(800)
     })
     it('a command that does not exist still ends the pane with 127, so "not installed" stays a launch failure', () => {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, NO_TMUX)
@@ -139,6 +145,31 @@ describe('buildEngineLaunchArgv', () => {
       expect(engineFallbackPrelude('codex', '/bin/zsh', null)).toContain("exec '/bin/zsh' -l\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).toContain("exec '/bin/bash'\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).not.toContain('set-option')
+    })
+  })
+
+  describe('Codex writer ownership', () => {
+    it.each(['supported', 'older', 'failed'] as const)('probes %s startup options without changing prompt arguments', mode => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-codex-launch-'))
+      try {
+        const binary = join(folder, 'codex fixture')
+        writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
+          + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
+          + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
+        const prelude = engineFallbackPrelude('codex', '/bin/sh', null)
+        const args = ['-c', `${prelude}harness_engine "$@"`, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
+        if (mode === 'failed') {
+          try { execFileSync('/bin/sh', args, { stdio: ['ignore', 'pipe', 'pipe'] }); expect.fail('launch must refuse an unknown startup mode') }
+          catch (error) {
+            expect((error as any).status).toBe(1)
+            expect(String((error as any).stderr)).toContain('could not verify Codex startup options')
+            expect(String((error as any).stdout)).not.toContain('same-conversation')
+          }
+        } else {
+          const output = execFileSync('/bin/sh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+          expect(output).toBe(`${mode === 'supported' ? '<--no-daemon>\n' : ''}<resume>\n<same-conversation>\n<literal $(nothing) \`nothing\` and spaces>\n`)
+        }
+      } finally { rmSync(folder, { recursive: true, force: true }) }
     })
   })
 
@@ -531,6 +562,14 @@ describe('opening as a named agent', () => {
     // Resume keeps it too — the flag rides `extraArgs`, which every relaunch rebuilds from the row.
     expect(buildEngineCommandArgv('opencode', { resumeSessionId: 'ses_1', extraArgs: namedAgentArgs('opencode', 'harness-compute') }))
       .toEqual([engineBin('opencode'), '--session', 'ses_1', '--agent', 'harness-compute'])
+  })
+
+  it('refuses opencode v2, whose TUI has no --agent (only `opencode run` does)', () => {
+    expect(supportsNamedAgent('opencode', 2)).toBe(false)
+    expect(() => namedAgentArgs('opencode', 'harness-compute', 2)).toThrow(NamedAgentUnsupportedError)
+    // v1, or a version not read, keeps the flag it always had.
+    expect(supportsNamedAgent('opencode', 1)).toBe(true)
+    expect(supportsNamedAgent('opencode', null)).toBe(true)
   })
 
   it('refuses every other engine, naming it, rather than dropping the name', () => {

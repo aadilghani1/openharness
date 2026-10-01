@@ -1351,7 +1351,7 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, view: View, picker: &mut Pi
         settings::put(buf, body.x, body.y, body.width, &format!("{} · resize or Esc", view.title()), c.base);
         return None;
     }
-    let r = settings::area(body);
+    let r = settings::area(body, PickerKind::Devices(view).size(), 0);
     settings::fill(buf, r, c.base);
     picker.screen_area.set(r);
     picker.preview_area.set(None);

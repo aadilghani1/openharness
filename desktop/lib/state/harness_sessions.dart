@@ -11,7 +11,9 @@ enum SessionSort {
   recent('Recently used'),
   name('Name'),
   machine('Machine'),
-  project('Project');
+  project('Project'),
+  memory('RAM: highest first'),
+  cpu('CPU: highest first');
 
   const SessionSort(this.label);
   final String label;
@@ -88,13 +90,17 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'View only'
       : agent.isStopped
-      ? (agent.canPauseAndResume ? 'Paused' : 'Resume unavailable')
+      ? (agent.canPauseAndResume ? 'Saved' : 'Resume unavailable')
       : agent.launchState == 'failed'
       ? 'Start failed'
       : agent.launchState == 'starting'
       ? 'Starting'
       : needsInput
       ? 'Needs input'
+      : agent.closePlanState == 'failed'
+      ? 'Could not close'
+      : agent.closePlanState == 'waiting'
+      ? 'Stops after finishing'
       : working
       ? 'Working'
       : agent.terminalAvailable
@@ -117,7 +123,10 @@ class HarnessSession {
       : null;
 }
 
-List<HarnessSession> harnessSessions(AppNotifier app) {
+List<HarnessSession> harnessSessions(
+  AppNotifier app, {
+  bool includeLive = false,
+}) {
   final open = {
     for (final pane in app.allPanes)
       if (pane.agentId != null) (pane.machineId, pane.agentId),
@@ -127,7 +136,11 @@ List<HarnessSession> harnessSessions(AppNotifier app) {
   return [
     for (final machine in app.machineStates.values)
       for (final agent in machine.agents)
-        if (known(machine.machine.machineId, agent.id))
+        if (known(machine.machine.machineId, agent.id) ||
+            (includeLive &&
+                !machine.machine.isShared &&
+                !agent.isStopped &&
+                agent.terminalAvailable))
           HarnessSession(
             machine: machine,
             agent: agent,
@@ -157,6 +170,8 @@ List<HarnessSession> visibleHarnessSessions(
   SessionFilter filter = SessionFilter.all,
   SessionSort sort = SessionSort.recent,
   List<String> recent = const [],
+  Map<String, double> memory = const {},
+  Map<String, double> cpu = const {},
 }) {
   final terms = query.toLowerCase().trim().split(RegExp(r'\s+'));
   final result = sessions.where((row) {
@@ -194,6 +209,8 @@ List<HarnessSession> visibleHarnessSessions(
         (a.project?.label ?? '').toLowerCase(),
         (b.project?.label ?? '').toLowerCase(),
       ),
+      SessionSort.memory => (memory[b.id] ?? -1).compareTo(memory[a.id] ?? -1),
+      SessionSort.cpu => (cpu[b.id] ?? -1).compareTo(cpu[a.id] ?? -1),
     };
     if (comparison != 0) return comparison;
     final name = compareNatural(

@@ -245,7 +245,21 @@ The suite uses isolated, test-owned lifecycle fixtures. Its engine matrix explic
 first-run onboarding that prevents a proprietary CLI from running is unavailable evidence and must be
 reported as such, not described as exercised.
 
-## Config (`.env`, see `.env.example`)
+## Config (environment variables; see `.env.example`)
+
+Dev and release builds use the same production backend, account and machine state by default.
+Harness does **not** load a project's `.env` when started from that folder. To run against a
+different backend deliberately, export the settings or select a file explicitly:
+
+```bash
+HARNESS_ENV_FILE=/absolute/path/to/harness.env harness start
+```
+
+Exported variables take precedence. An explicit `DOTENV_CONFIG_PATH` remains supported.
+If you previously relied on automatic `.env` loading, set one of these paths before starting
+Harness. `harness status` reports the running daemon's backend, account environment and state
+directories; those can differ from the shell that invokes the command. Older daemons may not
+report all fields.
 
 | var | default | meaning |
 |-----|---------|---------|

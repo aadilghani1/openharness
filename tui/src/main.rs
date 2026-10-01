@@ -425,6 +425,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
+    for (chord, command) in &config.prefix_keys {
+        match command { Some(c) => app.keymap.bind(keys::Table::Prefix, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Prefix, chord) }
+    }
     // The server's options, keys, buffers and environment: this client's if it is the first
     // (tmux reads its configuration once, when its server starts).
     server::join(&mut app);

@@ -52,6 +52,9 @@ fn on_key(app: &mut App, key: KeyEvent) {
     app.key_name = Some(keys::name(&chord));
     // A message goes on the next key, as tmux's does.
     app.toast = None;
+    // ── keys ── Waiting for a key (a prefix, or a command's key, chosen in the panel): this is it,
+    // whatever it is — the prefix too.
+    if app.capturing.is_some() { crate::settings::captured(app, key); return }
     // display-panes (cmd_display_panes_key), before any table: a number, or a letter for 10 on,
     // runs its template for that pane (select-pane) and closes it — as does one no pane has;
     // any other key (every key with -N) closes it and goes on as it would have.
@@ -128,9 +131,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
         app.repeat_until = None;
     }
     // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
-    // at the status line keeps it.
+    // at the status line keeps it — and a plain-key prefix (`` ` ``, Enter) is the prefix over the
+    // panes alone: in a list it is typed into the search, or chooses.
     let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)));
-    if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
+    let listed = chord.plain() && app.modal.is_some();
+    if !line_edit && !listed && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.status_redraws += 1;
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
@@ -283,6 +288,14 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
             if let Some(Modal::Picker { picker, kind }) = &mut app.modal {
                 if in_preview { picker.preview_by(if up { -1 } else { 1 }) }
+                // A panel's list: the wheel scrolls it, three lines a notch, and chooses nothing —
+                // the mouse over a row does (Moved). (Up shows what is over the top: in a list read
+                // bottom-up, its later lines.)
+                else if inside(list) && crate::settings::is_panel(kind) && !(shift && multi) {
+                    let later = if crate::settings::top_down(kind) { !up } else { up };
+                    picker.scroll = if later { picker.scroll + 3 } else { picker.scroll.saturating_sub(3) };
+                    picker.free_scroll = true;
+                }
                 else if inside(list) {
                     if shift && multi { picker.toggle_mark(); }
                     let r: i64 = if crate::settings::top_down(kind) { -1 } else { 1 };
@@ -309,6 +322,10 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
             }
         }
         MouseEventKind::Up(_) => { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.bar_drag = false; picker.preview_drag = None; picker.border_drag = false; picker.preview_bar_drag = false } }
+        // A panel's list: the row under the mouse is the one chosen (the list does not move).
+        MouseEventKind::Moved if inside(list) => {
+            if let Some(Modal::Picker { picker, kind }) = &mut app.modal { if crate::settings::is_panel(kind) { picker.click(mouse.row); } }
+        }
         // fzf's right click: the row under it, then toggle (a mark, in a list that takes marks).
         MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
@@ -336,6 +353,11 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
             let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) if inside(list) => Some(picker.click(mouse.row)), Some(Modal::Picker { .. }) => Some(false), _ => None };
             match hit {
                 Some(true) if shift => { if multi { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.toggle_mark(); } } }
+                // A panel's list: the mouse over a row has chosen it already, so one click runs it.
+                Some(true) if matches!(&app.modal, Some(Modal::Picker { kind, .. }) if crate::settings::is_panel(kind)) => {
+                    app.last_click = None;
+                    modal_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                }
                 Some(true) => {
                     let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
                     app.last_click = Some((9, mouse.column, mouse.row, std::time::Instant::now(), 1));
@@ -647,7 +669,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 }
             }
             picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
-            picker.empty = if app.focused().is_none() { "Focus a harness to switch its model.".into() } else { "Loading its models…".into() };
+            picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
         PickerKind::Inbox => {
@@ -680,7 +702,9 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
         }
         // (Typed into, it ranks by match, best first, as fzf does; empty, it keeps its groups. A
         // query matches a command's name and keywords, not the description shown beside it.)
-        PickerKind::Commands => { picker.live = true; picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty())); picker.hints = vec![("enter", "run")] }
+        PickerKind::Commands => { picker.live = true; picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty(), crate::settings::in_tmux(picker))); picker.hints = vec![("enter", "run"), ("M-k", "change its key")] }
+        // ── keys ──
+        PickerKind::Keybinds => { picker.keep_order = true; picker.set_rows(modal::keybind_rows(app)); picker.hints = vec![("enter", "change"), ("esc", "done")] }
         PickerKind::Help => { picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
@@ -803,6 +827,7 @@ fn prepare(app: &mut App, kind: &PickerKind) {
 fn load_models(app: &mut App) {
     // ── models: this computer's models, the grids and the saved APIs (models.rs) ──
     crate::models::open(app);
+    // (The focused pane's engine's own models — what `model_rows` lists for that pane.)
     let Some((machine, agent)) = focused_agent(app) else { return };
     let Some(link) = app.link(&machine) else { return };
     let mark = loading(format!("models {machine} {agent}"), true);
@@ -839,6 +864,8 @@ pub fn run(app: &mut App, command: &str) {
         "help" => launch(app, "?", Filter::All),
         "layout" => picker(app, PickerKind::Layout, "layout", ""),
         "theme" | "appearance" => picker(app, PickerKind::Theme, "Appearance", "Search appearance"),
+        // ── keys ── Keybinds: a panel of its own (from the command list it opens in place).
+        "keybinds" => picker(app, PickerKind::Keybinds, "Keybinds", "Search keybinds"),
         "commands" => picker(app, PickerKind::Commands, "Commands", "Type a command — appearance, new, layout, models…"),
         "store" => launch(app, "*", Filter::All),
         "new" => crate::new_harness::open(app, None, None),
@@ -1057,7 +1084,7 @@ pub fn refill(app: &mut App) {
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take() {
         let was = picker.current_id();
         // (The settings panel changes only by your keys: a refresh would step out of its section.)
-        if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout | PickerKind::Theme | PickerKind::Commands) { fill(app, &kind, &mut picker) }
+        if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout | PickerKind::Theme | PickerKind::Commands | PickerKind::Keybinds) { fill(app, &kind, &mut picker) }
         // (The cursor put on another row by the list, not by a key: a moment before it answers.)
         if was.is_some() && picker.current_id() != was { picker.landed = Some(Instant::now()) }
         app.modal = Some(Modal::Picker { kind, picker });
@@ -1955,6 +1982,8 @@ fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     // ── machines & devices ── (a line typed or a y/n answered in the panel; Esc/← a level back)
     let (kind, mut picker) = match crate::devices::key(app, kind, picker, key) { Ok(()) => return, Err(back) => back };
+    // A key: the list follows the cursor again (the wheel had left it where it put it).
+    picker.free_scroll = false;
     // A row a key goes to is one you chose to look at (the list moving it there is not).
     let was = picker.current_id();
     let key_moves = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Tab | KeyCode::BackTab)
@@ -1963,6 +1992,12 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     let _ = was;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // ── keys ── Alt-k on a command: the next key you press is its key (Ctrl-k moves, as in fzf).
+    if matches!(kind, PickerKind::Commands) && alt && !ctrl && key.code == KeyCode::Char('k') {
+        crate::settings::capture_for_row(app, &mut picker);
+        app.modal = Some(Modal::Picker { kind, picker });
+        return;
+    }
     // Jump mode consumes one key, then fires jump or jump-cancel as fzf does.
     if let Some(accept) = picker.jumping.take() {
         let mut event = "jump-cancel";
@@ -2011,12 +2046,34 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     // unbind / toggle-bind: that key does nothing in this list now.
     if picker.unbound.contains(&fzf_key_name(&key)) { app.modal = Some(Modal::Picker { kind, picker }); return }
     let up: i64 = if crate::settings::top_down(&kind) { -1 } else { 1 };
+    // ── tabs ── The launcher's tab row: ↓ past the list's last row goes onto it; there ←/→ open the
+    // next tab (as typing its character does), ↑ or Enter goes back to the list, and any other key
+    // does what it does in the list — a key typed searches the tab chosen, Esc closes.
+    let mut tabbed = false;
+    if modal::is_launcher(&kind) && !ctrl && !alt && !shift {
+        if picker.on_tabs {
+            match key.code {
+                KeyCode::Left | KeyCode::Right => {
+                    picker.query = modal::next_tab(&picker.query, if key.code == KeyCode::Right { 1 } else { -1 });
+                    picker.qcursor = picker.query.chars().count();
+                    tabbed = true;
+                }
+                KeyCode::Up | KeyCode::Enter => { picker.on_tabs = false; app.modal = Some(Modal::Picker { kind, picker }); return }
+                KeyCode::Down => { app.modal = Some(Modal::Picker { kind, picker }); return }
+                _ => picker.on_tabs = false,
+            }
+        } else if key.code == KeyCode::Down && !(0..picker.visible.len() as i64).contains(&(picker.cursor as i64 - up)) {
+            picker.on_tabs = true;
+            app.modal = Some(Modal::Picker { kind, picker });
+            return;
+        }
+    }
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
     // list's own meaning of it; one with an action hn runs never falls back to it.
     let name = fzf_key_name(&key);
     let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| !falls_back(&name, a));
-    if let Some(actions) = bound {
+    if tabbed {} else if let Some(actions) = bound {
         match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
             End::Abort => { SPLIT.with(|s| s.set(None)); return }
@@ -2046,6 +2103,20 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
                 app.modal = Some(Modal::Picker { kind: PickerKind::Commands, picker });
                 return;
             }
+        }
+        // A model's question (Enter · Esc): Esc takes it back, and the view stays.
+        if matches!(kind, PickerKind::Models) && key.code == KeyCode::Esc && crate::models::cancel(app, &mut picker) { app.modal = Some(Modal::Picker { kind, picker }); return }
+        // tmux's commands, opened from their row: Esc is a step back to hn's.
+        if matches!(kind, PickerKind::Commands) && key.code == KeyCode::Esc && crate::settings::in_tmux(&picker) {
+            crate::settings::back_to_commands_at(app, &mut picker, "cmd:tmux-commands");
+            app.modal = Some(Modal::Picker { kind, picker });
+            return;
+        }
+        // ── keys ── Keybinds opened from the command list: Esc is a step back to it.
+        if matches!(kind, PickerKind::Keybinds) && key.code == KeyCode::Esc && picker.from_commands {
+            crate::settings::back_to_commands_at(app, &mut picker, "cmd:keybinds");
+            app.modal = Some(Modal::Picker { kind: PickerKind::Commands, picker });
+            return;
         }
         match key.code {
             KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
@@ -2176,7 +2247,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
         // The command list: tmux's commands join it once you search, and leave when you stop.
         if matches!(kind, PickerKind::Commands) && before.is_empty() != picker.query.is_empty() {
             picker.rows.clear();
-            picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty()));
+            picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty(), crate::settings::in_tmux(&picker)));
         }
         // The panel's lists: what you type puts the cursor on the best match.
         if crate::settings::is_panel(&kind) { picker.to_top() }
@@ -2561,8 +2632,14 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
     // A list of keys, buffers, commands or text: only Enter picks — the harness lists' keys (C-v
     // beside, C-x below, M-p pause …) do nothing here, as keys fzf has no action for.
-    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Commands | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
+    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Commands | PickerKind::Keybinds | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
     match kind.clone() {
+        // ── keys ── Enter on a command: the next key pressed is its key; on the prefix, where it is set.
+        PickerKind::Keybinds => {
+            let (knob, value) = id.as_deref().map(|id| id.split_once(':').unwrap_or((id, ""))).unwrap_or_default();
+            if let Some(msg) = crate::settings::set_key(app, knob, value) { picker.say(msg) }
+            return keep(app, kind, picker);
+        }
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
             SPLIT.with(|s| s.set(None));
@@ -2682,14 +2759,15 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             // (The engine's own models: only Enter switches.)
             if choice != Choice::Enter { return keep(app, kind, picker) }
             let Some(model) = id else { return keep(app, kind, picker) };
-            let Some((machine, agent)) = focused_agent(app) else { return };
+            let Some(crate::models::Target { machine, agent, .. }) = crate::models::target(app) else { return };
             let Some(link) = app.link(&machine) else { return };
             let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
             app.say(format!("Switching to {label}…"), theme::SOFT);
             app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "selectedModel": model }), Duration::from_secs(60)).await }, move |app, reply| match reply {
                 Ok(reply) => {
                     if let Some(row) = reply.get("agent") { let key = (machine.clone(), row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()); let a = crate::fleet::agent_from(&machine, row, app.fleet.agents.get(&key)); app.fleet.agents.insert(key, a); }
-                    app.say(format!("Now on {label}"), theme::ONLINE);
+                    crate::models::close(app);
+                    app.say(format!("✓ Now on {label}"), theme::ONLINE);
                 }
                 Err(e) => app.say(format!("Could not switch: {e}"), theme::DANGER),
             });
@@ -2729,6 +2807,14 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 // Settings open in this same panel, where the command list was.
                 crate::settings::into_settings(app, &mut picker);
                 return keep(app, PickerKind::Theme, picker);
+            } else if id == "cmd:tmux-commands" {
+                // tmux's commands, grouped, in this same panel (Esc comes back here).
+                crate::settings::into_tmux(app, &mut picker);
+                return keep(app, kind, picker);
+            } else if id == "cmd:keybinds" {
+                // ── keys ── (in this same panel too; Esc comes back here)
+                crate::settings::into_keybinds(app, &mut picker);
+                return keep(app, PickerKind::Keybinds, picker);
             } else if let Some(view) = id.strip_prefix("cmd:").and_then(crate::devices::View::of) {
                 // ── machines & devices ── (in this same panel too; Esc comes back here)
                 return crate::devices::from_commands(app, picker, view);
@@ -2899,7 +2985,7 @@ pub fn is_command(id: &str) -> bool {
         | "broadcast" | "clone" | "restart" | "pause" | "take" | "rename" | "tab" | "rename-tab" | "close-tab" | "next-tab" | "prev-tab"
         | "split-right" | "split-down" | "close-pane" | "zoom" | "equalize" | "pane-tab" | "copy-mode" | "find" | "tab-left" | "tab-right"
         | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "info" | "messages" | "keys"
-        | "theme" | "appearance" | "commands" | "choose-buffer" | "quit"
+        | "theme" | "appearance" | "commands" | "choose-buffer" | "quit" | "keybinds"
         // ── machines & devices ──
         | "connect-machine" | "add-phone" | "devices")
 }

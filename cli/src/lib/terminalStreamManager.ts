@@ -227,6 +227,12 @@ export class TerminalStreamManager {
     this.expiryTimer.unref?.()
   }
 
+  /** Closing a quiet pane must not silently stop a session open in another window/device. */
+  hasOtherViews(agentId: string, connId: string): boolean {
+    return [...this.streams.values()].some(stream =>
+      stream.agentId === agentId && stream.connId !== connId && !stream.closing)
+  }
+
   private async withLeaseLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.leaseLocks.get(key) ?? Promise.resolve()
     let release!: () => void

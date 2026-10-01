@@ -513,8 +513,12 @@ void main() {
             tester.view.physicalSize = Size(width, 800);
             await tester.pump();
             expect(tester.takeException(), isNull);
+            expect(usage, findsNothing);
+            final monitor = find.byKey(
+              const ValueKey('workspace-harness-monitor'),
+            );
             expect(
-              tester.getRect(usage).right,
+              tester.getRect(monitor).right,
               lessThan(tester.getRect(context).left),
             );
           }
@@ -606,6 +610,8 @@ void main() {
     expect(app.allPanes, isNot(contains(first)));
     expect(second.session!.agentId, 'a1');
     await mouse.removePointer();
+    // Closing a tile resizes the remaining terminal through its 50 ms debounce.
+    await tester.pump(const Duration(milliseconds: 60));
     await tester.pumpWidget(const SizedBox());
   });
 

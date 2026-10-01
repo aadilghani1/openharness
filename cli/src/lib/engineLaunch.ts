@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
@@ -180,15 +181,20 @@ export class NamedAgentUnsupportedError extends Error {
   }
 }
 
-export function supportsNamedAgent(engine: AgentEngine): boolean {
+/**
+ * `opencodeMajor` is the installed OpenCode's major version (`engines/opencode/version.ts`), absent
+ * meaning v1. v2 moved `--agent` to `opencode run`; its TUI exits 1 on the flag, so v2 has no entry.
+ */
+export function supportsNamedAgent(engine: AgentEngine, opencodeMajor: number | null = null): boolean {
+  if (engine === 'opencode' && isOpencodeV2(opencodeMajor)) return false
   return NAMED_AGENT_ARGS[engine] !== null
 }
 
 /** The argv that opens `engine` as its named agent `agent`. Throws [NamedAgentUnsupportedError] for
  *  an engine with no contract, so a caller cannot build an argv that silently drops the name. */
-export function namedAgentArgs(engine: AgentEngine, agent: string): string[] {
+export function namedAgentArgs(engine: AgentEngine, agent: string, opencodeMajor: number | null = null): string[] {
   const lead = NAMED_AGENT_ARGS[engine]
-  if (lead === null) throw new NamedAgentUnsupportedError(engine)
+  if (lead === null || !supportsNamedAgent(engine, opencodeMajor)) throw new NamedAgentUnsupportedError(engine)
   return [...lead, agent]
 }
 
@@ -420,6 +426,7 @@ export function buildEngineLaunchArgv(
   if (isTerminalEngine(engine)) return buildTerminalLaunchArgv(opts, shell)
   const command = buildEngineCommandArgv(engine, opts)
   const interactive = interactiveEngineShell(shell)
+    ?? (engine === 'codex' ? { path: '/bin/sh', args: ['-c'], label: 'shell' } : null)
   if (!interactive) return command
   const enginePrelude = engineFallbackPrelude(engine, interactive.path, tmuxBinary)
   // The clear comes FIRST, before the install as well as before the engine. An installer is a child
@@ -491,6 +498,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     ? `  [ -n "\${TMUX_PANE:-}" ] && ${shellSingleQuote(tmuxBinary)} set-option -p -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1 || true\n`
     : ''
   return 'harness_engine() {\n'
+    + (engine === 'codex' ? codexOwnedLaunchPrelude() : '')
     + '  harness_status=0\n'
     + '  "$@" || harness_status=$?\n'
     + '  if [ "$harness_status" -eq 127 ]; then exit 127; fi\n'
@@ -501,6 +509,22 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
+}
+
+/** Codex 0.157+ otherwise puts the writer outside tmux in a shared server. Keep
+ * Harness-owned launches process-owned so Close, hook attribution, provider env
+ * and RAM accounting describe the same lifetime. Probe the binary AFTER any
+ * install, in the exact pane shell; older versions simply omit the flag. The
+ * probe is bounded and never changes the user's Codex configuration. */
+function codexOwnedLaunchPrelude(): string {
+  const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
+  return `  harness_codex_mode=0\n`
+    + `  ${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(probe)} "$1" || harness_codex_mode=$?\n`
+    + `  case "$harness_codex_mode" in\n`
+    + `    0) harness_codex_bin="$1"; shift; set -- "$harness_codex_bin" --no-daemon "$@" ;;\n`
+    + `    64) ;;\n`
+    + `    *) printf '%s\\n' 'harness: could not verify Codex startup options. Please try opening this session again.' >&2; exit 1 ;;\n`
+    + `  esac\n`
 }
 
 /**

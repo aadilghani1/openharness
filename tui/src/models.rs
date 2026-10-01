@@ -270,6 +270,39 @@ pub struct Switch { pub machine: String, pub agent: String, pub to: String, pub 
 
 const SWITCH_FOR: Duration = Duration::from_secs(60);
 
+/// A Use over: its row, its model's name, the step it reached, and why it failed (None: ready);
+/// [seen]: the cursor has been on its row since (leaving the row then ends it).
+#[derive(Clone, Debug)]
+pub struct Ended { pub row: String, pub name: String, pub step: Step, pub failed: Option<String>, pub seen: bool }
+
+/// A Use's steps, as its preview lists them.
+pub const STEPS: [&str; 4] = ["Download", "Start", "Serve", "Switch harness"];
+
+/// A step's mark: done ✓, under way ↻ (its progress, when the daemon sends one), failed ✗, or
+/// still to come.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mark { Done, Now(Option<f64>), Failed, Later }
+
+/// The marks of a Use at [step], [op] the operation on its model; [ended]: Some(true) ready,
+/// Some(false) failed at [step], None under way.
+pub fn checklist(step: Step, op: Option<&Operation>, ended: Option<bool>) -> [Mark; 4] {
+    let at = match step { Step::Get => 0, Step::Start => 1, Step::Serve => 2, Step::Switch => 3 };
+    std::array::from_fn(|i| match (i.cmp(&at), ended) {
+        (_, Some(true)) | (std::cmp::Ordering::Less, _) => Mark::Done,
+        (std::cmp::Ordering::Equal, Some(false)) => Mark::Failed,
+        (std::cmp::Ordering::Equal, None) => Mark::Now(progress(step, op)),
+        _ => Mark::Later,
+    })
+}
+
+/// How far the operation under [step] is, while it runs and the daemon says (a download's or a
+/// start's; serving and switching have none).
+fn progress(step: Step, op: Option<&Operation>) -> Option<f64> {
+    op.filter(|o| matches!(step, Step::Get | Step::Start) && o.active()).and_then(|o| o.progress)
+}
+
+fn percent(p: f64) -> u32 { (p * 100.0).floor() as u32 }
+
 /// The model the focused harness is being moved to, while it is.
 fn switching_for<'a>(app: &'a App, t: Option<&Target>) -> Option<&'a str> {
     let (t, s) = (t?, app.models_view.switching.as_ref()?);
@@ -308,6 +341,12 @@ pub struct Models {
     pub switching: Option<Switch>,
     /// Why the last Use of a row failed (row id, words): its preview says so.
     pub use_error: Option<(String, String)>,
+    /// The first Enter's question on a row (row id, words), in its preview until Enter, Esc or the
+    /// cursor leaves the row.
+    pub confirm: Option<(String, String)>,
+    /// How the last Use ended: its preview's checklist and ✓ / ✗ stay until the cursor leaves its
+    /// row or another action starts.
+    pub ended: Option<Ended>,
     /// Sections a wake was sent for and not yet answered; the re-reads that follow one.
     pub asking: HashSet<String>,
     pub follow_until: Option<Instant>,
@@ -351,10 +390,29 @@ fn due(last: Option<&Instant>, every: Duration, now: Instant) -> bool { last.is_
 pub struct Target { pub machine: String, pub agent: String, pub engine: String, pub grid_model: String, pub base_url: String }
 
 pub fn target(app: &App) -> Option<Target> {
-    let (machine, agent) = crate::input::focused_agent(app)?;
-    let a = app.fleet.agent(&machine, &agent)?;
-    if a.engine == "terminal" { return None }
-    Some(Target { engine: a.engine.clone(), grid_model: a.grid_model.clone(), base_url: a.grid_base_url.clone(), machine, agent })
+    let of = |machine: String, agent: String| -> Option<Target> {
+        let a = app.fleet.agent(&machine, &agent)?;
+        (a.engine != "terminal").then(|| Target { engine: a.engine.clone(), grid_model: a.grid_model.clone(), base_url: a.grid_base_url.clone(), machine, agent })
+    };
+    if let Some(t) = crate::input::focused_agent(app).and_then(|(m, a)| of(m, a)) { return Some(t) }
+    // No pane focused at all: the harness on screen, when it is the only one. (A pane that is
+    // focused — a shell, a terminal — is the one meant: never another harness in its place.)
+    if app.focused().is_some() { return None }
+    let mut shown = app.rects.iter().filter_map(|(id, _)| app.panes.get(id)).filter_map(|p| of(p.machine_id.clone(), p.agent_id.clone()));
+    let only = shown.next()?;
+    shown.next().is_none().then_some(only)
+}
+
+/// Why there is no harness to move: what the focused pane is, said so a person can act on it.
+pub fn no_target_why(app: &App) -> String {
+    let Some(focus) = app.focused() else { return "No pane is focused — click a harness's pane, then open Models".into() };
+    let Some(p) = app.panes.get(&focus) else { return "The focused pane is not a harness's".into() };
+    if p.agent_id.is_empty() { return "The focused pane is a shell, not a harness — start one with New harness".into() }
+    match app.fleet.agent(&p.machine_id, &p.agent_id) {
+        None => format!("This pane's harness ({}) is not in the list yet — try again in a moment", p.agent_id.chars().take(8).collect::<String>()),
+        Some(a) if a.engine == "terminal" => "The focused pane is a terminal — its model can not be switched; a harness's can".into(),
+        Some(_) => NO_HARNESS.into(),
+    }
 }
 
 /// Whether [engine] can be pointed at a model here: the daemon's picture says it may.
@@ -586,22 +644,29 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
         None => out.push(note("local", if !up(app, &machine) { "Connect this computer to see its models." } else { v.local_error.get(&machine).map(String::as_str).unwrap_or("Finding models that fit…") }, &head)),
         Some(s) => {
             if let Some(n) = &s.notice { out.push(note("notice", n, &head)) }
-            let rank = |m: &LocalModel| if v.op_for(&machine, m).is_some_and(Operation::active) || v.pending.as_ref().is_some_and(|p| p.1 == m.id) { 0 } else if m.running() { 1 } else if m.downloaded() { 2 } else { 3 };
-            let mut mine: Vec<(u8, usize, &LocalModel)> = s.models.iter().enumerate().map(|(i, m)| (rank(m), i, m)).filter(|(r, _, _)| *r < 3).collect();
-            mine.sort_by_key(|(r, i, _)| (*r, *i));
+            // What can be used now first: one being got or started, one running here, one the own
+            // grid serves from another machine; then one downloaded and stopped; a grid's offline
+            // one last. (In the daemon's order within each.)
+            let rank = |m: &LocalModel| if v.op_for(&machine, m).is_some_and(Operation::active) || v.pending.as_ref().is_some_and(|p| p.1 == m.id) { 0 } else if m.running() { 1 } else if m.downloaded() { 3 } else { 5 };
+            let mut mine: Vec<(u8, usize, Row)> = s.models.iter().enumerate().map(|(i, m)| (rank(m), i, m)).filter(|(r, _, _)| *r < 5).map(|(r, i, m)| (r, i, local_row(app, m, t, &head))).collect();
             let theirs = v.grids.get(&machine).is_some_and(|g| g.sections.iter().any(|s| s.own && !s.models.is_empty()));
+            if let Some(g) = v.grids.get(&machine) {
+                // (This computer's running ones are listed by their local names.)
+                let here: Vec<&LocalModel> = s.models.iter().filter(|m| m.running()).collect();
+                let served = g.sections.iter().filter(|s| s.own).flat_map(|s| s.models.iter().map(move |x| (s, x)))
+                    .filter(|(_, x)| !here.iter().any(|m| x.id.eq_ignore_ascii_case(&m.id) || x.id.eq_ignore_ascii_case(&m.name)));
+                mine.extend(served.enumerate().map(|(i, (s, x))| (if x.offline.is_some() { 4 } else { 2 }, i, grid_row(app, s, x, t, &head))));
+            }
+            mine.sort_by_key(|(r, i, _)| (*r, *i));
             if mine.is_empty() && !theirs && !searching { out.push(note("none", "No models here yet — get one below", &head)) }
-            out.extend(mine.into_iter().map(|(_, _, m)| local_row(app, m, t, &head)));
+            out.extend(mine.into_iter().map(|(_, _, r)| r));
         }
     }
 
     if let Some(g) = v.grids.get(&machine) {
-        // (This computer's own are above, by their local names.)
-        let here: Vec<&LocalModel> = snap.map(|s| s.models.iter().filter(|m| m.running()).collect()).unwrap_or_default();
-        for s in g.sections.iter().filter(|s| s.own) {
-            for x in s.models.iter().filter(|x| !here.iter().any(|m| x.id.eq_ignore_ascii_case(&m.id) || x.id.eq_ignore_ascii_case(&m.name))) {
-                out.push(grid_row(app, s, x, t, &head));
-            }
+        // (Without this computer's list yet, the own grid's models as they come.)
+        if snap.is_none() {
+            for s in g.sections.iter().filter(|s| s.own) { for x in &s.models { out.push(grid_row(app, s, x, t, &head)) } }
         }
         for s in g.sections.iter().filter(|s| !s.own) {
             let words = section_words(s, v.asking.contains(&s.name));
@@ -777,10 +842,10 @@ pub fn plan_enter(app: &App, id: &str) -> Plan {
     if !f.get { return say(if !m.can_start { "This model does not fit here now." } else { "It cannot be got now. Try again in a moment." }) }
     let supports = v.local.get(&app.fleet.local_id).is_some_and(|s| s.supports_download);
     let go = if f.get_use { Plan::Use { model: m.id.clone(), download: true } } else { Plan::Act { model: m.id.clone(), action: if supports { "download" } else { "start" } } };
-    // A download is gigabytes: the first Enter says what the second will do.
+    // A download is gigabytes: the first Enter asks, in the preview, what the second will do.
     let size = m.size.map(gb).map(|s| format!(" ({s})")).unwrap_or_default();
-    let then = if f.get_use { " — then it starts and this harness moves onto it" } else { "" };
-    Plan::Arm(format!("Enter again to get {}{size}{then}", m.name), Box::new(go))
+    let then = if f.get_use { ", start it, move this harness onto it" } else { "" };
+    Plan::Arm(format!("Get {}{size}{then}? Enter · Esc", m.name), Box::new(go))
 }
 
 /// What ^S does on row [id]: stop a local model (asked first).
@@ -800,12 +865,19 @@ pub fn choose(app: &mut App, picker: &mut Picker, id: &str, stop: bool) {
 }
 
 fn run(app: &mut App, picker: &mut Picker, plan: Plan, key: &str) {
-    if !matches!(plan, Plan::Arm(..)) { picker.armed = None }
+    if !matches!(plan, Plan::Arm(..)) { picker.armed = None; app.models_view.confirm = None }
+    // (Anything but words starts another action: the last Use's end leaves its preview.)
+    if !matches!(plan, Plan::Nothing | Plan::Say(_)) { app.models_view.ended = None }
     match plan {
         Plan::Nothing => {}
+        // (No harness: why, from what the focused pane is.)
+        Plan::Say(s) if s == NO_HARNESS => picker.say(no_target_why(app)),
         Plan::Say(s) => picker.say(s),
         Plan::Arm(words, then) => {
+            app.models_view.confirm = None;
             if picker.armed.as_deref() == Some(key) { picker.armed = None; run(app, picker, *then, key) }
+            // Enter on a local model asks in its preview, where it stays until answered.
+            else if let Some(row) = key.strip_suffix("\u{1f}enter").filter(|id| id.starts_with("mv:local:")) { picker.armed = Some(key.to_string()); app.models_view.confirm = Some((row.to_string(), words)) }
             else { picker.armed = Some(key.to_string()); picker.say(words) }
         }
         Plan::Retarget { machine, payload, name } => {
@@ -813,7 +885,8 @@ fn run(app: &mut App, picker: &mut Picker, plan: Plan, key: &str) {
             picker.say(format!("Switching {who} to {name}…"));
             retarget(app, &machine, payload, &name, false);
         }
-        Plan::Use { model, download } => { start_use(app, &model, download); if let Some(u) = app.models_view.using.clone() { picker.say(using_label(app, &u)) } }
+        // (Its steps are the preview's checklist.)
+        Plan::Use { model, download } => start_use(app, &model, download),
         Plan::Act { model, action } => { picker.say(format!("{}…", pending_word(action))); act(app, &model, action) }
         Plan::Wake(name) => { wake(app, &name); picker.say(STARTING_UP_WAIT) }
         Plan::More => app.models_view.more = !app.models_view.more,
@@ -835,6 +908,42 @@ pub fn using_label(app: &App, u: &Use) -> String {
         (Step::Serve, _) => format!("Waiting for {} to serve…", u.name),
         (Step::Switch, _) => format!("Moving the harness onto {}…", u.name),
     }
+}
+
+/// Esc on the view: a first Enter's question taken back (true), the view left open.
+pub fn cancel(app: &mut App, picker: &mut Picker) -> bool {
+    let asked = app.models_view.confirm.take().is_some();
+    if asked { picker.armed = None }
+    asked
+}
+
+/// The status bar's word on a Use while it runs (`#{model_progress}`): `↻ qwen3-coder 42%`, or
+/// the step under way where the daemon sends no progress.
+/// What the model list is waiting on now, for its title (beside a spinner): a Use's step, else a
+/// harness being moved. None: nothing.
+pub fn working(app: &App) -> Option<String> {
+    if let Some(s) = status_text(app) { return Some(s.trim_start_matches("↻ ").to_string()) }
+    app.models_view.switching.as_ref().map(|s| format!("switching to {}", s.name))
+}
+
+pub fn status_text(app: &App) -> Option<String> {
+    let u = app.models_view.using.as_ref()?;
+    let op = local_model(app, &u.model).and_then(|m| app.models_view.op_for(&app.fleet.local_id, &m).cloned());
+    let doing = match u.step { Step::Get => "downloading", Step::Start => "starting", Step::Serve => "waiting to serve", Step::Switch => "switching" };
+    Some(match progress(u.step, op.as_ref()) { Some(p) => format!("↻ {} {}%", u.name, percent(p)), None => format!("↻ {} {doing}", u.name) })
+}
+
+/// The cursor's row in the open view: a question, or a Use's end, is its row's until the cursor
+/// leaves it (or the view closes).
+fn follow(app: &mut App) {
+    let here = match &app.modal { Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, picker }) => picker.current_id(), _ => None };
+    let v = &mut app.models_view;
+    if v.confirm.as_ref().is_some_and(|(row, _)| here.as_ref() != Some(row)) {
+        v.confirm = None;
+        if let Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, picker }) = app.modal.as_mut() { picker.armed = None }
+    }
+    let v = &mut app.models_view;
+    if let Some(e) = v.ended.as_mut() { if here.as_ref() == Some(&e.row) { e.seen = true } else if e.seen { v.ended = None } }
 }
 
 // ── talking to the daemon ────────────────────────────────────────────────────────
@@ -1001,8 +1110,7 @@ fn retarget(app: &mut App, machine: &str, payload: Value, name: &str, job: bool)
     app.models_view.switching = Some(Switch { machine: machine.to_string(), agent, to, name: name.to_string(), since: Instant::now() });
     if !rpc(app, machine, "agent_retarget", payload, Duration::from_secs(60), move |app, r| on_retarget(app, &n, job, r)) {
         app.models_view.switching = None;
-        app.say("That machine is not connected", theme::WARN);
-        if job { app.models_view.using = None }
+        if job { fail(app, "That machine is not connected") } else { app.say("That machine is not connected", theme::WARN) }
     }
 }
 
@@ -1021,17 +1129,27 @@ fn retarget_error(e: &RpcError) -> String {
 /// The daemon moved the harness (its pane restarts on the model — "Switching…" stays until its
 /// frame says so), or said why not.
 pub fn on_retarget(app: &mut App, name: &str, job: bool, reply: Result<Value, RpcError>) {
-    if job { app.models_view.using = None }
+    let used = if job { app.models_view.using.take() } else { None };
     let who = app.models_view.switching.as_ref().and_then(|s| app.fleet.agent(&s.machine, &s.agent)).map(|a| a.name.clone()).unwrap_or_else(|| "the harness".into());
+    // (A Use's last step: its end, and the one toast that says it.)
+    let end = |app: &mut App, failed: Option<String>| if let Some(u) = &used { app.models_view.ended = Some(Ended { row: format!("mv:local:{}", u.model), name: u.name.clone(), step: Step::Switch, failed, seen: false }) };
     match reply {
-        Ok(_) => app.say(format!("Switching {who} to {name}…"), theme::ONLINE),
+        // Moved: the list has done its job — it closes, and the status line says so.
+        Ok(_) if used.is_some() => { end(app, None); close(app); app.say(format!("✓ {name} is ready · {who} is on it"), theme::ONLINE) }
+        Ok(_) => { close(app); app.say(format!("✓ Switching {who} to {name}…"), theme::ONLINE) }
         Err(e) => {
-            let w = format!("Could not switch {who} to {name}: {}", retarget_error(&e));
+            let why = retarget_error(&e);
+            let w = format!("Could not switch {who} to {name}: {why}");
             if let Some(s) = app.models_view.switching.take() { app.models_view.use_error = Some((format!("mv:switch:{}", s.to), w.clone())) }
-            app.say(w, theme::DANGER);
+            if used.is_some() { end(app, Some(format!("Could not switch {who}: {why}"))); app.say(format!("✗ {w}"), theme::DANGER) } else { app.say(w, theme::DANGER) }
         }
     }
     crate::input::refill(app);
+}
+
+/// The model list, if it is what is open: closed (a harness moved onto a model — its job done).
+pub fn close(app: &mut App) {
+    if matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, .. })) { app.modal = None }
 }
 
 // ── Use, step by step ────────────────────────────────────────────────────────────
@@ -1073,13 +1191,17 @@ fn start_use(app: &mut App, model: &str, download: bool) {
     let Some(m) = local_model(app, model) else { return };
     let supports = app.models_view.local.get(&app.fleet.local_id).is_some_and(|s| s.supports_download);
     app.models_view.using = Some(Use { model: m.id.clone(), name: m.name.clone(), machine: t.machine, agent: t.agent, step: if download { Step::Get } else { Step::Start }, since: Instant::now() });
+    app.models_view.ended = None;
     act(app, &m.id, if download && supports { "download" } else { "start" });
 }
 
+/// The Use stops at its step: its row's preview says why (✗) and how to try again, and one toast.
 fn fail(app: &mut App, why: &str) {
     let Some(job) = app.models_view.using.take() else { return };
-    app.models_view.use_error = Some((format!("mv:local:{}", job.model), why.to_string()));
-    app.say(format!("{}: {why}", job.name), theme::WARN);
+    let row = format!("mv:local:{}", job.model);
+    app.models_view.use_error = Some((row.clone(), why.to_string()));
+    app.models_view.ended = Some(Ended { row, name: job.name.clone(), step: job.step, failed: Some(why.to_string()), seen: false });
+    app.say(format!("✗ {}: {why}", job.name), theme::DANGER);
 }
 
 /// Take the Use on as far as what the daemon has said allows.
@@ -1122,6 +1244,7 @@ pub fn loading(app: &App) -> bool { !app.models_view.reading.is_empty() || !app.
 /// [grids_every] says, and take a Use on (its deadlines).
 pub fn tick(app: &mut App) {
     let open = matches!(&app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, .. }));
+    follow(app);
     app.models_view.starts.retain(|_, at| at.elapsed() < START_CAP);
     if app.models_view.switching.as_ref().is_some_and(|s| switched(app, s)) { app.models_view.switching = None }
     let machine = app.fleet.local_id.clone();
@@ -1182,6 +1305,42 @@ fn bold(t: impl Into<String>) -> Line<'static> { Line::from(span(t, Style::defau
 fn warn(t: impl Into<String>) -> Line<'static> { Line::from(span(t, fg(theme::WARN))) }
 fn dim(t: impl Into<String>) -> Line<'static> { Line::from(span(t, Style::default().add_modifier(Modifier::DIM))) }
 
+/// A local row's first-Enter question, or its Use's checklist — Download · Start · Serve · Switch
+/// harness — and how it ended: what its preview says under its status.
+fn use_lines(app: &App, m: &LocalModel, id: &str) -> Vec<Line<'static>> {
+    let v = &app.models_view;
+    if let Some((_, words)) = v.confirm.as_ref().filter(|(row, _)| row == id) { return vec![Line::raw(""), Line::from(span(words.clone(), theme::bold(theme::accent())))] }
+    let ended = v.ended.as_ref().filter(|e| e.row == id);
+    let (step, op, since) = match (v.using.as_ref().filter(|u| u.model == m.id), ended) {
+        (Some(u), _) => (u.step, v.op_for(&app.fleet.local_id, m).cloned(), Some(u.since)),
+        (None, Some(e)) => (e.step, None, None),
+        _ => return vec![],
+    };
+    let ended = ended.filter(|_| since.is_none());
+    let mut out = vec![Line::raw("")];
+    for (name, mark) in STEPS.iter().zip(checklist(step, op.as_ref(), ended.map(|e| e.failed.is_none()))) {
+        out.push(match mark {
+            Mark::Done => Line::from(span(format!("✓ {name}"), fg(theme::ONLINE))),
+            Mark::Now(Some(p)) => Line::from(span(format!("↻ {name}  {} {}%", bar(p), percent(p)), fg(theme::accent()))),
+            Mark::Now(None) => Line::from(span(format!("↻ {name} · {}", elapsed(since.map(|s| s.elapsed().as_secs()).unwrap_or(0))), fg(theme::accent()))),
+            Mark::Failed => Line::from(span(format!("✗ {name}"), fg(theme::DANGER))),
+            Mark::Later => dim(format!("  {name}")),
+        });
+    }
+    match ended.map(|e| (e.failed.as_ref(), &e.name)) {
+        Some((None, name)) => { out.push(Line::raw("")); out.push(Line::from(span(format!("✓ Ready · this harness is on {name}"), theme::bold(theme::ONLINE)))) }
+        Some((Some(why), _)) => { out.push(Line::raw("")); out.push(Line::from(span(format!("✗ Failed · {why}"), fg(theme::DANGER)))); out.push(Line::from(span("Enter tries again.", fg(theme::accent())))) }
+        None => {}
+    }
+    out
+}
+
+/// [p] of a bar 16 cells wide.
+fn bar(p: f64) -> String { let n = ((p * 16.0).round() as usize).min(16); format!("{}{}", "█".repeat(n), "░".repeat(16 - n)) }
+
+/// A step's time so far: `12s`, `3m 05s`.
+fn elapsed(secs: u64) -> String { if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) } }
+
 /// The preview of row [id]: what decides between models, and what Enter does.
 pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
     let t = target(app);
@@ -1200,7 +1359,9 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
             else if m.running() { "Running".into() } else if m.downloaded() { "Downloaded".into() } else { "Not downloaded".into() };
         let status = if f.switching { format!("{SWITCHING} this harness is moving onto it") } else if f.in_use { format!("{status} · this harness is on it") } else { status };
         let mut out = vec![bold(m.name.clone()), Line::raw(status)];
-        out.extend(failed);
+        // (A Use's end says why it failed itself.)
+        if !v.ended.as_ref().is_some_and(|e| e.row == id) { out.extend(failed) }
+        out.extend(use_lines(app, &m, id));
         out.push(Line::raw(""));
         let here = this_computer();
         if let Some(size) = m.size {
@@ -1253,7 +1414,7 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
         out.push(Line::raw(""));
         out.push(kv("Machine", node.to_string()));
         out.push(kv("Source", if own { "On your machines".to_string() } else { format!("Shared · {grid}") }));
-        let said = match plan_enter(app, id) { Plan::Retarget { .. } => "Enter moves this harness onto it.".to_string(), Plan::Arm(..) => "Enter twice moves this harness onto it anyway.".into(), Plan::Say(w) => w, _ => String::new() };
+        let said = match plan_enter(app, id) { Plan::Retarget { .. } => "Enter moves this harness onto it.".to_string(), Plan::Arm(..) => "Enter twice moves this harness onto it anyway.".into(), Plan::Say(w) if w == NO_HARNESS => no_target_why(app), Plan::Say(w) => w, _ => String::new() };
         if !said.is_empty() { out.push(Line::raw("")); out.push(Line::from(span(said, fg(theme::accent())))) }
         return out;
     }
@@ -1347,6 +1508,42 @@ mod tests {
         app.fleet.agents.insert(key, a);
     }
 
+    /// On your machines: what can be used now first — a model running here, then one the own grid
+    /// serves from another machine — then one downloaded and stopped; a grid's offline one last.
+    #[test]
+    fn models_ready_now_come_before_ones_not_running() {
+        let mut app = app();
+        on_local(&mut app, "local", Ok(local_reply(qwen("running", Value::Null), false)));
+        let mut g = grids_reply(&["box-model"]);
+        g["grids"][0]["models"].as_array_mut().unwrap().push(json!({ "id": "away-model", "node": "lap", "unavailable": { "reason": "offline", "machine": "lap" } }));
+        on_grids(&mut app, "local", Ok(g));
+        let mine: Vec<String> = super::rows(&app, "").into_iter().filter(|r| r.group.as_deref().is_some_and(|g| g.starts_with("On your machines")) && is_row(&r.id)).map(|r| r.id).collect();
+        assert_eq!(mine, vec!["mv:local:qwen-35b".to_string(), "mv:grid:own-grid\tstudio\tbox-model".into(), "mv:local:gemma-12b".into(), "mv:grid:own-grid\tlap\taway-model".into()]);
+    }
+
+    /// Which harness Enter moves: the focused pane's. A focused terminal is the one meant — never
+    /// the harness beside it — and the panel says why there is none; with nothing focused, the one
+    /// harness on screen.
+    #[test]
+    fn the_focused_pane_is_the_harness_meant_and_why_none_is_said() {
+        let mut app = app();
+        assert_eq!(target(&app).map(|t| t.agent).as_deref(), Some("a1"));
+        let key = ("local".to_string(), "t1".to_string());
+        let a = crate::fleet::agent_from("local", &json!({ "id": "t1", "name": "shell", "engine": "terminal" }), None);
+        app.fleet.agents.insert(key, a);
+        app.panes.insert(2, crate::pane::Pane::new(2, "local", "t1", 75, 40));
+        app.rects = vec![(1, ratatui::layout::Rect::new(0, 0, 75, 40)), (2, ratatui::layout::Rect::new(75, 0, 75, 40))];
+        app.tabs[0].focus = Some(2);
+        assert!(target(&app).is_none(), "not the claude harness beside it");
+        assert!(no_target_why(&app).contains("terminal"), "{}", no_target_why(&app));
+        app.tabs[0].focus = None;
+        assert_eq!(target(&app).map(|t| t.agent).as_deref(), Some("a1"), "nothing focused: the one harness on screen");
+        assert!(no_target_why(&app).contains("No pane is focused"));
+        app.panes.insert(3, crate::pane::Pane::new(3, "local", "zz9abc", 75, 40));
+        app.tabs[0].focus = Some(3);
+        assert!(no_target_why(&app).contains("zz9abc"), "{}", no_target_why(&app));
+    }
+
     fn model(id: &str, state: &str, gib: f64) -> Value {
         json!({ "id": id, "name": id, "state": state, "sizeBytes": gib * GIB, "canStart": state != "running", "canStop": state == "running", "estTokS": 40 })
     }
@@ -1407,26 +1604,36 @@ mod tests {
         assert_eq!(in_use_row(&rows).as_deref(), Some("mv:sub:claude\t7f0c"));
         assert!(row(&rows, "mv:local:qwen-35b").right.ends_with("Get"));
 
-        // Get: the first Enter only says what the second will do.
+        // Get: the first Enter only asks, in the preview, what the second will do.
         let mut picker = Picker::new("models", "");
+        let qwen_preview = |app: &App| text(&preview(app, "mv:local:qwen-35b"));
         choose(&mut app, &mut picker, "mv:local:qwen-35b", false);
         assert!(app.models_view.sent.is_empty(), "nothing downloads on the first Enter");
-        assert!(flash(&picker).starts_with("Enter again to get Qwen3.6-35B-A3B (20 GB) — then it starts"), "{}", flash(&picker));
+        assert!(flash(&picker).is_empty(), "no fading flash: {}", flash(&picker));
+        assert!(qwen_preview(&app).contains("Get Qwen3.6-35B-A3B (20 GB), start it, move this harness onto it? Enter · Esc"), "{}", qwen_preview(&app));
         choose(&mut app, &mut picker, "mv:local:qwen-35b", false);
         assert_eq!(last_sent(&app), ("local".into(), "grid_fleet_model_download".into(), json!({ "modelId": "qwen-35b" })));
         assert_eq!(app.models_view.using.as_ref().map(|u| u.step), Some(Step::Get));
+        assert!(!qwen_preview(&app).contains("Enter · Esc"), "{}", qwen_preview(&app));
 
-        // The daemon takes it; its progress is the row's word.
+        // The daemon takes it; its progress is the row's word, the checklist's bar and the status bar's.
         on_act(&mut app, "local", Ok(json!({ "operation": op("download", "downloading", "running", Some(0.1)) })));
         assert_eq!(last_sent(&app).1, "grid_fleet_models_list");
         on_local(&mut app, "local", Ok(local_reply(qwen("available", op("download", "downloading", "running", Some(0.42))), true)));
         assert!(row(&rows_of(&app), "mv:local:qwen-35b").right.ends_with("Downloading 42%"));
         assert_eq!(app.models_view.using.as_ref().map(|u| u.step), Some(Step::Get), "a download has no deadline");
+        let p = qwen_preview(&app);
+        assert!(p.contains("↻ Download") && p.contains("█") && p.contains("42%") && p.contains("\n  Start\n  Serve\n  Switch harness"), "{p}");
+        assert_eq!(status_text(&app).as_deref(), Some("↻ Qwen3.6-35B-A3B 42%"));
+        assert_eq!(crate::format::expand(&app, "#{?model_progress,#{model_progress},none}", app.active, app.focused(), false), "↻ Qwen3.6-35B-A3B 42%");
 
         // Downloaded: it is started.
         on_local(&mut app, "local", Ok(local_reply(qwen("downloaded", op("download", "downloading", "done", None)), false)));
         assert_eq!(last_sent(&app), ("local".into(), "grid_fleet_model_start".into(), json!({ "modelId": "qwen-35b" })));
         assert_eq!(app.models_view.using.as_ref().map(|u| u.step), Some(Step::Start));
+        let p = qwen_preview(&app);
+        assert!(p.contains("✓ Download") && p.contains("↻ Start · 0s") && !p.contains("█"), "{p}");
+        assert_eq!(status_text(&app).as_deref(), Some("↻ Qwen3.6-35B-A3B starting"));
         on_act(&mut app, "local", Ok(json!({ "operation": op("start", "starting", "running", None) })));
         on_local(&mut app, "local", Ok(local_reply(qwen("downloaded", op("start", "starting", "running", None)), true)));
         assert_eq!(app.models_view.using.as_ref().map(|u| u.step), Some(Step::Start), "still starting");
@@ -1444,7 +1651,10 @@ mod tests {
         assert_eq!(pane_note(&app, "local", "a1").as_deref(), Some("Switching to Qwen3.6-35B-A3B…"));
         on_retarget(&mut app, "Qwen3.6-35B-A3B", true, Ok(json!({ "retargeted": true })));
         assert!(app.models_view.using.is_none());
-        assert!(toast(&app).contains("Switching fix-login to Qwen3.6-35B-A3B"), "{}", toast(&app));
+        assert_eq!(toast(&app), "✓ Qwen3.6-35B-A3B is ready · fix-login is on it");
+        let p = qwen_preview(&app);
+        assert!(p.contains("✓ Switch harness") && p.contains("✓ Ready · this harness is on Qwen3.6-35B-A3B"), "{p}");
+        assert!(status_text(&app).is_none(), "nothing runs");
         frame(&mut app, json!({ "model": "qwen-35b", "state": "awake" }));
         let rows = rows_of(&app);
         assert!(row(&rows, "mv:local:qwen-35b").right.ends_with("✓ In use"));
@@ -1490,8 +1700,8 @@ mod tests {
         assert_eq!(last_sent(&app), ("local".into(), "grid_fleet_model_start".into(), json!({ "modelId": "gemma-12b" })));
         on_act(&mut app, "local", Err(RpcError::new("Stop a running model to make room, then try again.", "")));
         assert!(app.models_view.using.is_none());
-        assert_eq!(toast(&app), "gemma-12b: Stop a running model to make room, then try again.");
-        assert!(text(&preview(&app, "mv:local:gemma-12b")).contains("Stop a running model to make room"));
+        assert_eq!(toast(&app), "✗ gemma-12b: Stop a running model to make room, then try again.");
+        assert!(text(&preview(&app, "mv:local:gemma-12b")).contains("✗ Failed · Stop a running model to make room"));
 
         // A download the daemon reports failed.
         let job = Use { model: "qwen-35b".into(), name: "Qwen".into(), machine: "local".into(), agent: "a1".into(), step: Step::Get, since: Instant::now() };
@@ -1506,6 +1716,61 @@ mod tests {
         // A request still out: nothing moves.
         assert_eq!(next(&serving, Some(&snap), None, true, Some(&parse_grids(&grids_reply(&["qwen-35b"]))), Instant::now()), Next::Wait);
         assert_eq!(next(&serving, Some(&snap), None, false, Some(&parse_grids(&grids_reply(&["QWEN-35B"]))), Instant::now()), Next::Retarget { grid: "own-grid".into(), model: "QWEN-35B".into() });
+    }
+
+    /// A Use's four steps, from where it is and the operation on its model: done, the one under
+    /// way (with its progress only while the daemon sends one), failed, or still to come.
+    #[test]
+    fn the_steps_follow_the_use_and_its_operation() {
+        use Mark::*;
+        let o = |action: &str, stage: &str, phase: &str, p: Option<f64>| Operation::parse(&op(action, stage, phase, p));
+        assert_eq!(checklist(Step::Get, o("download", "downloading", "running", Some(0.42)).as_ref(), None), [Now(Some(0.42)), Later, Later, Later]);
+        assert_eq!(checklist(Step::Get, None, None), [Now(None), Later, Later, Later]);
+        assert_eq!(checklist(Step::Get, o("download", "downloading", "done", Some(1.0)).as_ref(), None), [Now(None), Later, Later, Later], "a finished operation is no bar");
+        assert_eq!(checklist(Step::Start, o("start", "starting", "running", None).as_ref(), None), [Done, Now(None), Later, Later]);
+        assert_eq!(checklist(Step::Serve, None, None), [Done, Done, Now(None), Later]);
+        assert_eq!(checklist(Step::Switch, None, None), [Done, Done, Done, Now(None)]);
+        assert_eq!(checklist(Step::Switch, None, Some(true)), [Done, Done, Done, Done]);
+        assert_eq!(checklist(Step::Start, o("start", "starting", "failed", None).as_ref(), Some(false)), [Done, Failed, Later, Later]);
+        assert_eq!(checklist(Step::Get, None, Some(false)), [Failed, Later, Later, Later]);
+    }
+
+    /// How a Use ended stays in its row's preview — past the 3 s a flash lasts — until the cursor
+    /// leaves the row; Esc takes back a confirm without closing the view.
+    #[test]
+    fn the_end_state_stays_until_the_cursor_leaves_the_row() {
+        let mut app = loaded();
+        let mut picker = Picker::new("models", "");
+        picker.set_rows(rows(&app, ""));
+        choose(&mut app, &mut picker, "mv:local:gemma-12b", false);
+        on_act(&mut app, "local", Err(RpcError::new("Stop a running model to make room, then try again.", "")));
+        picker.select("mv:local:gemma-12b");
+        picker.flash = Some(("old".into(), Instant::now() - Duration::from_secs(10)));
+        app.modal = Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, picker });
+        let gemma = |app: &App| text(&preview(app, "mv:local:gemma-12b"));
+        for _ in 0..3 { tick(&mut app) }
+        assert!(gemma(&app).contains("✗ Failed · Stop a running model") && gemma(&app).contains("Enter tries again."), "{}", gemma(&app));
+        let Some(crate::modal::Modal::Picker { picker, .. }) = app.modal.as_mut() else { panic!() };
+        picker.select("mv:local:qwen-35b");
+        tick(&mut app);
+        assert!(!gemma(&app).contains("✗ Failed"), "{}", gemma(&app));
+
+        // A confirm: Esc takes it back, and the next Enter asks again.
+        let Some(crate::modal::Modal::Picker { mut picker, .. }) = app.modal.take() else { panic!() };
+        choose(&mut app, &mut picker, "mv:local:qwen-35b", false);
+        assert!(text(&preview(&app, "mv:local:qwen-35b")).contains("? Enter · Esc"));
+        assert!(cancel(&mut app, &mut picker));
+        assert!(!text(&preview(&app, "mv:local:qwen-35b")).contains("? Enter · Esc"));
+        assert!(!cancel(&mut app, &mut picker), "nothing left to take back: Esc closes");
+        choose(&mut app, &mut picker, "mv:local:qwen-35b", false);
+        assert!(app.models_view.sent.iter().all(|s| s.1 != "grid_fleet_model_download"), "asked again, not started");
+        // Moving off the row takes the confirm back too.
+        picker.select("mv:local:gemma-12b");
+        app.modal = Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, picker });
+        tick(&mut app);
+        assert!(!text(&preview(&app, "mv:local:qwen-35b")).contains("? Enter · Esc"));
+        let Some(crate::modal::Modal::Picker { picker, .. }) = &app.modal else { panic!() };
+        assert!(picker.armed.is_none());
     }
 
     /// One local model runs at a time: with another running, Use says to stop it first, and Get

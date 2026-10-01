@@ -1,4 +1,5 @@
 #include "focus.h"
+#include "claude_pet.h"
 #include "theme.h"
 #include <stdio.h>
 #include <string.h>
@@ -7,7 +8,8 @@
  * THE FOCUS FACE — the agent screen, laid out like the octopus's (owner, 2026-10-01).
  *
  * The session's name curves along the top edge in the octopus's own arc (ht_arc_title, GeistMono 24);
- * the engine's mark stands where the octopus does, 56 px (focus_marks.c); under it the recap in a card
+ * the engine's mark stands where the octopus does, 56 px (focus_marks.c) — for a Claude agent it is
+ * the animated pet instead (claude_pet.c), centred in the same box; under it the recap in a card
  * that always holds four lines of geist_med_28 — as many as the octopus reads — a shorter recap centred
  * in it. With no recap there is no card: the working line, or a resting line ("Let's build it", …),
  * is centred on the glass. In every state the mark stands halfway between the name and what is under
@@ -97,6 +99,37 @@ int ht_focus_engine_index(const char *engine)
 }
 _Static_assert(sizeof ht_icon_engine20 / sizeof ht_icon_engine20[0] == sizeof ENGINES / sizeof ENGINES[0],
                "one icon per engine");
+
+/*
+ * THE CLAUDE PET'S STATE, from the face alone: an open question; else the working line (the
+ * `status[0]` path in ht_focus_face: no recap, an activity); else a finished turn; else resting.
+ * A clock of 0, or a sleeping/offline mood, holds idle step 0. ht_focus_pet_next_ms() and the face
+ * share this, so the redraw time in ui_habitat.c always agrees with what is drawn.
+ */
+static ht_pet_state_t pet_state(const ht_character_face_t *f, const char *recap)
+{
+    bool has_recap = recap && *recap;
+    if (f->asking) return HT_PET_ASKING;
+    if (!has_recap && f->activity && *f->activity) return HT_PET_WORKING;
+    return f->mood == HT_CHARACTER_DONE ? HT_PET_DONE : HT_PET_IDLE;
+}
+static bool pet_holds(const ht_character_face_t *f)
+{
+    return !f->clock_ms || f->mood == HT_CHARACTER_ASLEEP || f->mood == HT_CHARACTER_OFFLINE;
+}
+
+uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
+{
+    if (f->voice || ht_focus_engine_index(f->engine) != 0 || pet_holds(f)) return 0;
+    ht_pet_state_t state = pet_state(f, recap);
+    uint32_t each = ht_claude_pet_step_ms[state], now = f->clock_ms / each;
+    const ht_pet_step_t *cur = &ht_claude_pet_loops[state][now % HT_PET_STEPS];
+    for (unsigned i = 1; i <= HT_PET_STEPS; i++) {
+        const ht_pet_step_t *p = &ht_claude_pet_loops[state][(now + i) % HT_PET_STEPS];
+        if (p->frame != cur->frame || p->dy != cur->dy) return (now + i) * each;
+    }
+    return 0;
+}
 
 bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink)
 {
@@ -353,7 +386,15 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     // The engine's mark, where the octopus stands. An unknown engine leaves the place empty.
     int engine = ht_focus_engine_index(f->engine);
     int mark_x = (HT_WIDTH - MARK_SIZE) / 2;
-    if (engine >= 0) ht_icon(s, mark_x, mark_top, &ht_icon_engine56[engine]);
+    if (engine == 0) {
+        // The Claude pet, centred in the mark's box, lifted by its step's hop.
+        bool hold = pet_holds(f);
+        ht_pet_state_t state = hold ? HT_PET_IDLE : pet_state(f, recap);
+        unsigned step = hold ? 0 : (f->clock_ms / ht_claude_pet_step_ms[state]) % HT_PET_STEPS;
+        const ht_pet_step_t *p = &ht_claude_pet_loops[state][step];
+        ht_icon(s, (HT_WIDTH - HT_PET_W) / 2, mark_top + (MARK_SIZE - HT_PET_H) / 2 + p->dy,
+                &ht_claude_pet_frames[p->frame]);
+    } else if (engine > 0) ht_icon(s, mark_x, mark_top, &ht_icon_engine56[engine]);
     else no_text(s, rf);
 
     // The card only holds a recap; its lines are drawn on its fill.
@@ -392,7 +433,8 @@ bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_m
     /*
      * Fifteen frames, and only the voice screen spends them.
      *
-     * Nothing on the home face moves — a skin whose subject is the work should not fidget. These are
+     * Nothing on the home face moves but the Claude pet, which runs on clock_ms, not on these
+     * frames — a skin whose subject is the work should not fidget. These are
      * the recording meter and the sending sweep, both of which the old firmware animated, and the
      * duration is picked so each lands on the cadence it had there.
      *

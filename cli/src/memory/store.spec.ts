@@ -138,7 +138,7 @@ describe('session privacy', () => {
     store.setSessionIncluded('claude', 'session_a', false)
     expect(store.list(access, 1).map(record => record.id)).toEqual([publicRecord.id])
     expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access).items.map(record => record.id)).toEqual([publicRecord.id])
-  })
+  }, 30_000) // Keep all 125 durable fixtures even on a busy shared CI disk.
 
   it('does not consult a private statement when admitting a new conflicting public statement', () => {
     const hidden = learn()

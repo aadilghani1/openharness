@@ -30,6 +30,7 @@ import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
+import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
@@ -48,9 +49,11 @@ import type { GridAttachResult } from './lib/gridAttach.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
+import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
+import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
@@ -496,6 +499,7 @@ export class BackendSocket {
   /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
    *  process and forgets the session. Keeps recap + agent name. */
   onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
+  closeAgentService: CloseAgentService | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
    *  requested folder and returns its process-agent. Session metadata may bind later through hooks. */
   onCreateAgent: ((input: {
@@ -755,6 +759,7 @@ export class BackendSocket {
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
+  harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
    *  that lands meanwhile. */
   private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
@@ -1200,6 +1205,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.closeAgentService?.dispose()
     this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.teamService?.stop()
@@ -2070,7 +2076,9 @@ export class BackendSocket {
       switch (type) {
         case 'machine_resources':
           // Sampling CPU must not hold up typing or other machine requests.
-          void readMachineResources()
+          void (payload.harnesses === true
+            ? this.harnessResourcesReader().then(harnesses => ({ harnesses }))
+            : readMachineResources())
             .then(resources => reply(type, requestId, { ...resources }))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
@@ -2657,6 +2665,7 @@ export class BackendSocket {
           // clock was set back) never throttles: the next open corrects it.
           let opened = false
           if (hasOpened) {
+            this.closeAgentService?.cancel(s.agentId)
             const since = Date.now() - (s.lastOpenedAt ?? 0)
             if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
               s = registry.markOpened(s.agentId) ?? s
@@ -2786,7 +2795,8 @@ export class BackendSocket {
             if (typeof payload.agent !== 'string' || !AGENT_NAME_RE.test(payload.agent)) {
               reply(type, requestId, { error: 'INVALID_AGENT', detail: 'agent must be 1-64 letters, digits, `-` or `_`' }); return
             }
-            if (!supportsNamedAgent(engine)) {
+            // OpenCode v2 counts as no way: its TUI exits 1 on `--agent` (engineLaunch.ts).
+            if (!supportsNamedAgent(engine, engine === 'opencode' ? opencodeMajorVersion() : null)) {
               reply(type, requestId, { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(engine).message }); return
             }
             agent = payload.agent
@@ -3008,6 +3018,19 @@ export class BackendSocket {
         // Delete an agent: signal its validated engine process and drop it from the list. Idempotent — an already
         // gone target still acks + re-emits agent_deleted so the web/device converge. E2EE-gated (the
         // frame arrived decrypted). Keeps the persisted recap + agent name for a later resume.
+        case 'agent_close': {
+          if (!this.closeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const { agentId, sessionId, createdAt, mode } = payload
+          if (typeof agentId !== 'string' || typeof sessionId !== 'string' || typeof createdAt !== 'string'
+            || typeof mode !== 'string' || !['inspect', 'idle', 'now', 'after_task', 'cancel'].includes(mode)) {
+            reply(type, requestId, { error: 'INVALID_CLOSE_REQUEST' }); return
+          }
+          // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
+          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode },
+            () => this.terminalStreams?.hasOtherViews(agentId, connId) ?? false)
+            .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
+          return
+        }
         case 'agent_delete': {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }

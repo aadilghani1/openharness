@@ -1391,6 +1391,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // The spinner's frame now, for a format of your own.
         "spinner" => crate::theme::spinner(app.tick).to_string(),
         "daemon_down" => app.daemon_down.then_some("1").unwrap_or("0").into(),
+        // A model being got for a harness, while it is: `↻ qwen3-coder 42%` (empty otherwise).
+        "model_progress" => crate::models::status_text(app).unwrap_or_default(),
         // The pane is another window's to type in (this one watches), when it is the only one.
         "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
         // However many panes the window has: whether another window has the pane to type in, and who.

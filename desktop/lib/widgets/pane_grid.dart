@@ -1368,7 +1368,7 @@ class _PaneContent extends StatelessWidget {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
     void close() {
-      notifier.closePane(pane.id);
+      notifier.requestClosePane(pane.id);
     }
 
     VoidCallback? split(PaneResizeAxis axis) =>

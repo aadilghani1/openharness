@@ -68,6 +68,8 @@ export class StoppedAgentStore {
       defaultName: projectDisplayName(session),
       touchedAt: Date.now(),
     }
+    // A later Resume is an explicit new visit, never an instruction to close it again.
+    delete snapshot.closePlan
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })

@@ -3070,7 +3070,7 @@ mod theme_render_tests {
         assert_eq!(bound(KeyCode::Char(' ')).as_deref(), Some("next-layout"));
         crate::commands::execute_bound(&mut app, "choose-command");
         let s = screen(&mut app);
-        assert!(s.contains("Commands") && s.contains("New Harness"), "{s}");
+        assert!(s.contains("Commands") && s.contains("New harness"), "{s}");
         let at = match &app.modal { Some(Modal::Picker { picker, .. }) => picker.screen_area.get(), _ => panic!("no panel") };
         // (A few letters are enough: the best match comes first.)
         for c in "appe".chars() { crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)) }
@@ -3081,11 +3081,214 @@ mod theme_render_tests {
         assert!(s.contains("Pane titles") && s.contains("Preview"), "{s}");
         let Some(Modal::Picker { kind, picker }) = &app.modal else { panic!("closed") };
         assert!(matches!(kind, PickerKind::Theme) && picker.from_commands);
-        assert_eq!(picker.screen_area.get(), at, "the panel stayed where it was");
+        // (The commands a palette; Appearance, with its preview, the large panel around it.)
+        let large = picker.screen_area.get();
+        assert!(large.width > at.width && large.contains(at.as_position()), "{at:?} in {large:?}");
         crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let s = screen(&mut app);
+        let Some(Modal::Picker { kind, picker }) = &app.modal else { panic!("Esc closed it") };
+        assert!(matches!(kind, PickerKind::Commands), "{s}");
+        assert_eq!(picker.current_id().as_deref(), Some("cmd:theme"));
+        assert_eq!(picker.screen_area.get(), at, "back in the palette's place");
+    }
+
+    // ── tabs ──
+
+    /// The launcher's tab row: ↓ past the list's last row goes onto it; there ←/→ open the next
+    /// tab (round from the last to the first), ↑ goes back to the list, and a key typed searches
+    /// the tab chosen. The panel keeps its size from tab to tab.
+    #[test]
+    fn down_past_the_list_goes_onto_the_tabs_and_arrows_switch_them() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        // (A tab opened fetches what it lists, as it does when typed.)
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _in = rt.enter();
+        let mut app = app();
+        let key = |app: &mut App, code: KeyCode| crate::input::modal_key(app, KeyEvent::new(code, KeyModifiers::NONE));
+        let now =|app: &App| match &app.modal { Some(Modal::Picker { kind, picker }) => (kind.clone(), picker.on_tabs, picker.query.clone()), _ => panic!("closed") };
+        crate::input::run(&mut app, "open");
+        screen(&mut app);
+        let (rows, at) = match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.visible.len(), picker.screen_area.get()), _ => panic!("no panel") };
+        // (As many ↓ as rows and one more: past the last row, onto the tabs; another stays there.)
+        for _ in 0..=rows + 1 { key(&mut app, KeyCode::Down) }
+        assert!(now(&app).1, "on the tabs");
+        let s = screen(&mut app);
+        assert!(s.contains("← → switch") && s.contains("harnesses"), "{s}");
+        key(&mut app, KeyCode::Right);
+        let (kind, tabs, query) = now(&app);
+        assert!(matches!(kind, PickerKind::Palette) && tabs && query == ">", "{kind:?} {query}");
+        key(&mut app, KeyCode::Right); key(&mut app, KeyCode::Right);
+        assert!(matches!(now(&app).0, PickerKind::Projects));
+        for _ in 0..3 { key(&mut app, KeyCode::Left) }
+        assert!(matches!(now(&app).0, PickerKind::Open { .. }) && now(&app).2.is_empty());
+        key(&mut app, KeyCode::Left);
+        assert!(matches!(now(&app).0, PickerKind::Help), "round to the last tab");
+        screen(&mut app);
+        assert_eq!(match &app.modal { Some(Modal::Picker { picker, .. }) => picker.screen_area.get(), _ => panic!() }, at, "the same size on every tab");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Up);
+        assert!(!now(&app).1, "↑ back to the list");
+        // Typed on the tabs: a search in the tab chosen.
+        for _ in 0..=rows + 1 { key(&mut app, KeyCode::Down) }
+        for _ in 0..3 { key(&mut app, KeyCode::Right) }
+        key(&mut app, KeyCode::Char('w'));
+        let (kind, tabs, query) = now(&app);
+        assert!(matches!(kind, PickerKind::Projects) && !tabs && query == "#w", "{kind:?} {query}");
+    }
+
+    // ── mouse ──
+
+    /// The mouse over a panel's list: the wheel scrolls the list and the chosen row stays chosen;
+    /// the row under the mouse is the one chosen; a key brings the list back to it.
+    #[test]
+    fn the_wheel_scrolls_a_panel_and_the_mouse_over_a_row_chooses_it() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+        let mut app = app();
+        crate::commands::execute_bound(&mut app, "choose-command");
+        screen(&mut app);
+        let state = |app: &App| match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.cursor, picker.scroll, picker.list_area.get(), picker.row_at.clone()), _ => panic!("closed") };
+        let (cursor, scroll, list, _) = state(&app);
+        let mouse = |app: &mut App, kind: MouseEventKind, row: u16| crate::input::handle(app, Event::Mouse(MouseEvent { kind, column: list.x + 4, row, modifiers: KeyModifiers::NONE }));
+        assert!(app.wants_motion(), "a panel asks for the mouse's moves");
+        for _ in 0..3 { mouse(&mut app, MouseEventKind::ScrollDown, list.y + 2) }
+        screen(&mut app);
+        let (now, scrolled, _, rows) = state(&app);
+        assert_eq!(now, cursor, "the wheel does not choose");
+        assert!(scrolled > scroll, "the list scrolled: {scroll} → {scrolled}");
+        // Over a row: that row is chosen, and the list stays where the wheel left it.
+        let (y, vi) = rows[3];
+        mouse(&mut app, MouseEventKind::Moved, y);
+        screen(&mut app);
+        let (now, still, _, _) = state(&app);
+        assert_eq!((now, still), (vi, scrolled), "the row under the mouse, the list where it was");
+        // A key: the list follows the cursor again.
+        for _ in 0..40 { crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)) }
+        screen(&mut app);
+        assert_eq!(state(&app).1, 0, "back at the top with the cursor");
+    }
+
+    /// One click on a panel's row runs it (the mouse over it chose it already): "tmux commands…"
+    /// opens tmux's, grouped, in the same panel; Esc comes back to hn's, on that row.
+    #[test]
+    fn one_click_runs_a_row_and_tmux_commands_open_behind_their_row() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut app = app();
+        crate::commands::execute_bound(&mut app, "choose-command");
+        screen(&mut app);
+        let picker = |app: &App| match &app.modal { Some(Modal::Picker { kind, picker }) => (kind.clone(), picker.theme_in.clone(), picker.current_id(), picker.row_at.clone(), picker.list_area.get()), _ => panic!("closed") };
+        // To the row, by keys (it may be below the fold), then one click on it.
+        for c in "tmux".chars() { crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)) }
+        screen(&mut app);
+        let (_, _, at, rows, list) = picker(&app);
+        assert_eq!(at.as_deref(), Some("cmd:tmux-commands"), "the row first for `tmux`");
+        let y = rows.iter().find(|(_, vi)| match &app.modal { Some(Modal::Picker { picker, .. }) => picker.rows[picker.visible[*vi].0].id == "cmd:tmux-commands", _ => false }).unwrap().0;
+        crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: list.x + 4, row: y, modifiers: KeyModifiers::NONE }));
+        let s = screen(&mut app);
+        let (kind, inside, _, _, _) = picker(&app);
+        assert!(matches!(kind, PickerKind::Commands) && inside.as_deref() == Some("tmux"), "one click opened it");
+        assert!(s.contains("tmux commands") && s.contains("tmux · Windows") && !s.contains("New harness"), "{s}");
+        crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let (kind, inside, at, _, _) = picker(&app);
+        assert!(matches!(kind, PickerKind::Commands) && inside.is_none() && at.as_deref() == Some("cmd:tmux-commands"), "Esc back to hn's, on its row");
+    }
+
+    /// A harness moved onto a model: the model list closes, the status line says it.
+    #[test]
+    fn a_model_switched_closes_the_model_list() {
+        let mut app = app();
+        crate::input::run(&mut app, "models");
+        assert!(matches!(app.modal, Some(Modal::Picker { kind: PickerKind::Models, .. })));
+        crate::models::on_retarget(&mut app, "qwen3-coder", false, Ok(serde_json::json!({})));
+        assert!(app.modal.is_none(), "closed");
+        assert!(app.toast.as_ref().is_some_and(|t| format!("{t:?}").contains("qwen3-coder")), "{:?}", app.toast);
+    }
+
+    // ── keys ──
+
+    /// A plain-key prefix (`` ` ``, Enter) is the prefix over the panes, and only there: in a list
+    /// or a line being typed, the key is the list's (typed into the search, Enter chooses). A prefix
+    /// with a modifier works over the lists, as before.
+    #[test]
+    fn a_plain_key_prefix_leaves_the_lists_their_keys() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app();
+        app.keymap.prefix = crate::keys::parse("`").unwrap();
+        let key = |app: &mut App, code: KeyCode, mods: KeyModifiers| crate::input::handle(app, Event::Key(KeyEvent::new(code, mods)));
+        key(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
+        assert!(app.prefix, "over the panes, ` is the prefix");
+        app.prefix = false;
+        crate::commands::execute_bound(&mut app, "choose-command");
+        key(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
+        let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!("closed") };
+        assert!(!app.prefix && picker.query == "`", "in a list, ` is typed: {:?}", picker.query);
+        // A prefix with a modifier still works over a list.
+        app.keymap.prefix = crate::keys::parse("C-a").unwrap();
+        key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert!(app.prefix, "C-a over a list is the prefix");
+    }
+
+    /// Keybinds from the command list: its own panel in the same place — no preview, the
+    /// prefix first and fixed — where Enter on a command waits for its key, a key in use is
+    /// replaced on its second press, and Esc steps back to the commands.
+    #[test]
+    fn keybinds_open_from_commands_change_a_key_and_esc_goes_back() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app();
+        // (As the client takes a key: a key being waited for goes there first.)
+        let key = |app: &mut App, code: KeyCode| {
+            let k = KeyEvent::new(code, KeyModifiers::NONE);
+            if app.capturing.is_some() { crate::settings::captured(app, k) } else { crate::input::modal_key(app, k) }
+        };
+        let said = |app: &App| match &app.modal { Some(Modal::Picker { picker, .. }) => picker.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default(), _ => panic!("closed") };
+        crate::commands::execute_bound(&mut app, "choose-command");
+        screen(&mut app);
+        let at = match &app.modal { Some(Modal::Picker { picker, .. }) => picker.screen_area.get(), _ => panic!("no panel") };
+        for c in "keyb".chars() { key(&mut app, KeyCode::Char(c)) }
+        let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!("closed") };
+        assert_eq!(picker.current_id().as_deref(), Some("cmd:keybinds"));
+        key(&mut app, KeyCode::Enter);
+        let s = screen(&mut app);
+        let Some(Modal::Picker { kind, picker }) = &app.modal else { panic!("closed") };
+        assert!(matches!(kind, PickerKind::Keybinds) && picker.from_commands);
+        assert_eq!(picker.screen_area.get(), at, "the panel stayed where it was");
+        assert!(s.contains("Keybinds") && s.contains("Prefix") && s.contains("Second prefix") && s.contains("Split right") && s.contains("Navigation"), "{s}");
+        assert!(!s.contains("Preview") && !s.contains("Appearance"), "{s}");
+        // The prefix: Enter waits for the new one; Esc leaves it.
+        assert_eq!(picker.current_id().as_deref(), Some("prefix"));
+        key(&mut app, KeyCode::Enter);
+        assert!(app.capturing.is_some() && said(&app).starts_with("Prefix: press"), "{}", said(&app));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.capturing.is_none() && said(&app) == "Unchanged", "{}", said(&app));
+        // Split right onto n (Next swarm's): named first, replaced on the second press.
+        if let Some(Modal::Picker { picker, .. }) = &mut app.modal { let i = crate::modal::KEYBINDS.iter().position(|k| k.0 == "Split right").unwrap(); picker.select(&format!("key:{i}")) }
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(said(&app), "Split right: press a key · Esc cancels");
+        key(&mut app, KeyCode::Char('n'));
+        assert_eq!(said(&app), "C-b n is Next swarm — n again to replace · Esc to keep");
+        key(&mut app, KeyCode::Char('n'));
+        assert!(said(&app).starts_with("Split right: C-b n"), "{}", said(&app));
+        let s = screen(&mut app);
+        assert!(s.lines().any(|l| l.contains("Split right") && l.contains("C-b n")), "the row shows its key now:\n{s}");
+        // Esc: back to the commands, the cursor on Keybinds.
+        key(&mut app, KeyCode::Esc);
         let Some(Modal::Picker { kind, picker }) = &app.modal else { panic!("Esc closed it") };
         assert!(matches!(kind, PickerKind::Commands));
-        assert_eq!(picker.current_id().as_deref(), Some("cmd:theme"));
+        assert_eq!(picker.current_id().as_deref(), Some("cmd:keybinds"));
+        // Alt-k on a command in the list: the same — a key in use is named first.
+        if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.select("cmd:split-down") }
+        crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
+        assert!(app.capturing.is_some());
+        key(&mut app, KeyCode::Char('n'));
+        assert!(said(&app).starts_with("C-b n is Split right — n again"), "{}", said(&app));
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(said(&app), "Unchanged");
+        assert_eq!(app.keymap.prefix_command(&crate::keys::parse("n").unwrap()).map(|b| b.command.as_str()), Some("split-window -h"));
+        // Opened by name (not from the list), Esc closes it.
+        app.modal = None;
+        crate::input::run(&mut app, "keybinds");
+        assert!(matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Keybinds, picker }) if !picker.from_commands));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
     }
 }
 

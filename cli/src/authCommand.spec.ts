@@ -6,6 +6,7 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { b64d, b64e, fingerprint, newIdentity } from './lib/e2ee/core.js'
+import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
@@ -163,6 +164,54 @@ function seedDevLog(root: string, active: string[], removed: string[]): void {
     recent: [], frozen: null, notifiedUpTo: 1,
   }))
 }
+
+describe.skipIf(process.platform === 'win32')('harness status connection settings', () => {
+  function statusRoot(): string {
+    // macOS limits Unix socket paths to 104 bytes; its usual TMPDIR is already long.
+    const root = mkdtempSync('/tmp/hstat-')
+    dirs.push(root)
+    return root
+  }
+  it.each([true, false])('reports the running daemon environment when caller signed in is %s', async callerSignedIn => {
+    const root = statusRoot()
+    if (callerSignedIn) seedSession(root)
+    const data = join(root, 'data')
+    mkdirSync(data)
+    writeFileSync(join(data, 'adapter.pid'), String(process.pid))
+    const socket = await listenLocalSocket((_req, res) => res.end(JSON.stringify({
+      version: '0.3.40-dev.fixture', connected: true, signedIn: true, sessions: [],
+      backendUrl: 'wss://daemon.example', autonomousEnv: 'stag', dataDir: '/daemon/state', authDir: '/daemon/auth',
+    })), localSocketPath(data, Number(process.env.PORT ?? 18473))!)
+    try {
+      const result = await runAsync(root, ['status'], 'wss://caller.example')
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('wss://daemon.example')
+      expect(result.stdout).toMatch(/account\s+stag/)
+      expect(result.stdout).toContain('running · backend connected')
+      expect(result.stdout).toContain('/daemon/state')
+      expect(result.stdout).toContain('/daemon/auth')
+      expect(result.stdout).not.toContain('caller.example')
+    } finally { await socket.close() }
+  })
+
+  it('works with an older daemon without guessing its missing account environment', async () => {
+    const root = statusRoot()
+    seedSession(root)
+    const data = join(root, 'data')
+    mkdirSync(data)
+    writeFileSync(join(data, 'adapter.pid'), String(process.pid))
+    const socket = await listenLocalSocket((_req, res) => res.end(JSON.stringify({
+      version: '0.3.40', connected: true, sessions: [], backendUrl: 'wss://older.example',
+    })), localSocketPath(data, Number(process.env.PORT ?? 18473))!)
+    try {
+      const result = await runAsync(root, ['status'], 'wss://caller.example')
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('wss://older.example')
+      expect(result.stdout).toMatch(/account\s+unknown/)
+      expect(result.stdout).not.toContain('caller.example')
+    } finally { await socket.close() }
+  })
+})
 
 describe('harness auth status --json', () => {
   it('reports loggedIn:false with no saved session, and never touches the network', () => {

@@ -99,7 +99,7 @@ it('applies backpressure without acknowledging or saving a new episode when the 
   const fullCursor = store.learning.cursor('stream')
   expect(() => capture(event('still_blocked'))).toThrow('memory_backlog_full')
   expect(store.learning.cursor('stream')).toBe(fullCursor)
-})
+}, 30_000) // Hundreds of durable writes; this is a backpressure check, not a five-second benchmark.
 
 it('expires unreviewed input as an explicit gap, rejects late results and eventually prunes job metadata', () => {
   const source = event('expired')

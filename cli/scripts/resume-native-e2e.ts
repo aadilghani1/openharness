@@ -6,7 +6,7 @@
  */
 import { execFile as execCallback } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -22,6 +22,10 @@ const socket = `resume-e2e-${process.pid}`
 const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 const bin = join(root, 'bin'); mkdirSync(bin)
 writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec ${quote(tmuxBinary)} -L ${quote(socket)} -f /dev/null "$@"\n`, { mode: 0o700 })
+// Do not propagate this agent's account, swarm or engine overrides into the disposable TUIs.
+for (const key of Object.keys(process.env)) {
+  if (/^(HARNESS|CODEX|CLAUDE|ANTHROPIC|OPENAI)_/.test(key) || key === 'CLAUDECODE') delete process.env[key]
+}
 Object.assign(process.env, {
   PATH: `${bin}:${process.env.PATH}`, ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
   ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'), HARNESS_AUTH_DIR: join(root, 'auth'), DSH_DIR: join(root, 'dsh'),
@@ -33,9 +37,16 @@ const { registry } = await import('../src/lib/registry.js')
 const { stoppedAgents } = await import('../src/lib/stoppedAgents.js')
 const { TmuxBackend } = await import('../src/lib/tmuxBackend.js')
 const { createStopAgentService } = await import('../src/lib/stopAgentService.js')
+const { CloseAgentService, inspectCloseActivity } = await import('../src/lib/closeAgentService.js')
+const { sessionCheckpoints } = await import('../src/lib/sessionCheckpoint.js')
+const { createHarnessResourcesReader } = await import('../src/lib/harnessResources.js')
+const { CodexNormalizer } = await import('../src/engines/codex/normalizer.js')
+const { lineToEvents, newTurnState } = await import('../src/lib/normalize.js')
+const { agentFrame } = await import('../src/lib/agentFrame.js')
+const { buildEngineLaunchArgv } = await import('../src/lib/engineLaunch.js')
 const { createResumeAgentService } = await import('../src/lib/resumeAgentService.js')
 const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
-const { resolvePaneEngineProcess, checkSessionRuntime } = await import('../src/lib/tmux.js')
+const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess, tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
 const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
 const { claudeProcessSession } = await import('../src/lib/sessionRepair.js')
 const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
@@ -51,7 +62,8 @@ const server = await startHookServer(0, {
   resolveHookAgent: async input => {
     if (!input.tmuxPane) return null
     const identity = await resolvePaneEngineProcess(input.tmuxPane, input.engine)
-    if (!identity) { console.error('[fixture] no process for', input); return null }
+    if (!identity) { console.error('[fixture] no process for', input,
+      await lookupPaneEngineProcess(input.tmuxPane, input.engine), await tmuxPaneProcessTree(input.tmuxPane)); return null }
     const row = registry.byPaneEngine(input.tmuxPane, input.engine)
     if (!row || row.engine !== input.engine) { console.error('[fixture] no registry route', input, identity, registry.list().map(r => ({ id: r.agentId, pane: r.tmuxPane }))); return null }
     return registry.openProcessAgent({ engine: input.engine, processIdentity: identity, runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd })?.entry ?? null
@@ -71,6 +83,8 @@ try {
   // Anchor keeps pane IDs monotonic even after Stop removes the last engine session.
   await tmux('new-session', '-d', '-s', 'fixture-anchor', '/bin/sh')
   for (const engine of ['claude', 'codex'] as const) {
+    const selected = process.argv.find(arg => arg.startsWith('--engine='))?.slice('--engine='.length)
+    if (selected && selected !== engine) continue
     const cwd = join(root, engine, 'workspace'); mkdirSync(cwd, { recursive: true })
     const profile = join(root, engine)
     const sessionId = randomUUID(); const marker = `RESUME_HISTORY_${engine}_${sessionId.slice(0, 8)}`
@@ -89,7 +103,7 @@ try {
       writeFileSync(join(profile, 'settings.json'), JSON.stringify({ apiKeyHelper: 'printf fixture-never-used', hooks: { SessionStart: [{ hooks: [{ type: 'command', command: cmd, timeout: 5 }] }] } }))
     } else {
       const folder = join(profile, 'sessions', timestamp.slice(0,4), timestamp.slice(5,7), timestamp.slice(8,10)); mkdirSync(folder, { recursive: true })
-      transcriptPath = join(folder, `rollout-${timestamp.replace(/:/g, '-')}-${sessionId}.jsonl`)
+      transcriptPath = join(folder, `rollout-${timestamp.slice(0, 19).replace(/:/g, '-')}-${sessionId}.jsonl`)
       writeFileSync(transcriptPath, [
         { timestamp, type: 'session_meta', payload: { id: sessionId, timestamp, cwd, originator: 'codex_cli_rs', cli_version: '0.154.0', source: 'cli', model_provider: 'fixture' } },
         { timestamp, type: 'event_msg', payload: { type: 'task_started', turn_id: sessionId, model_context_window: 100000 } },
@@ -114,7 +128,7 @@ try {
       PATH: `${bin}:${process.env.PATH}`, HARNESS_HOOK_DATA_DIR: process.env.ADAPTER_DATA_DIR!,
     }
     if (engine === 'codex') {
-      const bootstrap = await backend.create({ cwd, label: 'fixture-hook-trust', command: [codexBinary, '--no-alt-screen'], env: launchEnv })
+      const bootstrap = await backend.create({ cwd, label: 'fixture-hook-trust', command: buildEngineLaunchArgv('codex', { extraArgs: ['--no-alt-screen'] }), env: launchEnv })
       assert.equal(bootstrap.state, 'succeeded')
       if (bootstrap.state === 'succeeded') {
         const until = Date.now() + 15000
@@ -131,10 +145,34 @@ try {
     }
     const jobs = new AgentRestartCoordinator()
     const stopJobs = new Map<string, Promise<void>>()
-    socketBackend.onDeleteAgent = createStopAgentService({
+    const stopAgent = createStopAgentService({
       registry, stoppedAgents, restartJobs: jobs, stopJobs, tmuxBackend: backend,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
-      forgetSession: id => registry.removeAgent(id), markDeleted: () => {}, clearDeleted: () => {},
+      forgetSession: id => { registry.removeAgent(id); socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } }) }, markDeleted: () => {}, clearDeleted: () => {},
+    })
+    socketBackend.onDeleteAgent = stopAgent
+    socketBackend.closeAgentService?.dispose()
+    socketBackend.closeAgentService = new CloseAgentService({
+      registry,
+      activity: async row => {
+        const screen = await tmux('capture-pane', '-p', '-S', '-80', '-t', row.tmuxPane)
+        const raw = row.transcriptPath ? readFileSync(row.transcriptPath, 'utf8').trim().split('\n') : []
+        let turnOpen: boolean | undefined
+        if (row.engine === 'codex') {
+          const normalizer = new CodexNormalizer('live')
+          for (const line of raw) normalizer.ingest(line)
+          if (raw.length) turnOpen = normalizer.turnOpen
+        } else if (row.engine === 'claude') {
+          const state = newTurnState()
+          for (const line of raw) lineToEvents(line, state)
+          if (raw.length) turnOpen = state.turnOpen
+        }
+        return inspectCloseActivity(row.engine, screen, turnOpen, false)
+      },
+      checkpoint: async (row, explicitlyStopped, phase) => sessionCheckpoints.save(row, {
+        explicitlyStopped, screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
+      }),
+      stop: stopAgent, changed: row => { void agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }).then(agent => socketBackend.send({ type: 'agent_synced', payload: { agent } })) },
     })
     socketBackend.onResumeAgent = createResumeAgentService({
       registry, stoppedAgents, tmuxBackend: backend, restartJobs: jobs, stopJobs, pinnedControls: new Set(),
@@ -193,7 +231,8 @@ try {
     const neighbour = (await tmux('split-window', '-d', '-P', '-F', '#{pane_id}', '-t', route, '/bin/sh')).trim()
     const neighbourPid = (await tmux('display-message', '-p', '-t', neighbour, '#{pane_pid}')).trim()
     assert.equal((await checkSessionRuntime(live)).state, 'alive')
-    assert.equal((await rpc('agent_resume', { agentId: old.agentId, creationId: randomUUID() })).resumed, true)
+    const reattached = await rpc('agent_resume', { agentId: old.agentId, creationId: randomUUID() })
+    assert.equal(reattached.resumed, true, JSON.stringify(reattached))
     assert.equal(registry.byAgent(old.agentId)!.processIdentity!.pid, pid); assert.equal(registry.byAgent(old.agentId)!.tmuxPane, route)
     assert.equal((await rpc('agent_create_status', { creationId })).state, 'created')
     // Reproduce a legacy daemon row whose hook binding was lost. Remove the earlier
@@ -247,11 +286,43 @@ try {
       assert.equal((await openSaved(randomUUID())).state, 'created')
       const current = registry.byAgent(old.agentId)!
       assert.equal(current.sessionId, sessionId)
-      const paused = await rpc('agent_delete', { agentId: old.agentId })
-      assert.equal(paused.deleted, true, JSON.stringify(paused))
+      const closeTarget = { agentId: current.agentId, sessionId: current.sessionId, createdAt: new Date(current.registeredAt).toISOString() }
+      // Deferred intent is durable, but opening/cancelling must leave the same process alive.
+      assert.equal((await rpc('agent_close', { ...closeTarget, mode: 'after_task' })).deferred, true)
+      registry.load()
+      assert.equal(registry.byAgent(current.agentId)?.closePlan?.state, 'waiting')
+      assert.equal((await rpc('agent_close', { ...closeTarget, mode: 'cancel' })).cancelled, true)
+      assert.equal((await checkPidRuntime(current)).state, 'alive')
+      const reading = (await createHarnessResourcesReader(() => [current])()).agents[0]
+      assert(reading.memoryBytes !== null && reading.memoryBytes > 0, 'monitor must read the real process tree')
+      const inspected = await rpc('agent_close', { ...closeTarget, mode: 'inspect' })
+      assert(inspected.activity, JSON.stringify(inspected))
+      const paused = await rpc('agent_close', { ...closeTarget, mode: inspected.activity === 'idle' ? 'idle' : 'now' })
+      assert.equal(paused.closed, true, JSON.stringify(paused))
       assert.equal((await checkPidRuntime(current)).state, 'gone')
+      const after = (await createHarnessResourcesReader(() => [current])()).agents[0]
+      assert.equal(after.memoryBytes, null, 'a dead process must not retain an old RAM reading')
+      const folder = join(root, 'data', 'session-checkpoints')
+      const manifest = readdirSync(folder).filter(f => /^[a-f0-9]{64}\.json$/.test(f))
+        .map(f => JSON.parse(readFileSync(join(folder, f), 'utf8'))).find(m => m.agentId === current.agentId)
+      assert(manifest, 'close must commit a durable checkpoint')
+      assert(readFileSync(join(folder, manifest.file), 'utf8').includes(marker), 'checkpoint must retain the original conversation')
+      log(`${engine} close ${cycle + 1}: ${inspected.activity}, ${Math.round(reading.memoryBytes / 1024 / 1024)} MB released, checkpoint verified`)
     }
-    log(`PASS ${engine}: native history + hook, three immediate pause/resume cycles, new tmux runtime, same id, attach same PID, receipt replay, missing-ID recovery before Stop, stop persistence, neighbouring pane and surviving shell preserved`)
+    if (engine === 'claude') {
+      assert.equal((await openSaved(randomUUID())).state, 'created')
+      const current = registry.byAgent(old.agentId)!
+      const queued = await rpc('agent_close', { agentId: current.agentId, sessionId: current.sessionId,
+        createdAt: new Date(current.registeredAt).toISOString(), mode: 'after_task' })
+      assert.equal(queued.deferred, true)
+      const deferredDeadline = Date.now() + 25000
+      while (registry.byAgent(current.agentId) && Date.now() < deferredDeadline) await new Promise(resolve => setTimeout(resolve, 100))
+      assert.equal(registry.byAgent(current.agentId), undefined, 'a deferred idle close must complete without another client request')
+      assert.equal((await checkPidRuntime(current)).state, 'gone')
+      assert.equal(stoppedAgents.get(current.agentId)?.sessionId, sessionId)
+      log('PASS deferred close: real idle Claude saved and exited through the background timer')
+    }
+    log(`PASS ${engine}: native history + hook, three close/checkpoint/resume cycles, deferred close persistence/cancel, measured RAM released, new tmux runtime, same id, attach same PID, receipt replay, missing-ID recovery before Stop, neighbouring pane and surviving shell preserved`)
   }
   if (process.argv.includes('--serve')) {
     // The desktop acceptance test uses the real local WS transport and terminal streams.
@@ -259,7 +330,6 @@ try {
     const { attachLocalWsServer } = await import('../src/localWsServer.js')
     const { TerminalStreamManager } = await import('../src/lib/terminalStreamManager.js')
     const { TerminalBackendCoordinator } = await import('../src/lib/terminalBackendCoordinator.js')
-    const { agentFrame } = await import('../src/lib/agentFrame.js')
     const streams = new TerminalStreamManager({
       terminals: new TerminalBackendCoordinator([backend], ['tmux'], []),
       resolveAgent: id => registry.byAgent(id), streamingAvailable: true,
@@ -274,7 +344,7 @@ try {
     const resume = socketBackend.onResumeAgent!
     socketBackend.onResumeAgent = async id => {
       const fixture = fixtures.find(f => f.agentId === id); assert(fixture, 'only fixture sessions may resume')
-      let done = false, submitted = false
+      let done = false
       const result = resume(id).finally(() => { done = true })
       let announced = ''
       while (!done) {
@@ -285,15 +355,8 @@ try {
             announced = state
             socketBackend.send({ type: 'agent_synced', payload: { agent: await agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }) } })
           }
-          if (fixture.engine === 'codex' && !submitted) {
-            const screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', row.tmuxPane)
-            if (screen.includes(fixture.marker) && /Ask Codex/.test(screen)) {
-              submitted = true
-              await tmux('send-keys', '-t', row.tmuxPane, '-l', 'Fixture verification only. Do not use tools.')
-              await new Promise(r => setTimeout(r, 600))
-              await tmux('send-keys', '-t', row.tmuxPane, 'Enter')
-            }
-          }
+          // The standalone native check already proved the deferred startup
+          // hook. UI resume must behave like production: never submit a turn.
         }
         await new Promise(r => setTimeout(r, 100))
       }
@@ -308,7 +371,6 @@ try {
         console.error('[resume-native] native pause failed:', error, { before, after: JSON.stringify(registry.byAgent(id)) })
         throw error
       }
-      socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } })
     }
     let finish!: () => void
     const finished = new Promise<void>(resolve => { finish = resolve })
@@ -325,7 +387,15 @@ try {
         assert.equal(saved?.sessionId, fixture.sessionId)
         if (row) {
           assert.equal(row.sessionId, fixture.sessionId)
-          const screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', row.tmuxPane)
+          // Process readiness precedes the native TUI's first paint. Check the
+          // real terminal with a bounded wait, including background resumes.
+          let screen = ''
+          const paintDeadline = Date.now() + 10000
+          do {
+            screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', row.tmuxPane)
+            if (screen.includes(fixture.marker)) break
+            await new Promise(resolve => setTimeout(resolve, 100))
+          } while (Date.now() < paintDeadline)
           assert(screen.includes(fixture.marker), 'native terminal must show original history')
         } else {
           assert.equal((await checkPidRuntime(saved!)).state, 'gone', 'Paused must mean the original process is gone')
@@ -341,7 +411,7 @@ try {
     const endpoint = `http://127.0.0.1:${(http.address() as { port: number }).port}`
     writeFileSync(join(tmpdir(), 'harness-resume-ui-endpoint.json'), JSON.stringify({ endpoint, root }))
     log(`desktop fixture ready: ${endpoint}`)
-    const expiry = setTimeout(finish, 10 * 60_000)
+    const expiry = setTimeout(finish, 30 * 60_000)
     process.once('SIGINT', finish); process.once('SIGTERM', finish)
     await finished
     clearTimeout(expiry); process.off('SIGINT', finish); process.off('SIGTERM', finish)

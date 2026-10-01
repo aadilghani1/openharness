@@ -152,7 +152,7 @@ class User:
     def launch(self, engine, label, double_enter=False, click_create=False):
         before = {s['id'] for s in self.status()['sessions']}
         if click_create:
-            self.field('New Harness')
+            self.field('Start ' + {'codex': 'Codex', 'claude': 'Claude Code', 'terminal': 'Terminal'}[engine])
         else:
             self.keys(*(['Enter', 'Enter'] if double_enter else ['Enter']))
         added = self.check(lambda: [s for s in self.status()['sessions'] if s['id'] not in before],

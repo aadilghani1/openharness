@@ -35,6 +35,9 @@ pub struct Row {
     pub right_narrow: Option<String>,
     /// Its line comes before its right column wherever both don't fit (a question, a failure).
     pub line_first: bool,
+    /// A search lists a lower tier's matches first, however well a higher one's match (the command
+    /// list: hn's own, then tmux's).
+    pub tier: u8,
 }
 
 /// A list narrower than this shows a row's narrow right column.
@@ -55,8 +58,9 @@ impl Row {
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false, tier: 0 }
     }
+    pub fn tier(mut self, tier: u8) -> Row { self.tier = tier; self }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
     pub fn lead(mut self, spans: Vec<Span<'static>>) -> Row { self.lead = spans; self }
@@ -220,6 +224,11 @@ pub struct Picker {
     pub theme_in: Option<String>,
     /// Opened from the command list (C-b Space): Esc goes back to it rather than closing.
     pub from_commands: bool,
+    /// The launcher's tab row has the keys (↓ past the list's last row): ←/→ open the next tab.
+    pub on_tabs: bool,
+    /// The wheel scrolled the panel's list: it stays where it was put, wherever the cursor is,
+    /// until a key moves it.
+    pub free_scroll: bool,
 }
 
 impl Picker {
@@ -300,6 +309,8 @@ impl Picker {
             search: None,
             theme_in: None,
             from_commands: false,
+            on_tabs: false,
+            free_scroll: false,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_reposition: Default::default(),
@@ -389,6 +400,7 @@ impl Picker {
                         // A live list's rows are its order (by urgency), as fzf's are over lines
                         // drawn to one width: length decides nothing between them.
                         let mut rank = crate::fzf::rank(&hit, &chars, if self.live { &live_tiebreak } else { &o.tiebreak });
+                        rank.insert(0, row.tier as i64);
                         // --tac: the input read bottom-up, ties too.
                         rank.push(if o.tac { -(index as i64) } else { index as i64 });
                         scored.push((rank, index, hit.positions.iter().filter(|p| **p < shown_chars).map(|p| *p as u32).collect()));

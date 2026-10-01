@@ -1,4 +1,4 @@
-//! New Harness: a keyboard-driven form, with a persistent draft and in-place choosers.
+//! New Harness: a compact keyboard-driven form, with a persistent draft and side choosers.
 mod data;
 mod receipt;
 mod task;
@@ -209,7 +209,7 @@ impl Form {
             "↑/↓ fields · Enter choose · Esc back".into()
         }
     }
-    fn describe(&self, field: Field) -> (&str, String) {
+    fn describe(&self, field: Field) -> (String, String) {
         let (label, value) = match field {
             Field::Agent => (
                 if self.draft.what.dsh.is_some() {
@@ -221,7 +221,7 @@ impl Form {
             ),
             Field::Project => ("Project", self.project_label()),
             Field::Task => ("Task", if self.draft.task.trim().is_empty() {
-                "Harness anything… (optional)".into()
+                "Add a task (optional)".into()
             } else {
                 self.draft.task.split_whitespace().collect::<Vec<_>>().join(" ")
             }),
@@ -284,13 +284,17 @@ impl Form {
                 } else if self.attempt.is_some() {
                     "Check status"
                 } else {
-                    "New Harness"
+                    "Start"
                 },
                 String::new(),
             ),
         };
         (
-            label,
+            if field == Field::Create && !self.starting && self.attempt.is_none() {
+                format!("Start {}", self.draft.what.label)
+            } else {
+                label.into()
+            },
             self.blocked(field).map(str::to_string).unwrap_or(value),
         )
     }
@@ -781,7 +785,7 @@ fn child(app: &mut App, form: &mut Form, kind: Choice, initial: &str) {
         Choice::Path => "/path/to/project or ~/project",
         Choice::Clone => "GitHub URL or owner/repository",
         Choice::NewFolder => "Folder name (optional)",
-        Choice::Task => "Harness anything…",
+        Choice::Task => "Describe the task…",
     };
     let mut picker = Picker::new("", hint);
     picker.keep_order = kind != Choice::Project;
@@ -1299,7 +1303,7 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => launch = activate(app, &mut form),
-            KeyCode::Right if form.child.is_some() || form.focus == Field::Worktree => {
+            KeyCode::Right if form.focus != Field::Create => {
                 activate(app, &mut form);
             }
             KeyCode::Left | KeyCode::PageUp | KeyCode::PageDown
@@ -1312,6 +1316,9 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
+                if form.child.is_none() && form.focus != Field::Create {
+                    reveal(app, &mut form);
+                }
                 if form.child.is_some() {
                     form.child_active = true;
                     form.child.as_mut().unwrap().picker.type_char(ch);
@@ -1654,8 +1661,7 @@ mod tests {
         app
     }
 
-    /// Opening a chooser within the form leaves the panel where it was, on a wide
-    /// window and a narrow one.
+    /// Opening a chooser leaves the main form where it was, on a wide window and a narrow one.
     #[tokio::test]
     async fn the_form_stays_put_when_a_chooser_opens() {
         let mut app = app();
@@ -1840,6 +1846,7 @@ mod tests {
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
             panic!()
         };
+        form.focus = Field::Agent;
         child(&mut app, &mut form, Choice::Agent, "codex");
         app.modal = Some(Modal::NewHarness(form));
         refresh(&mut app);
@@ -1857,6 +1864,16 @@ mod tests {
         };
         assert!(form.child.is_none());
         assert!(matches!(&form.draft.project, Project::Folder(p) if p == "/home/dev/project"));
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        key(&mut app, form, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        assert!(form.child_active);
+        key(&mut app, form, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        key(&mut app, form, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        assert!(form.child_active);
+        assert_eq!(form.child.as_ref().unwrap().picker.query, "c");
         app.modal = Some(Modal::Confirm {
             prompt: "keep me".into(),
             command: "".into(),
@@ -1899,14 +1916,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_form_is_the_panel_centered_and_anchored_at_every_terminal_size() {
+    async fn compact_form_and_side_choosers_stay_anchored_at_every_terminal_size() {
         let mut app = app();
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
             panic!()
         };
         for width in [
-            1, 10, 21, 22, 45, 80, 109, 110, 120, 122, 123, 124, 150, 220,
+            1, 10, 21, 22, 45, 80, 109, 110, 120, 128, 130, 131, 132, 150, 220,
         ] {
             for height in [1, 4, 5, 10, 14, 24, 42] {
                 let area = Rect::new(3, 2, width, height);
@@ -1924,35 +1941,70 @@ mod tests {
                             form.child_active = active;
                             let mut buf = Buffer::empty(area);
                             if let Some(cursor) = draw(&mut buf, area, &mut form) {
+                                assert!(active, "a preview must not take keyboard focus");
                                 assert!(area.contains(cursor), "{area:?} {cursor:?}");
                             }
                             for (hit, _) in &form.hits {
                                 assert_eq!(hit.intersection(area), *hit);
                             }
                             if form.area.width > 0 {
-                                // The menus' panel: one size and place whatever is open.
-                                assert_eq!(form.area, crate::settings::area(area));
+                                // The form's panel: its own height, one size and place whatever is open.
+                                assert_eq!(form.area, crate::settings::area(area, crate::settings::PanelSize::Form, view::HEIGHT));
+                                assert!(form.area.width <= 60 && form.area.height <= 17);
                                 let left = form.area.x - area.x;
                                 let right = area.right() - form.area.right();
                                 assert!(left.abs_diff(right) <= 1, "not centered in {area:?}");
                                 let top = form.area.y - area.y;
                                 let bottom = area.bottom() - form.area.bottom();
                                 assert!(top.abs_diff(bottom) <= 1, "not centered in {area:?}");
-                                let position = (form.area.x, form.area.y, form.area.width);
                                 assert_eq!(
-                                    *anchor.get_or_insert(position),
-                                    position,
+                                    *anchor.get_or_insert(form.area),
+                                    form.area,
                                     "form moved in {area:?}: engine={engine}, active={active}"
                                 );
                                 assert_eq!(form.area.intersection(area), form.area);
                             }
-                            // A chooser opens in the form's place, as a section of Appearance does.
                             if form.child_area.width > 0 {
-                                assert_eq!(form.child_area, form.area);
+                                assert_eq!(form.child_area.intersection(area), form.child_area);
+                                assert_eq!(form.child_area.y, form.area.y);
+                                if form.child_area.x == form.area.x {
+                                    assert!(active, "narrow previews must leave the form visible");
+                                    assert_eq!(form.child_area, form.area);
+                                } else {
+                                    assert_eq!(form.child_area.x, form.area.right() + 2);
+                                    assert!(form.child_area.width >= 32);
+                                }
+                            }
+                            if width >= 80 && height >= 24
+                                && (form.child_area.is_empty() || form.child_area.x > form.area.x)
+                            {
+                                assert_eq!(form.hits.len(), form.fields().len(), "all settings stay visible");
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn project_chooser_keeps_the_selected_row_visible_past_the_action_separator() {
+        let mut app = app();
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        child(&mut app, &mut form, Choice::Project, "");
+        form.child_active = true;
+        let mut rows = vec![Row::new("clone", "Clone Repository"), Row::new("folder", "Open Folder"), Row::new("new", "New Folder")];
+        rows.extend((0..50).map(|n| Row::new(format!("at:local\t/project-{n}"), format!("project-{n} @ local"))));
+        form.child.as_mut().unwrap().picker.set_rows(rows);
+        for width in [80, 150] {
+            let area = Rect::new(0, 0, width, 42);
+            let count = form.child.as_ref().unwrap().picker.visible.len();
+            for cursor in (0..count).chain((0..count).rev()) {
+                form.child.as_mut().unwrap().picker.cursor = cursor;
+                draw(&mut Buffer::empty(area), area, &mut form);
+                let picker = &form.child.as_ref().unwrap().picker;
+                assert!(picker.row_at.iter().any(|(_, row)| *row == cursor), "selected row {cursor} is hidden at width {width}");
             }
         }
     }

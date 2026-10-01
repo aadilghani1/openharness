@@ -498,7 +498,14 @@ export class RemoteRelayPool {
           if (isBinary) return
           let frame: Frame
           try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
-          const payload = frame.payload as { machineId?: unknown; error?: unknown; p2p?: unknown } | undefined
+          const payload = frame.payload as { machineId?: unknown; error?: unknown; p2p?: unknown; online?: unknown } | undefined
+          if (frame.type === 'node_status' && payload?.online === false) {
+            if (!settled) {
+              settled = true; clearTimeout(timeout)
+              reject(new RelayConnectError('MACHINE_OFFLINE', 1013))
+            }
+            return
+          }
           if (!selected) {
             // The socket's very first frame, before any select, is {type:'connected',payload:{userId}} —
             // pure backend bookkeeping with no machineId. Swallow it; it answers nothing this relay asked.
@@ -593,6 +600,16 @@ export class RemoteRelayPool {
         }
         let frame: Frame
         try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
+        if (frame.type === 'node_status' && framePayload(frame).online === false) {
+          // The backend socket outlives the remote daemon. Its next incarnation has no knowledge of
+          // this session's keys, even when it runs the identical CLI version. Retire the session as
+          // soon as presence goes offline so the next select does a fresh authenticated handshake.
+          // Keep the identity pin: going offline is not a revocation or a reason to pair again.
+          entry.sink?.sendFrame(frame)
+          if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
+          try { ws.close(1012, 'remote machine disconnected') } catch { ws.terminate() }
+          return
+        }
         if (frame.type === 'e2e_rekey') { crypto.handleRekey((frame.payload ?? {}) as Record<string, unknown>); return }
         if (frame.type === 'e2e_denied') {
           // Mid-session revoke (e.g. `harness unpair` run on the peer while this relay was already
@@ -674,13 +691,16 @@ export class RemoteRelayPool {
     ws.on('close', (code, reasonBuf) => {
       entry.viewers?.close()
       entry.heartbeat?.stop()
+      if (entry.lingerTimer) clearTimeout(entry.lingerTimer)
+      entry.lingerTimer = null
       if (entry.p2pRetryTimer) clearTimeout(entry.p2pRetryTimer)
       if (entry.upgradeTimer) clearTimeout(entry.upgradeTimer)
       void entry.upgradeShadow?.stop('relay_closed', false)
       void entry.upgradeOrphan?.stop('relay_closed', false)
       void entry.p2p?.stop('relay_closed', false)
       entry.p2p = null
-      this.entries.delete(machineId)
+      // An invalidated/retired socket can finish closing after its replacement has already dialed.
+      if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
       entry.onClosed?.(code, reasonBuf?.toString() ?? '')
     })
     entry.heartbeat = watchSocketLiveness(ws, {
@@ -705,6 +725,7 @@ export class RemoteRelayPool {
     // Several local views share this upstream connection. Keep each view's terminal lease
     // distinct, but stable across its opens (and across relay/P2P transport changes).
     const viewId = randomUUID()
+    let detached = false
     return {
       send: async (frame) => {
         if (frame.type === 'terminal_open') {
@@ -758,11 +779,14 @@ export class RemoteRelayPool {
         if (p2pFailed) this.demoteP2p(machineId, entry, 'send_failed')
       },
       detach: () => {
+        if (detached) return
+        detached = true
         // This client only; the upstream stays for whoever else is on it, and lingers a while for
         // the next select once nobody is.
         if (client) entry.attached.delete(client)
         bindAttached(entry)
         if (entry.attached.size > 0) return
+        if (this.entries.get(machineId) !== entry) return
         entry.viewers?.reset()
         entry.lingerTimer = setTimeout(() => {
           if (!entry.sink) {
@@ -773,7 +797,7 @@ export class RemoteRelayPool {
             void entry.p2p?.stop('idle', false)
             entry.p2p = null
             try { entry.ws.close(1000, 'idle') } catch { /* ignore */ }
-            this.entries.delete(machineId)
+            if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
           }
         }, this.lingerMs)
         entry.lingerTimer.unref?.()

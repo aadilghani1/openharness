@@ -46,6 +46,10 @@ pub(super) fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, styl
     buf.set_stringn(x, y, out, width as usize, style);
 }
 
+/// The form's height: enough rows for every agent's settings, the same whatever is open, so
+/// changing agents or opening an editor never moves it.
+pub(super) const HEIGHT: u16 = 17;
+
 /// The form's surface, as the settings panel draws its own: filled, no border.
 fn panel(buf: &mut Buffer, r: Rect, base: Style) {
     crate::settings::fill(buf, r, base)
@@ -75,21 +79,31 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
         ..
     } = crate::settings::chrome();
     crate::settings::backdrop(buf, body, backdrop);
-    // The form is the menus' panel: centred, the one size whatever is open — and a chooser (an
-    // agent, a machine, a folder…) opens in its place, as a section of Appearance does, so
-    // nothing moves.
-    let side = false;
-    let r = crate::settings::area(body);
+    // The form is a Form panel (settings::area): centred — the form, not the form and its chooser —
+    // and as tall as every agent's settings need, so changing agents or opening an editor never
+    // moves it. A chooser opens beside it where there is room, else in its place.
+    let r = crate::settings::area(body, crate::settings::PanelSize::Form, HEIGHT);
     let (x, y, form_w, form_h) = (r.x, r.y, r.width, r.height);
-    let (child_w, child_h) = (form_w, form_h);
+    let side_w = body.right().saturating_sub(r.right() + 4).min(60);
+    let side = side_w >= 32;
+    let child_w = if side { side_w } else { form_w };
+    let child_h = if side {
+        body.bottom().saturating_sub(y + 1).min(22).max(form_h)
+    } else {
+        form_h
+    };
     let fields = form.fields();
+    let fields_y = y + if form_h >= 9 { 3 } else { 1 };
     let errors = error_lines(&form.error, form_w.saturating_sub(4) as usize);
-    let error_h = errors.len().min(form_h.saturating_sub(4).max(1) as usize) as u16;
+    // Even a long error in a tiny terminal leaves one field (the focused action) visible.
+    let error_h = errors.len().min(r.bottom().saturating_sub(fields_y + 2).max(1) as usize) as u16;
     form.area = r;
     if form.child.is_none() || side || !form.child_active {
         panel(buf, r, base);
+        if form_h >= 9 {
+            put(buf, x + 3, y + 1, form_w - 6, "New Harness", base.add_modifier(Modifier::BOLD));
+        }
         let error_y = r.bottom() - 1 - error_h;
-        let fields_y = r.y + if form_h < 5 { 0 } else { 2 };
         let capacity = error_y.saturating_sub(fields_y);
         let mut row: u16 = 0;
         let rows: Vec<_> = fields
@@ -135,7 +149,7 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
                 } else {
                     label_w
                 },
-                label,
+                &label,
                 if *field == Field::Create {
                     st.add_modifier(Modifier::BOLD)
                 } else {
@@ -205,15 +219,17 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     form.child_area = r;
     panel(buf, r, base);
     if c.kind == Choice::Task {
-        return Some(task::draw(
+        let cursor = task::draw(
             buf,
             r,
             &mut c.picker,
             &form.error,
+            form.child_active,
             base,
             muted,
             accent,
-        ));
+        );
+        return form.child_active.then_some(cursor);
     }
     let query_x = r.x + 4;
     let query_y = r.y + 2;
@@ -242,7 +258,14 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     );
     c.picker.row_at.clear();
     if !c.kind.editing() {
-        let rows = r.height.saturating_sub(6) as usize;
+        // Project's blank line between folder actions and recents occupies a display row too.
+        // Reserve it in the scroll window so the selected item cannot hide under the footer.
+        let separated = c.kind == Choice::Project && c.picker.query.is_empty()
+            && c.picker.visible.windows(2).any(|pair| {
+                !c.picker.rows[pair[0].0].id.starts_with("at:")
+                    && c.picker.rows[pair[1].0].id.starts_with("at:")
+            });
+        let rows = r.height.saturating_sub(6 + u16::from(separated)) as usize;
         c.picker.page_rows.set(rows as i64);
         c.picker.scroll = c
             .picker
@@ -319,7 +342,11 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     let hint = if !form.error.is_empty() {
         &form.error
     } else {
-        c.picker.busy.as_deref().unwrap_or("")
+        c.picker.busy.as_deref().unwrap_or(if form.child_active {
+            "Enter select · Esc back"
+        } else {
+            "Enter or → to choose"
+        })
     };
     put(buf, r.x + 2, r.bottom() - 2, r.width - 4, hint, muted);
     form.child_active.then(|| {
