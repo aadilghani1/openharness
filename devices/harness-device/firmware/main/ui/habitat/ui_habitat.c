@@ -841,12 +841,13 @@ static void render_workspace_preview(ht_scene_t *f)
 }
 /*
  * THE BLUE BELL — the Focus skin's notification pill, as the LVGL firmware drew it: #006fff, fully
- * round, padded 13 x 4, at y 22: the bell in montserrat_14 and, 6 px on, the count in montserrat_22,
- * centred on each other in a 32 px row. Three runs: box, bell, count.
+ * round, padded 13 x 4: the bell in montserrat_14 and, 6 px on, the count in montserrat_22, centred
+ * on each other in a 32 px row. Three runs: box, bell, count. It sits at the bottom edge, where the
+ * microphone was: the top belongs to the curved name.
  */
 static void focus_bell(ht_scene_t *f, unsigned count)
 {
-    enum { BELL_Y = 22, BELL_PAD_H = 13, BELL_PAD_V = 4, BELL_GAP = 6 };
+    enum { BELL_Y = 400, BELL_PAD_H = 13, BELL_PAD_V = 4, BELL_GAP = 6 };
     const ht_font_t *bf = &ht_lv_montserrat_14.base, *cf = &ht_lv_montserrat_22.base;
     char text[16];
     snprintf(text, sizeof text, "%u", count);
@@ -861,9 +862,6 @@ static void focus_bell(ht_scene_t *f, unsigned count)
 }
 static void render_home(ht_scene_t *f)
 {
-    // Where the Focus face's microphone target begins: a little above the mark's ink at 397, so the
-    // top of the mark is not its edge. A_PET ends here on Focus.
-    enum { FOCUS_MIC_TOP = 353 };
     s.caption_arc = (ht_rect_t){0};
     if (!s.connected || s.loading) { render_brand(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
@@ -932,7 +930,7 @@ static void render_home(ht_scene_t *f)
     bool focus_face = character.id == HT_CHARACTER_FOCUS;
     ht_character_face(f, &character, &f_, ACCENT, recap);
     if (bell) {
-        if (focus_face) focus_bell(f, unread);   // y 22..57, clear of the tab pill at 67
+        if (focus_face) focus_bell(f, unread);   // y 400..432, under the recap
         else ht_notification_bell(f, unread, f_.ink);
     }
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
@@ -953,75 +951,31 @@ static void render_home(ht_scene_t *f)
         footer_control(f, 113, 240, "[ return ]", A_RETURN, s.connected && !visit.pending);
     }
     /*
-     * A SKIN WITH NO COMPANION NEEDS SOMETHING TO PRESS.
-     *
-     * The centre rect below has always started voice, on every skin — but on a creature face the
-     * creature IS the affordance, and Focus has none. One footer label, and only when nothing else
-     * has claimed the footer. Artwork still owns no action: the hit rect is registered here.
-     */
-    /*
-     * THE MICROPHONE, drawn rather than labelled.
-     *
-     * `[ say ]` was a bracket label because bracket labels are what this firmware has; the device
-     * drew a mic here before habitat and a mic is what the thing is. It goes through ht_text with its
-     * own 26 px cell instead of footer_control's ht_mono_20, for the same reason the footer bell does
-     * — an icon routed into a text run has to match that run's cell exactly or the raster overreads.
-     * The hit rect is still registered here: artwork owns no action.
+     * ON FOCUS THE ENGINE'S MARK IS THE MICROPHONE (owner, 2026-10-01). A creature skin talks when the
+     * creature is tapped; Focus has no creature, and its mark stands in the creature's place, so a tap
+     * on the mark talks to the agent. The target is the mark's square and 16 px around it, registered
+     * before A_PET so the face's hold-for-tabs does not swallow it. Artwork still owns no action.
      */
     if (focus_face && !carry.active && !carry.error[0] && !visit.available) {
-        bool can_say = s.connected && !s.loading && a != NULL;
-        int n = s.hit_count++;
-        /*
-         * THE TARGET RUNS TO THE BOTTOM OF THE GLASS, and that is the whole point of it.
-         *
-         * It was {143, 389, 180, 50} — 50 px tall around a 48 px glyph drawn at y 392, so three
-         * pixels of slack above the mark and NONE below it. A thumb pressing the lower half of a
-         * circle held in the hand rolls downward, and the roll left the rect. That loses the entire
-         * contact rather than just the release: the press path records `pressed_action` from the
-         * FIRST sample, and both the scroll guard above and the release rule below ask
-         * home_footer(pressed_action.kind), so a DOWN one pixel low makes the contact a terminal
-         * scroll and nothing can recover it. Pressing the TOP of the mark worked immediately because
-         * the row above is A_PET, whose tap opens the microphone too.
-         *
-         * Nothing else on the Focus face claims this band — A_PET is cut short to end where it
-         * starts (see the bottom of this function), the bell sits at the top — so the rect takes it
-         * whole, down to the bottom edge. The corners fall outside the round glass, which costs
-         * nothing: a touch out there does not exist.
-         */
-        s.hits[n] = (hit_t){{143, FOCUS_MIC_TOP, 180, HT_HEIGHT - FOCUS_MIC_TOP}, A_VOICE, 0, can_say};
-        // The LVGL firmware's own icon_act_voice, 44 px in its #00ff2f, centred on (233, 393) as its
-        // 80 px button was. It is a picture, so it has no pressed or disabled ink of its own.
-        ht_icon(f, 233 - ht_icon_mic.w / 2, 393 - ht_icon_mic.h / 2, &ht_icon_mic);
+        ht_rect_t m = ht_focus_mark_target;
+        s.hits[s.hit_count++] = (hit_t){{(int16_t)(m.x - 16), (int16_t)(m.y - 16), (int16_t)(m.w + 32),
+            (int16_t)(m.h + 32)}, A_VOICE, 0, s.connected && !s.loading && a != NULL};
     }
     if (!carry.active && !carry.error[0] && !visit.available) {
-        /*
-         * Both phases of the caption open the pane picker on a creature skin. Focus has two doors
-         * where they have one: its tab pill opens the TAB list and its agent's name the PANE list.
-         * The pill's is A_TAB_LIST rather
-         * than A_TABS, because A_TABS on this surface is the slide-to-switch gesture and answers
-         * only a strict tap; a door is pressed and released, like the microphone.
-         */
-        if (focus_face) {
-            // Where ht_focus_face put them this frame: the pill and the name move with the layout.
-            ht_rect_t p = ht_focus_pill_target, t = ht_focus_name_target;
-            if (p.w) s.hits[s.hit_count++] = (hit_t){{83, p.y - 3, 300, p.h + 6}, A_TAB_LIST, 0, s.connected};
-            s.hits[s.hit_count++] = (hit_t){{83, t.y - 3, 300, t.h + 6}, A_AGENTS, 0, true};
-        } else s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
+        // Both phases of the caption open the pane picker — on Focus too, whose name is on the same
+        // curve. The tab list is a hold on the face (A_PET below), on every skin.
+        s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
             s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
             break;
         }
     }
-    // The badge's own target follows it. On Focus that is the top strip, clear of the tab pill below.
-    if (bell)
-        s.hits[s.hit_count++] = focus_face ? (hit_t){{83, 10, 300, 55}, A_INBOX, 0, unread > 0}
-                                           : (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
+    // The badge's own target follows it, at the bottom on every skin.
+    if (bell) s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
     // The bell and the creature never share a target, even when the bell is
-    // hidden or its count changes under a finger. Centre always starts voice.
-    // On Focus it stops where the microphone's target starts; nothing is drawn between the last recap
-    // row (y 335) and the mic, so the band belongs to the button rather than to a tap-anywhere.
-    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, focus_face ? FOCUS_MIC_TOP - 66 : 316}, A_PET, 0, true};
+    // hidden or its count changes under a finger. Centre always starts voice (on Focus, the mark does).
+    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
 }
 /*
  * FOCUS'S LISTS SPEAK THE AGENT SCREEN'S TYPE (owner, 2026-09-30): Geist and Montserrat from the
@@ -2766,10 +2720,10 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch((action_t){.kind = A_VOICE_STOP});
             } else if (character.id == HT_CHARACTER_FOCUS && s.view != SELECTION) {
                 /*
-                 * On Focus the microphone starts speech and nothing else does. A creature skin has
+                 * On Focus the engine's mark starts speech and nothing else does. A creature skin has
                  * no button — the creature IS the affordance, so the middle of the glass has to be
-                 * one. Focus draws its button, and the middle is the recap somebody is reading: a
-                 * tap there opening the mic surprised people, and the mic is right under it.
+                 * one. On Focus the middle is the recap somebody is reading: a tap there opening the
+                 * mic surprised people, and the mark is its own target (A_VOICE).
                  */
             } else if (s.connected && !s.loading && pressed_action.id[0]) {
                 ESP_LOGI("habitat", "gesture tap: start voice");
