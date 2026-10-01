@@ -190,6 +190,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private func syncMenuKeys() {
     guard let keymap, let main = NSApp.mainMenu else { return }
     keymap.applyMenuKeys(to: main, context: flutterKeyContext)
+    statusMenu?.updateKeymap(keymap, context: flutterKeyContext)
   }
 
   private func configure(palette: [String: Any]? = nil) {

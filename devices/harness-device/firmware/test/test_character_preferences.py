@@ -87,8 +87,8 @@ int main(void) {
     // Focus is what a dial shows before anybody has chosen (owner's decision, 2026-09-30).
     assert(ht_character_default() == HT_CHARACTER_FOCUS);
 #endif
-    // And at full brightness: no "bright" key is 255, a saved one is kept exactly.
-    bright_present = false; assert(config_load_brightness() == 255);
+    // And at 80%: no "bright" key is 204 (80 of 100 once the UI rounds it), a saved one is kept exactly.
+    bright_present = false; assert(config_load_brightness() == 204 && (204 * 100 + 127) / 255 == 80);
     bright_present = true; bright_stored = 102; assert(config_load_brightness() == 102);
     bright_present = false;
     home_caption.initialized=true;

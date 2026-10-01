@@ -1749,6 +1749,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_error_keeps_its_recovery_instruction_and_action_visible() {
+        let mut app = app();
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        form.error = "Could not start it: “My-First-Claude-Project” already exists. Select that folder from your projects.".into();
+        for width in [45, 80, 130] {
+            let area = Rect::new(0, 0, width, 38);
+            let mut buf = Buffer::empty(area);
+            draw(&mut buf, area, &mut form);
+            let text: String = (form.area.y..form.area.bottom()).map(|y| {
+                (form.area.x + 2..form.area.right() - 2)
+                    .map(|x| buf[(x, y)].symbol()).collect::<String>().trim().to_string()
+            }).collect::<Vec<_>>().join(" ");
+            assert!(text.contains("already exists. Select that folder from your projects."), "{text}");
+            assert!(form.hits.iter().any(|(_, f)| *f == Field::Create));
+            assert_eq!(form.area.intersection(area), form.area);
+        }
+        form.error = "项目".repeat(100);
+        for height in [5, 10, 24] {
+            let area = Rect::new(0, 0, 22, height);
+            let mut buf = Buffer::empty(area);
+            draw(&mut buf, area, &mut form);
+            assert_eq!(form.area.intersection(area), form.area);
+            assert!(form.hits.iter().any(|(_, f)| *f == Field::Create));
+        }
+    }
+
+    #[tokio::test]
     async fn terminal_and_agent_options_match_the_launch_contract() {
         let mut app = app();
         open(&mut app, None, Some("/home/dev/repo".into()));

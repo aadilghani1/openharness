@@ -20,7 +20,7 @@ on 2026-09-30; the unmerged checkpoints below describe earlier review stages.
 | Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
 | Add Phone | Desktop QR/device layout implemented; pairing lifecycle tests and light/dark enlarged-text renders pass |
 | Machine recovery/linking | Desktop linking/password layouts implemented; bounded selectable errors, fixed actions, and 32-point reveal controls tested/rendered |
-| Notifications | Desktop popup, two-line rows, glyphs, and empty/error states implemented; unchanged event rules tested; live empty popup inspected |
+| Notifications | macOS menu overview has receipt-bound message previews, tab/machine context, a collapsed Working section, and Mark all read; full desktop inbox remains available. Synthetic native light/dark, expanded, empty, long, selected and unavailable states inspected; live menu interaction still needs review |
 | Branches / pull requests | Desktop lists and shared modal veil implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
 | Settings / customization | Desktop status customization, natural-height controls, error contrast, keyboard focus and passive native footer preview implemented; actual status previews preserve the selected renderer |
 | Store | Existing graphical discovery/detail/launch routes retained; ordinary labels, search and counts use system typography; desktop and narrow/enlarged previews inspected |
@@ -37,6 +37,30 @@ Legacy/test-only paths (including the old NewAgentDialog entry when
 The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
+
+## Notification overview review — 2026-09-30
+
+The menu now presents questions and completed results together, with the actual
+question or notified recap beneath the session title. Working expands inline;
+its count excludes unread sessions already above it and never changes the badge.
+Settings is removed from this menu and its last action is Quit. GitHub merge
+events remain a follow-up rather than inferred notifications.
+
+Native captures use synthetic sessions and the production AppKit views:
+[light](images/notification-overview-light.png),
+[dark](images/notification-overview-dark.png), and
+[expanded Working](images/notification-overview-working.png). These are view
+renders on neutral surfaces; they do not simulate the window-server blur.
+The fixture also covers empty, long/truncated, highlighted, and offline rows.
+Reproduce with `tool/check_swarm_titlebar.sh <flutter-sdk> --status-menu-preview`.
+
+Validation: 67 targeted Flutter tests, 44 native menu checks, changed-file static
+analysis, icon audit, and a signed Intel Skia debug build. Coverage includes
+receipt-bound previews, same-session coalescing, unread/working separation,
+known versus unknown elapsed time, stale clicks, snapshot clearing, tab moves,
+existing-pane navigation, disclosure key handling, effective shortcut hints,
+and sign-out cleanup. Physical pointer/keyboard tracking and VoiceOver in the
+user's running app remain manual review items; this fixture is not that evidence.
 
 ## AI review panel
 

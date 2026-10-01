@@ -159,6 +159,11 @@ jobs:
           HN_PANE_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
           HN_PANE_UI_PORT: 19783
         run: python3 -u tests/pane-ui.py
+      - name: Animation, timed messages and idle input
+        env:
+          HARNESS_TUI_BIN: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          HN_REPAINT_TEST_PORT: 19794
+        run: python3 -u tests/repaint.py
       - name: New Harness popup, draft and launch recovery
         env:
           HN_NEW_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui

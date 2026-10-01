@@ -24,7 +24,9 @@ private func fixture(_ agent: String, project: String = "autonomous-harness",
                      unread: Bool = true, token: String = "first", offline: Bool = false) -> [String: Any] {
   var row: [String: Any] = ["machineId": machine,
     "agentId": agent, "title": agent, "tabName": tabId == nil ? "Other sessions" : tabName, "unread": unread,
-    "detail": "Office Mac · \(project)"]
+    "detail": "Office Mac · \(project)", "machineName": "Office Mac",
+    "message": "The reconnect fix is ready for you to try.",
+    "receivedAt": Date().timeIntervalSince1970 * 1000 - 120_000]
   row["tabId"] = tabId
   if unread { row["readToken"] = token; row["label"] = "Finished" }
   if offline { row["unavailable"] = "Offline" }
@@ -33,7 +35,8 @@ private func fixture(_ agent: String, project: String = "autonomous-harness",
 
 private extension HarnessStatusMenu {
   func item(_ action: String) -> NSMenuItem {
-    menu.items.first { $0.identifier?.rawValue == action }!
+    menu.items.first { $0.identifier?.rawValue == action ||
+      $0.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + action }!
   }
   func row(_ agent: String) -> NSMenuItem {
     menu.items.first { ($0.representedObject as? [String: Any])?["agentId"] as? String == agent }!
@@ -51,19 +54,25 @@ do {
               fixture("DeepSeek model", project: "No Project", unread: false),
               fixture("Math addition inquiry", project: "No Project", tabId: nil, offline: true)]
   status.update(["enabled": true, "statusMenuEntries": rows])
-  try check(status.menu.items.filter { $0.state == .on }.count == 2, "Unread rows have dots")
-  try check(status.row("General chat conversation").onStateImage != nil, "A blue dot replaces the checkmark")
-  try check(status.menu.items.contains { $0.title == "Build" && !$0.isEnabled } &&
-            status.menu.items.contains { $0.title == "Other sessions" && !$0.isEnabled }, "Tabs and other sessions use native section headings")
+  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" }.count == 2,
+            "One row per unread session")
+  try check((status.row("General chat conversation").view?.frame.height ?? 0) > 64 &&
+            (status.row("General chat conversation").view?.frame.height ?? 0) <= 98 &&
+            status.row("General chat conversation").view?.accessibilityLabel()?.contains("reconnect fix") == true,
+            "Multiline rows expose the actual message to accessibility")
+  try check(status.item("clearStatusNotifications").view?.accessibilityLabel()?.contains("Notifications (2)") == true &&
+            !status.menu.items.contains { $0.title == "Build" }, "One notification section replaces tab headings")
   try check(!status.row("Math addition inquiry").isEnabled, "Offline conversations stay visible but disabled")
   try check(status.row("Math addition inquiry").toolTip?.contains("Offline") == true, "Unavailable state is explained")
   try check(!status.menu.items.contains { $0.title == "DeepSeek model" }, "Read conversations are absent from the notification menu")
   status.click(status.row("General chat conversation"))
   try check(emitted.last?.0 == "openStatusHarness" && reveals == 0, "Navigation is sent before revealing the window")
   status.click(status.item("newAgent"))
-  status.click(status.item("settings"))
-  try check(emitted.suffix(2).map { $0.0 } == ["newAgent", "settings"] && reveals == 2,
-            "New Harness and Settings reveal the window and reuse existing actions")
+  status.click(status.item("addAgent"))
+  try check(emitted.suffix(2).map { $0.0 } == ["newAgent", "addAgent"] && reveals == 2,
+            "New and Open Harness reveal the window and reuse existing actions")
+  try check(!status.menu.items.contains { $0.identifier?.rawValue == "settings" } &&
+            status.item("quit").title == "Quit", "Settings is absent and the exit command is simply Quit")
 
   status.menuWillOpen(status.menu)
   let selected = status.row("General chat conversation")
@@ -72,7 +81,7 @@ do {
   rows.append(fixture("New result", project: "website", tabId: "tab-website", tabName: "Website"))
   status.update(["enabled": true, "statusMenuEntries": rows])
   try check(status.row("General chat conversation") === selected &&
-            !status.menu.items.contains { $0.title == "Website" }, "Arrivals do not move open-menu rows")
+            !status.menu.items.contains { $0.title == "New result" }, "Arrivals do not move open-menu rows")
   status.click(selected)
   try check(emitted.count == before, "A replaced notification cannot dispatch an old click")
   status.click(status.item("clearStatusNotifications"))
@@ -82,7 +91,7 @@ do {
             cleared?.first?["readToken"] as? String == "first", "Clear sends only displayed receipts, never new arrivals")
   status.menuDidClose(status.menu)
   status.menuNeedsUpdate(status.menu)
-  try check(status.menu.items.contains { $0.title == "Website" }, "The next opening shows new arrivals")
+  try check(status.menu.items.contains { $0.title == "New result" }, "The next opening shows new arrivals")
 
   status.menuWillOpen(status.menu)
   let originalLocation = status.row("General chat conversation")
@@ -93,18 +102,20 @@ do {
   let originalReceipt = emitted.last?.1 as? [String: Any]
   try check(emitted.last?.0 == "openStatusHarness" && originalReceipt?["tabId"] as? String == "tab-build",
             "A current notification retains its displayed destination when tabs change")
-  try check(!status.menu.items.contains { $0.title == "Review" }, "Tab changes do not move open-menu rows")
+  try check(status.row("General chat conversation").toolTip?.contains("Build") == true,
+            "Tab context does not move under the pointer")
   status.menuDidClose(status.menu)
   status.menuNeedsUpdate(status.menu)
-  try check(status.menu.items.contains { $0.title == "Review" }, "The next opening reflects the new tab group")
+  try check(status.row("General chat conversation").toolTip?.contains("Review") == true,
+            "The next opening reflects the new tab context")
 
   status.update(["enabled": false, "statusMenuEntries": rows])
-  try check(!status.item("newAgent").isEnabled && !status.item("addAgent").isEnabled && !status.item("settings").isEnabled &&
+  try check(!status.item("newAgent").isEnabled && !status.item("addAgent").isEnabled &&
             !status.item("clearStatusNotifications").isEnabled, "A modal disables workspace actions")
   status.click(status.item("openWindow"))
   try check(reveals == 3, "Show Harness remains available during a modal")
   status.update(["enabled": true, "statusMenuEntries": []])
-  try check(status.menu.items.first?.title == "No unread notifications" &&
+  try check(status.menu.items.contains { $0.title == "No unread notifications" } &&
             !status.item("clearStatusNotifications").isEnabled, "An empty inbox is explicit and cannot be cleared")
   let open = status.menu.items.first { $0.title == "Open Harness…" }!
   status.click(open)
@@ -128,12 +139,13 @@ do {
     try check(logo != nil, "The menu bar template loads from the Harness artwork")
     logo?.setName("HarnessStatusIcon")
     let indicator = HarnessStatusMenu(showWindow: {}, emit: { _, _ in })
-    indicator.update(["enabled": true, "statusMenuEntries": rows])
+    indicator.update(["enabled": true, "statusMenuEntries": rows,
+                      "statusMenuWorkingEntries": [fixture("Running", unread: false)]])
     try check(indicator.statusItem?.button?.title == "" &&
               indicator.statusItem?.button?.image?.accessibilityDescription == "3 unread" &&
               indicator.statusItem?.button?.image?.isTemplate == true &&
               indicator.statusItem?.button?.accessibilityValue() as? String == "3 unread",
-              "The monochrome Harness template carries the count badge without a separate text label")
+              "The badge counts notifications only, never working sessions")
     let unreadPixels = renderedStatusPixels(indicator.statusItem!.button!.image!)
     indicator.update(["enabled": true, "statusMenuEntries": []])
     try check(indicator.statusItem?.button?.image?.accessibilityDescription == "0 unread" &&
@@ -162,14 +174,66 @@ do {
     fixture("Review result", tabId: "tab-two", tabName: "Work"),
     fixture("Background result", tabId: nil),
   ]])
-  let headings = status.menu.items.filter { !$0.isEnabled && !$0.isSeparatorItem && $0.representedObject == nil }
-  try check(headings.map { $0.title } == ["Work", "Work", "Other sessions"],
-            "Tab IDs keep equal names separate, combine projects and machines, and preserve section order")
-  try check(status.menu.index(of: status.row("Website result")) < status.menu.index(of: headings[1]) &&
-            status.menu.index(of: status.row("Review result")) > status.menu.index(of: headings[1]),
-            "Each row stays inside its tab's section")
+  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" }.map { $0.title } ==
+            ["API result", "Website result", "Review result", "Background result"],
+            "Notifications retain Dart's urgency and time order across tabs")
   try check(status.row("Website result").toolTip?.contains("website") == true,
             "Project context remains available in the row tooltip")
+
+  var working = (0..<7).map { fixture("Working \($0)", unread: false) }
+  status.update(["enabled": true, "statusMenuEntries": (0..<8).map { fixture("News \($0)") },
+                 "statusMenuWorkingEntries": working])
+  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" && !$0.isHidden }.count == 5 &&
+            status.item("notificationInbox").title == "View all 8 notifications…",
+            "The glance is bounded, with a route to every unread notification")
+  let toggle = status.item("toggleWorking")
+  try check(toggle.title == "Working (7)" && status.row("Working 0").isHidden,
+            "Working starts collapsed")
+  status.menuWillOpen(status.menu)
+  try check(toggle.view?.accessibilityPerformPress() == true && !status.row("Working 0").isHidden,
+            "Disclosure expands inline through the accessible native control")
+  let overflow = status.item("moreWorking")
+  try check(overflow.submenu?.items.count == 2, "Additional work stays available without flooding the overview")
+  func keyEvent(_ code: UInt16) -> NSEvent {
+    NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+      windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
+  }
+  try check(status.handleWorkingKey(keyEvent(123), item: toggle) && status.row("Working 0").isHidden &&
+            status.handleWorkingKey(keyEvent(124), item: toggle) && !status.row("Working 0").isHidden,
+            "Left and Right collapse and expand the working section")
+  try check(!status.handleWorkingKey(keyEvent(125), item: toggle), "Arrow navigation remains AppKit's")
+  let workingRow = status.row("Working 0")
+  let beforeWorking = emitted.count
+  working.removeFirst()
+  status.update(["enabled": true, "statusMenuEntries": [fixture("Newer news")], "statusMenuWorkingEntries": working])
+  status.click(workingRow)
+  try check(emitted.count == beforeWorking, "A session that stopped working cannot dispatch a stale working click")
+  _ = toggle.view?.accessibilityPerformPress()
+  _ = toggle.view?.accessibilityPerformPress()
+  try check(status.menu.items.contains { $0.title == "News 0" } &&
+            !status.menu.items.contains { $0.title == "Newer news" },
+            "Toggling Working preserves the open notification snapshot")
+  let currentWorking = status.row("Working 1")
+  try check(currentWorking.view?.accessibilityPerformPress() == true && emitted.last?.0 == "openStatusHarness" &&
+            (emitted.last?.1 as? [String: Any])?["unread"] as? Bool == false,
+            "Working rows navigate with a distinct non-notification receipt")
+  status.menuDidClose(status.menu)
+  status.menuNeedsUpdate(status.menu)
+  status.update([:])
+  try check(!status.menu.items.contains { $0.identifier?.rawValue == "toggleWorking" },
+            "Sign-out removes working data as well as unread messages")
+  let bindings: [[String: Any]] = [
+    ["keys": ["cmd+shift+k"], "command": "agent.open", "hint": "⇧⌘K", "repeatable": false, "menuAction": "addAgent"],
+  ]
+  let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
+  status.updateKeymap(map, context: "workspace")
+  status.update(["enabled": true, "statusMenuEntries": []])
+  try check(status.item("addAgent").keyEquivalent == "k" &&
+            status.item("addAgent").keyEquivalentModifierMask == [.command, .shift] &&
+            status.item("newAgent").keyEquivalent.isEmpty,
+            "Footer shortcuts follow remapping and unbinding, including after a rebuild")
+  status.click(status.item("addAgent"))
+  try check(emitted.last?.0 == "addAgent", "Keymap identifiers preserve the existing Open Harness action")
   print("Harness status menu passed \(checks) checks")
 } catch {
   fputs("Harness status menu failed: \(error)\n", stderr)

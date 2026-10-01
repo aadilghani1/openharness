@@ -187,7 +187,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
             _ = tokio::time::sleep(Duration::from_millis(500)) => None,
         };
         let apply = |app: &mut app::App, event: Event| match event {
-            Event::Input(_) | Event::Animate => {}
+            Event::Input(_) => {}
             Event::Machine { machine_id, generation, event } => app.on_machine(machine_id, generation, event),
             Event::Apply(f) => f(app),
             Event::Tick => app.on_tick(),
@@ -400,13 +400,6 @@ async fn run(config: config::Config) -> io::Result<()> {
         loop { interval.tick().await; if ticks.send(Event::Tick).is_err() { break } }
     });
 
-    // Animation frames do not speed up the maintenance timers (reconnects, RPCs and saves).
-    let animation = tx.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
-        loop { interval.tick().await; if animation.send(Event::Animate).is_err() { break } }
-    });
-
     mark("terminal ready");
     // Its ids ($N @N %N) from this server name's counters: unique among its clients.
     ids::use_file(&app::sessions_path(None));
@@ -470,6 +463,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
+    // Rendered animation and timed UI messages schedule their next frame.
+    // Maintenance and incoming input/output keep their own cadence.
+    let mut next_repaint: Option<Instant> = None;
     let mut mouse_all = false;
     let mut cursor_colour: Option<String> = None;
     let mut startup_input = std::collections::VecDeque::new();
@@ -477,10 +473,15 @@ async fn run(config: config::Config) -> io::Result<()> {
     loop {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
+        let wait = next_repaint.map(|at| wait.min(at.saturating_duration_since(Instant::now()))).unwrap_or(wait);
         let first = tokio::select! {
             event = rx.recv() => event,
             _ = tokio::time::sleep(wait) => None,
         };
+        if next_repaint.is_some_and(|at| Instant::now() >= at) {
+            next_repaint = None;
+            need_draw = true;
+        }
         let mut refill = false;
         let apply = |app: &mut app::App, event: Event, refill: &mut bool, startup: &mut std::collections::VecDeque<crossterm::event::Event>| {
             match event {
@@ -496,7 +497,6 @@ async fn run(config: config::Config) -> io::Result<()> {
                 }
                 Event::Apply(f) => { f(app); *refill = true }
                 Event::Tick => app.on_tick(),
-                Event::Animate => {},
             }
         };
         if let Some(event) = first { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
@@ -549,6 +549,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         if need_draw && last_draw.elapsed() >= frame_budget {
             // (The backend makes each frame's changes one synchronized update, and writes nothing
             // for a frame that changed nothing.)
+            let frame_started = Instant::now();
             term.draw(|frame| ui::draw(frame, &mut app))?;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
@@ -568,6 +569,8 @@ async fn run(config: config::Config) -> io::Result<()> {
                 execute!(term.backend_mut(), terminal::SetTitle(&title))?;
                 app.title = title;
             }
+            // Include custom terminal-title formats: they can animate too.
+            next_repaint = ui::next_repaint(&app, frame_started);
         }
     }
     // Its #() jobs ended, as tmux's server ends its jobs.

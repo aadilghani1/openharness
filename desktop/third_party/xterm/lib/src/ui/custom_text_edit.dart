@@ -341,8 +341,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     _pendingActionEcho = null;
     if (submitted == null) return false;
     // The newline either lands on the buffer the action was performed on, or
-    // after this side's reset has already emptied it — whichever wins the race.
-    if (value.text != '$submitted\n' && value.text != '\n') return false;
+    // after this side's reset has already emptied it (back to the delete pad,
+    // when there is one) — whichever wins the race. A browser's <textarea>
+    // does the same as iOS: Return reports the action, then types its newline.
+    if (value.text != '$submitted\n' &&
+        value.text != '${_initEditingState.text}\n') {
+      return false;
+    }
     _connection?.setEditingState(_currentEditingState);
     return true;
   }

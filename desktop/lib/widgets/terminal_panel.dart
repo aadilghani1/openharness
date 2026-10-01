@@ -107,6 +107,9 @@ bool get isTouchBrowser =>
     (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS);
 
+/// Safari (or any browser) on an iPhone or iPad.
+bool get isIOSBrowser => kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
 class TerminalPanel extends StatefulWidget {
   final AppNotifier notifier;
   final TerminalSession session;
@@ -2283,6 +2286,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                                   : SystemMouseCursors.text,
                               onSecondaryTapDown: (_, _) => _copyOrPaste(),
                               deleteDetection: isTouchBrowser,
+                              // A <textarea>, not an <input>: iOS Safari hangs
+                              // its AutoFill bar (passwords, cards, places)
+                              // over the keyboard for every <input>. Return
+                              // still submits: see CustomTextEdit's action echo.
+                              keyboardType: isIOSBrowser
+                                  ? TextInputType.multiline
+                                  : TextInputType.text,
 
                               onAltBufferScroll: session.scrollViaTmuxCopyMode
                                   ? (up) => session.sendScrollCommand(up, 1)

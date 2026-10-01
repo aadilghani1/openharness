@@ -212,10 +212,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // 4) Scan to sign in (lib/harnessSession.ts). A signed-in computer asks for a one-time code for
-  //    its Add Phone QR; the phone that scans it redeems the code for a session of its own. Only an
-  //    Autonomous sign-in can hand one off — a phone's session cannot mint more of itself.
+  //    its Add Phone QR; the phone that scans it redeems the code for a session of its own. An
+  //    Autonomous sign-in can hand one off, and so can a computer a phone signed in by QR
+  //    (routes/qrSignIn.ts) — a phone's own session cannot mint more of itself.
   app.post('/api/auth/handoff', async (req, reply) => {
-    if (req.user!.harnessSessionId) {
+    if (req.user!.harnessSessionId && req.user!.harnessSessionKind !== 'computer') {
       return sendError(reply, 'Add a phone from a computer signed in to Harness', 'HANDOFF_NOT_ALLOWED', 403)
     }
     try {

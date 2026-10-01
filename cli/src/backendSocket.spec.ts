@@ -1445,6 +1445,31 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:invalid-project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder')
+    const create = vi.fn()
+    socket.onCreateAgent = create
+    try {
+      socket.handleLocalFrame('local:invalid-project', { type: 'agent_create', payload: {
+        requestId: 'invalid', creationId: randomUUID(), engine: 'codex', projectSource: 'remote',
+        repositoryUrl: 'https://private-token@github.com/owner/repo',
+      } })
+      await vi.waitFor(() => expect(frames).toContainEqual({ type: 'agent_create_result', payload: {
+        requestId: 'invalid', error: 'INVALID_REPOSITORY',
+        detail: 'Enter a GitHub HTTPS or SSH URL, or owner/repository.',
+      } }))
+      expect(JSON.stringify(frames)).not.toContain('private-token')
+      expect(prepare).not.toHaveBeenCalled()
+      expect(create).not.toHaveBeenCalled()
+    } finally {
+      await socket.unregisterLocalClient('local:invalid-project')
+      await socket.stop()
+    }
+  })
+
   it.each([
     { projectSource: 'remote', repositoryUrl: 'owner/repo' },
     { projectSource: 'worktree', gitSource: '/remote/repo', branchRef: 'refs/heads/main' },
@@ -2823,6 +2848,31 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     await vi.waitFor(() => expect(revoked).toBe(1))
 
     await socket.stop()
+  })
+
+  it('says whose key a device-key-log removal spent before signing out, and nothing for a plain revoke', async () => {
+    const socket = new BackendSocket('token')
+    const order: string[] = []
+    socket.onDeviceRemoved = (pub) => { order.push(`removed:${pub}`) }
+    socket.onRevoked = () => { order.push('revoked') }
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: { reason: 'device_removed', pub: 'PUB' } } })
+    await vi.waitFor(() => expect(order).toEqual(['removed:PUB', 'revoked']))
+    await socket.stop()
+
+    const plain = new BackendSocket('token')
+    let removed = 0
+    plain.onDeviceRemoved = () => { removed += 1 }
+    plain.onRevoked = () => {}
+    plain.connect()
+    const ws2 = wsMock.instances.at(-1)!
+    ws2.open()
+    ws2.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: {} } })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(removed).toBe(0)
+    await plain.stop()
   })
 })
 

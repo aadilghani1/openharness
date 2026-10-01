@@ -1727,8 +1727,7 @@ impl App {
             return;
         };
         let (cols, rows) = content.unwrap_or((pane.cols, pane.rows));
-        // Below the daemon's 40×12 the far terminal stays 40×12 and the tile shows the part of it
-        // around the cursor, as tmux shows a window bigger than its client.
+        // The remote terminal follows the actual tile, including narrow or short split panes.
         let (cols, rows) = pane::stream_size(cols, rows);
         pane.opening = true;
         pane.want = (cols, rows);

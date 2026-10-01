@@ -1302,16 +1302,52 @@ pub fn most_urgent(states: impl Iterator<Item = State>) -> Option<State> {
     states.min_by_key(rank)
 }
 
-thread_local! { static ANIMATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
-pub fn set_animations(on: bool) { ANIMATIONS.with(|a| a.set(on)) }
+thread_local! {
+    static ANIMATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static ANIMATION_USED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub fn begin_animation_frame(on: bool) {
+    ANIMATIONS.with(|a| a.set(on));
+    ANIMATION_USED.with(|a| a.set(false));
+}
 pub fn animations() -> bool { ANIMATIONS.with(|a| a.get()) }
+pub fn needs_animation_frame() -> bool { ANIMATION_USED.with(|a| a.get()) }
+
+/// Reading an animated frame records demand for the next one. Static screens
+/// and reduced-motion indicators do not keep an animation timer running.
+pub fn animation_frame() -> usize {
+    if !animations() { return 0 }
+    ANIMATION_USED.with(|a| a.set(true));
+    (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0)) as usize
+}
 
 /// A spinner frame for things in motion (working dots, connecting cards).
 pub fn spinner(_tick: u64) -> &'static str {
     // fzf's frames, in its order.
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let frame = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0);
-    FRAMES[if animations() { frame as usize % FRAMES.len() } else { 0 }]
+    FRAMES[animation_frame() % FRAMES.len()]
+}
+
+#[cfg(test)]
+mod animation_tests {
+    #[test]
+    fn only_moving_content_requests_animation_and_each_frame_starts_fresh() {
+        use super::*;
+        begin_animation_frame(true);
+        state_mark(State::Ready, 0);
+        state_mark(State::NeedsInput, 0);
+        assert!(!needs_animation_frame());
+        state_mark(State::Working, 0);
+        assert!(needs_animation_frame());
+        begin_animation_frame(true);
+        assert!(!needs_animation_frame());
+        animation_frame(); // the picker's ASCII and Unicode loading frames
+        assert!(needs_animation_frame());
+        begin_animation_frame(false);
+        assert_eq!(spinner(0), "⠋");
+        assert_eq!(animation_frame(), 0);
+        assert!(!needs_animation_frame());
+    }
 }
 
 #[cfg(test)]

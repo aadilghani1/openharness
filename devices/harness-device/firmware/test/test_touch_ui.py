@@ -201,7 +201,7 @@ for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notic
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_title') + function('focus_centred') + function('focus_clipped') + function('render_focus_panes') + function('panes_move') + function('panes_settle') + function('render_agents') + function('tabs_move') + function('tab_name') + function('render_focus_tabs') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('render_focus_panes') + function('panes_move') + function('panes_settle') + function('render_agents') + function('tabs_move') + function('tab_name') + function('render_focus_tabs') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'ui_notify_task_done', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -1989,26 +1989,30 @@ int main(int argc, char **argv) {
     habitat_touch(false,233,100,1375); scene_take();
     assert(s.offset==4 && !strcmp(make_action(s.hits[4]).id,"pane-7"));
     portrait(dir,"panes-last");
-    // FOCUS'S PANES: every pane at once, still, in full ink; only the pane on the face is green.
+    // FOCUS'S PANES, in the LVGL TABS picker: the close pill, "PANES", one card a pane with its name
+    // alone; the pane on the face is the card with the accent rim.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=3; s.active=0;
     {
         const char *names[3]={"claude - Harness","Energy","Opencode"};
         for(int i=0;i<3;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); COPY(s.agents[i].name,names[i]); }
         view(AGENTS); scene_take(); portrait(dir,"focus-panes");
-        int rows=0; bool green_one=false;
-        for(int i=0;i<scene.count;i++) for(int k=0;k<3;k++) if(!strcmp(scene.runs[i].text,names[k])) {
-            rows++;
-            assert(scene.runs[i].fg == (k==0 ? color(HT_THEME_VOICE) : FG));   // no fade, one green
-            assert(scene.runs[i].font == &ht_lv_geist_med_32.base);             // the tab names' type and size
-            if (k==1) assert(scene.runs[i].y + ht_lv_geist_med_32.base.height/2 == 233);   // centred as a block
-            if (k==0) green_one=true;
+        int rows=0, rims=0;
+        for(int i=0;i<scene.count;i++) {
+            if (scene.runs[i].box.h == 58 && scene.runs[i].box.border == color(HT_THEME_VOICE)) {
+                rims++; assert(scene.runs[i].y + 29 < 233);                     // the first card, above the middle
+            }
+            for(int k=0;k<3;k++) if(!strcmp(scene.runs[i].text,names[k])) {
+                rows++;
+                assert(scene.runs[i].font == &ht_lv_geist_med_28.base && scene.runs[i].fg == color(0xeaeaf0));
+            }
         }
-        assert(rows==3 && green_one);
+        assert(rows==3 && rims==1);
         habitat_touch(true,233,300,1000); habitat_touch(true,233,200,1100); habitat_touch(false,233,200,1200);
-        assert(s.offset==0 && !switches);   // six or fewer: nothing moves
+        assert(s.offset==0 && !switches);   // four or fewer: nothing moves
         tap(2000,233,233); assert(switches==1 && s.view==AGENT);
+        view(AGENTS); scene_take(); tap(3000,233,30); assert(s.view==HOME);   // the cross goes back
     }
-    // Past six the list scrolls a row per pitch, and a long name ends in "...".
+    // Past four the list scrolls a card per pitch, and a long name ends in "...".
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=9; s.active=0;
     {
         for(int i=0;i<9;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); snprintf(s.agents[i].name,sizeof s.agents[i].name,"Pane %d",i); }
@@ -2016,7 +2020,8 @@ int main(int argc, char **argv) {
         view(AGENTS); scene_take(); assert(s.hit_count==PANE_ROWS+1);
         habitat_touch(true,233,340,1000); habitat_touch(true,233,240,1100); habitat_touch(true,233,120,1200);
         habitat_touch(false,233,120,1300); scene_take();
-        assert(s.offset==3 && !switches);   // 220 px: four rows' travel, clamped at the last page
+        assert(s.offset==3 && !switches);   // 220 px: three cards' travel
+        s.offset=5; scene_take();           // the last page
         bool cut=false;
         for(int i=0;i<scene.count;i++) { const char *t=scene.runs[i].text; size_t n=strlen(t);
             if(!strncmp(t,"Payments",8) && n>3 && !strcmp(t+n-3,"...")) cut=true; }
@@ -2033,6 +2038,11 @@ int main(int argc, char **argv) {
         for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Harness") && scene.runs[i].fg==color(HT_THEME_VOICE) &&
                                           scene.runs[i].font==&ht_lv_geist_med_32.base) green=true;
         assert(green);
+        bool title=false, arrow=false;   // the close pill and "TABS" on top; no ← at the bottom
+        for(int i=0;i<scene.count;i++) { title |= !strcmp(scene.runs[i].text,"T") && scene.runs[i].y==62;
+                                         arrow |= !strcmp(scene.runs[i].text,"\xe2\x86\x90"); }
+        assert(title && !arrow);
+        tap(3000,233,30); assert(s.view==HOME);   // the cross goes back
     }
     // Every advertised optional control is present, none appear for a legacy host.
     reset(); host_features=0; view(SETTINGS); scene_take();

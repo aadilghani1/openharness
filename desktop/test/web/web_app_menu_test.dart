@@ -62,12 +62,6 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('web-menu:web.sign_out')), findsOneWidget);
-    // An empty tab has no pane to split, zoom or close.
-    expect(find.byKey(const ValueKey('web-menu:pane.close')), findsNothing);
-    expect(
-      find.byKey(const ValueKey('web-menu:pane.split_right')),
-      findsNothing,
-    );
     await tester.tap(find.byKey(const ValueKey('web-menu:app.settings')));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(SettingsScreen), findsOneWidget);

@@ -113,7 +113,8 @@ behavior (e.g. `SwarmScreen.chrome` / `WorkspaceChrome` in `state/workspace_chro
 which runs the same `_commands` table keys use, adds a bar over the picker, and turns off
 `KeyHints` — `widgets/key_hints.dart`, absent means hints shown). Below
 `WorkspaceChrome.compactBelow` (web: 720px, a phone) the workspace goes compact: a tab
-switcher replaces the tab row and `PaneGrid.soloFocused` draws only the focused harness —
+switcher replaces the tab row, `WorkspaceChrome.compactFooter` replaces the status bar with one
+dropdown plus Share (hidden while the on-screen keyboard is up), and `PaneGrid.soloFocused` draws only the focused harness —
 without touching zoom or the synced layout, so the same desk keeps its grid on a computer. Do not change desktop behavior for the
 web, and do not copy shared screens into `lib/web/` — add a seam instead.
 

@@ -33,6 +33,38 @@ class WorkspacePicker {
   final VoidCallback close;
 }
 
+/// One entry of the workspace footer as a host composition sees it: what it
+/// names, what it currently reads, and the same action its footer link runs.
+class WorkspaceFooterItem {
+  const WorkspaceFooterItem({
+    required this.title,
+    this.detail = '',
+    this.onPressed,
+  });
+
+  final String title;
+  final String detail;
+  final VoidCallback? onPressed;
+}
+
+/// The workspace footer's content, for a host that lays it out its own way.
+class WorkspaceFooter {
+  const WorkspaceFooter({
+    required this.summary,
+    required this.items,
+    this.share,
+  });
+
+  /// One line standing for the whole footer, e.g. `MacBook · feat/web`.
+  final String summary;
+
+  /// Subscriptions, then the focused harness's machine, project, branch, PR.
+  final List<WorkspaceFooterItem> items;
+
+  /// The Share action, when the Share button is enabled.
+  final WorkspaceFooterItem? share;
+}
+
 /// What a host composition adds to the shared workspace. Desktop passes none;
 /// the web build (`lib/web/`) puts its mouse-first menu before the tabs, a bar
 /// over the picker, and names a machine for New Harness. [leadingWidth] is reserved before the tabs
@@ -49,6 +81,7 @@ class WorkspaceChrome {
     this.scrollsTabsByArrows = false,
     this.attachesFiles = false,
     this.compactTabs,
+    this.compactFooter,
     this.compactBelow = 0,
   });
 
@@ -85,5 +118,10 @@ class WorkspaceChrome {
   /// harness is drawn — a phone has room for neither a tab row nor a grid.
   final Widget Function(BuildContext context, WorkspaceCommands commands)?
   compactTabs;
+
+  /// Replaces the status bar while compact. It is handed the footer's content
+  /// and owns its own height — zero hides it.
+  final Widget Function(BuildContext context, WorkspaceFooter footer)?
+  compactFooter;
   final double compactBelow;
 }
