@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
 import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
@@ -25,7 +26,6 @@ import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import 'dotenv/config'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync, renameSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -66,7 +66,7 @@ import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
-import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
 import { ZooLessonReporter } from './lib/zooLessons.js'
 import { DAEMONS_OFF, DAEMONS_OFF_DETAIL, DaemonsSwitch, localKillSwitch, zooPassthrough, type ZooRead } from './lib/daemonsSwitch.js'
@@ -2185,6 +2185,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const identityFile = join(env.ADAPTER_DATA_DIR, 'e2e', 'identity.json')
     try { renameSync(identityFile, `${identityFile}.removed-${Date.now()}`) } catch { /* already gone */ }
   }
+  const autonomousEnv = session?.autonomousEnv ?? env.AUTONOMOUS_ENV
   const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
@@ -2193,7 +2194,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error('[runtime-profile] connect reconcile failed:', err instanceof Error ? err.message : err)
     })
     onBackendConnected()
-  }, computerId())
+  }, computerId(), autonomousEnv)
   backendRef = backend
   backend.viewerTargetProvider = (agentId) => dshViewers.forwardingUrl(agentId)
 
@@ -4040,13 +4041,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     identity: sharingIdentity.getIdentity(),
     grants: new HarnessGrantStore(join(env.ADAPTER_DATA_DIR, 'harness-shares.json')),
     collaboration: new HarnessCollaborationStore(join(env.ADAPTER_DATA_DIR, 'harness-collaboration.json')),
-    autonomousEnv: env.AUTONOMOUS_ENV,
+    autonomousEnv,
     terminals, resolveAgent: (id) => registry.resolve(id),
     send: (id, type, payload) => backend.sendObserver(id, type, payload),
     publish: (method, path, body) => proxyBackend(method, path, body),
     watchViewer: (id, send) => sharedViewers.watch(id, send),
   })
-  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, env.AUTONOMOUS_ENV, async () => {
+  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, autonomousEnv, async () => {
     const result = await proxyBackend('GET', '/api/harness-shares')
     if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
@@ -4479,6 +4480,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // none could be opened; clients then stay on this port.
       localSocket: daemonBoot.localSocket?.path ?? null,
       backendUrl: env.BACKEND_WS_URL,
+      autonomousEnv,
+      dataDir: env.ADAPTER_DATA_DIR,
+      authDir: AUTH_DIR,
       webUrl: env.WEB_URL,
       connected: backend.isConnected(),
       deviceTransportConnected: backend.hasCommander(),
@@ -7427,18 +7431,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  * the one fact that tells a daemon on THIS sign-in from one left over from the previous account (see
  * startCommand). Null when the daemon does not say.
  */
-async function runningDaemonStatus(): Promise<{ version: string; sessions: number; machineId: string | null; connected: boolean } | null> {
+async function runningDaemonStatus(): Promise<{
+  version: string; sessions: number; machineId: string | null; connected: boolean
+  backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
+  dataDir: string | null; authDir: string | null
+} | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
       ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
     if (!body) return null
-    const status = body as { version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown } | null
+    const status = body as {
+      version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
+      backendUrl?: unknown; autonomousEnv?: unknown; signedIn?: unknown; dataDir?: unknown; authDir?: unknown
+    } | null
     const version = typeof status?.version === 'string' && status.version ? status.version : VERSION
     const sessions = Array.isArray(status?.sessions) ? status.sessions.length : 0
     const machineId = typeof status?.machineId === 'string' && status.machineId ? status.machineId : null
     // Missing on a daemon too old to report it — read as connected, as the desktop app does.
     const connected = status?.connected !== false
-    return { version, sessions, machineId, connected }
+    return {
+      version, sessions, machineId, connected,
+      backendUrl: typeof status?.backendUrl === 'string' ? status.backendUrl : null,
+      autonomousEnv: typeof status?.autonomousEnv === 'string' ? status.autonomousEnv : null,
+      signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
+      dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
+      authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+    }
   } catch {
     return null
   }
@@ -7454,6 +7472,7 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
 }): void {
   const row = (k: string, v: string): string => `   ${k.padEnd(10)} ${v}`
   const rule = '  ' + '─'.repeat(37)
@@ -7468,7 +7487,10 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
-  console.log(row('backend', readAuthSession() ? env.BACKEND_WS_URL : 'not signed in · harness login'))
+  console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
+  console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
+  if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
+  if (opts.connection.authDir) console.log(row('auth', tildify(opts.connection.authDir)))
   console.log(row('agents', `${opts.sessions} available`))
   console.log(row('pid', String(opts.pid)))
   console.log(row('logs', tildify(LOG_FILE)))
@@ -7593,6 +7615,13 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     version: daemonStatus?.version ?? VERSION,
+    connection: {
+      backendUrl: daemonStatus?.backendUrl ?? env.BACKEND_WS_URL,
+      autonomousEnv: daemonStatus?.autonomousEnv ?? session?.autonomousEnv ?? env.AUTONOMOUS_ENV,
+      signedIn: daemonStatus?.signedIn ?? session !== null,
+      dataDir: daemonStatus?.dataDir ?? env.ADAPTER_DATA_DIR,
+      authDir: daemonStatus?.authDir ?? AUTH_DIR,
+    },
   })
   if (!session) {
     console.log('  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.')
@@ -8417,6 +8446,7 @@ async function status(): Promise<void> {
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
+  const signedIn = daemonStatus?.signedIn ?? session !== null
   if (!alive) registry.load()
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
@@ -8430,7 +8460,7 @@ async function status(): Promise<void> {
       ? '○ stopped'
       : safeMode
         ? `◍ safe mode · start-up failed on v${safeMode.version} — waiting for a fixed build (${safeMode.error.split('\n')[0]})`
-      : !session
+      : !signedIn
         ? '● running · this computer only (not signed in)'
         : daemonStatus == null
           ? '● running · not answering yet'
@@ -8456,6 +8486,15 @@ async function status(): Promise<void> {
         ? deviceRegistration(peekIdentityPub(), new DeviceLogStore().read(), identitySpent())
         : !peekIdentityPub() && identitySpent() ? 'removed' : null,
     ) ?? undefined,
+    // A status command can run with different shell settings from the daemon. Report the daemon's
+    // connection, not those of this short-lived caller; missing fields on older daemons stay unknown.
+    connection: {
+      backendUrl: alive ? daemonStatus?.backendUrl ?? null : env.BACKEND_WS_URL,
+      autonomousEnv: alive ? daemonStatus?.autonomousEnv ?? null : session?.autonomousEnv ?? env.AUTONOMOUS_ENV,
+      signedIn,
+      dataDir: alive ? daemonStatus?.dataDir ?? null : env.ADAPTER_DATA_DIR,
+      authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
+    },
   })
   process.exit(0)
 }
