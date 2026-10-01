@@ -25,7 +25,31 @@ import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixture
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
-import { STRICT_DOWN_TYPES } from './lib/e2ee/applicationFrames.js'
+import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import type { CloseAgentService } from './lib/closeAgentService.js'
+
+describe('safe session close RPC', () => {
+  it('requires encrypted remote frames and never blocks unrelated inventory while saving', async () => {
+    const socket = new BackendSocket('fixture')
+    const frames: any[] = []
+    socket.registerLocalClient('local:close', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let finish!: (value: { closed: true }) => void
+    const request = vi.fn(() => new Promise<{ closed: true }>(resolve => { finish = resolve }))
+    socket.closeAgentService = { request, dispose() {} } as unknown as CloseAgentService
+    const payload = { requestId: 'closing', agentId: 'fixture', sessionId: 'history', createdAt: '2026-09-30T12:00:00.000Z', mode: 'idle' }
+    expect(encryptDownFrame('agent_close')).toBe(true)
+    expect(encryptRpcResult('agent_close_result')).toBe(true)
+    await (socket as any).dispatchDown({ type: 'agent_close', payload }, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    socket.handleLocalFrame('local:close', { type: 'agent_close', payload })
+    socket.handleLocalFrame('local:close', { type: 'agents_list', payload: { requestId: 'inventory' } })
+    await vi.waitFor(() => expect(frames.some(f => f.type === 'agents_list_result')).toBe(true))
+    expect(frames.some(f => f.type === 'agent_close_result')).toBe(false)
+    finish({ closed: true })
+    await vi.waitFor(() => expect(frames.find(f => f.type === 'agent_close_result')?.payload).toMatchObject({ requestId: 'closing', closed: true }))
+    await socket.stop()
+  })
+})
 
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -1178,7 +1202,7 @@ describe('BackendSocket outbound queue', () => {
     const system = vi.spyOn(machineResources, 'readMachineResources')
     const socket = new BackendSocket('token')
     let finish!: (value: { sampledAt: string; agents: [] }) => void
-    socket.harnessResourcesReader = vi.fn(() => new Promise(resolve => { finish = resolve }))
+    socket.harnessResourcesReader = vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve }))
     socket.runtimeModelsProvider = async () => []
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:monitor', {

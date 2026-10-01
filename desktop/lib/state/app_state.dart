@@ -582,6 +582,11 @@ class AppNotifier extends ChangeNotifier {
   final _agentRenames = <(String, String), _AgentRename>{};
   final _agentStops = <(String, String), _AgentStop>{};
   final _agentPauses = <(String, String), Future<String?>>{};
+
+  /// The workspace supplies presentation; the model owns target identity and completion.
+  Future<bool> Function(List<(String, Agent)>)? reviewSessionClose;
+  final _viewCloseRequests = <String, Future<void>>{};
+  final _closingViewAgents = <(String, String), int>{};
   final _agentForks = <(String, String), AgentForkAttempt>{};
   final _agentRestarts = <(String, String), AgentRestartAttempt>{};
   int _machineEditRevision = 0;
@@ -1718,6 +1723,210 @@ class AppNotifier extends ChangeNotifier {
     for (final pane in removed.panes) {
       if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
     }
+  }
+
+  /// Explicit user Close. Layout cleanup, tab switching, sign-out and moving a
+  /// tile continue using their existing view-only operations.
+  Future<void> requestCloseSwarm(String id) {
+    final tab = swarms.where((s) => s.id == id).firstOrNull;
+    if (tab == null) return Future.value();
+    final captured = tab.panes.toList();
+    return _requestViewClose('tab:$id', tab, captured, () async {
+      if (tab.panes.length != captured.length ||
+          !captured.every(tab.panes.contains)) {
+        return;
+      }
+      await closeSwarm(id);
+    });
+  }
+
+  Future<void> requestClosePane(int paneId) {
+    final tab = activeSwarm;
+    final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
+    if (pane == null) return Future.value();
+    if (tab.isCompanions) return requestCloseSwarm(tab.id);
+    final captured = tab.panes
+        .where(
+          (p) =>
+              identical(p, pane) ||
+              (!pane.isWeb &&
+                  p.isWeb &&
+                  p.machineId == pane.machineId &&
+                  p.ownerAgentId == pane.agentId),
+        )
+        .toList();
+    return _requestViewClose('pane:${tab.id}:$paneId', tab, captured, () async {
+      if (tab.panes.contains(pane)) await closePane(paneId, swarmId: tab.id);
+    });
+  }
+
+  Future<void> _requestViewClose(
+    String key,
+    Swarm tab,
+    List<TerminalPane> closing,
+    Future<void> Function() finish,
+  ) {
+    if (_disposed) return Future.value();
+    if (_viewCloseRequests[key] case final pending?) return pending;
+    final targets = <(String, Agent)>[];
+    final seen = <(String, String)>{};
+    for (final pane in closing) {
+      final id = pane.agentId;
+      if (pane.isWeb || id == null || !seen.add((pane.machineId, id))) continue;
+      // The same pane object may belong to several tabs. Only its last view
+      // closes the underlying session, even when another tab is hidden.
+      final remains = swarms.any(
+        (other) => other.panes.any(
+          (p) =>
+              !p.isWeb &&
+              p.machineId == pane.machineId &&
+              p.agentId == id &&
+              (!identical(other, tab) || !closing.contains(p)),
+        ),
+      );
+      if (remains) continue;
+      final machine = stateOf(pane.machineId);
+      final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
+      if (machine?.machine.isShared == true ||
+          agent == null ||
+          agent.isStopped ||
+          !agent.terminalAvailable ||
+          !agent.closeSupported) {
+        continue;
+      }
+      targets.add((pane.machineId, agent));
+    }
+    final revision = _authRevision;
+    for (final (machine, agent) in targets) {
+      final target = (machine, agent.id);
+      _closingViewAgents[target] = (_closingViewAgents[target] ?? 0) + 1;
+    }
+    final completion = Completer<void>();
+    final request = completion.future;
+    _viewCloseRequests[key] = request;
+    unawaited(
+      (() async {
+        try {
+          if (targets.isNotEmpty &&
+              (reviewSessionClose == null ||
+                  !await reviewSessionClose!(targets))) {
+            return;
+          }
+          if (!_authWorkCurrent(revision) || !swarms.contains(tab)) return;
+          await finish();
+        } catch (_) {
+          if (_authWorkCurrent(revision)) {
+            _lastError = 'Could not close this session safely. Check its state and try again.';
+            _lastErrorRetryable = true;
+            notifyListeners();
+          }
+        } finally {
+          for (final (machine, agent) in targets) {
+            final target = (machine, agent.id);
+            final remaining = (_closingViewAgents[target] ?? 1) - 1;
+            if (remaining == 0) {
+              _closingViewAgents.remove(target);
+            } else {
+              _closingViewAgents[target] = remaining;
+            }
+          }
+          if (identical(_viewCloseRequests[key], request)) {
+            _viewCloseRequests.remove(key);
+          }
+          completion.complete();
+        }
+      })(),
+    );
+    return request;
+  }
+
+  /// Capture once before showing a prompt. Old/replaced targets cannot inherit its answer.
+  Future<Map<String, dynamic>> Function(String) prepareSessionClose(
+    String machineId,
+    Agent agent,
+  ) {
+    final machine = stateOf(machineId);
+    final revision = _authRevision;
+    final removal = machine?._agentRemovals[agent.id];
+    return (mode) async {
+      bool sameAgent(Agent? current) =>
+          current != null &&
+          current.createdAt == agent.createdAt &&
+          current.sessionId == agent.sessionId;
+      final current = machine?.agents
+          .where((a) => a.id == agent.id)
+          .firstOrNull;
+      if (machine == null ||
+          machine.machine.isShared ||
+          !_machineWorkCurrent(machine, revision) ||
+          machine._agentRemovals[agent.id] != removal ||
+          !sameAgent(current)) {
+        return {
+          'error': 'AGENT_CHANGED',
+          'detail': 'The session changed. Check it before closing.',
+        };
+      }
+      if (agent.createdAt == null || !agent.closeSupported) {
+        return {
+          'error': 'UNSUPPORTED',
+          'detail': 'Update the Harness CLI on this machine to close saved sessions safely.',
+        };
+      }
+      Map<String, dynamic> result;
+      try {
+        result = await _conn(machineId).request(
+          'agent_close',
+          payload: {
+            'agentId': agent.id,
+            'sessionId': agent.sessionId ?? '',
+            'createdAt': agent.createdAt!.toUtc().toIso8601String(),
+            'mode': mode,
+          },
+        );
+      } catch (_) {
+        // A lost reply never causes a second Stop. Authoritative saved inventory
+        // can confirm it; otherwise keep the pane and report uncertainty.
+        await reloadMachineData(machineId);
+        final observed = machine.agents
+            .where((a) => a.id == agent.id)
+            .firstOrNull;
+        if (_machineWorkCurrent(machine, revision) &&
+            sameAgent(observed) &&
+            observed!.isStopped) {
+          return {'closed': true};
+        }
+        return {
+          'error': 'CLOSE_UNCONFIRMED',
+          'detail': 'Could not confirm the close. Check the machine connection and try again.',
+        };
+      }
+      if (!_machineWorkCurrent(machine, revision)) {
+        return {'error': 'AGENT_CHANGED'};
+      }
+      final observed = machine.agents
+          .where((a) => a.id == agent.id)
+          .firstOrNull;
+      if (observed != null && !sameAgent(observed)) {
+        return {'error': 'AGENT_CHANGED'};
+      }
+      if (result['closed'] == true &&
+          (observed == null || !observed.isStopped)) {
+        _upsertAgent(
+          machine,
+          agent.copyWith(
+            status: 'stopped',
+            terminalAvailable: false,
+            clearClosePlan: true,
+          ),
+        );
+        notifyListeners();
+      }
+      if (result['cancelled'] == true && observed != null) {
+        _upsertAgent(machine, observed.copyWith(clearClosePlan: true));
+        notifyListeners();
+      }
+      return result;
+    };
   }
 
   void reopenClosedSwarm({String? historyId}) {
@@ -3691,7 +3900,9 @@ class AppNotifier extends ChangeNotifier {
     // the log existed), and every machine it names is trusted with no password.
     if (signedIn) {
       if (_deviceLog case final log?) {
-        unawaited(log.register(freshSignIn: viewer?.auth.consumeFreshSignIn() ?? false));
+        unawaited(
+          log.register(freshSignIn: viewer?.auth.consumeFreshSignIn() ?? false),
+        );
       }
     }
     try {
@@ -5646,6 +5857,10 @@ class AppNotifier extends ChangeNotifier {
           prev.project != agent.project ||
           prev.gitContext != agent.gitContext ||
           prev.lastActivityAt != agent.lastActivityAt ||
+          prev.createdAt != agent.createdAt ||
+          prev.closeSupported != agent.closeSupported ||
+          prev.closePlanState != agent.closePlanState ||
+          prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
           prev.tokensUsed != agent.tokensUsed ||
           prev.outputStats != agent.outputStats ||
@@ -5807,7 +6022,10 @@ class AppNotifier extends ChangeNotifier {
     final log = _deviceLog;
     if (log == null) return;
     final now = DateTime.now();
-    if (_deviceLogReadAt case final last? when now.difference(last) < const Duration(seconds: 30)) return;
+    if (_deviceLogReadAt case final last?
+        when now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
     _deviceLogReadAt = now;
     unawaited(log.refresh());
   }
@@ -5857,7 +6075,9 @@ class AppNotifier extends ChangeNotifier {
 
   /// Take [pub] out of the account on every device. Null when done, else why not.
   Future<String?> removeDevice(String pub) async {
-    final error = _deviceLog != null ? await _deviceLog!.remove(pub) : await api.daemonRemoveDevice(pub);
+    final error = _deviceLog != null
+        ? await _deviceLog!.remove(pub)
+        : await api.daemonRemoveDevice(pub);
     if (error == null) newDevices.removeWhere((d) => d.pub == pub);
     devicesRevision++;
     notifyListeners();
@@ -5872,7 +6092,9 @@ class AppNotifier extends ChangeNotifier {
       final r = await log.rebaseline(confirm: confirm);
       result = r == null ? null : DevicesRebaseline.fromViewer(r);
     } else {
-      result = DevicesRebaseline.fromDaemon(await api.daemonRebaselineDevices(confirm: confirm));
+      result = DevicesRebaseline.fromDaemon(
+        await api.daemonRebaselineDevices(confirm: confirm),
+      );
     }
     if (confirm) {
       devicesRevision++;
@@ -7706,6 +7928,17 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> _removeAgent(MachineState machine, String agentId) async {
+    // Repeated retained-stop events must not invalidate the history refresh
+    // already in flight. There is no newer removal when nothing changed.
+    if (machine._agentRemovals.containsKey(agentId) &&
+        !machine.agents.any((agent) => agent.id == agentId) &&
+        !allPanes.any(
+          (pane) =>
+              pane.machineId == machine.machine.machineId &&
+              (pane.agentId == agentId || pane.ownerAgentId == agentId),
+        )) {
+      return;
+    }
     final stop = _agentStops[(machine.machine.machineId, agentId)];
     final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
     confirmedStop?.confirmed = true;
@@ -7737,6 +7970,9 @@ class AppNotifier extends ChangeNotifier {
           (pane.agentId == agentId ||
               (pane.isWeb && pane.ownerAgentId == agentId));
       if (!owned) continue;
+      // The explicit Close owns these panes until its disk-safe acknowledgement,
+      // so it can preserve recently-closed layout and composer history normally.
+      if (_closingViewAgents.containsKey((machineId, agentId))) continue;
       for (final swarm in swarms) {
         if (swarm.panes.contains(pane)) {
           affected.add(swarm);
@@ -9552,7 +9788,12 @@ class AppNotifier extends ChangeNotifier {
     }
     final now = DateTime.now();
     final last = _lastAgentTouch;
-    if (last != null &&
+    final queuedClose = machine.agents.any(
+      (a) => a.id == agentId && a.closePlanState != null,
+    );
+    if (!queuedClose &&
+        !_closingViewAgents.containsKey((machineId, agentId)) &&
+        last != null &&
         last.machineId == machineId &&
         last.agentId == agentId &&
         now.difference(last.at) < agentTouchDebounce) {
@@ -11714,16 +11955,20 @@ class AppNotifier extends ChangeNotifier {
   /// A pin past the end of a shrunken grid is HELD, not dropped: the tiles that
   /// closed can come back, and forgetting the pin the moment the grid got small
   /// would quietly undo a choice the user never revisited.
-  void _settlePins() {
-    final pinned = panes.where(isPanePinned).toList()
-      ..sort((a, b) => pinnedSlotFor(a)!.compareTo(pinnedSlotFor(b)!));
+  void _settlePins([Swarm? target]) {
+    final tab = target ?? activeSwarm;
+    final members = tab.panes;
+    int? slot(TerminalPane pane) =>
+        hasNavigationRail ? pane.pinnedSlot : tab.pinnedSlots[pane.id];
+    final pinned = members.where((pane) => slot(pane) != null).toList()
+      ..sort((a, b) => slot(a)!.compareTo(slot(b)!));
     for (final pane in pinned) {
-      final want = pinnedSlotFor(pane)!;
-      if (want >= panes.length) continue;
-      final at = panes.indexOf(pane);
+      final want = slot(pane)!;
+      if (want >= members.length) continue;
+      final at = members.indexOf(pane);
       if (at == want) continue;
-      panes.removeAt(at);
-      panes.insert(want, pane);
+      members.removeAt(at);
+      members.insert(want, pane);
     }
   }
 
@@ -11847,11 +12092,19 @@ class AppNotifier extends ChangeNotifier {
     return true;
   }
 
-  Future<void> closePane(int paneId, {bool persist = true}) async {
-    final pane = panes.where((p) => p.id == paneId).firstOrNull;
+  Future<void> closePane(
+    int paneId, {
+    bool persist = true,
+    String? swarmId,
+  }) async {
+    final tab = swarmId == null
+        ? activeSwarm
+        : swarms.where((s) => s.id == swarmId).firstOrNull;
+    if (tab == null) return;
+    final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
-    if (activeSwarm.isCompanions) {
-      await closeSwarm(activeSwarmId, persist: persist);
+    if (tab.isCompanions) {
+      await closeSwarm(tab.id, persist: persist);
       return;
     }
     if (pane.isWeb) {
@@ -11864,7 +12117,6 @@ class AppNotifier extends ChangeNotifier {
         _dismissedViewers[_viewerKey(pane.machineId, owner)] = viewerState;
       }
     }
-    final tab = activeSwarm;
     bool closesWithPane(TerminalPane candidate) =>
         candidate == pane ||
         (!pane.isWeb &&
@@ -11891,7 +12143,7 @@ class AppNotifier extends ChangeNotifier {
       _rememberClosed(
         ClosedAgent(
           pane,
-          activeSwarm,
+          tab,
           historyId: 'closed-${_nextClosedHistoryId++}',
           name: agent?.name ?? pane.session?.agentName ?? pane.agentId!,
           machineName: machine?.machine.displayName ?? pane.machineId,
@@ -11901,21 +12153,21 @@ class AppNotifier extends ChangeNotifier {
     }
     // Only a close that moves the focus is worth telling the daemon about: a
     // background tile going away changes nothing the dial can see.
-    final wasFocused = focusedPaneId == paneId;
-    activeSwarm.remove(pane);
+    final wasFocused = identical(activeSwarm, tab) && focusedPaneId == paneId;
+    tab.remove(pane);
     // A harness's viewer lives beside its terminal and nowhere else: closing
     // the terminal in this tab takes the viewer in this tab with it. The
     // viewer's own close above is different — it is a choice about the page.
     if (!pane.isWeb && pane.agentId != null) {
-      for (final viewer in activeSwarm.panes.toList()) {
+      for (final viewer in tab.panes.toList()) {
         if (viewer.isWeb &&
             viewer.machineId == pane.machineId &&
             viewer.ownerAgentId == pane.agentId) {
-          activeSwarm.remove(viewer);
+          tab.remove(viewer);
         }
       }
     }
-    _settlePins();
+    _settlePins(tab);
     if (persist) _persistLayout();
     selectedMachineId = focusedPane?.machineId;
     if (wasFocused) _announceAppFocus();
@@ -13459,9 +13711,17 @@ class AppNotifier extends ChangeNotifier {
         // Only this computer's own daemon says this (a viewer build has no daemon, and a machine's
         // frame must not be able to raise a notice here).
         if (viewer == null) {
-          final pub = payload['pub'], label = payload['label'], kind = payload['kind'];
+          final pub = payload['pub'],
+              label = payload['label'],
+              kind = payload['kind'];
           if (pub is String && kind is String) {
-            _announceDevice(NewDeviceNotice(pub: pub, label: label is String ? label : '', kind: kind));
+            _announceDevice(
+              NewDeviceNotice(
+                pub: pub,
+                label: label is String ? label : '',
+                kind: kind,
+              ),
+            );
           }
         }
         break;

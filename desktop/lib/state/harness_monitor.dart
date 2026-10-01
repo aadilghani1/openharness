@@ -29,6 +29,31 @@ class HarnessMonitor extends ChangeNotifier {
         : null;
   }
 
+  /// Shared-server RSS belongs to the server, not to each conversation.
+  /// Count it once per machine/profile and label it separately in the panel.
+  List<HarnessResources> get sharedReadings {
+    final rows = live;
+    return [
+      for (final entry in _samples.entries)
+        if (identical(app.stateOf(entry.key), entry.value.$1))
+          for (final shared in entry.value.$2.shared)
+            if (rows.any(
+              (row) =>
+                  row.machineId == entry.key &&
+                  shared.$1.contains(row.agent.id),
+            ))
+              shared.$2,
+    ];
+  }
+
+  String? get sharedLabel {
+    final rows = sharedReadings;
+    if (rows.isEmpty) return null;
+    final known = rows.where((r) => r.memoryBytes != null).toList();
+    final memory = known.fold<double>(0, (sum, r) => sum + r.memoryBytes!);
+    return 'Shared Codex servers · ${formatHarnessMemory(known.isEmpty ? null : memory)}${known.isNotEmpty && known.length < rows.length ? '+' : ''} RAM';
+  }
+
   String get label {
     final rows = live;
     if (rows.isEmpty) return '0 live';
@@ -43,7 +68,18 @@ class HarnessMonitor extends ChangeNotifier {
           known++;
         }
       }
-      return (known == 0 ? null : total, known > 0 && known < rows.length);
+      final shared = sharedReadings;
+      for (final sample in shared) {
+        final n = value(sample);
+        if (n != null) {
+          total += n;
+          known++;
+        }
+      }
+      return (
+        known == 0 ? null : total,
+        known > 0 && known < rows.length + shared.length,
+      );
     }
 
     final memory = sum((r) => r.memoryBytes), cpu = sum((r) => r.cpuPercent);
@@ -51,7 +87,7 @@ class HarnessMonitor extends ChangeNotifier {
   }
 
   String get detail =>
-      'Harness Monitor — $label\nLive sessions on connected machines. + means some readings are unavailable. ${HarnessResources.explanation}';
+      'Harness Monitor — $label\nLive sessions on connected machines. + means some readings are unavailable. ${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the total. These servers may also serve sessions outside Harness.'}';
 
   void start() {
     if (_started || _disposed) return;

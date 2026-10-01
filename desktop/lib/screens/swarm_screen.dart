@@ -24,6 +24,7 @@ import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart' show confirmSwitchAnyway;
+import '../widgets/session_close_dialog.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -573,6 +574,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
     _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
+    app.reviewSessionClose = _reviewSessionClose;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -762,6 +764,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   @override
   void dispose() {
     _harnessMonitor.dispose();
+    if (app.reviewSessionClose == _reviewSessionClose) {
+      app.reviewSessionClose = null;
+    }
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
@@ -1788,7 +1793,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'text': _harnessMonitor.label,
         'label': _harnessMonitor.detail,
         'detail': _harnessMonitor.detail,
-        'segments': [{'text': _harnessMonitor.label}],
+        'segments': [
+          {'text': _harnessMonitor.label},
+        ],
         'interactive': _shortcutsEnabled,
       },
       'footerCovered':
@@ -2264,9 +2271,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'select':
         if (args['id'] is String) app.selectSwarm(args['id']);
       case 'close':
-        if (args['id'] is String) await app.closeSwarm(args['id']);
+        if (args['id'] is String) await app.requestCloseSwarm(args['id']);
       case 'closeActive':
-        await app.closeSwarm(app.activeSwarmId);
+        await app.requestCloseSwarm(app.activeSwarmId);
       case 'rename':
         // Acknowledge after the form opens so the titlebar can hand its native
         // keyboard focus to Flutter while the user edits the name.
@@ -2387,7 +2394,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
           }
         }
       case 'closePane':
-        if (app.focusedPane case final pane?) unawaited(app.closePane(pane.id));
+        if (app.focusedPane case final pane?) {
+          unawaited(app.requestClosePane(pane.id));
+        }
       case 'findTerminal':
         app.focusedPane?.session?.find(TerminalFindAction.open);
       case 'findNext':
@@ -2475,6 +2484,77 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     }
     if (restoreEntry) await _ensureEmptyEntry();
+  }
+
+  Future<bool> _reviewSessionClose(List<(String, Agent)> targets) async {
+    final choices =
+        <(Agent, Future<Map<String, dynamic>> Function(String), String)>[];
+    Future<String?> choose(
+      Agent agent,
+      String activity, {
+      String? error,
+    }) async {
+      String? result;
+      _closeHarnessControls(restoreFocus: false);
+      await _dialog(() async {
+        result = await showSessionCloseDialog(
+          context,
+          agent,
+          activity,
+          keymap: _keymap,
+          error: error,
+        );
+      }, restoreEntry: false);
+      return result;
+    }
+
+    // Review every working session before stopping any member of a whole tab.
+    for (final (machine, agent) in targets) {
+      if (!mounted) return false;
+      final request = app.prepareSessionClose(machine, agent);
+      final state = await request('inspect');
+      if (!mounted) return false;
+      if (state['error'] != null) {
+        await choose(
+          agent,
+          'unknown',
+          error:
+              state['detail'] as String? ??
+              'Could not check this session. It has been kept open.',
+        );
+        return false;
+      }
+      final activity = state['activity'] as String? ?? 'unknown';
+      final mode = activity == 'idle' ? 'idle' : await choose(agent, activity);
+      if (mode == null) return false;
+      choices.add((agent, request, mode));
+    }
+    for (final (agent, request, mode) in choices) {
+      if (!mounted) return false;
+      var result = await request(mode);
+      if (!mounted) return false;
+      // Work may have begun while the person was reviewing another session.
+      if (result['error'] == 'SESSION_NOT_IDLE') {
+        final next = await choose(
+          agent,
+          result['activity'] as String? ?? 'unknown',
+        );
+        if (next == null) return false;
+        result = await request(next);
+      }
+      if (!mounted) return false;
+      if (result['closed'] != true && result['deferred'] != true) {
+        await choose(
+          agent,
+          'unknown',
+          error:
+              result['detail'] as String? ??
+              'Could not close this session safely. Its saved history is kept.',
+        );
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _rename(String id) => _dialog(() async {
@@ -5962,7 +6042,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final Map<ShortcutAction, VoidCallback> _actionHandlers = {
     ShortcutAction.newSwarm: _newTab,
     ShortcutAction.reopenClosedSwarm: app.reopenClosed,
-    ShortcutAction.closeSwarm: () => app.closeSwarm(app.activeSwarmId),
+    ShortcutAction.closeSwarm: () => app.requestCloseSwarm(app.activeSwarmId),
     ShortcutAction.renameSwarm: () => _rename(app.activeSwarmId),
     ShortcutAction.nextSwarm: () => app.stepSwarm(1),
     ShortcutAction.previousSwarm: () => app.stepSwarm(-1),
@@ -5990,7 +6070,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ShortcutAction.addAgent: _addAgent,
     ShortcutAction.closePane: () {
       if (app.focusedPane case final pane?) {
-        unawaited(app.closePane(pane.id));
+        unawaited(app.requestClosePane(pane.id));
       }
     },
     ShortcutAction.newAgent: _newAgent,
@@ -7010,8 +7090,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final download = kIsWeb && !_compact(context);
       final downloadWidth = download ? available * .16 : 0.0;
       final usage = _subscriptionUsage;
-      final resourceBudget = math.max(0.0, available - shareWidth - downloadWidth -
-          (!kIsWeb && _slotShown ? 44 : 0) - cell.width * 5);
+      final resourceBudget = math.max(
+        0.0,
+        available -
+            shareWidth -
+            downloadWidth -
+            (!kIsWeb && _slotShown ? 44 : 0) -
+            cell.width * 5,
+      );
       final monitorWidth = resourceBudget * .55;
       final usageWidth = constraints.maxWidth < 1050
           ? 0.0
@@ -7083,11 +7169,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           : null,
                       builder: (context, emphasized) => Padding(
                         padding: EdgeInsets.symmetric(horizontal: cell.width),
-                        child: Text(
-                          _harnessMonitor.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: workspaceBarTextStyle(emphasized: emphasized),
+                        child: SizedBox(
+                          height: workspaceBarControlHeight(context),
+                          child: Center(
+                            widthFactor: 1,
+                            child: Text(
+                              _harnessMonitor.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: workspaceBarTextStyle(
+                                emphasized: emphasized,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -7300,7 +7394,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             final armed = _middleDownTab;
                             _middleDownTab = null;
                             if (armed == swarm.id) {
-                              unawaited(app.closeSwarm(swarm.id));
+                              unawaited(app.requestCloseSwarm(swarm.id));
                             }
                           },
                           child: DesktopWorkspaceTab(
@@ -7322,7 +7416,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 ? () => app.selectSwarm(swarm.id)
                                 : null,
                             onClose: _shortcutsEnabled
-                                ? () => unawaited(app.closeSwarm(swarm.id))
+                                ? () =>
+                                      unawaited(app.requestCloseSwarm(swarm.id))
                                 : null,
                             activity: activity == null || activity.mark.isEmpty
                                 ? null

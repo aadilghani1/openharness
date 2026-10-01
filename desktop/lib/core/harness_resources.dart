@@ -36,9 +36,11 @@ class MachineHarnessResources {
   const MachineHarnessResources({
     required this.sampledAt,
     required this.agents,
+    this.shared = const [],
   });
   final DateTime sampledAt;
   final Map<String, HarnessResources> agents;
+  final List<(Set<String>, HarnessResources)> shared;
 
   static MachineHarnessResources? parse(Object? value) {
     if (value is! Map ||
@@ -57,6 +59,17 @@ class MachineHarnessResources {
     return MachineHarnessResources(
       sampledAt: time,
       agents: Map.unmodifiable(rows),
+      shared: List.unmodifiable([
+        if (value['shared'] is List)
+          for (final row in value['shared'] as List)
+            if (row is Map<String, dynamic> &&
+                row['kind'] == 'codex' &&
+                row['agentIds'] is List)
+              (
+                (row['agentIds'] as List).whereType<String>().toSet(),
+                HarnessResources.fromJson(row),
+              ),
+      ]),
     );
   }
 }

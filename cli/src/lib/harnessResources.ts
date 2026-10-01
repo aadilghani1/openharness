@@ -1,9 +1,13 @@
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { env } from '../config/env.js'
 import { promisify } from 'node:util'
 import type { ProcessIdentity } from './terminalTypes.js'
 
 const exec = promisify(execFile)
-type Agent = { agentId: string; processIdentity?: ProcessIdentity | null }
+type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null }
+export type SharedResourceRoot = { pid: number; start: string; agentIds: string[] }
 export interface ResourceProcess {
   pid: number
   parent: number
@@ -20,6 +24,7 @@ export interface HarnessResource {
 export interface HarnessResources {
   sampledAt: string
   agents: HarnessResource[]
+  shared?: Array<Omit<HarnessResource, 'agentId'> & { kind: 'codex'; agentIds: string[] }>
 }
 
 // Reuses Harness Monitor's single process-table / subtree approach. The daemon
@@ -51,10 +56,33 @@ async function sampleProcesses(): Promise<ResourceProcess[]> {
   return rows
 }
 
+/** Read one small identity file per active Codex profile. No transcript scan
+ * or server RPC. Its PID must still pass the same birth check as every agent. */
+async function sharedCodexRoots(agents: readonly Agent[]): Promise<SharedResourceRoot[]> {
+  const profiles = new Map<string, string[]>()
+  for (const agent of agents) {
+    if (agent.engine !== 'codex' || !agent.processIdentity) continue
+    const home = agent.codexHome || env.CODEX_HOME
+    profiles.set(home, [...profiles.get(home) ?? [], agent.agentId])
+  }
+  const roots: SharedResourceRoot[] = []
+  for (const [home, agentIds] of profiles) {
+    try {
+      const text = await readFile(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8')
+      if (text.length > 16384) continue
+      const value = JSON.parse(text)
+      if (Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.processStartTime === 'string') {
+        roots.push({ pid: value.pid, start: value.processStartTime.replace(/\s+/g, ' '), agentIds })
+      }
+    } catch { /* No running shared server, or its identity cannot be read. */ }
+  }
+  return roots
+}
+
 /** No timer, no retained history and no work until an owning client asks. */
 export function createHarnessResourcesReader(agents: () => readonly Agent[], deps = {
   sample: sampleProcesses, now: Date.now,
-}) {
+}, sharedRoots: (agents: readonly Agent[]) => Promise<SharedResourceRoot[]> = sharedCodexRoots) {
   let previous: { at: number; rows: Map<number, ResourceProcess> } | undefined
   let cached: { at: number; value: HarnessResources } | undefined
   let pending: Promise<HarnessResources> | undefined
@@ -76,18 +104,15 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
       owners.set(identity.pid, [...owners.get(identity.pid) ?? [], agent.agentId])
     }
     const elapsed = previous ? at - previous.at : 0
-    const readings = current.map(agent => {
-      const unknown: HarnessResource = { agentId: agent.agentId, memoryBytes: null, cpuPercent: null, processCount: null }
-      const root = agent.processIdentity?.pid
-      // Refuse stale PIDs and duplicate ownership rather than double-counting.
-      if (!root || owners.get(root)?.length !== 1 || owners.get(root)?.[0] !== agent.agentId) return unknown
+    const counted = new Set<number>()
+    const measure = (root: number) => {
       let memoryBytes = 0, cpuMs = 0, processCount = 0
       let cpuKnown = elapsed > 0 && elapsed <= 60_000
       const queue = [root], seen = new Set<number>()
       while (queue.length) {
         const pid = queue.pop()!
         if (seen.has(pid) || (pid !== root && owners.has(pid))) continue
-        seen.add(pid)
+        seen.add(pid); counted.add(pid)
         const row = byPid.get(pid)
         if (!row) continue
         memoryBytes += row.memoryBytes
@@ -97,11 +122,22 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
         else cpuKnown = false
         queue.push(...children.get(pid) ?? [])
       }
-      return { agentId: agent.agentId, memoryBytes, processCount,
-        cpuPercent: cpuKnown ? Math.round(cpuMs / elapsed * 1000) / 10 : null }
+      return { memoryBytes, processCount, cpuPercent: cpuKnown ? Math.round(cpuMs / elapsed * 1000) / 10 : null }
+    }
+    const readings = current.map(agent => {
+      const unknown: HarnessResource = { agentId: agent.agentId, memoryBytes: null, cpuPercent: null, processCount: null }
+      const root = agent.processIdentity?.pid
+      // Refuse stale PIDs and duplicate ownership rather than double-counting.
+      if (!root || owners.get(root)?.length !== 1 || owners.get(root)?.[0] !== agent.agentId) return unknown
+      return { agentId: agent.agentId, ...measure(root) }
     })
+    const shared: NonNullable<HarnessResources['shared']> = []
+    for (const root of await sharedRoots(current)) {
+      if (counted.has(root.pid) || byPid.get(root.pid)?.start !== root.start) continue
+      shared.push({ kind: 'codex', agentIds: root.agentIds, ...measure(root.pid) })
+    }
     previous = { at, rows: byPid }
-    const value = { sampledAt: new Date(at).toISOString(), agents: readings }
+    const value = { sampledAt: new Date(at).toISOString(), agents: readings, ...(shared.length ? { shared } : {}) }
     cached = { at, value }
     return value
   }

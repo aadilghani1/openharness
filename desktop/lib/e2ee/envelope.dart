@@ -27,6 +27,7 @@ const Set<String> encryptedDownTypes = {
   'grid_fleet_run',
   'grid_fleet_cancel',
   'machine_resources',
+  'agent_close',
   'phone_pair',
   'viewer_surface',
   'api_connections',

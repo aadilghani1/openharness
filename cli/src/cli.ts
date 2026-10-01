@@ -143,6 +143,8 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
+import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
@@ -2356,7 +2358,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const devinReaders = new Map<string, DevinReader>()
   const commandcodeNormalizers = new Map<string, CommandCodeNormalizer>()
   /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
-  const sessionTurnOpen = (sessionId: string): boolean =>
+  const sessionTurnState = (sessionId: string): boolean | undefined =>
     turnStates.get(sessionId)?.turnOpen
       ?? codexNormalizers.get(sessionId)?.turnOpen
       ?? cursorNormalizers.get(sessionId)?.turnOpen
@@ -2371,7 +2373,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? hermesReaders.get(sessionId)?.turnOpen
       ?? devinReaders.get(sessionId)?.turnOpen
       ?? commandcodeNormalizers.get(sessionId)?.turnOpen
-      ?? false
+  const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
   const watcher = new Watcher()
   const queuedSessionEvents: Array<{
     sessionId: string
@@ -6735,10 +6737,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
   const stopJobs = new Map<string, Promise<void>>()
-  backend.onDeleteAgent = createStopAgentService({
+  const stopAgent = createStopAgentService({
     registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
     forgetSession, markDeleted, clearDeleted,
   })
+  backend.onDeleteAgent = stopAgent
+  backend.closeAgentService = new CloseAgentService({
+    registry,
+    activity: async s => {
+      if (s.sessionId) await watcher.pollSession(s.sessionId)
+      const screen = await captureTerminal(s.agentId, 80)
+      return inspectCloseActivity(s.engine, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
+    },
+    checkpoint: async (s, explicitlyStopped, phase) => sessionCheckpoints.save(s, {
+      explicitlyStopped, screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
+    }),
+    stop: stopAgent,
+    changed: announceSession,
+  })
+  backend.closeAgentService.start()
 
   backend.onResumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,

@@ -78,3 +78,23 @@ not a process`)).toEqual([
     expect((await read()).agents[0].memoryBytes).toBeNull()
   })
 })
+
+it('counts a detached shared server once, without assigning its whole RAM to every session', async () => {
+  const agents = [agent('a', 10), agent('b', 20)]
+  let time = 10_000
+  const shared = vi.fn(async () => [
+    { pid: 50, start, agentIds: ['a', 'b'] },
+    { pid: 50, start, agentIds: ['a', 'b'] },
+    { pid: 60, start: 'recycled', agentIds: ['a'] },
+    { pid: 11, start, agentIds: ['a'] },
+  ])
+  const read = createHarnessResourcesReader(() => agents, {
+    sample: async () => [row(10), row(11, 10), row(20), row(50), row(51, 50), row(60)],
+    now: () => time,
+  }, shared)
+  const first = await read()
+  expect(first.agents.map(row => row.memoryBytes)).toEqual([200, 100])
+  expect(first.shared).toEqual([{ kind: 'codex', agentIds: ['a', 'b'], memoryBytes: 200, processCount: 2, cpuPercent: null }])
+  time += 3000
+  expect((await read()).shared![0].cpuPercent).toBe(0)
+})

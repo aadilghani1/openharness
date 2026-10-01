@@ -102,11 +102,11 @@ class WebTabSwitcher extends StatelessWidget {
       case WebFocusPane(:final paneId):
         app.focusPane(paneId, reveal: true);
       case WebClosePane(:final paneId):
-        unawaited(app.closePane(paneId));
+        unawaited(app.requestClosePane(paneId));
       case WebSelectTab(:final id):
         app.selectSwarm(id);
       case WebCloseTab(:final id):
-        unawaited(app.closeSwarm(id));
+        unawaited(app.requestCloseSwarm(id));
       case WebRunCommand(:final command):
         commands.run(command);
       case null:

@@ -90,13 +90,17 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'View only'
       : agent.isStopped
-      ? (agent.canPauseAndResume ? 'Paused' : 'Resume unavailable')
+      ? (agent.canPauseAndResume ? 'Saved' : 'Resume unavailable')
       : agent.launchState == 'failed'
       ? 'Start failed'
       : agent.launchState == 'starting'
       ? 'Starting'
       : needsInput
       ? 'Needs input'
+      : agent.closePlanState == 'failed'
+      ? 'Could not close'
+      : agent.closePlanState == 'waiting'
+      ? 'Stops after finishing'
       : working
       ? 'Working'
       : agent.terminalAvailable

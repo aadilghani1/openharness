@@ -122,6 +122,23 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
           row.machineId,
           row.agent.id,
         )).error;
+      } else if (row.agent.closePlanState != null) {
+        final result = await widget.app.prepareSessionClose(
+          row.machineId,
+          row.agent,
+        )('cancel');
+        if (result['cancelled'] != true) {
+          error =
+              result['detail'] as String? ??
+              'Could not cancel the scheduled close.';
+        }
+      } else if (row.agent.closeSupported) {
+        final review = widget.app.reviewSessionClose;
+        if (review == null) {
+          error = 'Open this session to close it safely.';
+        } else {
+          await review([(row.machineId, row.agent)]);
+        }
       } else {
         error = await widget.app.pauseAgent(row.machineId, row.agent.id);
       }
@@ -159,6 +176,22 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
       _errors.remove(row.id);
     });
     try {
+      if (row.agent.closePlanState != null) {
+        final result = await widget.app.prepareSessionClose(
+          row.machineId,
+          row.agent,
+        )('cancel');
+        if (result['cancelled'] != true) {
+          if (mounted) {
+            setState(
+              () => _errors[row.id] =
+                  result['detail'] as String? ??
+                  'Could not keep this session open. Try again.',
+            );
+          }
+          return;
+        }
+      }
       final opened = await widget.onOpen(row);
       if (mounted && opened) widget.onClose();
     } on SwarmResumeFailure catch (failure) {
@@ -186,13 +219,11 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
       recent: widget.recent,
       memory: {
         for (final row in all)
-          if (widget.monitor?.reading(row)?.memoryBytes case final value?)
-            row.id: value,
+          row.id: ?widget.monitor?.reading(row)?.memoryBytes,
       },
       cpu: {
         for (final row in all)
-          if (widget.monitor?.reading(row)?.cpuPercent case final value?)
-            row.id: value,
+          row.id: ?widget.monitor?.reading(row)?.cpuPercent,
       },
     );
     final running = all.where((row) => row.running).length;
@@ -306,6 +337,17 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   onClose: widget.onClose,
                 ),
                 if (widget.introduction != null) widget.introduction!,
+                if (widget.monitor?.sharedLabel case final String shared)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDesktop.panelPadding,
+                      vertical: 6,
+                    ),
+                    child: Tooltip(
+                      message: 'Included once in the total. May also serve sessions outside Harness. Per-session readings exclude these shared servers.',
+                      child: Text(shared, style: AppType.body(), maxLines: 2),
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppDesktop.panelPadding,
@@ -397,7 +439,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                         'Needs input $needsInput',
                                       SessionFilter.running =>
                                         'Running $running',
-                                      SessionFilter.paused => 'Paused $paused',
+                                      SessionFilter.paused => 'Saved $paused',
                                     },
                                   ),
                                 ),
@@ -550,8 +592,12 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                     ? 'Pausing…'
                                     : row.agent.isStopped
                                     ? 'Resuming…'
+                                    : row.agent.closeSupported
+                                    ? 'Closing…'
                                     : 'Pausing…',
-                                error: _errors[row.id],
+                                error:
+                                    _errors[row.id] ??
+                                    row.agent.closePlanDetail,
                                 onOpen: () =>
                                     _open(row, answering: row.needsInput),
                                 onAnswer: () => _open(row, answering: true),
@@ -638,7 +684,7 @@ class _SessionRow extends StatelessWidget {
                 row.agent.launchState == 'starting'));
     // Play/pause carries normal state; only exceptions need another label.
     final attention = switch (row.status) {
-      'Ready' || 'Paused' || 'Working' || 'Needs input' => null,
+      'Ready' || 'Saved' || 'Working' || 'Needs input' => null,
       final status => status,
     };
     // The time the panel sorts by (Recently used), so the ages read in order.
@@ -981,10 +1027,20 @@ class _SessionRow extends StatelessWidget {
                                 icon: Icon(
                                   row.agent.isStopped
                                       ? AppIcons.play
+                                      : row.agent.closePlanState != null
+                                      ? AppIcons.play
+                                      : row.agent.closeSupported
+                                      ? AppIcons.close
                                       : AppIcons.pause,
                                   size: 20,
                                   semanticLabel:
-                                      '${row.agent.isStopped ? 'Resume' : 'Pause'} ${row.agent.displayName}',
+                                      '${row.agent.isStopped
+                                          ? 'Resume'
+                                          : row.agent.closePlanState != null
+                                          ? 'Keep running'
+                                          : row.agent.closeSupported
+                                          ? 'Close'
+                                          : 'Pause'} ${row.agent.displayName}',
                                 ),
                                 padding: const EdgeInsets.all(6),
                                 style: actionStyle(primary),
@@ -1118,6 +1174,10 @@ class _MonitorStats extends StatelessWidget {
 /// three things can come back: the same shell, the same conversation, or the
 /// harness with a new one (`resumeMode` on the agent frame).
 String _toggleLabel(HarnessSession row) {
+  if (!row.agent.isStopped && row.agent.closePlanState != null) {
+    return 'Keep running';
+  }
+  if (!row.agent.isStopped && row.agent.closeSupported) return 'Close session';
   if (isTerminalEngine(row.agent.engine)) {
     return row.agent.isStopped
         ? 'Open a fresh shell here'

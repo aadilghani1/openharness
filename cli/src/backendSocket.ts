@@ -30,6 +30,7 @@ import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
+import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
@@ -497,6 +498,7 @@ export class BackendSocket {
   /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
    *  process and forgets the session. Keeps recap + agent name. */
   onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
+  closeAgentService: CloseAgentService | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
    *  requested folder and returns its process-agent. Session metadata may bind later through hooks. */
   onCreateAgent: ((input: {
@@ -1202,6 +1204,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.closeAgentService?.dispose()
     this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.teamService?.stop()
@@ -2661,6 +2664,7 @@ export class BackendSocket {
           // clock was set back) never throttles: the next open corrects it.
           let opened = false
           if (hasOpened) {
+            this.closeAgentService?.cancel(s.agentId)
             const since = Date.now() - (s.lastOpenedAt ?? 0)
             if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
               s = registry.markOpened(s.agentId) ?? s
@@ -3012,6 +3016,19 @@ export class BackendSocket {
         // Delete an agent: signal its validated engine process and drop it from the list. Idempotent — an already
         // gone target still acks + re-emits agent_deleted so the web/device converge. E2EE-gated (the
         // frame arrived decrypted). Keeps the persisted recap + agent name for a later resume.
+        case 'agent_close': {
+          if (!this.closeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const { agentId, sessionId, createdAt, mode } = payload
+          if (typeof agentId !== 'string' || typeof sessionId !== 'string' || typeof createdAt !== 'string'
+            || typeof mode !== 'string' || !['inspect', 'idle', 'now', 'after_task', 'cancel'].includes(mode)) {
+            reply(type, requestId, { error: 'INVALID_CLOSE_REQUEST' }); return
+          }
+          // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
+          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode },
+            () => this.terminalStreams?.hasOtherViews(agentId, connId) ?? false)
+            .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
+          return
+        }
         case 'agent_delete': {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }

@@ -17,6 +17,7 @@ import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import '../test/support/workspace_tools.dart' show openWorkspaceManagement;
 import '../test/swarm_interactions_test.dart' show chord;
 import '../test/swarm_screen_test.dart' show mount;
 import '../test/swarm_state_test.dart' show createApp;
@@ -210,7 +211,7 @@ void main() {
                 app.stateOf('m')!.agents.any((a) => a.id == id && a.isStopped),
             '$engine saved row before manager cycle $cycle',
           );
-          await tester.tap(find.byTooltip('Harnesses'));
+          await openWorkspaceManagement(tester, 'harnesses');
           await tester.pump();
           await tester.tap(toggle);
           await tester.tap(toggle);
@@ -263,10 +264,28 @@ void main() {
           );
           expect(app.allPanes.any((p) => p.agentId == anchorId), isTrue);
           expect(find.byType(HarnessSessionManager), findsNothing);
-          await tester.tap(find.byTooltip('Harnesses'));
+          await tester.tap(
+            find.byKey(const ValueKey('workspace-harness-monitor')),
+          );
           await tester.pump();
           await tester.tap(toggle);
-          await tester.tap(toggle);
+          await tester.pump();
+          // A working engine must ask; an idle one can close directly.
+          await until(
+            () =>
+                find
+                    .byKey(const Key('session-close-now'))
+                    .evaluate()
+                    .isNotEmpty ||
+                app.stateOf('m')!.agents.any((a) => a.id == id && a.isStopped),
+            '$engine close review',
+          );
+          if (find
+              .byKey(const Key('session-close-now'))
+              .evaluate()
+              .isNotEmpty) {
+            await tester.tap(find.byKey(const Key('session-close-now')));
+          }
           await until(
             () =>
                 app
@@ -279,9 +298,10 @@ void main() {
           expect((await get('/verify?id=$id'))['stopped'], true);
           expect(app.allPanes.any((p) => p.agentId == id), isFalse);
           expect(app.allPanes.any((p) => p.agentId == anchorId), isTrue);
-          expect(find.byType(HarnessSessionManager), findsOneWidget);
-          await tester.tap(find.byTooltip('Close harnesses'));
-          await tester.pump();
+          if (find.byType(HarnessSessionManager).evaluate().isNotEmpty) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+            await tester.pump();
+          }
         }
       }
       await tester.pumpWidget(const SizedBox());

@@ -142,6 +142,31 @@ describe('buildEngineLaunchArgv', () => {
     })
   })
 
+  describe('Codex writer ownership', () => {
+    it.each(['supported', 'older', 'failed'] as const)('probes %s startup options without changing prompt arguments', mode => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-codex-launch-'))
+      try {
+        const binary = join(folder, 'codex fixture')
+        writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
+          + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
+          + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
+        const prelude = engineFallbackPrelude('codex', '/bin/sh', null)
+        const args = ['-c', `${prelude}harness_engine "$@"`, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
+        if (mode === 'failed') {
+          try { execFileSync('/bin/sh', args, { stdio: ['ignore', 'pipe', 'pipe'] }); expect.fail('launch must refuse an unknown startup mode') }
+          catch (error) {
+            expect((error as any).status).toBe(1)
+            expect(String((error as any).stderr)).toContain('could not verify Codex startup options')
+            expect(String((error as any).stdout)).not.toContain('same-conversation')
+          }
+        } else {
+          const output = execFileSync('/bin/sh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+          expect(output).toBe(`${mode === 'supported' ? '<--no-daemon>\n' : ''}<resume>\n<same-conversation>\n<literal $(nothing) \`nothing\` and spaces>\n`)
+        }
+      } finally { rmSync(folder, { recursive: true, force: true }) }
+    })
+  })
+
   describe('a terminal (engine `terminal`)', () => {
     it('is the login shell itself behind a non-interactive wrapper that only raises the limit and enters the folder', () => {
       expect(buildEngineLaunchArgv('terminal', { cwd: '/work/project' }, '/bin/zsh')).toEqual([

@@ -82,6 +82,42 @@ void main() {
     );
   });
 
+  test('shared-server resources contribute once to totals and disappear with their last live session', () async {
+    final connection = _Connection();
+    final app = createApp(
+      connected: true,
+      connectionForTest: (_) => connection,
+    );
+    final monitor = HarnessMonitor(app);
+    addTearDown(monitor.dispose);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'Work', terminalAvailable: true),
+    ];
+    (connection.reply['harnesses'] as Map)['shared'] = [
+      {
+        'kind': 'codex',
+        'agentIds': ['a0', 'another-session'],
+        'memoryBytes': 600000000,
+        'cpuPercent': 4.5,
+        'processCount': 2,
+      },
+    ];
+    await monitor.refresh();
+    expect(monitor.label, '1 live · 2.0 GB · 130% CPU');
+    expect(monitor.sharedLabel, 'Shared Codex servers · 600 MB RAM');
+    expect(monitor.detail, contains('included once'));
+    ((connection.reply['harnesses'] as Map)['shared'] as List).first.remove(
+      'memoryBytes',
+    );
+    await monitor.refresh();
+    expect(monitor.sharedLabel, 'Shared Codex servers · — RAM');
+    expect(monitor.label, '1 live · 1.4 GB+ · 130% CPU');
+    app.machineStates['m']!.agents = [];
+    expect(monitor.label, '0 live');
+    expect(monitor.sharedLabel, isNull);
+  });
+
   testWidgets(
     'uses one machine request for every session; tokens are existing data',
     (tester) async {

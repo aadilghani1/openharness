@@ -166,6 +166,31 @@ void main() {
     },
   );
 
+  test('duplicate retained-stop events cannot erase an in-flight saved-history refresh', () async {
+    connection.inventory = Completer<Map<String, dynamic>>();
+    for (var event = 0; event < 2; event++) {
+      await app.handleEventForTest('m', {
+        'type': 'agent_deleted',
+        'payload': {'agentId': 'a0', 'retained': true},
+      });
+    }
+    connection.inventory!.complete({
+      'agents': [
+        {
+          'id': 'a0',
+          'name': 'Retained work',
+          'engine': 'codex',
+          'sessionId': 'original-conversation',
+          'status': 'stopped',
+          'terminal': {'available': false},
+        },
+      ],
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+    expect(swarmDestinations(app).any((row) => row.agentId == 'a0'), isTrue);
+  });
+
   for (final placement in HarnessPlacement.values) {
     test('Enter resumes directly before opening ${placement.name}', () async {
       final target = app.activeSwarmId;

@@ -59,6 +59,8 @@ export type AgentFrame = {
    */
   title: string | null
   status: string
+  closePlan: { state: 'waiting' | 'failed'; detail?: string } | null
+  closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   createdAt: string
   updatedAt: string
@@ -196,6 +198,8 @@ export async function agentFrame(
     name: projectDisplayName(s),
     title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
+    closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
+    closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),

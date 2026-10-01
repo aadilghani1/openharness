@@ -70,6 +70,8 @@ function modelString(value: unknown): string | null {
 }
 
 export interface RegisteredSession {
+  /** An explicit Close-after-task intent. Never inferred from visibility or CPU use. */
+  closePlan?: import('./closeAgentService.js').AgentClosePlan
   /** Per-row marker; the top-level array is retained for backward-reader safety. */
   schemaVersion: 2
   /** Whether the supported engine process is currently identified; terminal liveness is tracked separately. */
@@ -553,10 +555,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   if (new Set(placements).size !== placements.length) return null
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
-  const { lastOpenedAt: rawOpenedAt, ...rest } = row
+  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   return {
     ...rest,
+    ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
     ...(launch ? { launch } : {}),
@@ -605,6 +608,17 @@ function normalizedLaunch(value: unknown): AgentLaunch | undefined {
     ? launch.detail.slice(0, 500)
     : undefined
   return { state: 'failed', error, ...(detail ? { detail } : {}) }
+}
+
+function normalizedClosePlan(value: unknown): RegisteredSession['closePlan'] {
+  if (!value || typeof value !== 'object') return undefined
+  const plan = value as Partial<NonNullable<RegisteredSession['closePlan']>>
+  if ((plan.state !== 'waiting' && plan.state !== 'failed') || typeof plan.id !== 'string' || !/^[a-f0-9-]{36}$/.test(plan.id)
+    || typeof plan.identity !== 'string'
+    || !plan.identity || plan.identity.length > 8192 || typeof plan.requestedAt !== 'number'
+    || !Number.isFinite(plan.requestedAt) || plan.requestedAt < 0) return undefined
+  return { id: plan.id, state: plan.state, identity: plan.identity, requestedAt: plan.requestedAt,
+    ...(typeof plan.detail === 'string' ? { detail: plan.detail.slice(0, 500) } : {}) }
 }
 
 function validatedRows(values: readonly unknown[]): RegisteredSession[] | null {
@@ -1016,6 +1030,7 @@ class Registry {
           // Rehydrated explicitly for the reason the ⚠️ above gives. A reboot keeps it: it is when a
           // person last looked, which no reboot changes.
           ...(normalizedOpenedAt(raw.lastOpenedAt) !== undefined ? { lastOpenedAt: normalizedOpenedAt(raw.lastOpenedAt) } : {}),
+          ...(!rebooted && normalizedClosePlan(raw.closePlan) ? { closePlan: normalizedClosePlan(raw.closePlan)! } : {}),
         }
         if (
           raw.engine !== engine
@@ -1555,6 +1570,7 @@ class Registry {
       // the first hook after an open — the next prompt, a `/clear` — erases it from memory, the next
       // save writes that to disk, and every app's "last used" order forgets the open ever happened.
       ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
+      ...(existing?.closePlan ? { closePlan: existing.closePlan } : {}),
     }
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
@@ -1752,6 +1768,20 @@ class Registry {
     entry.touchedAt = Date.now()
     this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()
+    return entry
+  }
+
+  setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
+    const entry = this.agents.get(agentId)
+    if (!entry) return null
+    const previous = entry.closePlan
+    if (plan) entry.closePlan = normalizedClosePlan(plan)
+    else delete entry.closePlan
+    try { this.save(true) } catch (error) {
+      if (previous) entry.closePlan = previous
+      else delete entry.closePlan
+      throw error
+    }
     return entry
   }
 
@@ -2010,12 +2040,14 @@ class Registry {
     this.saveNames()
   }
 
-  private save(): void {
+  private save(strict = false): void {
     if (this.transactionDepth > 0) {
+      if (strict) throw new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction')
       this.savePending = true
       return
     }
     if (this.writeBlocked) {
+      if (strict) throw new Error('The saved session registry is unavailable')
       console.error('[registry] save skipped because the loaded registry requires operator repair')
       return
     }
@@ -2110,6 +2142,7 @@ class Registry {
         this.persistedBaseline = new Map(serialized.map((row) => [rowId(row), rowFingerprint(row)]))
       })
     } catch (err) {
+      if (strict) throw err
       console.error('[registry] save failed:', err)
     }
   }

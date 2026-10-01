@@ -473,9 +473,9 @@ void main() {
       expect(find.byType(HarnessSessionManager), findsOneWidget);
       expect(find.text('Harness Monitor'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
-      expect(find.text('Paused 1'), findsOneWidget);
+      expect(find.text('Saved 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);
-      expect(find.text('Paused'), findsNothing);
+      expect(find.text('Saved'), findsNothing);
       expect(find.textContaining('Pause keeps'), findsNothing);
       expect(
         tester
@@ -547,7 +547,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.stateOf('m')!.agents.first.isStopped, isTrue);
       expect(find.text('Running 0'), findsOneWidget);
-      expect(find.text('Paused 2'), findsOneWidget);
+      expect(find.text('Saved 2'), findsOneWidget);
       await tester.tap(toggle('a0'));
       await tester.pump();
       expect(connection.types, ['agent_resume']);
@@ -619,7 +619,7 @@ void main() {
       connection.inventory!.completeError(StateError('refresh failed'));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
-      expect(find.text('Paused 2'), findsOneWidget);
+      expect(find.text('Saved 2'), findsOneWidget);
       expect(tester.widget<IconButton>(toggle('a0')).onPressed, isNotNull);
       expect(connection.stops, ['a0']);
     },
@@ -674,8 +674,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
       // Paused, not "Resume unavailable": it can come back.
-      expect(harnessSessions(app).single.status, 'Paused');
-      expect(find.text('Paused 1'), findsOneWidget);
+      expect(harnessSessions(app).single.status, 'Saved');
+      expect(find.text('Saved 1'), findsOneWidget);
       expect(
         tester.widget<IconButton>(toggle('shell')).onPressed,
         isNotNull,
@@ -1327,6 +1327,8 @@ void main() {
             'engine': agent.engine,
             'sessionId': agent.sessionId,
             'status': agent.status,
+            'closeSupported': true,
+            'createdAt': now.toIso8601String(),
             'terminal': {'available': agent.terminalAvailable},
             'project': {
               'name': agent.project?.name,
