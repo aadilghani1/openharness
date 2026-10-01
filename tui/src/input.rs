@@ -827,8 +827,8 @@ fn prepare(app: &mut App, kind: &PickerKind) {
 fn load_models(app: &mut App) {
     // ── models: this computer's models, the grids and the saved APIs (models.rs) ──
     crate::models::open(app);
-    // (The harness a Use moves: the focused one, or the only one on screen.)
-    let Some(crate::models::Target { machine, agent, .. }) = crate::models::target(app) else { return };
+    // (The focused pane's engine's own models — what `model_rows` lists for that pane.)
+    let Some((machine, agent)) = focused_agent(app) else { return };
     let Some(link) = app.link(&machine) else { return };
     let mark = loading(format!("models {machine} {agent}"), true);
     let key = (machine, agent.clone());
