@@ -181,7 +181,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     }
     menu.addItem(.separator())
     add("New Harness…", HarnessKeymapMenu.actionPrefix + "newAgent", enabled: enabled)
-    add("Open Harness…", HarnessKeymapMenu.actionPrefix + "addAgent", enabled: enabled)
+    add("Open Harness…", HarnessKeymapMenu.actionPrefix + "sessions", enabled: enabled)
     menu.addItem(.separator())
     add("Show Harness", "openWindow")
     add("Quit", "quit")

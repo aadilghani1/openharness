@@ -299,7 +299,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       item.representedObject = action
       item.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + action)
       let symbols = [
-        "new": "plus.square", "newAgent": "plus", "addAgent": "arrow.up.right.square", "newTerminal": "terminal",
+        "new": "plus.square", "newAgent": "plus", "sessions": "arrow.up.right.square", "addAgent": "folder", "newTerminal": "terminal",
         "cloneAgent": "plus.square.on.square", "restartAgent": "arrow.clockwise",
         "shareAgent": "square.and.arrow.up",
         "renameActive": "pencil", "closeActive": "xmark",
@@ -323,7 +323,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // ellipsis (owner, 2026-09-22). The Dart keymap decides every chord below — applyMenuKeys
     // rewrites each equivalent here from it. New Terminal (⇧⌘T) stays in the keymap, off the menu.
     add(file, "New Harness", "n", "newAgent")
-    add(file, "Open Harness", "o", "addAgent")
+    add(file, "Open Harness", "p", "sessions")
+    add(file, "Open Project", "o", "addAgent")
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
@@ -352,7 +353,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
-      add(view, "Harnesses", "p", "sessions")
       add(view, "Harnesses Needing Input…", "i", "notifications", [.command, .shift])
       add(view, "Machines", "m", "machineList")
       add(view, "Models", "i", "models")
@@ -1867,7 +1867,7 @@ private final class SwarmTabStrip: NSView {
     searchButton.isEnabled = false
     searchButton.target = self
     searchButton.action = #selector(openSearch)
-    searchButton.setAccessibilityLabel("Search harnesses")
+    searchButton.setAccessibilityLabel("Open Harness")
     addSubview(searchButton)
     storeButton.isBordered = false
     storeButton.title = "Harness Store"
@@ -2034,7 +2034,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.isEnabled = actionsEnabled
     searchButton.foreground = palette.navigationForeground
     searchButton.isEnabled = actionsEnabled
-    searchButton.toolTip = state["searchTooltip"] as? String ?? "Search harnesses"
+    searchButton.toolTip = state["searchTooltip"] as? String ?? "Open Harness"
     searchButton.setAccessibilityHelp(searchButton.toolTip)
     storeButton.toolTip = state["storeTooltip"] as? String ?? "Explore Harness Store"
     storeButton.setAccessibilityHelp(storeButton.toolTip)

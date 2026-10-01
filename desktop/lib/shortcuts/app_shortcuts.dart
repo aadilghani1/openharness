@@ -494,7 +494,7 @@ const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.addAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),
-    label: 'Open Harness',
+    label: 'Open Project',
     group: ShortcutGroup.actions,
   ),
   AppShortcut(

@@ -67,6 +67,8 @@ void main() {
     );
   });
   test('the command catalog retains the current direct workspace keys', () {
+    expect(harnessCommandById['harnesses.list']!.label, 'Open Harness');
+    expect(harnessCommandById['agent.open']!.label, 'Open Project');
     String? command(
       String keys, [
       KeymapContext context = KeymapContext.terminal,

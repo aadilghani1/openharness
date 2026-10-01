@@ -79,7 +79,7 @@ private extension NSView {
 
 private func checkIconTooltipTracking() throws {
   let button = SwarmIconButton(frame: NSRect(x: 0, y: 0, width: 40, height: 28))
-  button.toolTip = "Search harnesses · ⌘P"
+  button.toolTip = "Open Harness · ⌘P"
   let tooltipAreas = button.trackingAreas
   try checkTitlebar(!tooltipAreas.isEmpty, "AppKit installs tooltip tracking for an icon button")
   for _ in 0..<3 {
@@ -1075,7 +1075,7 @@ private extension SwarmTabStrip {
 
   func checkTopActions() throws {
     var state: [String: Any] = ["enabled": true,
-      "searchTooltip": "Search harnesses · ⌘P", "storeTooltip": "Explore Harness Store · ⌘S",
+      "searchTooltip": "Open Harness · ⌘P", "storeTooltip": "Explore Harness Store · ⌘S",
       "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work",
       "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
     var calls: [String] = []
@@ -1873,7 +1873,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
     try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps Open Harness on Command-O")
+      "The exported keymap keeps Open Project on Command-O")
     for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
       try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
@@ -2082,13 +2082,13 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "Open Harness" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "Open Harness advertises Command-O")
+    try checkTitlebar(addHarness.title == "Open Project" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
+      "Open Project advertises Command-O")
     try checkTitlebar(!agent.items.contains { $0.representedObject as? String == "newTerminal" },
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
     try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "sessions", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
     for (action, title, menu) in [
       ("restartAgent", "Restart Harness", agent),
       ("shareAgent", "Share Harness", agent),
@@ -2139,8 +2139,8 @@ private extension SwarmTitlebar {
     try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Pane defaults to Command-Shift-W")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
     try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command, .shift], "Command search keeps its native menu owner")
-    let harnesses = main.item(withTitle: "View")!.submenu!.items.first { $0.representedObject as? String == "sessions" }!
-    try checkTitlebar(harnesses.keyEquivalent == "p" && harnesses.keyEquivalentModifierMask == [.command],
+    let harnesses = agent.items.first { $0.representedObject as? String == "sessions" }!
+    try checkTitlebar(harnesses.title == "Open Harness" && harnesses.keyEquivalent == "p" && harnesses.keyEquivalentModifierMask == [.command],
       "Command-P keeps harness search; commands use Command-Shift-P")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")
     try checkTitlebar(agent.items.contains { $0.title == "New Tab" && $0.keyEquivalent == "t" && $0.representedObject as? String == "new" }, "New Tab opens the chooser with Command-T")

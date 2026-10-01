@@ -24,7 +24,7 @@ let working: [[String: Any]] = [
 ]
 let bindings: [[String: Any]] = [
   ["keys": ["cmd+n"], "command": "agent.new", "hint": "⌘N", "repeatable": false, "menuAction": "newAgent"],
-  ["keys": ["cmd+o"], "command": "agent.open", "hint": "⌘O", "repeatable": false, "menuAction": "addAgent"],
+  ["keys": ["cmd+p"], "command": "harnesses.list", "hint": "⌘P", "repeatable": false, "menuAction": "sessions"],
 ]
 let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
 

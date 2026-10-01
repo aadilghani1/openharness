@@ -105,8 +105,8 @@ do {
   status.click(status.row("General chat conversation"))
   try check(emitted.last?.0 == "openStatusHarness" && reveals == 0, "Navigation is sent before revealing the window")
   status.click(status.item("newAgent"))
-  status.click(status.item("addAgent"))
-  try check(emitted.suffix(2).map { $0.0 } == ["newAgent", "addAgent"] && reveals == 2,
+  status.click(status.item("sessions"))
+  try check(emitted.suffix(2).map { $0.0 } == ["newAgent", "sessions"] && reveals == 2,
             "New and Open Harness reveal the window and reuse existing actions")
   try check(!status.menu.items.contains { $0.identifier?.rawValue == "settings" } &&
             status.item("quit").title == "Quit", "Settings is absent and the exit command is simply Quit")
@@ -147,7 +147,7 @@ do {
             "The next opening reflects the new tab context")
 
   status.update(["enabled": false, "statusMenuEntries": rows])
-  try check(!status.item("newAgent").isEnabled && !status.item("addAgent").isEnabled &&
+  try check(!status.item("newAgent").isEnabled && !status.item("sessions").isEnabled &&
             !status.item("clearStatusNotifications").isEnabled, "A modal disables workspace actions")
   status.click(status.item("openWindow"))
   try check(reveals == 3, "Show Harness remains available during a modal")
@@ -158,7 +158,7 @@ do {
             "An empty inbox is explicit, cannot be cleared and has no empty Working section")
   let open = status.menu.items.first { $0.title == "Open Harness…" }!
   status.click(open)
-  try check(emitted.last?.0 == "addAgent" && reveals == 4,
+  try check(emitted.last?.0 == "sessions" && reveals == 4,
             "Open Harness reveals the window and opens the existing-session picker even with no notifications")
   let beforeShow = emitted.count
   status.click(status.menu.items.first { $0.title == "Show Harness" }!)
@@ -167,7 +167,7 @@ do {
   status.update([:])
   try check(!status.menu.items.contains { $0.identifier?.rawValue == "openStatusHarness" }, "Sign-out removes all conversation data")
   try check(status.item("openWindow").isEnabled && status.item("quit").isEnabled &&
-            !status.item("addAgent").isEnabled,
+            !status.item("sessions").isEnabled,
             "The signed-out menu still offers Show and Quit, but cannot open the session picker")
   // Exercise the actual AppKit status button: the displayed number must agree
   // with the notification rows, with a bare icon after the last read.
@@ -254,17 +254,17 @@ do {
   try check(!status.menu.items.contains { $0.identifier?.rawValue == "workingHeading" },
             "Sign-out removes working data as well as unread messages")
   let bindings: [[String: Any]] = [
-    ["keys": ["cmd+shift+k"], "command": "agent.open", "hint": "⇧⌘K", "repeatable": false, "menuAction": "addAgent"],
+    ["keys": ["cmd+shift+k"], "command": "harnesses.list", "hint": "⇧⌘K", "repeatable": false, "menuAction": "sessions"],
   ]
   let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
   status.updateKeymap(map, context: "workspace")
   status.update(["enabled": true, "statusMenuEntries": []])
-  try check(status.item("addAgent").keyEquivalent == "k" &&
-            status.item("addAgent").keyEquivalentModifierMask == [.command, .shift] &&
+  try check(status.item("sessions").keyEquivalent == "k" &&
+            status.item("sessions").keyEquivalentModifierMask == [.command, .shift] &&
             status.item("newAgent").keyEquivalent.isEmpty,
             "Footer shortcuts follow remapping and unbinding, including after a rebuild")
-  status.click(status.item("addAgent"))
-  try check(emitted.last?.0 == "addAgent", "Keymap identifiers preserve the existing Open Harness action")
+  status.click(status.item("sessions"))
+  try check(emitted.last?.0 == "sessions", "Keymap identifiers preserve the existing Open Harness action")
   print("Harness status menu passed \(checks) checks")
 } catch {
   fputs("Harness status menu failed: \(error)\n", stderr)
