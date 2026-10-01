@@ -349,4 +349,20 @@ describe('model availability, leases, and idempotent publication', () => {
     expect(readFileSync(join(directory, 'memory.sqlite')).includes(Buffer.from(unique))).toBe(false)
     expect(store.learning.capture(batch('replayed', { from: 'first', events: [source] })).state).toBe('cancelled')
   })
+
+  it('rejects a late broader proposal after the owner narrows its memory to a project', () => {
+    const source = event('personal', { projectId: null })
+    store.learning.capture(batch('personal', { projectId: null, events: [source] }))
+    const lease = claim()
+    const broad = proposal(source, { scope: { profileId: 'owner' } })
+    const record = store.propose(broad, lease.access).record
+    const preview = store.libraryPreview('owner', { kind: 'narrow', id: record.id, revision: 1, projectId: 'project' })
+    expect(store.learning.status().jobs.reviewing).toBe(1) // Preview rolls back cancellation too.
+    store.libraryApply('owner', preview.command, preview.version, true)
+    expect(store.learning.finish(lease, [broad], target)).toEqual({ state: 'stale', reason: 'lease_changed' })
+    expect(store.learning.status().jobs.cancelled).toBe(1)
+    expect(store.libraryPage('owner', { scope: 'personal' }).items).toEqual([])
+    expect(store.libraryDetail('owner', record.id)!.record.scope.projectId).toBe('project')
+    expect(store.source(source.id, lease.access)).not.toBeNull()
+  })
 })

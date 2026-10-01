@@ -102,6 +102,144 @@ it('refuses payload authority changes and secret-bearing corrections without cha
   expect(store.libraryDetail('owner', record.id)!.record).toEqual(record)
 })
 
+it('narrows a personal memory to one known project without changing its meaning or adding confirmation', () => {
+  const record = learn('personal', { profileId: 'owner' })
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated, ...draft } = record
+  store.ingest({ id: 'corroboration', profileId: 'owner', projectId: null, role: 'user', engine: 'codex', sessionId: 'another_session',
+    nativeEventId: 'corroboration', rootIds: ['corroboration'], eligibility: 'coding', observedAt: 950, text: record.claim })
+  store.propose({ ...draft, evidence: [{ ...draft.evidence[0], sourceEventId: 'corroboration' }] },
+    { profileId: 'owner', projectIds: [], includeProfile: true })
+  store.registerProject('chosen_project')
+  store.registerProject('other_project')
+  const originalSupport = store.libraryDetail('owner', record.id)!.support
+  expect(originalSupport?.independentUserStatements).toBe(2)
+  const command = { kind: 'narrow' as const, id: record.id, revision: 1, projectId: 'chosen_project' }
+  const preview = store.libraryPreview('owner', command)
+  expect(preview.effects.record).toMatchObject({ id: record.id, revision: 2, scope: { profileId: 'owner', projectId: 'chosen_project' } })
+  expect(store.libraryDetail('owner', record.id)!.record).toEqual(record)
+  store.libraryApply('owner', command, preview.version, true)
+  const detail = store.libraryDetail('owner', record.id)!
+  expect(detail.record).toMatchObject({ claim: record.claim, rationale: record.rationale, evidence: record.evidence,
+    evidenceClass: record.evidenceClass, applicability: record.applicability, revision: 2 })
+  expect(detail.support).toEqual(originalSupport)
+  expect(detail.scopeChanges).toEqual([{ revision: 2, from: { profileId: 'owner' },
+    to: { profileId: 'owner', projectId: 'chosen_project' }, changedAt: 1000, actor: 'owner' }])
+  expect(store.recall({ query: 'reproducer' }, { profileId: 'owner', projectIds: ['chosen_project'], includeProfile: true }).items).toHaveLength(1)
+  expect(store.recall({ query: 'reproducer' }, { profileId: 'owner', projectIds: ['other_project'], includeProfile: true }).items).toEqual([])
+  expect(() => store.libraryApply('owner', command, preview.version, true)).toThrow('preview_changed')
+})
+
+it('refuses unknown or excluded destinations and moving a memory from one project to another', () => {
+  const personal = learn('personal', { profileId: 'owner' }), scoped = learn('scoped')
+  store.registerProject('excluded'); store.setProjectIncluded('excluded', false)
+  for (const projectId of ['missing', 'excluded']) expect(() => store.libraryPreview('owner',
+    { kind: 'narrow', id: personal.id, revision: 1, projectId })).toThrow('project_unavailable')
+  expect(() => store.libraryPreview('owner', { kind: 'narrow', id: scoped.id, revision: 1, projectId: 'project' }))
+    .toThrow('scope_narrowing_only')
+  expect(store.libraryDetail('owner', personal.id)!.record).toEqual(personal)
+  expect(() => store.libraryPreview('other', { kind: 'narrow', id: personal.id, revision: 1, projectId: 'project' })).toThrow('scope_denied')
+})
+
+it('keeps inferred knowledge tentative when its applicability is narrowed', () => {
+  const original = learn('statement', { profileId: 'owner' })
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated, ...draft } = original
+  const record = store.propose({ ...draft, assertionType: 'observed_usage', evidenceClass: 'inferred', conflictKey: 'inferred' },
+    { profileId: 'owner', projectIds: [], includeProfile: true }).record
+  store.registerProject('project')
+  const preview = store.libraryPreview('owner', { kind: 'narrow', id: record.id, revision: 1, projectId: 'project' })
+  store.libraryApply('owner', preview.command, preview.version, true)
+  const detail = store.libraryDetail('owner', record.id)!
+  expect(detail.record).toMatchObject({ state: 'tentative', evidenceClass: 'inferred', evidence: record.evidence })
+  expect(detail.support?.independentUserStatements).toBe(0)
+})
+
+it('preserves an unresolved conflict while allowing an owner to narrow with learning and recall off', () => {
+  const original = learn('original', { profileId: 'owner' }), opposing = learn('opposing', { profileId: 'owner' })
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated, ...draft } = opposing
+  store.propose({ ...draft, conflictKey: original.conflictKey }, { profileId: 'owner', projectIds: [], includeProfile: true })
+  const conflicted = store.libraryDetail('owner', original.id)!.record
+  expect(conflicted.state).toBe('needs_verification')
+  store.registerProject('project')
+  store.setControls({ learn: false, recall: false })
+  const preview = store.libraryPreview('owner', { kind: 'narrow', id: original.id, revision: conflicted.revision, projectId: 'project' })
+  store.libraryApply('owner', preview.command, preview.version, false)
+  expect(store.libraryDetail('owner', original.id)!.record).toMatchObject({ state: 'needs_verification', evidence: original.evidence })
+  expect(store.controls()).toMatchObject({ learn: false, recall: false })
+})
+
+it('previews conflicting project knowledge and atomically withholds both claims after narrowing', () => {
+  const personal = learn('personal', { profileId: 'owner' }), existing = learn('project')
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated, ...draft } = existing
+  const opposing = store.propose({ ...draft, conflictKey: personal.conflictKey },
+    { profileId: 'owner', projectIds: ['project'], includeProfile: true }).record
+  const preview = store.libraryPreview('owner', { kind: 'narrow', id: personal.id, revision: 1, projectId: 'project' })
+  expect(preview.effects.record?.state).toBe('needs_verification')
+  expect(preview.effects.conflicts).toMatchObject([{ id: opposing.id, revision: 2, claim: opposing.claim, state: 'needs_verification' }])
+  expect(store.libraryDetail('owner', opposing.id)!.record.state).toBe('active')
+  expect(store.libraryDetail('owner', personal.id)!.record.scope.projectId).toBeUndefined()
+  store.libraryApply('owner', preview.command, preview.version, true)
+  expect(store.libraryDetail('owner', opposing.id)!.record.state).toBe('needs_verification')
+  expect(store.libraryDetail('owner', personal.id)!.record.state).toBe('needs_verification')
+})
+
+it('persists scope audit across restart and removes it with the forgotten memory', () => {
+  const record = learn('personal', { profileId: 'owner' })
+  const projectId = store.projectForLocator({ kind: 'directory', path: '/synthetic/project-label-only' })
+  const access = { profileId: 'owner', projectIds: [projectId], includeProfile: true }
+  store.putTopic({ id: 'topic', scope: record.scope, title: 'Debugging', statements: [{ text: record.claim,
+    supports: [{ memoryId: record.id, revision: 1, paths: ['/claim'] }] }] }, access)
+  const preview = store.libraryPreview('owner', { kind: 'narrow', id: record.id, revision: 1, projectId })
+  store.libraryApply('owner', preview.command, preview.version, true)
+  expect(store.topic('topic', access)).toBeNull()
+  expect(JSON.stringify({ list: store.list(access), recall: store.recall({ query: 'reproducer' }, access) }))
+    .not.toContain('project-label-only')
+  store.close()
+  const reopened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => 1000 })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  expect(store.libraryDetail('owner', record.id)!.scopeChanges).toHaveLength(1)
+  expect(store.libraryDetail('owner', record.id)!.project?.location).toBe('/synthetic/project-label-only')
+  store.libraryForget('owner', record.id, 2)
+  expect(store.libraryDetail('owner', record.id)).toBeNull()
+  expect(store.libraryPage('owner').items).toEqual([])
+})
+
+it('withdraws the broader revision from other conversations and invalidates a stale target preview', () => {
+  const record = learn('personal', { profileId: 'owner' })
+  store.registerProject('project'); store.registerProject('other_project')
+  const access = { profileId: 'owner', projectIds: ['other_project'], includeProfile: true }
+  const binding = { engine: 'claude' as const, sessionId: 'receiving', projectId: 'other_project', route: 'prompt_hook' as const }
+  store.prepareRecall({ query: 'reproducer' }, binding, access)
+  const command = { kind: 'narrow' as const, id: record.id, revision: 1, projectId: 'project' }
+  const preview = store.libraryPreview('owner', command)
+  store.setProjectIncluded('project', false)
+  expect(() => store.libraryApply('owner', command, preview.version, true)).toThrow('preview_changed')
+  store.setProjectIncluded('project', true)
+  const current = store.libraryPreview('owner', command)
+  store.libraryApply('owner', command, current.version, true)
+  const next = store.prepareRecall({ query: 'reproducer' }, binding, access)
+  expect(next.packet.items).toEqual([])
+  expect(JSON.parse(next.packet.text).withdrawn.references).toEqual([{ id: record.id, revision: 1 }])
+  store.libraryForget('owner', record.id, 2)
+  expect(store.libraryDetail('owner', record.id)).toBeNull()
+})
+
+it('lists known project names and literal path matches with privacy applied before pagination', () => {
+  const first = store.projectForLocator({ kind: 'git_common_directory', path: '/synthetic/work/editor/.git' })
+  const second = store.projectForLocator({ kind: 'directory', path: '/synthetic/research/editor' })
+  const hidden = store.projectForLocator({ kind: 'directory', path: '/synthetic/private-hidden' })
+  store.setProjectIncluded(hidden, false)
+  const page = store.libraryProjects('owner', { search: 'editor', limit: 1 })
+  expect(page.items).toEqual([{ id: second, name: 'editor', location: '/synthetic/research/editor' }])
+  expect(store.libraryProjects('owner', { search: 'editor', before: page.nextBefore!, limit: 1 }).items)
+    .toEqual([{ id: first, name: 'editor', location: '/synthetic/work/editor' }])
+  expect(store.libraryProjects('owner', { search: 'research/editor' }).items.map(project => project.id)).toEqual([second])
+  expect(store.libraryProjects('owner', { search: '%' }).items).toEqual([])
+  expect(store.libraryProjects('owner').items.map(project => project.id)).not.toContain(hidden)
+  expect(() => store.libraryProjects('other')).toThrow('scope_denied')
+  expect(() => store.libraryProjects('owner', { limit: 1000 })).toThrow('invalid_input')
+})
+
 it('previews forgetting without erasing evidence and refuses a changed dependency snapshot', () => {
   const record = learn('one')
   const preview = store.libraryPreview('owner', { kind: 'forget', id: record.id, revision: 1 })

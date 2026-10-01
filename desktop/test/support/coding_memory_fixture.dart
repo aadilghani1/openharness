@@ -49,6 +49,23 @@ class MemoryFixture extends CodingMemoryConnection {
   String? cursor;
   String? refuseApply;
   Map<String, dynamic>? previewed;
+  final projects = <Map<String, dynamic>>[
+    {
+      'id': 'synthetic-project',
+      'name': 'editor',
+      'location': '/synthetic/work/editor',
+    },
+    {
+      'id': 'second-project',
+      'name': 'editor',
+      'location': '/synthetic/research/editor',
+    },
+  ];
+  final scopeChanges = <Map<String, dynamic>>[];
+
+  Map<String, dynamic>? get project => projects
+      .where((p) => p['id'] == (record['scope'] as Map)['projectId'])
+      .firstOrNull;
 
   @override
   Future<Map<String, dynamic>> request(Map<String, dynamic> payload) async {
@@ -88,6 +105,8 @@ class MemoryFixture extends CodingMemoryConnection {
                 'ok': true,
                 'record': record,
                 'support': null,
+                'project': project,
+                'scopeChanges': scopeChanges,
                 'sources': [
                   {
                     'id': 'source-fixture',
@@ -99,6 +118,20 @@ class MemoryFixture extends CodingMemoryConnection {
                 ],
               }
             : {'ok': false, 'error': 'NOT_FOUND'};
+      case 'projects':
+        final query = payload['query'] as Map;
+        final search = (query['search'] as String).toLowerCase();
+        return {
+          'ok': true,
+          'items': projects
+              .where(
+                (p) => '${p['name']} ${p['location']}'.toLowerCase().contains(
+                  search,
+                ),
+              )
+              .toList(),
+          'nextBefore': null,
+        };
       case 'preview':
         previewed = payload['command'] as Map<String, dynamic>;
         return {
@@ -120,6 +153,19 @@ class MemoryFixture extends CodingMemoryConnection {
                   }
                 : previewed!['kind'] == 'configure'
                 ? {'preferences': previewed!['preferences']}
+                : previewed!['kind'] == 'narrow'
+                ? {
+                    'record': {
+                      ...record,
+                      'scope': {
+                        ...record['scope'] as Map,
+                        'projectId': previewed!['projectId'],
+                      },
+                    },
+                    'project': projects.singleWhere(
+                      (p) => p['id'] == previewed!['projectId'],
+                    ),
+                  }
                 : {
                     'record': {...record, ...previewed!['fields'] as Map},
                   },
@@ -133,6 +179,20 @@ class MemoryFixture extends CodingMemoryConnection {
           recall = prefs['recall'] as bool;
         } else if (previewed!['kind'] == 'forget') {
           present = false;
+        } else if (previewed!['kind'] == 'narrow') {
+          final from = record['scope'];
+          record = {
+            ...record,
+            'scope': {...from as Map, 'projectId': previewed!['projectId']},
+            'revision': (record['revision'] as int) + 1,
+          };
+          scopeChanges.add({
+            'revision': record['revision'],
+            'from': from,
+            'to': record['scope'],
+            'changedAt': 1790762400000,
+            'actor': 'owner',
+          });
         } else {
           record = {
             ...record,

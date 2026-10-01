@@ -8,7 +8,7 @@ import { MemoryLearner, type LearningOutcome, type MemoryInference } from './lea
 import { locateProject, type ProjectContext } from './project.js'
 import type { Arguments, MemoryPort, Operation, Result } from './operations.js'
 import type { MemoryPreferences } from './store.js'
-import type { LibraryQuery, LibraryCommand, LibraryPreview } from './library.js'
+import type { LibraryQuery, LibraryProjectQuery, LibraryCommand, LibraryPreview } from './library.js'
 import type { PreparedRecall, RecallReceipt } from './receipts.js'
 import { conditionsSchema, MemoryError, parse, type RecallPacket, type RecallRequest } from './types.js'
 
@@ -125,6 +125,10 @@ export class CodingMemoryRuntime {
     return this.withOwner(owner, port => port.request('libraryDetail', [owner, id]))
   }
 
+  async libraryProjects(owner: string, query: LibraryProjectQuery = {}) {
+    return this.withOwner(owner, port => port.request('libraryProjects', [owner, query]))
+  }
+
   async libraryPreview(owner: string, command: LibraryCommand) {
     return this.withOwner(owner, port => port.request('libraryPreview', [owner, command]))
   }
@@ -135,7 +139,7 @@ export class CodingMemoryRuntime {
       const result = await port.request('libraryApply', [owner, preview.command, preview.version, enabled])
       if (this.active?.id === owner) {
         if (result.preferences) this.active.preferences = result.preferences
-        if (preview.command.kind === 'forget' || !this.active.preferences.learn) this.active.learner.cancel()
+        if (['forget', 'correct', 'narrow'].includes(preview.command.kind) || !this.active.preferences.learn) this.active.learner.cancel()
       }
       return result
     })

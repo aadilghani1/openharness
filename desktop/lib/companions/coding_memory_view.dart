@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_dialog.dart';
@@ -8,6 +9,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'coding_memory_connection.dart';
 import 'coding_memory_library.dart';
+import 'coding_memory_project_picker.dart';
 
 /// The collection's owner library; it does not send chat or terminal input.
 class CodingMemoryView extends StatefulWidget {
@@ -386,10 +388,17 @@ class _MemoryDialogState extends State<_MemoryDialog> {
   String? error;
   bool refreshedWhileEditing = false;
   bool busy = false, editing = false;
+  bool choosingProject = false;
+  String _projectQuery = '';
+  int? _narrowRevision;
+  int _projectChoicesEpoch = 0;
   bool _reloadNeeded = false, _closing = false;
   late int _seenChanges;
   CodingMemoryLibrary get library => widget.library;
-  Map<String, dynamic> get record => memoryMap(detail?['record']);
+  Map<String, dynamic> get record => {
+    ...memoryMap(detail?['record']),
+    if (detail?['project'] != null) 'project': detail!['project'],
+  };
   @override
   void initState() {
     super.initState();
@@ -410,6 +419,8 @@ class _MemoryDialogState extends State<_MemoryDialog> {
       _claim.clear();
       _reason.clear();
       _action.clear();
+      _projectQuery = '';
+      choosingProject = false;
       error = codingMemoryError(const CodingMemoryFailure('OWNER_CHANGED'));
     } else if (_seenChanges != library.changes) {
       _seenChanges = library.changes;
@@ -436,6 +447,10 @@ class _MemoryDialogState extends State<_MemoryDialog> {
       if (mounted) {
         error = codingMemoryError(failure);
         if (failure is CodingMemoryFailure &&
+            failure.code == 'PROJECT_UNAVAILABLE') {
+          ++_projectChoicesEpoch;
+        }
+        if (failure is CodingMemoryFailure &&
             [
               'NOT_FOUND',
               'OWNER_CHANGED',
@@ -446,6 +461,8 @@ class _MemoryDialogState extends State<_MemoryDialog> {
           _claim.clear();
           _reason.clear();
           _action.clear();
+          _projectQuery = '';
+          choosingProject = false;
         }
       }
     } finally {
@@ -464,6 +481,10 @@ class _MemoryDialogState extends State<_MemoryDialog> {
     final result = await library.detail(widget.id!);
     if (!mounted || !library.valid || snapshot != library.changes) return;
     detail = result;
+    if (choosingProject && record['revision'] != _narrowRevision) {
+      choosingProject = false;
+      error = 'This memory changed. Review its current details before choosing a project.';
+    }
     refreshedWhileEditing = editing;
     if (!editing) {
       _claim.text = record['claim'] as String;
@@ -530,6 +551,19 @@ class _MemoryDialogState extends State<_MemoryDialog> {
     if (!busy) Navigator.of(context).pop();
   }
 
+  void _back() {
+    if (busy) return;
+    if (preview != null) {
+      setState(() => preview = null);
+    } else if (choosingProject) {
+      setState(() => choosingProject = false);
+    } else if (editing) {
+      setState(() => editing = false);
+    } else {
+      _close();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final command = memoryMap(preview?.data['command']);
@@ -540,8 +574,11 @@ class _MemoryDialogState extends State<_MemoryDialog> {
         ? switch (kind) {
             'forget' => 'Forget this memory?',
             'configure' => 'Update memory settings?',
+            'narrow' => 'Limit this memory to a project?',
             _ => 'Review your correction',
           }
+        : choosingProject
+        ? 'Choose a project'
         : editing
         ? 'Correct memory'
         : widget.id == null
@@ -552,92 +589,124 @@ class _MemoryDialogState extends State<_MemoryDialog> {
         memoryMap(memoryMap(record['details'])['experiment'])['runs'] == null;
     return PopScope(
       canPop: !busy,
-      child: DesktopPromptSurface(
-        width: 620,
-        body: DesktopPromptScrollBody(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              DesktopDialogHeader(
-                title: title,
-                padding: EdgeInsets.zero,
-                onClose: busy ? null : _close,
-              ),
-              const SizedBox(height: 16),
-              if (busy) const LinearProgressIndicator(),
-              if (library.valid)
-                if (preview != null)
-                  _previewBody(command)
-                else if (detail != null)
-                  editing ? _editor() : _detail(context),
-            ],
-          ),
-        ),
-        footer: error == null ? null : DesktopPromptMessage(error!),
-        actions: [
-          TextButton(
-            focusNode: _cancel,
-            autofocus: true,
-            onPressed: busy ? null : _close,
-            child: Text(preview == null ? 'Close' : 'Cancel'),
-          ),
-          if (library.valid && !busy)
-            if (preview != null) ...[
-              TextButton(
-                onPressed: () => setState(() => preview = null),
-                child: const Text('Back'),
-              ),
-              FilledButton(
-                onPressed: _apply,
-                style: kind == 'forget'
-                    ? FilledButton.styleFrom(
-                        backgroundColor: AppPalette.dangerFill,
-                        foregroundColor: Colors.white,
-                      )
-                    : null,
-                child: Text(
-                  kind == 'forget'
-                      ? 'Forget memory'
-                      : kind == 'configure'
-                      ? 'Apply settings'
-                      : 'Save correction',
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(
+            LogicalKeyboardKey.escape,
+            includeRepeats: false,
+          ): _back,
+        },
+        child: DesktopPromptSurface(
+          width: 620,
+          body: DesktopPromptScrollBody(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DesktopDialogHeader(
+                  title: title,
+                  padding: EdgeInsets.zero,
+                  onClose: busy ? null : _close,
                 ),
-              ),
-            ] else if (detail != null && editing) ...[
-              TextButton(
-                onPressed: _load,
-                child: const Text('Refresh current version'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (_form.currentState!.validate()) {
-                    unawaited(_preview(_correction()));
-                  }
-                },
-                child: const Text('Review correction'),
-              ),
-            ] else if (detail != null) ...[
-              TextButton(
-                onPressed: () => _preview({
-                  'kind': 'forget',
-                  'id': record['id'],
-                  'revision': record['revision'],
-                }),
-                child: const Text('Forget…'),
-              ),
-              if (canEdit)
+                const SizedBox(height: 16),
+                if (busy) const LinearProgressIndicator(),
+                if (library.valid)
+                  if (preview != null)
+                    _previewBody(command)
+                  else if (detail != null)
+                    choosingProject
+                        ? CodingMemoryProjectPicker(
+                            key: ValueKey(_projectChoicesEpoch),
+                            library: library,
+                            enabled: !busy,
+                            initialQuery: _projectQuery,
+                            onQueryChanged: (query) => _projectQuery = query,
+                            onPick: (project) => unawaited(
+                              _preview({
+                                'kind': 'narrow',
+                                'id': widget.id,
+                                'revision': _narrowRevision,
+                                'projectId': project['id'],
+                              }),
+                            ),
+                          )
+                        : editing
+                        ? _editor()
+                        : _detail(context),
+              ],
+            ),
+          ),
+          footer: error == null ? null : DesktopPromptMessage(error!),
+          actions: [
+            TextButton(
+              focusNode: _cancel,
+              autofocus: true,
+              onPressed: busy ? null : _close,
+              child: Text(preview == null ? 'Close' : 'Cancel'),
+            ),
+            if (library.valid && !busy)
+              if (preview != null) ...[
+                TextButton(onPressed: _back, child: const Text('Back')),
                 FilledButton(
-                  onPressed: () => setState(() => editing = true),
-                  child: const Text('Correct memory'),
+                  onPressed: _apply,
+                  style: kind == 'forget'
+                      ? FilledButton.styleFrom(
+                          backgroundColor: AppPalette.dangerFill,
+                          foregroundColor: Colors.white,
+                        )
+                      : null,
+                  child: Text(
+                    kind == 'forget'
+                        ? 'Forget memory'
+                        : kind == 'configure'
+                        ? 'Apply settings'
+                        : kind == 'narrow'
+                        ? 'Limit to project'
+                        : 'Save correction',
+                  ),
                 ),
-            ] else if (widget.command != null)
-              TextButton(
-                onPressed: _refreshSettings,
-                child: const Text('Refresh and review settings'),
-              )
-            else
-              TextButton(onPressed: _load, child: const Text('Try again')),
-        ],
+              ] else if (detail != null && choosingProject) ...[
+                if (error != null)
+                  TextButton(
+                    onPressed: _load,
+                    child: const Text('Refresh current version'),
+                  ),
+                TextButton(onPressed: _back, child: const Text('Back')),
+              ] else if (detail != null && editing) ...[
+                TextButton(
+                  onPressed: _load,
+                  child: const Text('Refresh current version'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    if (_form.currentState!.validate()) {
+                      unawaited(_preview(_correction()));
+                    }
+                  },
+                  child: const Text('Review correction'),
+                ),
+              ] else if (detail != null) ...[
+                TextButton(
+                  onPressed: () => _preview({
+                    'kind': 'forget',
+                    'id': record['id'],
+                    'revision': record['revision'],
+                  }),
+                  child: const Text('Forget…'),
+                ),
+                if (canEdit)
+                  FilledButton(
+                    onPressed: () => setState(() => editing = true),
+                    child: const Text('Correct memory'),
+                  ),
+              ] else if (widget.command != null)
+                TextButton(
+                  onPressed: _refreshSettings,
+                  child: const Text('Refresh and review settings'),
+                )
+              else
+                TextButton(onPressed: _load, child: const Text('Try again')),
+          ],
+        ),
       ),
     );
   }
@@ -658,6 +727,26 @@ class _MemoryDialogState extends State<_MemoryDialog> {
           _fields(record['rationale'], label: 'Why it matters'),
         _fields(record['futureAction'], label: 'How it can help'),
         _constraints(record),
+        if (memoryMap(record['scope'])['projectId'] == null &&
+            [
+              'active',
+              'tentative',
+              'needs_verification',
+            ].contains(record['state']))
+          TextButton(
+            onPressed: busy
+                ? null
+                : () => setState(() {
+                    choosingProject = true;
+                    _narrowRevision = (record['revision'] as num).toInt();
+                  }),
+            child: const Text('Limit to a project…'),
+          ),
+        if ((detail?['scopeChanges'] as List?)?.isNotEmpty == true)
+          _text(
+            'You limited where this memory applies on ${_date(context, memoryMap((detail!['scopeChanges'] as List).first)['changedAt'])}. Its evidence is unchanged.',
+            small: true,
+          ),
         const SizedBox(height: 20),
         Text(
           'Retained evidence',
@@ -712,10 +801,17 @@ class _MemoryDialogState extends State<_MemoryDialog> {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       if (memoryMap(fields['scope'])['projectId'] != null)
-        _fields(
-          memoryMap(fields['scope'])..remove('profileId'),
-          label: 'Project scope',
-        ),
+        _fields({
+          'Project':
+              memoryMap(fields['project'])['name'] ??
+              memoryMap(fields['scope'])['projectId'],
+          if (memoryMap(fields['project'])['location'] != null)
+            'Folder': memoryMap(fields['project'])['location'],
+          if (memoryMap(fields['scope'])['taskId'] != null)
+            'Task': memoryMap(fields['scope'])['taskId'],
+          if (memoryMap(fields['scope'])['branchId'] != null)
+            'Branch': memoryMap(fields['scope'])['branchId'],
+        }, label: 'Project scope'),
       if (memoryMap(fields['applicability']).isNotEmpty)
         _fields(fields['applicability'], label: 'Applies when'),
       if ((fields['exceptions'] as List?)?.isNotEmpty == true)
@@ -790,6 +886,35 @@ class _MemoryDialogState extends State<_MemoryDialog> {
 
   Widget _previewBody(Map<String, dynamic> command) {
     final effects = memoryMap(preview!.data['effects']);
+    if (command['kind'] == 'narrow') {
+      final project = memoryMap(effects['project']);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fields(record['claim'], label: 'Memory'),
+          _fields(project['name'], label: 'Use only in'),
+          if (project['location'] != null)
+            _fields(project['location'], label: 'Project folder'),
+          const SizedBox(height: 16),
+          _text(
+            'Future recall will use this memory only in this project. Its wording and evidence stay the same. Limiting a memory does not confirm it.',
+          ),
+          if ((effects['conflicts'] as List?)?.isNotEmpty == true) ...[
+            const SizedBox(height: 16),
+            _text(
+              'This conflicts with existing project knowledge. This memory and the following memories will be held for review:',
+            ),
+            for (final conflict in effects['conflicts'] as List)
+              _fields(memoryMap(conflict)['claim']),
+          ],
+          const SizedBox(height: 12),
+          _text(
+            'Context already sent to an agent remains in its earlier conversation. A later memory request will mark the broader revision as no longer current.',
+            small: true,
+          ),
+        ],
+      );
+    }
     if (command['kind'] == 'forget') {
       final memories = (effects['deletedIds'] as List).length;
       final topics = (effects['deletedTopicIds'] as List).length;

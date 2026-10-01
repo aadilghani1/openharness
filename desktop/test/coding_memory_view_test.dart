@@ -88,6 +88,21 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> capture(WidgetTester tester, String name) async {
+    final output = Platform.environment['HARNESS_MEMORY_CAPTURE_DIR'];
+    if (output == null) return;
+    await tester.runAsync(() async {
+      final image =
+          await (boundary.currentContext!.findRenderObject()
+                  as RenderRepaintBoundary)
+              .toImage(pixelRatio: 1);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      await Directory(output).create(recursive: true);
+      await File('$output/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+  }
+
   testWidgets(
     'detail exposes retained evidence; forgetting requires a concrete preview and defaults to cancel',
     (tester) async {
@@ -177,6 +192,243 @@ void main() {
     expect(find.text('Correct memory'), findsNothing);
     expect(find.text('Memory unavailable'), findsOneWidget);
   });
+
+  testWidgets(
+    'project search is read-only; narrowing previews the selected folder and preserves evidence',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      await tap(tester, 'Limit to a project…');
+      expect(find.text('/synthetic/work/editor'), findsOneWidget);
+      expect(find.text('/synthetic/research/editor'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'research');
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pumpAndSettle();
+      expect(find.text('/synthetic/work/editor'), findsNothing);
+      expect(
+        transport.calls.where(
+          (c) => ['preview', 'apply'].contains(c['action']),
+        ),
+        isEmpty,
+      );
+      await tap(tester, '/synthetic/research/editor');
+      expect(transport.previewed, {
+        'kind': 'narrow',
+        'id': 'synthetic-memory',
+        'revision': 1,
+        'projectId': 'second-project',
+      });
+      expect(find.text('Limit this memory to a project?'), findsOneWidget);
+      expect(
+        find.textContaining('Limiting a memory does not confirm it'),
+        findsOneWidget,
+      );
+      expect((transport.record['scope'] as Map)['projectId'], isNull);
+      await tap(tester, 'Back');
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'research',
+      );
+      await tap(tester, '/synthetic/research/editor');
+      final before = syntheticMemory();
+      final pending = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async =>
+          p['action'] == 'apply' ? pending.future : transport.respond(p);
+      await tester.tap(find.text('Limit to project'));
+      await tester.pump();
+      expect(find.text('Limit to project'), findsNothing);
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Close'))
+            .onPressed,
+        isNull,
+      );
+      pending.complete(transport.respond({'action': 'apply'}));
+      await tester.pumpAndSettle();
+      expect(
+        transport.calls.where((c) => c['action'] == 'apply'),
+        hasLength(1),
+      );
+      for (final key in [
+        'claim',
+        'evidence',
+        'evidenceClass',
+        'state',
+        'applicability',
+        'exceptions',
+      ]) {
+        expect(transport.record[key], before[key]);
+      }
+      await tap(tester, 'Read memory');
+      expect(find.text('/synthetic/research/editor'), findsOneWidget);
+      expect(find.textContaining('Its evidence is unchanged'), findsOneWidget);
+      expect(find.text('Limit to a project…'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a changed revision must be reviewed before another project preview',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      await tap(tester, 'Limit to a project…');
+      transport.record = syntheticMemory(
+        revision: 2,
+        claim: 'A newer preference to review.',
+      );
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Choose a project'), findsNothing);
+      expect(find.textContaining('Review its current details'), findsOneWidget);
+      expect(transport.calls.where((c) => c['action'] == 'preview'), isEmpty);
+      await tap(tester, 'Limit to a project…');
+      await tap(tester, '/synthetic/work/editor');
+      expect(transport.previewed!['revision'], 2);
+      await tap(tester, 'Cancel');
+      expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'late project searches and account changes cannot restore old choices',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      final older = Completer<Map<String, dynamic>>(),
+          newer = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async {
+        if (p['action'] != 'projects') return transport.respond(p);
+        return (p['query'] as Map)['search'] == ''
+            ? older.future
+            : newer.future;
+      };
+      await tester.ensureVisible(find.text('Limit to a project…'));
+      await tester.tap(find.text('Limit to a project…'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'research');
+      await tester.pump(const Duration(milliseconds: 250));
+      newer.complete({
+        'ok': true,
+        'items': [transport.projects.last],
+        'nextBefore': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('/synthetic/research/editor'), findsOneWidget);
+      older.complete({
+        'ok': true,
+        'items': [transport.projects.first],
+        'nextBefore': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('/synthetic/work/editor'), findsNothing);
+      final late = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async => late.future;
+      await tester.enterText(find.byType(TextField), 'work');
+      await tester.pump(const Duration(milliseconds: 250));
+      transport.invalidate();
+      await tester.pumpAndSettle();
+      late.complete({
+        'ok': true,
+        'items': transport.projects,
+        'nextBefore': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Memory unavailable'), findsOneWidget);
+      expect(find.text('/synthetic/work/editor'), findsNothing);
+      expect(find.text('/synthetic/research/editor'), findsNothing);
+      expect(
+        transport.calls.where(
+          (c) => ['preview', 'apply'].contains(c['action']),
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets(
+    'privacy refresh removes excluded project rows from an open picker',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      await tap(tester, 'Limit to a project…');
+      transport.projects.removeLast();
+      transport.learn = false; // A changed library policy snapshot.
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('/synthetic/research/editor'), findsNothing);
+      expect(find.text('/synthetic/work/editor'), findsOneWidget);
+      expect(
+        transport.calls.where(
+          (c) => ['preview', 'apply'].contains(c['action']),
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets(
+    'an unavailable destination refreshes choices without substituting another project',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      await tap(tester, 'Limit to a project…');
+      transport.handle = (p) async {
+        if (p['action'] == 'preview') {
+          transport.projects.removeLast();
+          return {'ok': false, 'error': 'PROJECT_UNAVAILABLE'};
+        }
+        return transport.respond(p);
+      };
+      await tap(tester, '/synthetic/research/editor');
+      expect(find.textContaining('Choose another project'), findsOneWidget);
+      expect(find.text('/synthetic/research/editor'), findsNothing);
+      expect(find.text('/synthetic/work/editor'), findsOneWidget);
+      expect(
+        transport.calls.where((c) => c['action'] == 'preview'),
+        hasLength(1),
+      );
+      expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'search Return and paging only browse; Escape backs out one level',
+    (tester) async {
+      await mount(tester);
+      await tap(tester, 'Read memory');
+      transport.handle = (p) async {
+        if (p['action'] == 'projects') {
+          final query = p['query'] as Map;
+          return {
+            'ok': true,
+            'items': [
+              query['before'] == null
+                  ? transport.projects.first
+                  : transport.projects.last,
+            ],
+            'nextBefore': query['before'] == null ? 9 : null,
+          };
+        }
+        return transport.respond(p);
+      };
+      await tap(tester, 'Limit to a project…');
+      await tester.showKeyboard(find.byType(TextField));
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(transport.calls.where((c) => c['action'] == 'preview'), isEmpty);
+      await tap(tester, 'More projects');
+      expect((transport.calls.last['query'] as Map)['before'], 9);
+      await tap(tester, '/synthetic/research/editor');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Choose a project'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Your coding memory'), findsNWidgets(2));
+      expect(find.text('Choose a project'), findsNothing);
+      expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+    },
+  );
 
   testWidgets(
     'refresh removes forgotten evidence from an already open detail view',
@@ -272,6 +524,32 @@ void main() {
   });
 
   for (final brightness in [Brightness.light, Brightness.dark]) {
+    for (final scale in [1.0, 1.6, 2.0]) {
+      testWidgets(
+        'project choices and preview fit ${brightness.name} at ${scale}x in a short window',
+        (tester) async {
+          const name = 'editor-with-a-very-long-but-recognizable-project-name';
+          const location =
+              '/synthetic/development/a-very-long-path-that-distinguishes-this-checkout/editor';
+          transport.projects.first.addAll({'name': name, 'location': location});
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: Size(scale == 1 ? 760 : 480, 620),
+          );
+          await tap(tester, 'Read memory');
+          await tap(tester, 'Limit to a project…');
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'project-picker-${brightness.name}-${scale}x');
+          await tap(tester, name);
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'scope-preview-${brightness.name}-${scale}x');
+          await tap(tester, 'Cancel');
+          expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
+        },
+      );
+    }
     for (final scale in [1.0, 2.0]) {
       testWidgets(
         'memory review fits ${brightness.name} at ${scale}x and narrow width',
@@ -284,22 +562,7 @@ void main() {
           );
           await tap(tester, 'Read memory');
           expect(tester.takeException(), isNull);
-          final output = Platform.environment['HARNESS_MEMORY_CAPTURE_DIR'];
-          if (output != null) {
-            await tester.runAsync(() async {
-              final image =
-                  await (boundary.currentContext!.findRenderObject()
-                          as RenderRepaintBoundary)
-                      .toImage(pixelRatio: 1);
-              final bytes = await image.toByteData(
-                format: ui.ImageByteFormat.png,
-              );
-              await Directory(output).create(recursive: true);
-              await File('$output/memory-${brightness.name}-${scale}x.png')
-                  .writeAsBytes(bytes!.buffer.asUint8List());
-              image.dispose();
-            });
-          }
+          await capture(tester, 'memory-${brightness.name}-${scale}x');
           await tap(tester, 'Correct memory');
           expect(tester.takeException(), isNull);
           await tap(tester, 'Review correction');

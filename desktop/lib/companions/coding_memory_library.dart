@@ -98,6 +98,12 @@ class CodingMemoryLibrary extends ChangeNotifier {
   Future<Map<String, dynamic>> detail(String id) =>
       _request({'action': 'show', 'id': id});
 
+  Future<Map<String, dynamic>> projects({String search = '', int? before}) =>
+      _request({
+        'action': 'projects',
+        'query': {'search': search, 'limit': 20, 'before': ?before},
+      });
+
   Future<CodingMemoryPreview> preview(Map<String, dynamic> command) async {
     final result = await _request({'action': 'preview', 'command': command});
     return CodingMemoryPreview(

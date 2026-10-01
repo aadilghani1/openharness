@@ -173,6 +173,8 @@ The memory viewer should answer four practical questions: “How do you understa
 
 Show natural statements with scope and evidence. Allow the user to correct a reason, mark an observed tool as a preference, limit a preference to one project, attach an approved reference, or forget it. Do not show personality scores or demand that the user approve an endless stream of obvious lessons. Ask for clarification only when uncertainty materially changes a current decision.
 
+Implemented control: “Limit to a project…” searches known, included coding projects by name or folder. Selecting a project opens a concrete preview; only applying it changes the memory. The claim, evidence and existing corroboration remain intact. Limiting applicability does not count as confirming truth. Conflicting project claims are shown and held for review. Account changes clear the picker; stale revisions require another review, and unavailable destinations are never silently replaced. Moving an already scoped memory or expanding its scope is not offered.
+
 ## First coding workflows and evaluation
 
 Begin with feature implementation, bug fixing, review, and task handoff across Claude Code and Codex. Exercise frontend, backend, and tooling examples so the design is not implicitly frontend-only. Preserve the extensible contexts for other programming domains without claiming untested support for every specialist workflow.

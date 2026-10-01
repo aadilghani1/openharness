@@ -5,7 +5,7 @@ import type { CallerVerdict } from '../pair/learn/approval.js'
 import { isOwnerProcess } from './ownerProcess.js'
 
 let owner: string | null, now: number, control: MemoryControl
-let runtime: Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
+let runtime: Pick<CodingMemoryRuntime, 'ownerKey' | 'libraryStatus' | 'libraryPage' | 'libraryProjects' | 'libraryDetail' | 'libraryPreview' | 'libraryApply'>
 let verify: ReturnType<typeof vi.fn<(id: string) => Promise<CallerVerdict>>>
 const command = { kind: 'forget' as const, id: 'memory', revision: 1 }
 const preview = { command, version: { generation: 1, knowledge: 1, preferences: 'hash' }, effects: { deletedIds: ['memory'] } }
@@ -14,6 +14,7 @@ beforeEach(() => {
   runtime = { ownerKey: () => owner,
     libraryStatus: vi.fn(async () => ({ runtime: { state: 'ready' as const }, preferences: { learn: true, recall: true }, queue: {} as never })),
     libraryPage: vi.fn(async () => ({ items: [], nextCursor: null, version: preview.version })),
+    libraryProjects: vi.fn(async () => ({ items: [], nextBefore: null })),
     libraryDetail: vi.fn(async () => null), libraryPreview: vi.fn(async () => structuredClone(preview)),
     libraryApply: vi.fn(async () => ({ deletedIds: ['memory'], alreadyDeliveredContent: 'not_erased' as const })),
   }
@@ -24,6 +25,9 @@ const request = (payload: Record<string, unknown>, conn = 'connection') => contr
 
 it('requires a verified owner process even for reads and refuses agent tokens and body-supplied authority', async () => {
   expect(await request({ action: 'list', token: 'pair-token' })).toMatchObject({ error: 'PERSON_ONLY' })
+  expect(await request({ action: 'projects', token: 'pair-token' })).toMatchObject({ error: 'PERSON_ONLY' })
+  expect(await request({ action: 'preview', command: { kind: 'narrow', id: 'memory', revision: 1, projectId: 'project' }, token: 'pair-token' }))
+    .toMatchObject({ error: 'PERSON_ONLY' })
   expect(verify).not.toHaveBeenCalled()
   expect(await request({ action: 'list', profileId: 'owner' })).toMatchObject({ error: 'INVALID_INPUT' })
   verify.mockResolvedValue({ ok: false, error: 'INSIDE_HARNESS', detail: 'agent' })
@@ -32,6 +36,12 @@ it('requires a verified owner process even for reads and refuses agent tokens an
   expect(await request({ action: 'status' })).toMatchObject({ error: 'UNVERIFIED' })
   expect(runtime.libraryPage).not.toHaveBeenCalled()
   expect(runtime.libraryStatus).not.toHaveBeenCalled()
+})
+
+it('routes bounded project search through the verified current owner', async () => {
+  expect(await request({ action: 'projects', query: { search: 'editor', limit: 10, before: 100 } })).toMatchObject({ ok: true, items: [] })
+  expect(runtime.libraryProjects).toHaveBeenCalledExactlyOnceWith('owner', { search: 'editor', limit: 10, before: 100 })
+  expect(await request({ action: 'projects', query: { limit: 500 } })).toMatchObject({ error: 'INVALID_INPUT' })
 })
 
 it('binds a one-use capability to the exact owner, process, connection and server-held command', async () => {

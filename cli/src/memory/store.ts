@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { builtinSqlite } from '../lib/sqliteRead.js'
 import { redact } from '../pair/learn/guard.js'
 import { admission, assertSafe, canonical, digest, proposalFingerprint } from './admission.js'
@@ -13,7 +13,7 @@ import type { Database } from './database.js'
 import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
 import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt } from './receipts.js'
 import { visibleEvidenceSql } from './visibility.js'
-import { correctionSchema, libraryCommandSchema, libraryQuerySchema, summarize, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
+import { correctionSchema, libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, summarize, type LibraryProjectQuery, type LibraryProject, type LibraryProjects, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
   type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
@@ -82,6 +82,10 @@ export class CodingMemoryStore {
         db!.exec(`
           CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, included INTEGER NOT NULL CHECK(included IN (0,1)));
+          CREATE TABLE IF NOT EXISTS memory_project_names (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, location TEXT NOT NULL
+          );
           CREATE TABLE IF NOT EXISTS memory_project_policy (
             project_id TEXT PRIMARY KEY REFERENCES projects(id), epoch INTEGER NOT NULL, live_from INTEGER NOT NULL
           );
@@ -114,6 +118,11 @@ export class CodingMemoryStore {
           CREATE TABLE IF NOT EXISTS revisions (
             memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
             revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(memory_id, revision)
+          );
+          CREATE TABLE IF NOT EXISTS memory_scope_changes (
+            memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL, from_scope TEXT NOT NULL, to_scope TEXT NOT NULL,
+            changed_at INTEGER NOT NULL, PRIMARY KEY(memory_id, revision)
           );
           CREATE TABLE IF NOT EXISTS evidence (
             memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
@@ -217,10 +226,16 @@ export class CodingMemoryStore {
     const key = this.locatorKey(locator)
     return this.transaction(() => {
       const existing = this.db.prepare('SELECT project_id FROM project_locators WHERE locator_key = ?').get(key)
-      if (existing) return String(existing.project_id)
-      const id = randomUUID()
-      this.registerProject(id)
-      this.db.prepare('INSERT INTO project_locators(locator_key, project_id) VALUES(?, ?)').run(key, id)
+      const id = existing ? String(existing.project_id) : randomUUID()
+      if (!existing) {
+        this.registerProject(id)
+        this.db.prepare('INSERT INTO project_locators(locator_key, project_id) VALUES(?, ?)').run(key, id)
+      }
+      // Owner-facing identity only. Labels and local paths are never added to extraction or recall.
+      // A worktree uses its common repository directory; an explicitly linked clone keeps the first label.
+      const location = locator.kind === 'git_common_directory' && basename(locator.path) === '.git' ? dirname(locator.path) : locator.path
+      this.db.prepare('INSERT OR IGNORE INTO memory_project_names(project_id,name,location) VALUES(?,?,?)')
+        .run(id, redact(basename(location) || 'Project').slice(0, 160), redact(location))
       return id
     })
   }
@@ -470,10 +485,7 @@ export class CodingMemoryStore {
       this.withholdConflicts(record)
       this.writeRecord(record)
       this.recordSupport(record, draft)
-      this.learning.invalidateSources([...previous.evidence.map(evidence => evidence.sourceEventId),
-        ...this.db.prepare('SELECT source_id FROM memory_support WHERE memory_id=? AND fingerprint=?')
-          .all(previous.id, proposalFingerprint(asDraft(previous))).map(row => String(row.source_id)),
-      ])
+      this.invalidateLearning(previous)
       return record
     })
   }
@@ -553,7 +565,61 @@ export class CodingMemoryStore {
     if (!record) return null
     const sources = [...new Set(record.evidence.map(evidence => evidence.sourceEventId))].map(id => this.rawSource(id)!)
       .map(({ id, engine, sessionId, role, observedAt }) => ({ id, engine, sessionId, role, observedAt }))
-    return { record, sources, support: this.support(id, access) }
+    const scopeChanges: LibraryDetail['scopeChanges'] = this.db.prepare(`SELECT * FROM memory_scope_changes WHERE memory_id=?
+      ORDER BY revision DESC LIMIT 20`).all(id).map(row => ({ revision: Number(row.revision),
+        from: JSON.parse(String(row.from_scope)), to: JSON.parse(String(row.to_scope)), changedAt: Number(row.changed_at), actor: 'owner' }))
+    return { record, sources, support: this.support(id, access), scopeChanges,
+      project: record.scope.projectId ? this.projectLabel(record.scope.projectId) : null }
+  }
+
+  libraryProjects(owner: string, input: LibraryProjectQuery = {}): LibraryProjects {
+    this.requireOwner(owner)
+    const query = parse(libraryProjectQuerySchema, input)
+    const limit = query.limit ?? 20
+    // Privacy applies before the bounded page. Names/paths are literal search text, never SQL patterns.
+    const rows = this.db.prepare(`SELECT p.rowid,p.id,n.name,n.location FROM projects p
+      LEFT JOIN memory_project_names n ON n.project_id=p.id WHERE p.included=1 AND p.rowid<?
+      AND instr(lower(COALESCE(n.name,p.id) || ' ' || COALESCE(n.location,'')),lower(?))>0
+      ORDER BY p.rowid DESC LIMIT ?`).all(query.before ?? Number.MAX_SAFE_INTEGER, query.search ?? '', limit + 1)
+    return { items: rows.slice(0, limit).map(row => this.projectLabel(String(row.id))),
+      nextBefore: rows.length > limit ? Number(rows[limit - 1].rowid) : null }
+  }
+
+  private projectLabel(id: string): LibraryProject {
+    const row = this.db.prepare('SELECT name,location FROM memory_project_names WHERE project_id=?').get(id)
+    return { id, name: row ? String(row.name) : `Project ${id}`, location: row ? String(row.location) : null }
+  }
+
+  /** Restrict applicability through the person-only preview flow; this is not new truth evidence. */
+  private libraryNarrow(owner: string, id: string, revision: number, projectId: string): LibraryPreview['effects'] {
+    this.requireOwner(owner)
+    return this.transaction(() => {
+      const access = this.ownerRecordAccess(id)
+      if (!access) throw new MemoryError('not_found')
+      const previous = this.requireRecord(id, revision, access)
+      if (previous.scope.projectId) throw new MemoryError('scope_narrowing_only')
+      if (!['active', 'tentative', 'needs_verification'].includes(previous.state)) throw new MemoryError('memory_not_active')
+      if (this.db.prepare('SELECT included FROM projects WHERE id=?').get(projectId)?.included !== 1) throw new MemoryError('project_unavailable')
+      const scope = { ...previous.scope, projectId }
+      const draft = { ...asDraft(previous), scope }
+      this.assertWritable(scope, { ...access, projectIds: [projectId] }, this.controls().generation, true)
+      const admitted = this.validateEvidence(draft)
+      const record: MemoryRecord = { ...previous, scope, revision: previous.revision + 1, updatedAt: this.now(),
+        state: previous.state === 'active' ? admitted : previous.state }
+      const conflicts = this.withholdConflicts(record)
+      this.writeRecord(record)
+      // The claim is unchanged. Carry every existing independent root to the restricted scope,
+      // including corroboration beyond record.evidence; narrowing adds no new confirmation.
+      this.db.prepare(`INSERT OR IGNORE INTO memory_support
+        (memory_id,fingerprint,root_id,source_id,quote,kind,session_key,observed_at)
+        SELECT memory_id,?,root_id,source_id,quote,kind,session_key,observed_at FROM memory_support
+        WHERE memory_id=? AND fingerprint=?`).run(proposalFingerprint(draft), id, proposalFingerprint(asDraft(previous)))
+      this.invalidateLearning(previous)
+      const scopeChange = { revision: record.revision, from: previous.scope, to: scope, changedAt: this.now(), actor: 'owner' as const }
+      this.db.prepare('INSERT INTO memory_scope_changes VALUES(?,?,?,?,?)')
+        .run(id, record.revision, canonical(previous.scope), canonical(scope), scopeChange.changedAt)
+      return { record: summarize(record), scopeChange, project: this.projectLabel(projectId), conflicts: conflicts.map(summarize) }
+    })
   }
 
   libraryCorrect(owner: string, id: string, revision: number, input: MemoryCorrection,
@@ -610,6 +676,7 @@ export class CodingMemoryStore {
     switch (command.kind) {
       case 'correct': return { record: summarize(this.libraryCorrect(owner, command.id, command.revision, command.fields, command.supersede)) }
       case 'forget': return this.libraryForget(owner, command.id, command.revision)
+      case 'narrow': return this.libraryNarrow(owner, command.id, command.revision, command.projectId)
       case 'configure': return { preferences: this.changePreferences(command.preferences, command.expected, enabled) }
     }
   }
@@ -898,17 +965,21 @@ export class CodingMemoryStore {
     return record
   }
 
-  private withholdConflicts(record: MemoryRecord): void {
-    if (record.state !== 'active') return
+  private withholdConflicts(record: MemoryRecord): MemoryRecord[] {
+    if (record.state !== 'active') return []
     const peers = this.db.prepare("SELECT data FROM memories WHERE scope_key = ? AND conflict_key = ? AND id != ? AND state IN ('active', 'needs_verification')")
       .all(canonical(record.scope), record.conflictKey, record.id).map(row => this.record(row))
       .filter(peer => this.evidenceIncluded(peer) && peer.claim !== record.claim && conditionsOverlap(peer.applicability, record.applicability))
-    if (!peers.length) return
+    if (!peers.length) return []
     record.state = 'needs_verification'
     for (const peer of peers) {
       if (peer.state === 'needs_verification') continue
-      this.writeRecord({ ...peer, revision: peer.revision + 1, state: 'needs_verification', updatedAt: this.now() })
+      peer.revision++
+      peer.state = 'needs_verification'
+      peer.updatedAt = this.now()
+      this.writeRecord(peer)
     }
+    return peers
   }
 
   private writeRecord(record: MemoryRecord, invalidateDescendants = true): void {
@@ -966,6 +1037,13 @@ export class CodingMemoryStore {
     // Independent support can connect overlapping evidence and expand a future forget operation,
     // without revising the meaning. Replayed roots do not change that dependency snapshot.
     if (changed) this.bumpKnowledgeEpoch()
+  }
+
+  private invalidateLearning(previous: MemoryRecord): void {
+    this.learning.invalidateSources([...previous.evidence.map(evidence => evidence.sourceEventId),
+      ...this.db.prepare('SELECT source_id FROM memory_support WHERE memory_id=? AND fingerprint=?')
+        .all(previous.id, proposalFingerprint(asDraft(previous))).map(row => String(row.source_id)),
+    ])
   }
 
   private forgetDependencies(id: string): MemoryRecord[] {
