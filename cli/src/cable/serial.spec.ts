@@ -12,6 +12,7 @@ import { SerialLink } from './serial.js'
 function port(nativeFd = 43) {
   const stream = Object.assign(new EventEmitter(), {
     _handle: { fd: nativeFd },
+    destroyed: false,
     write: vi.fn((_bytes: Uint8Array, done: (error?: Error) => void) => { queueMicrotask(() => done()); return true }),
     destroy: vi.fn(() => { queueMicrotask(() => stream.emit('close')); return stream }),
   })
@@ -123,6 +124,20 @@ describe('event-driven serial link', () => {
     expect(closed).toHaveBeenCalledExactlyOnceWith('end of stream')
     expect(received).not.toHaveBeenCalled()
     expect(stream.destroy).toHaveBeenCalledTimes(event === 'end' ? 1 : 0)
+  })
+
+  it.each(['requested', 'native'])('rejects a cancelled write with no callback error after %s close', async mode => {
+    const stream = port()
+    let complete!: (error?: Error) => void
+    stream.write.mockImplementation((_bytes, done) => { complete = done; return false })
+    const link = await SerialLink.open('/dev/fake', vi.fn(), vi.fn())
+    const writing = expect(link.write(Buffer.from('interrupted'))).rejects.toThrow('port closed')
+    await tick()
+    if (mode === 'requested') await link.close('user closed')
+    else stream.destroyed = true // Native destruction can precede the error/close events.
+    complete()
+    await writing
+    await link.close()
   })
 
   it.each(['EIO', undefined])('preserves disconnect error %s and does not deliver data after close', async code => {

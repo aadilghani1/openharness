@@ -11,7 +11,9 @@ close and `O_NOCTTY` are preserved; no native dependency is added.
 macOS 26.6.2 arm64, managed Node 22.23.2/libuv 1.51.0. Each observation opens
 one or three **owned, silent PTYs**, warms for 350 ms, and records 12 seconds of
 Node CPU time. Three observations per variant and port count alternate order.
-Initialization and teardown are outside the interval. A calibrated native
+Initialization and teardown are outside the interval. The measured candidate
+precedes the write-callback cancellation guard; that guard is inactive during
+this idle workload. The raw record preserves the exact measured source hash. A calibrated native
 sampler records CPU, footprint and interrupt wakeups over 10 seconds inside it.
 
 | Open ports | Node CPU before → after, % of one core | CPU reduction | Interrupt wakeups/sec before → after |
@@ -56,6 +58,13 @@ three unchanged suites: hook subprocess deadlines, installer subprocess deadline
 and installed OpenCode flags. A clean-main run reproduced hook deadlines and all
 five OpenCode failures; its installer checks passed. These results are retained
 as failures, not reported as a completely green local suite.
+
+The first native compatibility run caught a Node 20 cancellation difference on
+both operating systems: its write callback can omit an error after stream
+destruction. The production callback now rejects when the link or stream is
+closed, so an interrupted frame cannot be acknowledged as complete. This is
+covered by the existing native unplug/backpressure cases and two focused unit
+cases. [Node 20 source](https://github.com/nodejs/node/blob/v20.19.0/lib/internal/stream_base_commons.js#L75-L94).
 
 The implementation reads the internal native handle's `fd` once at construction.
 On POSIX, libuv normally reopens the TTY and owns that duplicate; its fallback

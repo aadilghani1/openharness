@@ -277,7 +277,13 @@ export class SerialLink {
   private async writeFrame(bytes: Uint8Array): Promise<void> {
     if (this.closed) throw new Error('port closed')
     await new Promise<void>((resolve, reject) => {
-      this.stream.write(bytes, (error) => { if (error) reject(error); else resolve() })
+      this.stream.write(bytes, (error) => {
+        if (error) reject(error)
+        // Node 20 can invoke a cancelled native write's callback without an error
+        // after destroying its stream. Do not acknowledge that interrupted frame.
+        else if (this.closed || this.stream.destroyed) reject(new Error('port closed'))
+        else resolve()
+      })
     })
   }
 
