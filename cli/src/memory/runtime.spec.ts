@@ -226,7 +226,8 @@ it('never captures an unclassified general-domain DSH and does not resolve its w
   expect((await runtime.recall('agent', { query: 'coding' })).status).toBe('denied')
 })
 
-it('prepares a host-bound prompt receipt and rejects a native-session replacement acknowledging it', async () => {
+it.each(['2.1.286', '2.1.287'])('prepares a Claude %s host-bound prompt receipt and rejects a native-session replacement acknowledging it', async cliVersion => {
+  sessions[0].cliVersion = cliVersion
   await learn()
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
   expect(prepared.packet.items).toHaveLength(1)
@@ -282,7 +283,7 @@ it('shares a correction and deletion across Codex and OpenCode without copying t
     evidence: _evidence, evidenceClass: _class, ...draft } = store.read(first.id, access)!
   const corrected = store.correctFromUser(first.id, first.revision,
     { ...draft, claim: 'Group related coding changes together.', futureAction: 'Group related coding changes together.' }, access)
-  for (const [engine, cliVersion] of [['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
     sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
     const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
     expect(prepared.packet.items).toHaveLength(1)
@@ -290,7 +291,7 @@ it('shares a correction and deletion across Codex and OpenCode without copying t
   }
   expect(store.list(access)).toHaveLength(1)
   store.forget(first.id, corrected.revision, access)
-  for (const [engine, cliVersion] of [['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
     sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
     expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.items).toEqual([])
   }

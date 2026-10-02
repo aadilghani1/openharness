@@ -799,3 +799,26 @@ cover an empty queue, Recall-only mode, identity changes, watching/experimental-
 This is lifecycle validation with synthetic state. The live stopped conversation and its backlog
 were left untouched; a fresh model connection and real-user extraction-quality validation remain
 necessary before claiming end-to-end completion.
+
+### Claude 2.1.287 compatibility — October 2
+
+The installed Claude release had advanced to 2.1.287 while the extraction and prompt-recall
+allowlists still stopped at earlier native observations. The actual production extraction adapter
+initially refused it as `claude_version_uncertified`, with zero provider requests. This prevented
+learning through that selected companion runtime; it was not evidence of a model-quality failure.
+
+The [native recording](../research/2026-10-02-memory-claude-2.1.287.json) now covers this exact release.
+A disposable launcher redirects only native home/config/provider environment, forwards the actual
+version and unchanged production arguments, and uses fake credentials against localhost. The real
+adapter accepted the synthetic completed response with an empty tool catalogue, omitted the
+workspace-instruction canary, and rejected a provider-sent Bash attempt before any fixture hook,
+MCP command, or shell sentinel was written. The selected mock model and effort remain explicit.
+The separate native lifecycle probe observed fresh context on the next prompt after resume,
+manual compaction, and a model change.
+
+Only 2.1.287 is added to the existing tested versions. Unknown releases still decline automatic
+extraction and prompt delivery; explicit scoped recall remains available. Host-bound receipt tests
+and shared correction/forgetting checks cover the new Claude version alongside Codex and OpenCode.
+No real account, model selection, conversation, installed application, or release was changed.
+Print-mode transport is the measured boundary: production account/profile changes, interactive TUI
+paths, semantic quality, and coding-task usefulness are not established by these mock observations.
