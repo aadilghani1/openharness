@@ -2069,6 +2069,10 @@ mod tests {
         let Some(Modal::NewHarness(mut f)) = app.modal.take() else {
             panic!()
         };
+        assert_eq!(f.draft.what.engine, "opencode");
+        assert_eq!(f.draft.permission, "auto");
+        // Exercise remembered per-engine choices independently of the launch default.
+        set_engine(&mut f, "codex");
         f.draft.permission = "readOnly".into();
         set_engine(&mut f, "claude");
         assert_eq!(f.draft.permission, "auto");
