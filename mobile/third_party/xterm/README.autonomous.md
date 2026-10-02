@@ -253,6 +253,37 @@ it if one is dropped.
     `lib/src/ui/infinite_scroll_view.dart`). `TerminalView.altBufferScrollPhysics`
     reaches the `Scrollable` that turns a drag into wheel events, layered over
     the platform's physics. Its extents are infinite, so a platform fling there
-    never meets an end and coasted for seconds, a wheel event per line; the
-    phone passes a short fling (`mobile/lib/terminal/remote_scroll_physics.dart`).
+    never meets an end, and its slow tail arrives as a line at a time; the
+    phone keeps the platform's fling and ends it once it is slower than about
+    ten lines a second (`mobile/lib/terminal/remote_scroll_physics.dart`).
     Null keeps the platform's physics, as upstream.
+
+19. **The alternate buffer's scroll waits for the program**
+    (`lib/src/terminal_view.dart`, `lib/src/ui/scroll_handler.dart`). With
+    `TerminalView.altBufferScrollPaced`, the wheel events of a scroll go out in
+    batches, at most two of them unanswered by a write from the program; lines
+    scrolled meanwhile join the next batch, at most a screen of them, and a
+    turn back drops what still waits. A batch with no answer in 120 ms counts
+    as answered — a program at the end of its history redraws nothing. A remote
+    program redraws at the far end of a link: a wheel event per line, sent as
+    fast as a fling scrolls, queued behind the redraws before it and moved its
+    screen long after the fling had stopped. False sends each line as it is
+    scrolled, as upstream.
+
+20. **A full-screen program's scroll slides into place**
+    (`lib/src/ui/remote_scroll_animator.dart`, `lib/src/ui/scroll_shift.dart`,
+    `lib/src/ui/render.dart`, `lib/src/ui/line_picture_cache.dart`,
+    `lib/src/ui/painter.dart`, `lib/src/ui/scroll_handler.dart`,
+    `lib/src/terminal_view.dart`). On the alternate screen a scroll is the
+    program's redraw, landing a line or more on from the last at uneven moments,
+    so the text jumped. With `TerminalView.altBufferScrollAnimated`, a redraw
+    within 400 ms of a wheel event is compared with the screen before it, one
+    signature per row (`detectScrollShift`): when at least three rows, and most
+    of those that could show it, agree on one shift and no other comes close,
+    the rows that moved are drawn that far back — where they were — and eased to
+    their place (e^-1 per 40 ms), clipped to the rows that changed so the fixed
+    rows stay put. The rows that left are drawn from their last recording, taken
+    out of the line cache (`LinePictureCache.take`) as they slide out. Purely
+    visual: emulator, hit-testing and selection see the new screen at once. A
+    change that is not a recognisable scroll ends any slide on the spot, as the
+    screen behaved before. False draws each redraw as it lands, as upstream.

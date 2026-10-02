@@ -48,6 +48,20 @@ class LinePictureCache {
     canvas.restore();
   }
 
+  /// Hands over [line]'s recording if it still shows [version], and forgets it:
+  /// the caller owns the picture from here, and disposes it. Null when there is
+  /// none, or it shows another version.
+  ///
+  /// What a slide draws the rows that left the screen with
+  /// (`RemoteScrollAnimator`): by the time it knows they left, the line has
+  /// been written over, and only this recording still shows what it was.
+  Picture? take(BufferLine line, int version) {
+    final entry = _pictures[line];
+    if (entry == null || entry.version != version) return null;
+    _pictures.remove(line);
+    return entry.picture;
+  }
+
   /// Drops every recording — the font, the scale or the colours changed, or the
   /// lines belong to an emulator that is gone.
   void clear() {

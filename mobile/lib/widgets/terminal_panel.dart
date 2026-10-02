@@ -1286,6 +1286,8 @@ class _TerminalPanelState extends State<TerminalPanel>
                             ? (up) => session.sendScrollCommand(up, 1)
                             : null,
                         altBufferScrollPhysics: const RemoteScrollPhysics(),
+                        altBufferScrollPaced: true,
+                        altBufferScrollAnimated: true,
                       ),
                     ),
                   ),

@@ -171,6 +171,11 @@ class TerminalPainter {
   void paintLineCached(Canvas canvas, Offset offset, BufferLine line) =>
       _linePictures.draw(canvas, offset, line);
 
+  /// AUTONOMOUS PATCH: [line]'s last recording, handed over to the caller if it
+  /// still shows [version] — see [LinePictureCache.take].
+  Picture? takeLinePicture(BufferLine line, int version) =>
+      _linePictures.take(line, version);
+
   /// Paints [line] to [canvas] at [offset]. The x offset of [offset] is usually
   /// 0, and the y offset is the top of the line.
   ///
