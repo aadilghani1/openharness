@@ -146,7 +146,7 @@ def install(config, source, target):
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
-                     'root/customize_airootfs.sh']:
+                     'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh']:
             (target / path).unlink(missing_ok=True)
         for path in ['etc/systemd/system/getty@tty1.service.d', 'root/.ssh']:
             shutil.rmtree(target / path, ignore_errors=True)

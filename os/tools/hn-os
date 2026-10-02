@@ -14,6 +14,8 @@ def main():
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/install.py', *args])
     if command == 'browser':
         os.execv('/usr/bin/hn-browser', ['hn-browser', *args])
+    if command in ['checkpoint', 'update', 'recover']:
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/system.py', command, *args])
     if command == 'status':
         print(Path('/usr/share/harness-os/lock.json').read_text())
         subprocess.run(['systemctl', '--user', '--no-pager', 'status', 'harness-daemon', 'hn-screen'])
@@ -25,7 +27,7 @@ def main():
                 'processes': subprocess.check_output(['ps', '-eo', 'comm,rss,pcpu', '--sort=-rss'], text=True)}
         print(json.dumps(data, indent=2))
         return
-    raise SystemExit('Usage: hn-os [status | install | browser [URL] | measure]')
+    raise SystemExit('Usage: hn-os [status | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
 
 
 if __name__ == '__main__':

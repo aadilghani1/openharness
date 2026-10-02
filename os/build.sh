@@ -33,7 +33,7 @@ EOF
 mkdir -p "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/repo"
 cp -a root/. "$BUILD_DIR/package/"
 cp installer.py "$BUILD_DIR/package/usr/lib/harness-os/install.py"
-install -m 755 tools/customize-live.sh "$BUILD_DIR/package/usr/lib/harness-os/setup-live"
+cp system.py "$BUILD_DIR/package/usr/lib/harness-os/system.py"
 install -m 755 tools/hn-os "$BUILD_DIR/package/usr/bin/hn-os"
 cp lock.json "$BUILD_DIR/package/usr/share/harness-os/lock.json"
 if [[ -n ${HARNESS_OS_RUNTIME_DIR:-} ]]; then
@@ -73,14 +73,21 @@ depend = tmux
 depend = foot
 depend = labwc
 EOF
-cat > "$BUILD_DIR/package/.INSTALL" <<'EOF'
-post_install() {
-    /usr/lib/harness-os/setup-live
-}
-EOF
-bsdtar --zstd -cf "$BUILD_DIR/repo/harness-os-0.1.0-1-x86_64.pkg.tar.zst" -C "$BUILD_DIR/package" .PKGINFO .INSTALL etc usr
+bsdtar --zstd -cf "$BUILD_DIR/repo/harness-os-0.1.0-1-x86_64.pkg.tar.zst" -C "$BUILD_DIR/package" .PKGINFO etc usr
 repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.zst
 cp -a live/. "$PROFILE/airootfs/"
+mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
+cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"
+cat > "$PROFILE/airootfs/etc/pacman.d/hooks/99-harness-live.hook" <<'EOF'
+[Trigger]
+Operation = Install
+Type = Package
+Target = harness-os
+[Action]
+Description = Preparing the Programmer OS live session
+When = PostTransaction
+Exec = /bin/bash /root/setup-live.sh
+EOF
 cat >> "$PROFILE/profiledef.sh" <<EOF
 
 iso_name="programmer-os"

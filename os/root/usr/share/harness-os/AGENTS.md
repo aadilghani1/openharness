@@ -1,0 +1,58 @@
+# Programmer OS
+
+The user works in hn agent panes. Keep the system small. Install the tools needed
+for the current task, and use terminal output, diffs and tests to review the work.
+Open `hn-browser URL` only when a browser helps. Do not add a desktop shell,
+launcher, panel, editor, model server, or background service without the user's
+request. Ordinary terminal panes remain available with Ctrl+B, then N → Terminal.
+
+## System operations
+
+- This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
+- Use the ordinary package manager; no private package ecosystem is required.
+  `sudo pacman -S --needed PACKAGE` installs from the system's complete dated
+  repository snapshot. Never run `pacman -Sy` followed by individual installs.
+- `sudo hn-os update` makes a checkpoint, advances all Arch repositories to
+  yesterday's complete snapshot, and performs a full upgrade. It asks through
+  pacman before the package transaction. Reboot after kernel/driver upgrades.
+- Package transactions also create checkpoints automatically. A checkpoint
+  includes the root filesystem, package database, kernel, initramfs and bootloader
+  files. `/home` and its projects are separate and are not rolled back.
+- `sudo hn-os checkpoint` explicitly saves the current system. Checkpoints use
+  disk space; list them with `sudo ls /.snapshots`. Do not delete them blindly.
+- Recovery runs from the live USB against an unmounted installed root device:
+  `sudo hn-os recover /dev/sda3` lists checkpoints;
+  `sudo hn-os recover /dev/sda3 CHECKPOINT` restores one. For encrypted installs,
+  first use `sudo cryptsetup open /dev/sda3 hn-recovery`, then use
+  `/dev/mapper/hn-recovery` in the recovery command. Device names vary; inspect
+  `lsblk -f` first. Recovery changes the installed system, not user projects.
+- The user's account has password-protected sudo. Do not disable authentication,
+  browser sandboxing, disk encryption or the session lock to make a task easier.
+
+## Network and hardware
+
+- Ethernet uses NetworkManager automatically. For Wi-Fi, use
+  `nmcli device wifi list` and `nmcli --ask device wifi connect SSID`.
+  Keep passwords out of shell arguments and transcripts.
+- Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
+- `Super+B` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
+  `Super+L` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
+- On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
+  generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
+  Install both from the same repository snapshot, regenerate initramfs with
+  `sudo mkinitcpio -P`, reboot, and verify `nvidia-smi` before claiming GPU compute
+  works. Older NVIDIA GPUs need a different driver assessment.
+- CUDA SDKs, model weights and model servers are installed only when a task needs
+  them. A driver working is not evidence that a particular AI framework supports
+  the GPU; test the actual framework and workload.
+
+## Diagnosis
+
+`hn-os status`, `hn-os measure`, `systemctl --user status hn-screen harness-daemon`
+and `journalctl --user -u hn-screen -u harness-daemon` show the session state.
+Restarting `hn-screen` should reconnect to existing work. Do not restart or kill
+the agent runtime as the first response to a display problem.
+
+Source: https://github.com/autonomous-ai/openharness/tree/main/os
+NVIDIA package: https://archlinux.org/packages/extra/x86_64/nvidia-open-lts/
+NVIDIA support: https://github.com/NVIDIA/open-gpu-kernel-modules

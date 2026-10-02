@@ -74,6 +74,42 @@ password and then enters hn. An unencrypted install requires console login.
 `Super+L` locks the session. Recovery remains possible through another console
 or the USB; the machine's owner retains normal Linux administrator control.
 
+## Updates and recovery
+
+`sudo hn-os update` saves a checkpoint and upgrades the whole system to yesterday's
+complete Arch repository snapshot. Use `--snapshot YYYY/MM/DD` to choose a complete
+snapshot at or after the current one. Packages remain signed by Arch; the OS does not
+run an updater or download anything on a schedule.
+
+Every package transaction also saves a checkpoint. It contains Btrfs root and a
+checksummed copy of `/boot`, so the package database, kernel, modules and initramfs
+can be recovered together. Home and projects stay outside root rollback.
+Checkpoints consume disk space and are retained until explicitly removed.
+
+To recover, boot the USB, inspect `lsblk -f`, and run `sudo hn-os recover ROOT_DEVICE`
+to list checkpoints. For an encrypted disk, first unlock it with
+`sudo cryptsetup open ROOT_PARTITION hn-recovery`, then use
+`/dev/mapper/hn-recovery` as `ROOT_DEVICE`. Run
+`sudo hn-os recover ROOT_DEVICE CHECKPOINT` to restore. Recovery requires the
+installed root and boot filesystems to be unmounted. The previous root is retained.
+This initial recovery path requires the USB; it is not an automatic boot fallback.
+
+## NVIDIA and local AI
+
+The small base image carries Intel/AMD graphics and Linux firmware. NVIDIA's
+compute driver is installed on demand with
+`sudo pacman -S --needed nvidia-open-lts nvidia-utils`, followed by
+`sudo mkinitcpio -P` and a reboot. These are the matching packages for the included
+LTS kernel and supported Turing-or-newer GPUs, including the intended RTX targets.
+See [Arch's package](https://archlinux.org/packages/extra/x86_64/nvidia-open-lts/)
+and [NVIDIA's supported GPUs](https://github.com/NVIDIA/open-gpu-kernel-modules).
+No NVIDIA hardware validation has been performed yet. Verify `nvidia-smi` and the
+actual AI workload on each physical machine before treating it as supported.
+
+Agent executables are installed through hn's existing engine install recipes
+when selected. Accounts, API credentials and model downloads are supplied by the
+owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
+
 ## Validation plan
 
 1. Installer input/disk safety tests, shell/Python/XML/JSON syntax, workflow lint.
