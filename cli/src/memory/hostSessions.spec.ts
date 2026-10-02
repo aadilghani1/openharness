@@ -43,6 +43,19 @@ it('uses personal scope only for the current verified collection conversation, n
   expect(roster.refresh([], no, no, 'another_agent')).toEqual([])
 })
 
+it('binds OpenCode to the host database and includes only the verified collection conversation in personal scope', () => {
+  const roster = new MemorySessionRoster('/home/person', Date.now, { opencode: '/native/opencode.db' })
+  const companion = { ...session, engine: 'opencode', transcriptPath: null, dsh: 'autonomous/pair' }
+  expect(roster.refresh([companion], no, no)).toEqual([])
+  expect(roster.refresh([companion], no, no, 'agent')).toMatchObject([
+    { engine: 'opencode', scope: 'profile', transcriptPath: '/native/opencode.db', sessionId: 'native' },
+  ])
+  expect(roster.refresh([{ ...companion, transcriptPath: '/model/supplied/path' }], no, no, 'agent')[0].transcriptPath)
+    .toBe('/native/opencode.db')
+  expect(roster.refresh([companion], no, () => true, 'agent')).toEqual([])
+  expect(new MemorySessionRoster('/home/person').refresh([companion], no, no, 'agent')).toEqual([])
+})
+
 it('recognizes fresh requests in both native event formats without treating their streamed replies as new activity', () => {
   const claude = newTurnState()
   const user = lineToEvents(JSON.stringify({ type: 'user', uuid: 'question', message: { role: 'user', content: 'Fix the parser.' } }), claude)

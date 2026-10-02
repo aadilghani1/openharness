@@ -7,7 +7,7 @@ import { visibleEvidenceSql } from './visibility.js'
 import { MemoryError, parse, type Conditions, type MemoryAccess, type MemoryRecord, type RecallPacket, type RecallRequest } from './types.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
-const bindingSchema = z.object({ engine: z.enum(['claude', 'codex']), sessionId: id, projectId: id.nullable(),
+const bindingSchema = z.object({ engine: z.enum(['claude', 'codex', 'opencode']), sessionId: id, projectId: id.nullable(),
   route: z.enum(['prompt_hook', 'mcp', 'manual']) }).strict()
 /** Always constructed from the authenticated host session, never copied from agent arguments. */
 export type MemoryDeliveryBinding = z.infer<typeof bindingSchema>
@@ -36,7 +36,7 @@ export interface MemoryRecallUse {
 }
 /** Ephemeral host identities are supplied by the runtime, never persisted in activity rows. */
 export const activityReceiversSchema = z.array(z.object({ agentId: id,
-  engine: z.enum(['claude', 'codex']), sessionId: id }).strict()).max(128)
+  engine: z.enum(['claude', 'codex', 'opencode']), sessionId: id }).strict()).max(128)
 export type ActivityReceiver = z.infer<typeof activityReceiversSchema>[number]
 export interface RecallActivity {
   agentId: string; engine: MemoryDeliveryBinding['engine']; projectId: string | null

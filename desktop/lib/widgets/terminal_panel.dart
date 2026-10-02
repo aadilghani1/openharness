@@ -2731,11 +2731,12 @@ class _TerminalHeader extends StatelessWidget {
     // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
     final showModelPicker = modelPickerSupports(session.engineId);
-    // The picker: a model id up to 220px and its padding.
+    // Both text selectors keep their natural width until the title has yielded.
     final pickerWidth =
-        (showModelPicker ? 250.0 : 0.0) + (agent != null ? 90.0 : 0.0);
-    final controlsWidth = onClose != null ? PaneHeaderButton.width : 0.0;
-    final actionsWidth = pickerWidth + controlsWidth;
+        (showModelPicker ? 232.0 : 0.0) + (agent != null ? 140.0 : 0.0);
+    // A domain harness has a different identity from its coding agent. The
+    // latter is already named by the selector on the right.
+    final showIdentityMark = agent == null || agent.dsh != null;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2750,6 +2751,13 @@ class _TerminalHeader extends StatelessWidget {
           builder: (context, constraints) {
             final scale = grid.appTextScaleOf(context);
             final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+            final controlsWidth = onClose != null
+                ? PaneHeaderButton.width
+                : 0.0;
+            final controlsGap = controlsWidth > 0 && pickerWidth > 0
+                ? 8.0
+                : 0.0;
+            final actionsWidth = pickerWidth + controlsGap + controlsWidth;
             // At the smallest widths, connection state takes the leading
             // mark's place so the pane name survives beside the fixed tools.
             final leadingStatus =
@@ -2799,7 +2807,7 @@ class _TerminalHeader extends StatelessWidget {
                     )
                   : 16.0;
               return math.min(
-                17 + 10 + width + 8 + statusRoom + 8,
+                (showIdentityMark ? 27 : 0) + width + 8 + statusRoom + 8,
                 constraints.maxWidth * .45,
               );
             }
@@ -2807,6 +2815,7 @@ class _TerminalHeader extends StatelessWidget {
             final desiredRightWidth = narrow
                 ? math.max(
                     controlsWidth +
+                        controlsGap +
                         (showModelPicker ? 96.0 : 0.0) +
                         (agent != null ? 90.0 : 0.0) +
                         badgeWidth,
@@ -2820,30 +2829,19 @@ class _TerminalHeader extends StatelessWidget {
                   );
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
-              compact
-                  ? controlsWidth +
-                        math.min(
-                          pickerWidth,
-                          math.max(
-                            agent != null ? 180.0 : 56.0,
-                            (constraints.maxWidth - controlsWidth) * .38,
-                          ),
-                        )
-                  : desiredRightWidth,
-              math.max(0.0, constraints.maxWidth - 99),
+              compact ? actionsWidth : desiredRightWidth,
+              math.max(0.0, constraints.maxWidth - (compact ? 56 : 99)),
             );
             return Row(
               children: [
                 if (leadingStatus)
                   statusButton()
-                else if (agent != null)
+                else if (agent != null && showIdentityMark)
                   EngineMark.forAgent(agent, size: 17)
-                else
+                else if (showIdentityMark)
                   EngineMark(engine: session.engineId, size: 17),
-                // Icon and name, the same as every other pane (owner,
-                // 2026-09-15): a harness agent is its harness here, and the
-                // engine it runs on is the dialog's and the tooltip's to say.
-                SizedBox(width: leadingStatus ? 6 : 10),
+                if (leadingStatus || showIdentityMark)
+                  SizedBox(width: leadingStatus ? 6 : 10),
                 Expanded(
                   child: Row(
                     children: [
@@ -3003,7 +3001,10 @@ class _TerminalHeader extends StatelessWidget {
                   ),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: math.max(0, rightWidth - controlsWidth),
+                    maxWidth: math.max(
+                      0,
+                      rightWidth - controlsWidth - controlsGap,
+                    ),
                   ),
                   child: PaneHeaderActions(
                     agentPicker: agent == null
@@ -3106,6 +3107,7 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
+                if (controlsGap > 0) SizedBox(width: controlsGap),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );

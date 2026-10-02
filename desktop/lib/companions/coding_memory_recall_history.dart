@@ -108,7 +108,11 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
     final feedback = memoryMap(recall['feedback']);
     final value = feedback['value'];
     final project = memoryMap(recall['project']);
-    final engine = recall['engine'] == 'claude' ? 'Claude' : 'Codex';
+    final engine = switch (recall['engine']) {
+      'claude' => 'Claude',
+      'opencode' => 'OpenCode',
+      _ => 'Codex',
+    };
     final where = project['name'] as String? ?? 'Companion conversation';
     final millis = recall['preparedAt'];
     final date = millis is num

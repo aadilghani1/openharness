@@ -166,6 +166,9 @@ it('reuses the selected collection across engines for scoped MCP recall, with a 
   expect(reply).toMatchObject({ ok: true, status: 'ok', context: expect.stringContaining(preference), receipt: { delivery: 'unverified' } })
   sessions[0] = { ...sessions[0], engine: 'codex', cliVersion: '0.159.0', sessionId: 'codex_collection' }
   expect(await runtime.recallCollection('agent', { query: 'coding changes' })).toMatchObject({ status: 'ok', context: expect.stringContaining(preference) })
+  sessions[0] = { ...sessions[0], engine: 'opencode', cliVersion: '1.18.34', sessionId: 'opencode_collection' }
+  expect(await runtime.recallCollection('agent', { query: 'coding changes' })).toMatchObject({ status: 'ok', context: expect.stringContaining(preference) })
+  expect((await runtime.libraryActivity('owner_a')).sessions).toMatchObject([{ engine: 'opencode', name: 'OpenCode session' }])
   await expect(runtime.recallCollection('agent', { query: 'coding', profileId: 'foreign' })).rejects.toThrow('invalid_input')
   await expect(runtime.recallCollection('agent', { query: 'coding', projectId: 'foreign' })).rejects.toThrow('invalid_input')
   sessions[0].scope = 'project'
@@ -213,7 +216,7 @@ it('prepares a host-bound prompt receipt and rejects a native-session replacemen
   expect(await runtime.promptRecallReceipts('agent')).toEqual([])
 })
 
-it.each(['claude', 'codex'] as const)('keeps %s prompt delivery unavailable on an unverified release while preserving explicit scoped recall', async engine => {
+it.each(['claude', 'codex', 'opencode'] as const)('keeps %s prompt delivery unavailable on an unverified release while preserving explicit scoped recall', async engine => {
   await learn()
   sessions[0] = { ...sessions[0], engine, cliVersion: '2.99.0' }
   expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')

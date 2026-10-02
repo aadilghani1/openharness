@@ -342,8 +342,10 @@ its headless debug timings do not establish native display or network latency.
   with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each terminal pane ends with agent, model,
-  close. Split and zoom remain in commands, menus and keyboard shortcuts.
+  and quiet, with larger click targets. Terminal panes end with matching
+  plain-text agent/model selectors and close at every width. Hovering the right
+  or bottom edge reveals its split icon; zoom stays in commands, menus and keyboard
+  shortcuts. Only distinct domain-harness icons stay on the left.
   Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.

@@ -36,6 +36,7 @@ import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
+import 'pane_split_edges.dart';
 import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder, PaneOpacity;
 import 'desktop_chrome.dart';
 
@@ -498,6 +499,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       single: app.panes.length == 1,
       pinned: app.isPanePinned(pane),
       zoomed: app.zoomedPaneId == pane.id,
+      canSplitRight:
+          app.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) != null,
+      canSplitDown:
+          app.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) != null,
       composer: pane.composerVisible,
       blocked:
           app.questionFor(pane.machineId, pane.agentId ?? session.agentId) !=
@@ -1260,91 +1265,119 @@ class _PaneCell extends StatelessWidget {
       // The same press selects the pane and reaches its terminal or viewer.
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => notifier.focusPane(pane.id),
-      child: Container(
-        key: ValueKey('pane-frame:${pane.id}'),
-        decoration: BoxDecoration(
-          // UNCHANGED, and deliberately: the terminal renders its own background
-          // inside this box, so a tile that stops matching the window colour
-          // shows a seam between the header strip and the terminal under it.
-          // What changes to make the gaps visible is the field BEHIND the grid
-          // (see _GridField), which is the part the gaps actually show.
-          //
-          // Over a Background: a terminal paints its own translucent fills, so
-          // the frame adds none (two would stack); a status pane has only this.
-          color: PaneOpacity.of(context) < 1 && pane.session != null
-              ? null
-              : PaneOpacity.fill(context, grid.AppPalette.windowBg),
-          borderRadius: BorderRadius.circular(_paneRadius),
-          // The rim is always drawn — it is what gives an unfocused card its
-          // edge, now that no shared line does. It only CHANGES COLOUR on
-          // focus, so nothing resizes as focus moves.
-          border: Border.fromBorderSide(
-            // Keep the location cue when a pane is alone or zoomed, too.
-            terminalPaneBorder(focused: focused, remote: remote),
+      child: ValueListenableBuilder<PaneDragRef?>(
+        valueListenable: paneDragging,
+        builder: (context, inFlight, child) => PaneSplitEdges(
+          enabled:
+              swarmMode &&
+              visible &&
+              !solo &&
+              agentId != null &&
+              pane.sharedHarness == null &&
+              onSplitPane != null &&
+              !notifier.activeSwarm.isUtility &&
+              !notifier.activeSwarm.isOrchestrator &&
+              notifier.zoomedPaneId == null &&
+              notifier.canAddPane &&
+              dragging == null &&
+              inFlight == null,
+          canSplitRight:
+              notifier.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) !=
+              null,
+          canSplitDown:
+              notifier.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) !=
+              null,
+          onSplit: (axis) => onSplitPane?.call(pane.id, axis),
+          child: child!,
+        ),
+        child: Container(
+          key: ValueKey('pane-frame:${pane.id}'),
+          decoration: BoxDecoration(
+            // UNCHANGED, and deliberately: the terminal renders its own background
+            // inside this box, so a tile that stops matching the window colour
+            // shows a seam between the header strip and the terminal under it.
+            // What changes to make the gaps visible is the field BEHIND the grid
+            // (see _GridField), which is the part the gaps actually show.
+            //
+            // Over a Background: a terminal paints its own translucent fills, so
+            // the frame adds none (two would stack); a status pane has only this.
+            color: PaneOpacity.of(context) < 1 && pane.session != null
+                ? null
+                : PaneOpacity.fill(context, grid.AppPalette.windowBg),
+            borderRadius: BorderRadius.circular(_paneRadius),
+            // The rim is always drawn — it is what gives an unfocused card its
+            // edge, now that no shared line does. It only CHANGES COLOUR on
+            // focus, so nothing resizes as focus moves.
+            border: Border.fromBorderSide(
+              // Keep the location cue when a pane is alone or zoomed, too.
+              terminalPaneBorder(focused: focused, remote: remote),
+            ),
           ),
-        ),
-        // A neutral gray veil lifts inactive backgrounds and softens their text
-        // without changing terminal colors. Paint attention above the veil so
-        // a waiting question keeps its full-strength amber rim. Keep this
-        // decoration present even when clear: inserting/removing it would
-        // reparent the terminal and lose its input, scroll and selection state.
-        foregroundDecoration: BoxDecoration(
-          color: dimmed ? const Color(0xFF9D9D9D).withValues(alpha: .30) : null,
-          border: blocked
-              ? Border.all(color: grid.AppPalette.warn, width: 2)
-              : null,
-          borderRadius: BorderRadius.circular(_paneRadius),
-        ),
-        // Keeps a terminal's constant repainting inside its own layer instead
-        // of dirtying the whole grid. No key: nothing reads this boundary, it
-        // only has to exist.
-        child: ClipRRect(
-          // Clipped HERE rather than through Container's own clipBehavior.
-          //
-          // Both clip, but they clip to different shapes: Container's is the
-          // decoration's OUTER edge, so the child fills the full radius and
-          // paints under the rim, leaving a square-shouldered corner peeking
-          // through the 1px the rim occupies. This one takes the rim's pixel
-          // off the radius, so the fill stops exactly where the rim starts.
-          //
-          // TerminalPanel opens with a ColoredBox across its whole box, and
-          // that is what was reaching the corners.
-          borderRadius: BorderRadius.circular(_paneRadius - 1),
-          child: RepaintBoundary(
-            child: _FileDropZone(
-              notifier: notifier,
-              pane: pane,
-              visible: visible,
-              child: _SwapZone(
+          // A neutral gray veil lifts inactive backgrounds and softens their text
+          // without changing terminal colors. Paint attention above the veil so
+          // a waiting question keeps its full-strength amber rim. Keep this
+          // decoration present even when clear: inserting/removing it would
+          // reparent the terminal and lose its input, scroll and selection state.
+          foregroundDecoration: BoxDecoration(
+            color: dimmed
+                ? const Color(0xFF9D9D9D).withValues(alpha: .30)
+                : null,
+            border: blocked
+                ? Border.all(color: grid.AppPalette.warn, width: 2)
+                : null,
+            borderRadius: BorderRadius.circular(_paneRadius),
+          ),
+          // Keeps a terminal's constant repainting inside its own layer instead
+          // of dirtying the whole grid. No key: nothing reads this boundary, it
+          // only has to exist.
+          child: ClipRRect(
+            // Clipped HERE rather than through Container's own clipBehavior.
+            //
+            // Both clip, but they clip to different shapes: Container's is the
+            // decoration's OUTER edge, so the child fills the full radius and
+            // paints under the rim, leaving a square-shouldered corner peeking
+            // through the 1px the rim occupies. This one takes the rim's pixel
+            // off the radius, so the fill stops exactly where the rim starts.
+            //
+            // TerminalPanel opens with a ColoredBox across its whole box, and
+            // that is what was reaching the corners.
+            borderRadius: BorderRadius.circular(_paneRadius - 1),
+            child: RepaintBoundary(
+              child: _FileDropZone(
                 notifier: notifier,
-                paneId: pane.id,
-                child: _DropZone(
+                pane: pane,
+                visible: visible,
+                child: _SwapZone(
                   notifier: notifier,
                   paneId: pane.id,
-                  dragging: dragging,
-                  child: ValueListenableBuilder<PaneDragRef?>(
-                    valueListenable: paneDragging,
-                    // The tile being carried fades where it sits, so the grid shows
-                    // where it came FROM while the ghost shows where it is going.
-                    builder: (context, inFlight, child) => Opacity(
-                      opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
-                      child: child,
+                  child: _DropZone(
+                    notifier: notifier,
+                    paneId: pane.id,
+                    dragging: dragging,
+                    child: ValueListenableBuilder<PaneDragRef?>(
+                      valueListenable: paneDragging,
+                      // The tile being carried fades where it sits, so the grid shows
+                      // where it came FROM while the ghost shows where it is going.
+                      builder: (context, inFlight, child) => Opacity(
+                        opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
+                        child: child,
+                      ),
+                      child: pane.isDevices
+                          ? devicesViewer?.call(context) ??
+                                const SizedBox.shrink()
+                          : pane.isCompanion
+                          ? companionViewer?.call(context) ??
+                                const SizedBox.shrink()
+                          : _PaneContent(
+                              notifier: notifier,
+                              pane: pane,
+                              single: _single,
+                              visible: visible,
+                              swarmMode: swarmMode,
+                              onOpenModels: onOpenModels,
+                              onSplitPane: onSplitPane,
+                            ),
                     ),
-                    child: pane.isDevices
-                        ? devicesViewer?.call(context) ??
-                              const SizedBox.shrink()
-                        : pane.isCompanion
-                        ? companionViewer?.call(context) ??
-                              const SizedBox.shrink()
-                        : _PaneContent(
-                            notifier: notifier,
-                            pane: pane,
-                            single: _single,
-                            visible: visible,
-                            swarmMode: swarmMode,
-                            onOpenModels: onOpenModels,
-                            onSplitPane: onSplitPane,
-                          ),
                   ),
                 ),
               ),

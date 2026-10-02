@@ -4,13 +4,16 @@ import { open, type FileHandle } from 'node:fs/promises'
 import { z } from 'zod'
 import { digest } from './admission.js'
 import { decodeMemoryRecord } from './native.js'
+import { OpenCodeMemoryCapture } from './opencodeCapture.js'
 import type { MemoryPort } from './operations.js'
 import { MemoryError, type SourceEvent } from './types.js'
 
 export interface CaptureSession {
-  profileId: string; projectId: string | null; engine: 'claude' | 'codex'; sessionId: string
-  /** Bound by the host registry, never copied from a model-supplied path. */
+  profileId: string; projectId: string | null; engine: 'claude' | 'codex' | 'opencode'; sessionId: string
+  /** Native JSONL or SQLite source, bound by the host, never copied from a model-supplied path. */
   transcriptPath: string
+  /** Required for SQLite sources to verify native session identity against the host. */
+  workspace?: string
   busy: boolean
   /** Host-observed fork/private-mode boundary. Copied older turns are not fresh user statements. */
   liveFrom?: number
@@ -36,7 +39,8 @@ export class NativeMemoryCapture {
     const streamId = digest([session.profileId, session.engine, session.sessionId])
     const pending = this.active.get(streamId)
     if (pending) return pending
-    const operation = this.read(session, streamId).finally(() => this.active.delete(streamId))
+    const operation = (session.engine === 'opencode' ? new OpenCodeMemoryCapture(this.memory, this.now).poll(session, streamId)
+      : this.read(session, streamId)).finally(() => this.active.delete(streamId))
     this.active.set(streamId, operation)
     return operation
   }
@@ -103,7 +107,7 @@ export class NativeMemoryCapture {
         const line = await frame(handle, cursor.o, stat.size, cursor.s)
         if (!line) break // A partial UTF-8/JSON record is left intact for the next append.
         const record = line.text === null ? { parts: [], ended: false, incomplete: true } : line.text.trim()
-          ? decodeMemoryRecord(session.engine, line.text) : { parts: [], ended: false, incomplete: false }
+          ? decodeMemoryRecord(session.engine as 'claude' | 'codex', line.text) : { parts: [], ended: false, incomplete: false }
         const events: SourceEvent[] = record.parts.filter(part => part.observedAt >= notBefore).map(part => {
           const id = digest([session.profileId, session.engine, session.sessionId, part.nativeEventId])
           return { ...part, id, profileId: session.profileId, projectId: session.projectId, engine: session.engine,

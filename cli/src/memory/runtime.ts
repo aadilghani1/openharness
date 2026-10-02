@@ -27,7 +27,7 @@ export interface MemoryHostSession {
   name?: string
   /** Exited sessions can remain briefly for capture, but never appear as open activity. */
   present?: boolean
-  engine: 'claude' | 'codex'
+  engine: 'claude' | 'codex' | 'opencode'
   cliVersion?: string | null
   sessionId: string
   workspace: string
@@ -151,7 +151,7 @@ export class CodingMemoryRuntime {
       }
       return { ...result, sessions: result.sessions.map(row => ({ ...row,
         name: redact((sessions.find(s => s.agentId === row.agentId)?.name ||
-          `${row.engine === 'claude' ? 'Claude' : 'Codex'} session`).slice(0, 200)) })) }
+          `${row.engine === 'claude' ? 'Claude' : row.engine === 'opencode' ? 'OpenCode' : 'Codex'} session`).slice(0, 200)) })) }
     })
   }
 

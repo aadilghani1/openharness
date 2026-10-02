@@ -335,14 +335,34 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the right-hand controls read agent, model, close. The shared
-12-point close glyph has a 28-point target, 4 points inside the trailing edge.
-Resting ink is 45%; hover and keyboard focus brighten the glyph without a fill,
-border, or movement. Keep the controls on one line; model and title text truncate
-before the close target shrinks. Split and zoom remain in commands, menus and
-keyboard shortcuts. Clicking the model focuses that
-pane and opens the same Models picker as Cmd-:. The agent name and chevron open
-the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
+**Pane header** — terminal panes show agent, model and close at every width.
+Splitting is revealed at the pane edges; zoom remains available through menus,
+command search and shortcuts. Keep split, add and zoom icons out of the header.
+
+Agent and model share `PaneHeaderTextButton`: plain 13-point workspace text,
+regular weight, matching padding and a 28-point target height. No pill, border or
+chevron. Both brighten on hover and keyboard focus without changing weight or
+geometry; use a hand cursor and Change agent / Change model tooltips. Their labels
+rest at 75% foreground (85% with Increase Contrast). Keep them close together,
+then leave an 8-point gap before close. Remove a coding-agent logo
+that repeats the agent selector; keep a distinct domain-harness mark on the left.
+The session name and its activity/status remain on the left.
+
+Use the shared 12-point close glyph in a 28-point target, sitting 4 points
+inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
+brighten the glyph without a fill, border, or movement. Keep the controls on one
+line; the session title yields first, then the model truncates while the agent
+retains readable identity. Never shrink the close target.
+
+Hovering within 44 points of the right or bottom edge reveals one 32-point
+target, inset 8 points and centered along that edge. Use the rounded
+`AppPaneIcon` with `AppPaneSymbol.splitRight` or `splitDown` at 16 points, not a plus. Keep the header
+and corners clear and the resize gaps unobstructed. Hide edge controls while
+dragging, zoomed, in a phone's single-pane view, or unable to add a pane. Hover
+does not focus, resize or rebuild the terminal. Split opens New Harness directly,
+inheriting the clicked pane's agent, machine,
+and project; the pane is created only after submission. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. The agent name opens the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is

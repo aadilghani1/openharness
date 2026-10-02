@@ -204,9 +204,15 @@ use the shared system-type scale.
 
 ## Pane controls
 
-Each pane header ends with model, split down, split right, zoom and × at the
-right edge. The 14-point split/zoom glyphs and 12-point close glyph each have a
-28-point target, with no resting fill or border. Tab and pane close marks share a small regular glyph (12-point
+Terminal pane headers end with agent, model and × at the right edge at every
+width. Splitting lives at the pane edges; zoom remains available through menus
+and shortcuts. Agent and model
+share plain 13-point workspace text with no pill or chevron, and an 8-point gap
+separates these selectors from close. The title truncates before the
+model; the agent retains readable identity. Remove repeated coding-agent logos
+on the left while retaining distinct domain-harness icons.
+The 12-point close glyph has a 28-point target, with no resting fill or border.
+Tab and pane close marks share a small regular glyph (12-point
 Lucide, optically matched 10-point SF Symbol) and quiet 45% resting ink, with
 full ink on hover/focus and the existing larger click
 targets. The close control removes that pane view while keeping its harness
@@ -230,24 +236,28 @@ a version from a family alias. Older daemons fall back to the provider name.
 Show only the model name in the header. The terminal presents its effort setting;
 never infer effort or append subscription effort to a local model name.
 Keep this label visible without requiring hover, including while disconnected;
-disable switching when the pane is read-only. Use a hand cursor, bold text on hover
-and keyboard focus, and a tooltip explaining subscription/local switching.
+disable switching when the pane is read-only. Agent and model use a hand cursor,
+brighter regular-weight text on hover and keyboard focus, and matching targets
+that never move. The model tooltip explains subscription/local switching.
 Do not repeat the model name in that tooltip unless it is truncated or replaced
 by `Switching…`. Preserve useful capability details and full truncated names
 while offline, but do not advertise switching when it is disabled.
 A model update must repaint the label without reopening or retargeting the pane.
 The observed subscription model does not select a Local row in the picker.
 
-Zoom is also available in the header and becomes Restore while enlarged.
-Stop remains a keyboard/menu action. Cmd-Shift-W closes the focused pane
+Zoom and Stop remain keyboard/menu actions. Cmd-Shift-W closes the focused pane
 view, Cmd-W closes the tab, and Cmd-Enter toggles pane zoom. Closing a view
 keeps its harness running; Stop Harness remains a separate command with its
 existing confirmation. Preserve explicit user keymap overrides.
 
-Pane edges have no floating split buttons. Split Right and Split Down use the
-header, keyboard commands (Cmd-R and Cmd-D by default), File menu, and command
-search. All open New Harness directly with the source pane's defaults, without
-an existing-harness search step. Keep the resize gaps available for resizing.
+Hovering the right or bottom edge reveals its split-right or split-down icon
+inside the pane. Use one 32-point target centered on that edge, inset 8 points,
+with the shared 16-point pane icon; do not use a plus. Hover leaves focus and
+terminal state untouched. Hide these controls while dragging or zoomed and
+leave the resize gaps clear. Split Right and Split Down also use keyboard
+commands (Cmd-R and Cmd-D by default), File menu and command search. All open
+New Harness directly with the source pane's defaults, without an existing-harness
+search step.
 
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button

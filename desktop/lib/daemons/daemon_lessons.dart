@@ -220,7 +220,7 @@ class DaemonLearning {
       return 'Learning resumes when your companion is turned on.';
     }
     if (state == 'unsupported') {
-      return 'Background learning currently needs Codex or Claude Code. Change agent to enable it; your conversation and saved memories are kept.';
+      return 'Background learning is not available with this connection yet. Your conversation and saved memories are kept.';
     }
     if (state == 'unopened') {
       return 'Open your companion with OpenCode, Codex, or Claude Code.';

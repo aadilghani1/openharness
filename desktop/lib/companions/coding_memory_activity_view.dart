@@ -74,7 +74,11 @@ class _CodingMemoryActivityViewState extends State<_CodingMemoryActivityView> {
   }
 
   String _where(Map<String, dynamic> session) =>
-      '${session['engine'] == 'claude' ? 'Claude' : 'Codex'} · ${memoryMap(session['project'])['name'] ?? 'Companion conversation'}';
+      '${switch (session['engine']) {
+        'claude' => 'Claude',
+        'opencode' => 'OpenCode',
+        _ => 'Codex',
+      }} · ${memoryMap(session['project'])['name'] ?? 'Companion conversation'}';
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
