@@ -974,6 +974,7 @@ pub fn run(app: &mut App, command: &str) {
         "messages" => picker(app, PickerKind::Messages, "messages", ""),
         "keys" => picker(app, PickerKind::Keys, "keys", ""),
         "choose-buffer" => picker(app, PickerKind::Buffers, "buffers", ""),
+        "quit" if app.os_session => app.error("hn is the OS session; open a Terminal with C-b N"),
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { if let Some(n) = c[4..].parse::<usize>().ok().and_then(|n| n.checked_sub(1)) { app.select_tab(n) } }
         // ── machines & devices ──

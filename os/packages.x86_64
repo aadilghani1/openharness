@@ -24,7 +24,7 @@ python
 openssh
 networkmanager
 systemd-resolvconf
-systemd-zram-generator
+zram-generator
 wireless-regdb
 # Exactly one terminal surface and an on-demand browser.
 labwc

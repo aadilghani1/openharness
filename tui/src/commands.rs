@@ -1808,6 +1808,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
         _ => &Words::plain(list),
     };
     let command = resolve(&words[0]);
+    if app.os_session && !app.headless && matches!(command, "detach-client" | "suspend-client") {
+        return app.error("hn is the OS session; open a Terminal with C-b N")
+    }
     // A client's own command where no terminal is attached: tmux's cmd_find_client finds none.
     let client_only = matches!(command, "switch-client" | "detach-client" | "refresh-client" | "suspend-client" | "lock-client" | "display-panes" | "command-prompt" | "confirm-before" | "display-menu" | "display-popup");
     if app.headless && client_only && !(command == "detach-client" && opt(words, "-s").is_some()) { return app.error("no current client") }
@@ -3619,6 +3622,35 @@ fn run_words_in(app: &mut App, words: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn os_session_refuses_detach_and_suspend_including_aliases() {
+        for command in ["detach-client", "detach", "detach -E sh", "suspend-client", "suspendc", "quit"] {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19789, sink, (80, 24));
+            app.os_session = true;
+            app.handed_over = true;
+            execute(&mut app, command);
+            assert!(!app.quit, "{command}");
+            assert!(!app.suspend, "{command}");
+            assert!(app.exec_after.is_none(), "{command}");
+            assert_eq!(app.errors, 1, "{command}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_client_can_still_detach_and_suspend() {
+        for command in ["detach", "suspendc"] {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19789, sink, (80, 24));
+            app.os_session = false;
+            app.handed_over = true;
+            execute(&mut app, command);
+            assert_eq!(app.quit, command == "detach");
+            assert_eq!(app.suspend, command == "suspendc");
+            assert_eq!(app.errors, 0);
+        }
+    }
 
     #[test]
     fn splits_like_tmux() {

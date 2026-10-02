@@ -669,6 +669,9 @@ pub struct App {
     /// No terminal (--headless): tmux's server with no client attached, holding sessions for
     /// the commands of a script until a client takes them.
     pub headless: bool,
+    /// The OS's primary screen: keep a home screen when empty and refuse client detach/suspend.
+    /// This controls the interface, not the user's ability to administer their machine.
+    pub os_session: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -874,6 +877,7 @@ impl App {
             handed_over: false,
             sessions_sig: String::new(),
             headless: false,
+            os_session: std::env::var("HARNESS_OS").as_deref() == Ok("1"),
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
@@ -3494,7 +3498,7 @@ impl App {
             return;
         }
         // (hn with no terminal is tmux's server, not a client: it keeps the sessions it has.)
-        let how = if self.headless { "off".to_string() } else { self.options.get("detach-on-destroy", "", None).unwrap_or_default() };
+        let how = if self.headless || self.os_session { "off".to_string() } else { self.options.get("detach-on-destroy", "", None).unwrap_or_default() };
         let others: Vec<u32> = self.sessions.iter().map(|s| s.id).collect();
         let next = match how.as_str() {
             "off" | "no-detached" => self.last_session.filter(|l| others.contains(l)).or_else(|| self.sessions.iter().max_by_key(|s| s.created).map(|s| s.id)),
@@ -3509,8 +3513,12 @@ impl App {
                 self.last_session = None;
                 if !desk { self.sessions.retain(|s| s.id != gone) }
             }
-            // hn with no terminal (tmux's server) and exit-empty off: it stays, with no session.
-            None if self.headless && !desk && self.options.get("exit-empty", "", None).as_deref() == Some("off") => {
+            None if self.os_session && desk => {
+                self.tabs = vec![Tab::home()];
+                self.active = 0;
+            }
+            // The OS surface stays on home, as does a headless server with exit-empty off.
+            None if !desk && (self.os_session || (self.headless && self.options.get("exit-empty", "", None).as_deref() == Some("off"))) => {
                 self.session_id = UNNUMBERED;
                 self.session_alias = None;
                 self.tabs = vec![Tab::home()];
@@ -6021,6 +6029,37 @@ mod scroll_settle_tests {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn os_surface_stays_home_after_its_last_session_closes() {
+        for desk in [false, true] {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19789, sink, (80, 24));
+            app.handed_over = true; // This state fixture must not persist a session.
+            app.os_session = true;
+            app.session_desk = desk;
+            app.tabs.clear();
+            app.session_gone_quiet();
+            assert!(!app.quit);
+            assert!(!app.exited);
+            assert_eq!(app.tabs.len(), 1);
+            assert!(app.tabs[0].root.is_none());
+            assert_eq!(app.active, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_client_still_exits_after_its_last_session_closes() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.handed_over = true;
+        app.os_session = false;
+        app.session_desk = false;
+        app.tabs.clear();
+        app.session_gone_quiet();
+        assert!(app.quit);
+        assert!(app.exited);
+    }
 
     #[tokio::test]
     async fn respawn_reply_and_fast_exit_deliver_one_death_hook_in_either_order() {
