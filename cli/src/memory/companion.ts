@@ -13,7 +13,7 @@ export function companionMemoryInference(intelligence: Pick<CompanionIntelligenc
     async target() {
       const status = await intelligence.extractionStatus()
       if (status.state === 'off') return { state: 'off' }
-      if (status.state === 'unsupported') return { state: 'unsupported' }
+      if (status.state === 'unsupported') return { state: 'unsupported', ...(status.reason ? { reason: status.reason } : {}) }
       if (status.state !== 'ready' || !status.contextKey || !status.agentId) return { state: 'waiting' }
       if (status.engine === 'codex' && !(await codexCapability()).supported) return { state: 'unsupported' }
       if (status.engine === 'claude' && !(await claudeCapability()).supported) return { state: 'unsupported' }

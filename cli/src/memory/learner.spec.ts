@@ -264,6 +264,30 @@ it('keeps notebook quota failures pending and does not probe the selected accoun
   expect(provider.run).toHaveBeenCalledOnce()
 })
 
+it('keeps a refused notebook pending, respects pause, and resumes with a usable connection', async () => {
+  await seedNotebook()
+  const provider = inference('{"statements":[]}')
+  provider.run = vi.fn(async () => { throw new MemoryError('inference_provider_restricted') })
+  const learner = new MemoryLearner(memory, provider)
+  const refused = { state: 'waiting_for_model', reason: 'inference_provider_restricted' }
+  expect(await learner.tick()).toEqual(refused)
+  provider.target = vi.fn<MemoryInference['target']>(async () => ({ state: 'unsupported', reason: 'inference_provider_restricted' }))
+  expect(await learner.tick()).toEqual(refused)
+  now += 60_001
+  expect(await learner.tick()).toEqual(refused)
+  expect(provider.run).toHaveBeenCalledOnce()
+  expect(store.list(access)).toHaveLength(1)
+  store.setControls({ learn: false, recall: true })
+  vi.mocked(provider.target).mockClear()
+  expect(await learner.tick()).toEqual({ state: 'learning_off' })
+  expect(provider.target).not.toHaveBeenCalled()
+  store.setControls({ learn: true, recall: true })
+  provider.target = vi.fn<MemoryInference['target']>(async () => ({ state: 'ready', key: 'new-connection' }))
+  provider.run = vi.fn(async () => '{"statements":[]}')
+  expect(await learner.tick()).toEqual({ state: 'notebook_empty' })
+  expect(provider.run).toHaveBeenCalledOnce()
+})
+
 it.each([null, 'not JSON', '{"statements":[],"decisions":[]}'])('distinguishes unavailable and malformed notebook output from empty synthesis: %s', async answer => {
   await seedNotebook()
   expect((await new MemoryLearner(memory, inference(answer)).tick()).state).toBe(answer === null ? 'waiting_for_model' : 'failed')

@@ -1112,6 +1112,52 @@ void main() {
     ]);
   });
 
+  for (final scale in [1.0, 2.0]) {
+    testWidgets(
+      'provider refusal explains recovery without changing settings at ${scale}x',
+      (tester) async {
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {
+            'state': 'waiting_for_model',
+            'reason': 'inference_provider_restricted',
+          },
+        };
+        await mount(
+          tester,
+          scale: scale,
+          size: Size(scale == 1 ? 850 : 440, 900),
+        );
+        expect(find.text('Learning needs attention'), findsOneWidget);
+        expect(
+          find.textContaining('provider declined background learning'),
+          findsOneWidget,
+        );
+        await capture(tester, 'provider-refusal-${scale}x');
+        await tap(tester, 'Review learning');
+        expect(find.textContaining('Choose another model'), findsOneWidget);
+        expect(find.textContaining('complete any setup'), findsNothing);
+        expect(transport.learn, isTrue);
+        expect(transport.recall, isTrue);
+        expect(
+          transport.calls.every(
+            (p) => p['action'] != 'preview' && p['action'] != 'apply',
+          ),
+          isTrue,
+        );
+        expect(tester.takeException(), isNull);
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {'state': 'learned', 'learned': 1},
+        };
+        await library.refresh();
+        await tester.pumpAndSettle();
+        expect(find.textContaining('provider declined'), findsNothing);
+        expect(find.textContaining('saved new memories'), findsOneWidget);
+      },
+    );
+  }
+
   for (final state in [
     ('off', null, 'Resume it', true),
     ('unavailable', null, 'memory service', true),

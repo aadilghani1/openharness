@@ -822,3 +822,34 @@ and shared correction/forgetting checks cover the new Claude version alongside C
 No real account, model selection, conversation, installed application, or release was changed.
 Print-mode transport is the measured boundary: production account/profile changes, interactive TUI
 paths, semantic quality, and coding-task usefulness are not established by these mock observations.
+
+### Stop repeating a provider's non-retryable refusal — October 2
+
+A synthetic READY request through the saved OpenCode Muse free model received HTTP 403 with the
+provider's `FreeTierError`: this route was restricted to use within OpenCode. No extraction case
+completed. This is a provider refusal, not a memory-quality score. A similar custom-agent restriction
+is [reported upstream](https://github.com/anomalyco/opencode/issues/50627); that report does not prove
+the cause of this particular request. No private conversations or personal credentials were supplied.
+
+The production adapter previously turned this error into a generic model outage. Its selected
+connection remained ready, allowing another background call after the queue's one-minute defer.
+The adapter now recognizes the exact recorded, non-retryable refusal. Companion intelligence retains
+only an opaque connection fingerprint in memory, stops further background calls on that connection,
+and clears the refusal when the observed model, account, owner or native process changes. A routine
+refresh of the same snapshot does not reset it; a late error cannot block a replacement connection.
+Ordinary outages and quota failures retain their existing handling. No credential or refusal is added
+to the saved companion profile, and no alternative model is selected automatically.
+
+Learning keeps its sources queued under the existing retention and capacity limits, preserves the
+refusal during the deferred interval, and keeps notebook work pending as well. Memories explains
+that the selected provider declined background learning and points to the companion's existing model
+control. Reviewing that explanation does not change Learn or Recall. The foreground terminal remains
+available; saved memories remain subject to the existing Recall setting.
+
+The [recording](../research/2026-10-02-memory-provider-refusal.json) includes the real OpenCode 1.18.34
+binary receiving the same refusal from a localhost mock: exactly one request, no tools, no forbidden
+action, and disposable native storage removed. Synthetic integration checks exercise the production
+intelligence, learner and queue over more than an hour, then resume on a new connection without
+dropping source evidence. These checks establish refusal handling, not semantic extraction quality,
+live user learning, or improved coding outcomes. The selected external route was not retried or
+bypassed, and real-session quality evaluation remains incomplete.

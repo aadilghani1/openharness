@@ -90,6 +90,7 @@ Supporting memory records: ${JSON.stringify(lease.input.records)}
 export class MemoryLearner {
   private active: Promise<LearningOutcome> | null = null
   private controller: AbortController | null = null
+  private providerRestricted = false
   constructor(private readonly memory: MemoryPort, private readonly inference: MemoryInference, private readonly timeoutMs = 90_000) {}
 
   tick(): Promise<LearningOutcome> {
@@ -111,12 +112,25 @@ export class MemoryLearner {
       const pending = await this.memory.request('pendingReview', [])
       assertActive(controller.signal)
       if (pending === 'learning_off') return { state: pending }
+      // Keep a non-retryable refusal visible even while the failed lease is deferred. The host's
+      // refusal status is cheap and suppresses native probes; only a changed connection can retry.
+      let target: InferenceTarget | undefined
+      if (this.providerRestricted) {
+        target = await this.inference.target()
+        assertActive(controller.signal)
+        if (target.state !== 'ready') return { state: 'waiting_for_model', ...(target.reason ? { reason: target.reason } : {}) }
+        this.providerRestricted = false
+      }
       const notebook = await this.memory.request('notebookPending', [])
       assertActive(controller.signal)
       const buildNotebook = notebook.state === 'ready' && (pending !== 'ready' || notebook.prefer)
       if (!buildNotebook && pending !== 'ready') return { state: notebook.state === 'idle' ? pending : notebook.state }
-      const target = await this.inference.target()
+      target ??= await this.inference.target()
       if (controller.signal.aborted) return { state: controller.signal.reason === 'foreground_activity' ? 'waiting_for_quiet' : 'cancelled' }
+      if (target.reason === 'inference_provider_restricted') {
+        this.providerRestricted = true
+        return { state: 'waiting_for_model', reason: target.reason }
+      }
       const timeoutMs = Math.max(1, Math.min(this.timeoutMs, 90_000))
       if (buildNotebook) {
         const claim = await this.memory.request('notebookClaim', [target])
@@ -167,8 +181,9 @@ export class MemoryLearner {
       const failure = error instanceof MemoryError ? error.code : 'inference_unavailable'
       const code = failure === 'inference_cancelled' && controller.signal.reason === 'foreground_activity'
         ? 'inference_interrupted' : failure
+      if (code === 'inference_provider_restricted') this.providerRestricted = true
       const state = code === 'inference_interrupted' ? 'queued' : code === 'inference_usage_limit' ? 'budget_deferred'
-        : ['inference_cancelled', 'inference_context_changed', 'inference_unavailable', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
+        : ['inference_cancelled', 'inference_context_changed', 'inference_unavailable', 'inference_provider_restricted', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
           : code === 'episode_context_too_large' ? 'source_incomplete' : 'failed'
       if (lease) await this.memory.request('defer', [lease, state]).catch(() => {})
       if (notebookLease) await this.memory.request('notebookDefer', [notebookLease, state === 'source_incomplete' ? 'failed' : state]).catch(() => {})

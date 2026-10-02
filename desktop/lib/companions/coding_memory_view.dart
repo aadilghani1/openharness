@@ -310,6 +310,9 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
       : 'Some recent work could not be read for learning. Your existing memories are still available.';
   final state = learning['state'];
   final message = switch (state) {
+    'waiting_for_model'
+        when learning['reason'] == 'inference_provider_restricted' =>
+      'Your selected model’s provider declined background learning. Choose another model in the companion terminal to continue. Existing memories are still available.',
     'waiting_for_model' => 'Waiting for your companion’s model. Check that its terminal beside this viewer is running with a model selected, and complete any setup shown there.',
     'foreground_busy' =>
       'Your companion is working. Learning waits until it is free.',

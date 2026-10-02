@@ -1,5 +1,13 @@
 import { expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { companionMemoryInference } from './companion.js'
+import { CompanionIntelligence, type CompanionRuntime } from '../pair/intelligence.js'
+import { CodingMemoryStore } from './store.js'
+import { MemoryLearner } from './learner.js'
+import { QUEUE_OPERATIONS, type MemoryPort, type Operation, type Arguments, type Result } from './operations.js'
+import { MemoryError } from './types.js'
 
 it('waits for a certified selected Codex runtime and preserves foreground priority', async () => {
   const intelligence = { extractionStatus: async () => ({ state: 'ready' as const, agentId: 'companion', engine: 'codex', contextKey: 'selected' }),
@@ -44,4 +52,54 @@ it('checks OpenCode native compatibility without probing a different engine', as
   opencode.mockResolvedValue({ supported: true, version: '1.18.34' })
   expect(await inference.target()).toEqual({ state: 'ready', key: 'native-binding', foregroundBusy: false })
   expect(codex).not.toHaveBeenCalled(); expect(claude).not.toHaveBeenCalled()
+})
+
+it('preserves queued evidence and stops calls and native probes after a refusal, then resumes on a new connection', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'memory-refusal-'))
+  let now = 10_000
+  const opened = CodingMemoryStore.open({ directory: join(directory, 'store'), profileId: 'owner', now: () => now })
+  if (!opened.ok) throw new Error(opened.reason)
+  const store = opened.store
+  try {
+    store.registerProject('project')
+    store.setControls({ learn: true, recall: true })
+    store.learning.capture({ streamId: 'stream', engine: 'codex', sessionId: 'coding-session', projectId: 'project',
+      episodeId: 'episode', from: null, to: '1', boundary: 'complete', events: [{
+        id: 'source', profileId: 'owner', projectId: 'project', engine: 'codex', sessionId: 'coding-session',
+        nativeEventId: 'source', role: 'user', eligibility: 'coding', observedAt: now, rootIds: ['source'],
+        text: 'Use SQLite for the synthetic offline project.',
+      }] })
+    const memory: MemoryPort = { async request<K extends Operation>(operation: K, args: Arguments<K>): Promise<Result<K>> {
+      const owner = (QUEUE_OPERATIONS as readonly string[]).includes(operation) ? store.learning : store
+      return (owner as unknown as Record<string, (...args: unknown[]) => unknown>)[operation].apply(owner, args) as Result<K>
+    } }
+    let runtime: CompanionRuntime = { agentId: 'companion', sessionId: 'companion-session', engine: 'opencode',
+      stopped: false, nativeProcessKey: 'process-a', accountKey: 'synthetic-owner', profile: null }
+    const run = vi.fn(async () => ({ text: '{"proposals":[]}' }))
+    run.mockRejectedValueOnce(new MemoryError('inference_provider_restricted'))
+    const intelligence = new CompanionIntelligence({ enabled: () => true, current: () => runtime,
+      directory: join(directory, 'work'), stateFile: join(directory, 'model.json'), runOpenCode: run,
+      openCodeSnapshot: () => ({ model: 'selected/model', auth: { type: 'api', key: 'synthetic-account' },
+        provider: { npm: '@ai-sdk/openai-compatible', models: { model: {} } } }),
+    })
+    const capability = vi.fn(async () => ({ supported: true, version: '1.18.34' }))
+    const inference = companionMemoryInference(intelligence, () => false, vi.fn(), vi.fn(), capability)
+    const learner = new MemoryLearner(memory, inference)
+    const refused = { state: 'waiting_for_model', reason: 'inference_provider_restricted' }
+    expect(await learner.tick()).toEqual(refused)
+    expect(capability).toHaveBeenCalledOnce()
+    for (const elapsed of [0, 60_001, 3_600_001]) {
+      now += elapsed
+      expect(await learner.tick()).toEqual(refused)
+      expect(run).toHaveBeenCalledOnce()
+      expect(capability).toHaveBeenCalledOnce()
+      expect(store.learning.status().jobs).toEqual({ waiting_for_model: 1 })
+      expect(store.source('source', { profileId: 'owner', projectIds: ['project'], includeProfile: false })?.text)
+        .toBe('Use SQLite for the synthetic offline project.')
+    }
+    runtime = { ...runtime, nativeProcessKey: 'process-b' }
+    expect(await learner.tick()).toEqual({ state: 'no_useful_memory', learned: 0 })
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(store.learning.status().jobs).toEqual({ no_useful_memory: 1 })
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
 })

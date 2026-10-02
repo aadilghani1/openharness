@@ -36,6 +36,7 @@ export interface IntelligenceStatus {
   model?: string
   effort?: string
   contextKey?: string
+  reason?: 'inference_provider_restricted'
 }
 
 interface IntelligenceDeps {
@@ -53,6 +54,8 @@ interface IntelligenceDeps {
 export class CompanionIntelligence {
   private saved: Record<string, { sessionId: string; profile: string }> | null = null
   private readonly calls = new Set<AbortController>()
+  /** Volatile refusal for one observed connection. No credentials or policy failures are persisted. */
+  private restrictedContext: string | null = null
 
   constructor(private readonly deps: IntelligenceDeps) {}
 
@@ -73,17 +76,19 @@ export class CompanionIntelligence {
     opts.signal?.addEventListener('abort', abort, { once: true })
     if (opts.signal?.aborted) controller.abort()
     this.calls.add(controller)
+    let target: ReturnType<CompanionIntelligence['target']> | undefined
     try {
       const bound = extraction || this.deps.current()?.engine === 'opencode'
-      const target = bound ? await this.extractionTarget() : this.target()
+      target = bound ? await this.extractionTarget() : this.target()
       if (controller.signal.aborted || !target.profile || !target.runtime || target.status.state !== 'ready') return null
       if (extraction && (!('contextKey' in opts) || opts.contextKey !== target.status.contextKey)) throw new MemoryError('inference_context_changed')
+      const selected = target
       const { runtime, profile } = target
       const engine = runtime.engine as 'claude' | 'codex' | 'opencode'
       const assertAuthorized = (): void => {
         if (controller.signal.aborted) throw new MemoryError('inference_cancelled')
         if ('assertAuthorized' in opts) opts.assertAuthorized?.()
-        if (this.target().status.contextKey !== target.runtimeContextKey) throw new MemoryError('inference_context_changed')
+        if (this.target().status.contextKey !== selected.runtimeContextKey) throw new MemoryError('inference_context_changed')
       }
       if (bound) assertAuthorized()
       mkdirSync(this.deps.directory, { recursive: true, mode: 0o700 })
@@ -94,7 +99,7 @@ export class CompanionIntelligence {
         timeoutMs: opts.timeoutMs, signal: controller.signal,
         ...(bound ? { assertAuthorized, beforeRun: async () => {
           const current = await this.extractionTarget()
-          if (current.status.state !== 'ready' || current.status.contextKey !== target.status.contextKey) throw new MemoryError('inference_context_changed')
+          if (current.status.state !== 'ready' || current.status.contextKey !== selected.status.contextKey) throw new MemoryError('inference_context_changed')
         } } : {}),
       }
       const run = this.deps.run ?? ((engine, options) => engine === 'claude' ? extraction ? runClaudeMemoryInference(options) : runClaudeOneShot(options)
@@ -112,6 +117,13 @@ export class CompanionIntelligence {
         (!runtime.sessionId && current.runtime?.startup?.processKey !== runtime.startup?.processKey) ||
         current.runtime?.codexHome !== runtime.codexHome || current.status.contextKey !== target.status.contextKey) return null
       return result.text
+    } catch (error) {
+      if (error instanceof MemoryError && error.code === 'inference_provider_restricted'
+        && !controller.signal.aborted && target?.runtime?.engine === 'opencode'
+        && target.runtimeContextKey && this.target().status.contextKey === target.runtimeContextKey) {
+        this.restrictedContext = target.runtimeContextKey
+      }
+      throw error
     } finally {
       opts.signal?.removeEventListener('abort', abort)
       this.calls.delete(controller)
@@ -164,8 +176,11 @@ export class CompanionIntelligence {
     const contextKey = createHash('sha256').update(JSON.stringify([runtime.agentId, runtime.sessionId,
       runtime.sessionId ? null : runtime.startup?.processKey, runtime.engine, profile.id, runtime.codexHome ?? null, runtime.accountKey ?? null,
       runtime.nativeProcessKey ?? null, openCodeSnapshot ? openCodeSnapshotIdentity(openCodeSnapshot) : null])).digest('hex')
+    if (this.restrictedContext !== contextKey) this.restrictedContext = null
     return { runtime, profile, openCodeSnapshot, runtimeContextKey: contextKey,
-      status: { ...status, state: 'ready', model: profile.model, effort: openCodeSnapshot?.variant ?? profile.effort, contextKey } }
+      status: { ...status, state: this.restrictedContext ? 'unsupported' : 'ready',
+        ...(this.restrictedContext ? { reason: 'inference_provider_restricted' as const } : {}),
+        model: profile.model, effort: openCodeSnapshot?.variant ?? profile.effort, contextKey } }
   }
 
   private load(): void {

@@ -60,6 +60,8 @@ export interface InferenceTarget {
   state: 'ready' | 'waiting' | 'off' | 'unsupported'
   /** Opaque host-derived identity of the selected account, collection, model, and effort. */
   key?: string
+  /** A recognized provider refusal, never raw provider output. */
+  reason?: 'inference_provider_restricted'
   foregroundBusy?: boolean
 }
 export interface LearningLease {

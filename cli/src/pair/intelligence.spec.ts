@@ -6,6 +6,7 @@ import { CompanionIntelligence, type CompanionRuntime } from './intelligence.js'
 import { encodeRuntimeProfile } from '../lib/runtimeProfile.js'
 import type { OneShotOptions } from '../lib/oneshot.js'
 import { openCodeSnapshotIdentity, type OpenCodeMemorySnapshot, type OpenCodeMemoryInferenceOptions } from '../memory/opencodeInference.js'
+import { MemoryError } from '../memory/types.js'
 
 let directory: string
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'collection-model-')) })
@@ -192,6 +193,47 @@ describe('OpenCode companion request binding', () => {
     expect(w.brain.status().state).toBe('waiting')
     expect(w.openCodeRun).not.toHaveBeenCalled()
     expect(w.run).not.toHaveBeenCalled()
+  })
+
+  it.each(['model', 'account', 'process', 'owner'] as const)('holds a provider refusal until the selected %s changes', async change => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    const options = { contextKey, timeoutMs: 1000, signal: new AbortController().signal }
+    w.openCodeRun.mockRejectedValueOnce(new MemoryError('inference_provider_restricted'))
+    await expect(w.brain.extract('synthetic evidence', options)).rejects.toThrow('inference_provider_restricted')
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'unsupported', reason: 'inference_provider_restricted', contextKey })
+    expect(await w.brain.extract('same queued evidence', options)).toBeNull()
+    expect(await w.brain.run('background triage', options)).toBeNull()
+    const savedSnapshot = w.snapshot()
+    w.setSnapshot(null)
+    expect(w.brain.status().state).toBe('waiting')
+    w.setSnapshot(structuredClone(savedSnapshot))
+    expect(w.brain.status().state).toBe('unsupported')
+    expect(w.openCodeRun).toHaveBeenCalledOnce()
+    expect(w.run).not.toHaveBeenCalled()
+    expect(readFileSync(w.deps.stateFile, 'utf8')).not.toContain('inference_provider_restricted')
+    if (change === 'model') w.setSnapshot({ ...w.snapshot(), model: 'selected/another',
+      provider: { ...w.snapshot().provider, models: { another: { name: 'Another', limit: { context: 10000, output: 1000 } } } } })
+    if (change === 'account') w.setSnapshot({ ...w.snapshot(), auth: { type: 'api', key: 'replacement' } })
+    if (change === 'process') w.set({ ...w.get(), nativeProcessKey: 'new-process' })
+    if (change === 'owner') w.set({ ...w.get(), accountKey: 'new-owner' })
+    const next = await w.brain.extractionStatus()
+    expect(next.state).toBe('ready')
+    expect(next.contextKey).not.toBe(contextKey)
+    expect(await w.brain.extract('synthetic evidence', { ...options, contextKey: next.contextKey! })).toBe('{"proposals":[]}')
+    expect(w.openCodeRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not apply a late refusal to a replacement connection', async () => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    let fail!: (error: Error) => void
+    w.openCodeRun.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+    const pending = w.brain.extract('synthetic evidence', { contextKey, timeoutMs: 1000, signal: new AbortController().signal })
+    const assertion = expect(pending).rejects.toThrow('inference_provider_restricted')
+    await vi.waitFor(() => expect(w.openCodeRun).toHaveBeenCalledOnce())
+    w.set({ ...w.get(), nativeProcessKey: 'replacement-process' })
+    fail(new MemoryError('inference_provider_restricted'))
+    await assertion
+    expect((await w.brain.extractionStatus()).state).toBe('ready')
   })
 
   it('rejects a queued extraction after the observed account changes', async () => {
