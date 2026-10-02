@@ -90,9 +90,14 @@ with only the checks relevant to the diff, for example:
 
 Commands use argv arrays; use separate checks for independent work. CLI and desktop
 checks can run together if memory/disk allow it. Put dependent operations in separate
-plans. A desktop test command should name its affected files and use
-`flutter test --no-pub --concurrency=2 --timeout=60s ...`. Tests legitimately needing
-longer can declare that explicitly. Start a necessary broad desktop run early, with
+plans. A scoped desktop test command should name its affected files and start with
+`flutter test --no-pub --concurrency=2 --timeout=60s ...`. Two workers are a starting
+point, not a fixed cap for a full suite. Choose and record a worker count that fits
+the host and other running checks: eight VM workers were validated on a 16-core,
+64 GiB Mac in the [baseline repair](performance/2026-10-02-desktop-baseline-repair.md).
+Chrome and native integration tests ignore Flutter's concurrency option.
+Tests legitimately needing longer can declare that explicitly. Start a necessary
+broad desktop run early, with
 an outer limit (initial budget: 15 minutes); investigate a timeout instead of waiting
 through multiple ten-minute stalled fixtures. Budgets are diagnostic deadlines,
 not permission to turn failures into success.
@@ -168,6 +173,14 @@ the failure as a maintenance item; a baseline failure is not a passing full suit
 Do not repeatedly run thousands of tests to rediscover it. The October 2 desktop
 [baseline record](performance/2026-10-02-buffered-diagnostic-validation.json) is
 historical evidence, not an allowlist: changes to those paths need fresh checks.
+
+If a broad run is interrupted, retain completed-file evidence only when every
+registered case in that file finished and its source/environment still match.
+Run every incomplete file again. A tester startup/loader error leaves that file
+unverified; isolate it once and retain the original error beside the new result.
+Report the combined coverage and any retries explicitly. This is not an
+uninterrupted passing suite, and it is not permission to retry assertion failures
+until they disappear.
 
 ## Complete the authorized release
 
