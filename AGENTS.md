@@ -11,7 +11,9 @@ validation and shipping, use [docs/validation-and-release.md](docs/validation-an
   equivalent CI has passed just because it is time to merge or release.
 - Reuse evidence only for the source and environment it covers. A squash with the same
   tree does not invalidate it; conflict resolutions, dependencies, or relevant code
-  changes do. See the validation guide for recording that evidence.
+  changes do. For deterministic checks, declare complete input/toolchain scopes in
+  the validation plan and pass the prior receipt with `--reuse`; inspect the diff
+  for new interactions. See the validation guide for recording that evidence.
 - Time-bound tests and baseline diagnosis. An unchanged, already documented failure
   does not need another full baseline run for every release. New failures and failures
   in changed behavior still need investigation. Never describe an incomplete or failed

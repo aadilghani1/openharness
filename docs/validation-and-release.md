@@ -118,6 +118,47 @@ before merge and then again on the merged commit. Check the merged source identi
 and rerun only validation invalidated by the merge. Native checks absent from CI
 still need their own evidence.
 
+For deterministic local checks, the runner can do that comparison and reuse the
+original logs. Add an explicit `reuse` contract to each eligible check:
+
+```json
+{
+  "name": "desktop-toolbar",
+  "cwd": "desktop",
+  "argv": ["flutter", "test", "--no-pub", "--concurrency=2", "--timeout=60s", "test/native_toolbar_sync_test.dart", "test/status_menu_test.dart"],
+  "timeout_seconds": 180,
+  "reuse": {
+    "inputs": ["desktop"],
+    "toolchain": [["flutter", "--version", "--machine"]]
+  }
+}
+```
+
+Run the plan normally first. After a documentation edit, rebase or squash, pass
+its receipt to `make validate ARGS=".harness/validation-plan.json --reuse
+.harness/validation/RUN/receipt.json"` (on one line). Unchanged eligible checks
+are labeled `reused`, with the original timestamps, log and duration; changed or
+failed checks run. A mixed failed run can contribute its independent passing
+checks. There are no automatic retries and no test selection inferred from paths.
+
+Inputs are literal checkout-relative files/directories and include tracked and
+untracked source, deletions and file modes. Declare every relevant component,
+fixture, configuration and dependency lock; prefer a whole component to an
+incomplete hand-picked file list. Supply version commands for every tool involved.
+The runner also compares the check command, executable, checkout, OS, inherited
+environment and its own implementation. Tool/environment values are hashed, not
+written to receipts. Missing/modified logs, changing source, failed cleanup and
+an unavailable toolchain cannot satisfy reuse. Install dependencies from the
+declared lock; generated or ignored build/dependency directories are not source
+inputs. Reinstalling or manually modifying them requires a fresh run.
+
+Leave out `reuse` for real engines, mutable services/hardware, native visual or
+physical input checks, and performance measurements affected by host load. Their
+external state needs fresh evidence. A reuse contract documents a reviewed scope;
+it cannot prove that the author included every dependency. The
+[October 2 pre-merge audit](performance/2026-10-02-premerge-validation.md) records
+the motivating failures and the measured effect.
+
 For a failure, isolate the failing test once. If its code, fixtures, dependencies,
 or environment changed, investigate it as a possible regression. Otherwise check
 existing baseline evidence before starting another baseline run. Link the exact
