@@ -28,13 +28,16 @@ void main() {
     await windowManager.focus();
   });
   testWidgets(
-    'Devices opens its native DSH, routes remote edits, and renders offline settings',
+    'Devices opens its native DSH, routes remote edits, and hides unreachable devices',
     (tester) async {
       final app = DevicesReviewApp();
       await app.prepare();
       final projects = SwarmProjectStore();
       final boundary = GlobalKey();
-      Future<void> mount(Brightness brightness) async {
+      Future<void> mount(
+        Brightness brightness, {
+        DevicesReviewApp? notifier,
+      }) async {
         grid.AppTheme.palette.value = brightness == Brightness.light
             ? HarnessPalette.paper
             : HarnessPalette.graphite;
@@ -47,7 +50,7 @@ void main() {
               theme: grid.buildAppTheme(brightness: brightness),
               builder: (_, child) => grid.BrightnessScope(child: child!),
               home: SwarmScreen(
-                notifier: app,
+                notifier: notifier ?? app,
                 nativeTabs: true,
                 projectStore: projects,
               ),
@@ -67,6 +70,7 @@ void main() {
       Future<void> capture(String name) async {
         final directory = Platform.environment['HARNESS_DEVICES_CAPTURE_DIR'];
         if (directory == null) return;
+        await tester.pump(const Duration(milliseconds: 120));
         final image =
             await (boundary.currentContext!.findRenderObject()
                     as RenderRepaintBoundary)
@@ -115,12 +119,9 @@ void main() {
         (d) => d.machineId == 'workshop-pc',
       );
       final offlineCard = find.byKey(ValueKey('device-card-${offline.key}'));
-      await tester.ensureVisible(offlineCard);
-      await tester.tap(offlineCard);
-      await tester.pumpAndSettle();
+      expect(offlineCard, findsNothing);
       expect(controller.device(offline.key)!.canEdit, isFalse);
       expect(controller.device(offline.key)!.status.settings, isNotNull);
-      await capture('offline-devices-dsh');
       await mount(Brightness.dark);
       await tester.ensureVisible(find.byKey(const Key('devices-add')));
       await tester.pumpAndSettle();
@@ -132,8 +133,30 @@ void main() {
       expect(find.byType(DevicesScreen), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-      projects.dispose();
       app.dispose();
+      final waiting = DevicesReviewApp();
+      await waiting.prepare(conversationReady: false);
+      await mount(Brightness.dark, notifier: waiting);
+      expect(find.text('Devices chat'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('devices-conversation-setup')),
+        findsOneWidget,
+      );
+      final left = tester.getRect(
+        find.byKey(ValueKey('pane-frame:${waiting.panes.first.id}')),
+      );
+      final right = tester.getRect(
+        find.byKey(ValueKey('pane-frame:${waiting.panes.last.id}')),
+      );
+      expect(left.right, lessThan(right.left));
+      expect(left.width / (left.width + right.width), closeTo(.7, .01));
+      await capture('dark-devices-chat-unavailable');
+      await mount(Brightness.light, notifier: waiting);
+      await capture('light-devices-chat-unavailable');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      waiting.dispose();
+      projects.dispose();
     },
   );
 }

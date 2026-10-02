@@ -566,8 +566,9 @@ unmerged.
   travel through that computer's authenticated daemon, with encrypted requests,
   results and device-status events. Duplicate USB ids on different computers
   stay separate. Shared harness access does not grant device control. Offline
-  computers and unsupported daemons keep last readings visible with controls
-  disabled; edits are never queued for later. Gestures remain local to the desk.
+  computers and unsupported daemons retain readings internally for reconnection;
+  their devices and connection errors are hidden from the dashboard. Edits are
+  never queued for later. Gestures remain local to the desk.
 - Original [product photography](https://www.autonomous.ai/harness-device), shared
   settings rows and light/dark surfaces frame the library, selected device,
   USB setup and empty-state Shop entry. Names and model labels are saved locally

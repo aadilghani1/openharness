@@ -71,7 +71,20 @@ void main() {
             )
             .first;
         expect(tester.widget<ExcludeFocus>(canvasFocus).excluding, isFalse);
-        expect(app.activeSwarm.panes.single.isDevices, isTrue);
+        expect(app.activeSwarm.panes, hasLength(2));
+        final viewer = app.activeSwarm.panes.first;
+        final chat = app.activeSwarm.panes.last;
+        expect(viewer.isDevices, isTrue);
+        expect(chat.isViewer, isFalse);
+        expect(find.text('Devices chat'), findsOneWidget);
+        final left = tester.getRect(
+          find.byKey(ValueKey('pane-frame:${viewer.id}')),
+        );
+        final right = tester.getRect(
+          find.byKey(ValueKey('pane-frame:${chat.id}')),
+        );
+        expect(left.right, lessThan(right.left));
+        expect(left.width / (left.width + right.width), closeTo(.7, .01));
         await app.experimentalFeatures.set(
           ExperimentalFeature.devicesTab,
           false,
@@ -111,6 +124,30 @@ void main() {
       final app = createApp(store: storage);
       await app.restorePaneLayoutForTest();
       expect(app.swarms.any((s) => s.isDevices), isFalse);
+      app.dispose();
+    },
+  );
+
+  test(
+    'restoring a Devices tab reserves chat before its conversation loads',
+    () async {
+      final storage = MemoryStore();
+      await PaneLayoutStore(storage: storage).saveSwarms([
+        Swarm(id: 'devices', name: 'Devices', kind: 'devices'),
+      ], 'devices');
+      final app = createApp(store: storage);
+      app.experimentalFeatures.bind(
+        'u1',
+        transport: MemoryExperimentalTransport(storage),
+      );
+      await app.experimentalFeatures.refresh();
+      await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
+      await app.restorePaneLayoutForTest();
+      final tab = app.swarms.singleWhere((tab) => tab.isDevices);
+      expect(tab.panes, hasLength(2));
+      expect(tab.panes.first.isDevices, isTrue);
+      expect(tab.panes.last.agentId, isNull);
+      expect(tab.manualLayout!.tiles.first.width, .7);
       app.dispose();
     },
   );

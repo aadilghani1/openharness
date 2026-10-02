@@ -1,8 +1,9 @@
 # Devices
 
 Manage physical Harness and Harness Pro devices across computers linked to your
-account. The native dashboard opens beside an ordinary agent conversation, with
-each USB device labeled by its host computer.
+account. The native dashboard opens on the left at 70%, with the ordinary agent
+chat on the right at 30%. Chat setup and recovery stay in that right pane.
+Each visible USB device is labeled by its reachable host computer.
 
 Devices is bundled with the Harness CLI, unlisted in the Store, and off by
 default. With an updated backend, desktop app, and daemons, enable **Settings →
@@ -16,8 +17,10 @@ Try asking:
 
 The agent reads live inventory and reports the owning computers, available
 devices, and unavailable hosts. A requested settings change targets one host
-and one device and waits for the device to report the requested values. Offline
-controls are disabled; changes are never queued for later.
+and one device and waits for the device to report the requested values. The
+dashboard hides devices from unreachable, unlinked, or unsupported computers,
+without listing connection errors. Saved names return when the computer
+reconnects. Changes are never queued for later.
 
 The dashboard supports brightness, sound, reverse scrolling, voice language,
 and the initial Focus face. Add device guides USB connection, naming, and model

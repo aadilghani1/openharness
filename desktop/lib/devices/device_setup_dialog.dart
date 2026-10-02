@@ -66,7 +66,12 @@ class _DeviceSetupState extends State<_DeviceSetup> {
                 listenable: widget.controller,
                 builder: (context, _) {
                   final connected = widget.controller.devices
-                      .where((d) => d.hostOnline && d.status.attached)
+                      .where(
+                        (d) =>
+                            d.hostOnline &&
+                            d.hostAvailable &&
+                            d.status.attached,
+                      )
                       .toList();
                   final selected =
                       widget.editing ??

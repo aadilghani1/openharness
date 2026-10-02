@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/devices/device_settings.dart';
+import 'package:harness/devices/device_hosts.dart';
 import 'package:harness/devices/devices_controller.dart';
 import 'package:harness/devices/devices_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -69,7 +70,10 @@ void main() {
       final context = tester.element(find.byType(DevicesScreen));
       await Future.wait([
         for (final image in ['front', 'side', 'desk'])
-          precacheImage(AssetImage('assets/devices/harness-$image.webp'), context),
+          precacheImage(
+            AssetImage('assets/devices/harness-$image.webp'),
+            context,
+          ),
       ]);
     });
     await tester.pumpAndSettle();
@@ -150,6 +154,77 @@ void main() {
       );
     }
   }
+
+  testWidgets(
+    'unreachable computers have no cards or errors and return with saved names',
+    (tester) async {
+      final hosts = DeviceHosts();
+      const inventory = [
+        DeviceHost(id: 'local', name: 'This Mac', online: true, local: true),
+        DeviceHost(id: 'remote', name: 'Remote Mac', online: true),
+      ];
+      hosts.reconcile(inventory);
+      final controller = DevicesController(
+        hosts: hosts,
+        accountId: 'review',
+        sendHostSettings: (_, _, _) async => true,
+      );
+      await controller.load();
+      hosts.receive('local', deviceStatus('local'));
+      hosts.receive('remote', deviceStatus('remote'));
+      final remote = controller.devices.firstWhere(
+        (device) => device.machineId == 'remote',
+      );
+      controller.rename(remote.key, 'Studio dial', HarnessDeviceModel.pro);
+      await pump(tester, controller);
+      await tester.tap(find.byKey(ValueKey('device-card-${remote.key}')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 devices'), findsOneWidget);
+
+      for (final reason in [
+        'Couldn’t reach Remote Mac.',
+        'Link this computer in Machines.',
+        'Update Harness on Remote Mac.',
+      ]) {
+        hosts.failed('remote', reason);
+        await tester.pumpAndSettle();
+        expect(find.byKey(ValueKey('device-card-${remote.key}')), findsNothing);
+        expect(find.textContaining(reason), findsNothing);
+        expect(find.text('1 device'), findsOneWidget);
+        expect(find.text('Studio dial'), findsNothing);
+        expect(find.text('Remote Mac'), findsNothing);
+        hosts.receive('remote', deviceStatus('remote'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(ValueKey('device-card-${remote.key}')),
+          findsOneWidget,
+        );
+        expect(controller.device(remote.key)!.name, 'Studio dial');
+      }
+
+      hosts.reconcile([
+        const DeviceHost(
+          id: 'local',
+          name: 'This Mac',
+          online: false,
+          local: true,
+        ),
+        const DeviceHost(id: 'remote', name: 'Remote Mac', online: false),
+      ]);
+      await tester.pumpAndSettle();
+      expect(find.text('No devices connected'), findsOneWidget);
+      expect(find.textContaining('Computer offline'), findsNothing);
+      expect(find.byType(DeviceSettingsPanel), findsNothing);
+      expect(
+        controller.devices,
+        hasLength(2),
+        reason: 'Names are retained for reconnection',
+      );
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      hosts.dispose();
+    },
+  );
 
   testWidgets('narrow layouts and 200 percent text remain scrollable', (
     tester,

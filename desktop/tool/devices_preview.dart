@@ -145,7 +145,10 @@ class DevicesReviewApp extends AppNotifier {
   final writes = <(String, String, Map<String, Object?>)>[];
   bool _ended = false;
 
-  Future<void> prepare({bool empty = false}) async {
+  Future<void> prepare({
+    bool empty = false,
+    bool conversationReady = true,
+  }) async {
     await experimentalFeatures.refresh();
     if (!empty) {
       for (var i = 0; i < 5; i++) {
@@ -183,6 +186,7 @@ class DevicesReviewApp extends AppNotifier {
       );
     }
     openDevices();
+    if (!conversationReady) return;
     machineStates['studio-mac']!.agents = [
       const Agent(
         id: 'review-devices',
@@ -199,6 +203,9 @@ class DevicesReviewApp extends AppNotifier {
   Future<void> showDevicesTerminal(String machineId, String agentId) async {
     final tab = swarms.where((tab) => tab.isDevices).firstOrNull;
     if (tab == null || tab.panes.any((pane) => pane.agentId == agentId)) return;
+    tab.panes.firstWhere((pane) => pane.isDevices)
+      ..machineId = machineId
+      ..ownerAgentId = agentId;
     final session =
         TerminalSession(
             machineId: machineId,
@@ -213,10 +220,20 @@ class DevicesReviewApp extends AppNotifier {
     session.terminal.write(
       'Devices\r\n\r\nYour Harness hardware, across your computers.\r\n\r\nTry the controls in the dashboard.\r\n\r\nThis review uses sample hardware and a\r\nsample conversation. No agent is running.\r\n',
     );
-    tab.panes.add(
-      TerminalPane(id: 900001, machineId: machineId, agentId: agentId)
-        ..session = session,
-    );
+    final pane = tab.panes
+        .where((pane) => !pane.isViewer && pane.agentId == null)
+        .firstOrNull;
+    if (pane != null) {
+      pane
+        ..machineId = machineId
+        ..agentId = agentId
+        ..session = session;
+    } else {
+      tab.panes.add(
+        TerminalPane(id: 900001, machineId: machineId, agentId: agentId)
+          ..session = session,
+      );
+    }
     tab.paneSizes['2:manual'] = PaneArrangement.viewerBesideTerminal;
     notifyListeners();
   }

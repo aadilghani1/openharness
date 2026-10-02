@@ -1645,14 +1645,25 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _ensureDevicesViewer(Swarm tab) {
-    if (!devicesEnabled || tab.panes.any((pane) => pane.isDevices)) return;
-    final pane = TerminalPane(
-      id: _nextPaneId++,
-      machineId: '',
-      kind: PaneKind.devices,
+    if (!devicesEnabled) return;
+    if (!tab.panes.any((pane) => pane.isDevices)) {
+      final pane = TerminalPane(
+        id: _nextPaneId++,
+        machineId: '',
+        kind: PaneKind.devices,
+      );
+      tab.panes.insert(0, pane);
+      tab.focusedPaneId ??= pane.id;
+    }
+    // Reserve the conversation before any network or launch work. Setup and
+    // failures belong in this same right-hand pane, never above the dashboard.
+    if (!tab.panes.any((pane) => !pane.isViewer)) {
+      tab.panes.add(TerminalPane(id: _nextPaneId++, machineId: ''));
+    }
+    tab.paneSizes.putIfAbsent(
+      '2:manual',
+      () => PaneArrangement.viewerBesideTerminal,
     );
-    tab.panes.insert(0, pane);
-    tab.focusedPaneId ??= pane.id;
   }
 
   Future<void> showDevicesTerminal(String machineId, String agentId) async {
@@ -1668,7 +1679,10 @@ class AppNotifier extends ChangeNotifier {
       () => PaneArrangement.viewerBesideTerminal,
     );
     await assignAgentToPane(
-      null,
+      tab.panes
+          .where((pane) => !pane.isViewer && pane.agentId == null)
+          .firstOrNull
+          ?.id,
       machineId,
       agentId,
       swarmId: tab.id,
@@ -12230,6 +12244,10 @@ class AppNotifier extends ChangeNotifier {
               ? targetPanes.length
               : split.paneIds.indexOf(split.paneId) + 1
         : targetPanes.indexOf(replaced);
+    final pendingLayout =
+        replaced != null && !replaced.isViewer && replaced.agentId == null
+        ? target.manualLayout
+        : null;
     if (existing != null) target.remove(existing);
     if (replaced != null) target.remove(replaced);
     final pane =
@@ -12243,6 +12261,11 @@ class AppNotifier extends ChangeNotifier {
       pane.sharedOwnerName = machine.machine.ownerName;
     }
     targetPanes.insert(insertion.clamp(0, targetPanes.length), pane);
+    // Attaching a conversation to a reserved slot is not a layout removal.
+    if (pendingLayout != null &&
+        pendingLayout.tiles.length == targetPanes.length) {
+      target.savePaneSizes('${targetPanes.length}:manual', pendingLayout);
+    }
     if (autoTile && split == null) {
       // A new pane reflows the whole tab. Old manual splits and remembered
       // sizes for this count must not silently override automatic placement.

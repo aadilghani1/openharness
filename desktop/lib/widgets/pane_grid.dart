@@ -58,6 +58,7 @@ class PaneGrid extends StatelessWidget {
     this.soloFocused = false,
     this.companionViewer,
     this.devicesViewer,
+    this.devicesConversation,
   });
 
   final AppNotifier notifier;
@@ -75,6 +76,7 @@ class PaneGrid extends StatelessWidget {
   /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
   final WidgetBuilder? companionViewer;
   final WidgetBuilder? devicesViewer;
+  final WidgetBuilder? devicesConversation;
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +94,7 @@ class PaneGrid extends StatelessWidget {
             soloFocused: soloFocused,
             companionViewer: companionViewer,
             devicesViewer: devicesViewer,
+            devicesConversation: devicesConversation,
           );
         }
         final panes = notifier.panes;
@@ -110,6 +113,7 @@ class PaneGrid extends StatelessWidget {
           onSplitPane: onSplitPane,
           companionViewer: companionViewer,
           devicesViewer: devicesViewer,
+          devicesConversation: devicesConversation,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -261,6 +265,7 @@ class _SwarmCanvas extends StatefulWidget {
     this.soloFocused = false,
     this.companionViewer,
     this.devicesViewer,
+    this.devicesConversation,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
@@ -271,6 +276,7 @@ class _SwarmCanvas extends StatefulWidget {
   final bool soloFocused;
   final WidgetBuilder? companionViewer;
   final WidgetBuilder? devicesViewer;
+  final WidgetBuilder? devicesConversation;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -615,6 +621,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     solo: widget.soloFocused,
                                     companionViewer: widget.companionViewer,
                                     devicesViewer: widget.devicesViewer,
+                                    devicesConversation:
+                                        widget.devicesConversation,
                                   ),
                                 ),
                               ),
@@ -1217,6 +1225,7 @@ class _PaneCell extends StatelessWidget {
     this.solo = false,
     this.companionViewer,
     this.devicesViewer,
+    this.devicesConversation,
   });
 
   final AppNotifier notifier;
@@ -1229,6 +1238,7 @@ class _PaneCell extends StatelessWidget {
   final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final WidgetBuilder? companionViewer;
   final WidgetBuilder? devicesViewer;
+  final WidgetBuilder? devicesConversation;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
   /// dimming or zoom, since it already fills the screen. The focused rim still
@@ -1368,6 +1378,13 @@ class _PaneCell extends StatelessWidget {
                           : pane.isCompanion
                           ? companionViewer?.call(context) ??
                                 const SizedBox.shrink()
+                          : pane.agentId == null &&
+                                devicesConversation != null &&
+                                notifier.swarms.any(
+                                  (tab) =>
+                                      tab.isDevices && tab.panes.contains(pane),
+                                )
+                          ? devicesConversation!(context)
                           : _PaneContent(
                               notifier: notifier,
                               pane: pane,

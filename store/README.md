@@ -51,6 +51,14 @@ what lets hundreds of packages exist without any of them touching the app or the
 
 ## Build one
 
+**Workspace layout is required:** every DSH with a viewer opens with the viewer
+on the left at **70%** and the real agent chat on the right at **30%**. Keep both
+slots during loading and failed setup; show chat recovery in the chat slot.
+Use the shared canvas and preserve user resizing. Follow the
+[DSH workspace contract](../desktop/design/dsh-workspace.md), including its
+failure, reconnect, and release checks. This applies equally to native utility
+dashboards and web viewers.
+
 **First time?** Follow [Hello World](../CONTRIBUTING.md#your-first-harness): copy a tiny package,
 install it locally, and change a greeting in a live HTML preview. It includes the viewer in
 `harness.json` with `"viewer": { "use": "autonomous/web-viewer" }`. No app changes are needed.

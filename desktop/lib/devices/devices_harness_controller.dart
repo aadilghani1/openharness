@@ -105,7 +105,14 @@ class DevicesHarnessController extends ChangeNotifier {
         );
         if (!_current(owner)) return;
         if (failure != null) {
-          error = failure;
+          // This package ships with the CLI and is deliberately absent from
+          // dsh_list/the Store. A missing bundle requires a Harness update,
+          // not a Store install or a raw INVALID_DSH message in the dashboard.
+          error = switch (_creation!.refusal) {
+            'INVALID_DSH' || 'UNSUPPORTED' || 'UNSUPPORTED_ON_REMOTE' => 'Update Harness on this computer to use Devices chat, then try again.',
+            _ when _creation!.awaitingConfirmation => 'Still waiting for your chat to start. Check again to reconnect to the same conversation.',
+            _ => 'Couldn’t start Devices chat. Try again in a moment.',
+          };
           return;
         }
         agent = existing();
@@ -118,7 +125,7 @@ class DevicesHarnessController extends ChangeNotifier {
         final resumed = await app.resumeAgent(machineId, agent.id);
         if (!_current(owner)) return;
         if (resumed.error != null) {
-          error = resumed.error;
+          error = 'Couldn’t resume Devices chat. Try again in a moment.';
           return;
         }
       }

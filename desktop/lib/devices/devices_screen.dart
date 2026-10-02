@@ -21,17 +21,8 @@ final harnessDeviceShopUrl = Uri.parse(
 );
 
 class DevicesTab extends StatefulWidget {
-  const DevicesTab({
-    super.key,
-    required this.notifier,
-    this.conversationOpening = false,
-    this.conversationError,
-    this.onOpenConversation,
-  });
+  const DevicesTab({super.key, required this.notifier});
   final AppNotifier notifier;
-  final bool conversationOpening;
-  final String? conversationError;
-  final VoidCallback? onOpenConversation;
   @override
   State<DevicesTab> createState() => _DevicesTabState();
 }
@@ -67,9 +58,6 @@ class _DevicesTabState extends State<DevicesTab> {
   Widget build(BuildContext context) => DevicesScreen(
     controller: controller,
     onRefresh: widget.notifier.refreshDevices,
-    conversationOpening: widget.conversationOpening,
-    conversationError: widget.conversationError,
-    onOpenConversation: widget.onOpenConversation,
   );
 }
 
@@ -79,16 +67,10 @@ class DevicesScreen extends StatefulWidget {
     required this.controller,
     this.openShop,
     this.onRefresh,
-    this.conversationOpening = false,
-    this.conversationError,
-    this.onOpenConversation,
   });
   final DevicesController controller;
   final Future<bool> Function(Uri)? openShop;
   final Future<void> Function()? onRefresh;
-  final bool conversationOpening;
-  final String? conversationError;
-  final VoidCallback? onOpenConversation;
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
 }
@@ -147,12 +129,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
         listenable: widget.controller,
         builder: (context, _) => LayoutBuilder(
           builder: (context, bounds) {
-            final devices = widget.controller.devices;
+            // Keep saved identities for reconnection, but only present devices
+            // whose host has answered. Other machines do not belong in this UI.
+            final devices = widget.controller.devices
+                .where((device) => device.hostOnline && device.hostAvailable)
+                .toList();
             final selected =
                 devices.where((d) => d.key == _selectedKey).firstOrNull ??
                 devices.where((d) => d.status.attached).firstOrNull ??
                 devices.firstOrNull;
-            _selectedKey ??= selected?.key;
+            _selectedKey = selected?.key;
             final pad = bounds.maxWidth < 640 ? 20.0 : 40.0;
             return SingleChildScrollView(
               key: const PageStorageKey('devices-page'),
@@ -226,26 +212,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
                           ),
                         ),
                       ],
-                      if (widget.conversationOpening ||
-                          widget.conversationError != null) ...[
-                        const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 12,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              widget.conversationError ??
-                                  'Opening the Devices conversation…',
-                              style: DesktopChrome.metadata(),
-                            ),
-                            if (!widget.conversationOpening)
-                              TextButton(
-                                onPressed: widget.onOpenConversation,
-                                child: const Text('Retry'),
-                              ),
-                          ],
-                        ),
-                      ],
                       if (widget.controller.error case final error?) ...[
                         const SizedBox(height: 16),
                         Wrap(
@@ -261,14 +227,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         ),
                       ],
                       const SizedBox(height: 32),
-                      for (final host in widget.controller.computers)
-                        if (host.error != null) ...[
-                          Text(
-                            '${host.name}: ${host.error}',
-                            style: DesktopChrome.metadata(),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
                       if (!widget.controller.loaded)
                         const SkeletonBlock(
                           child: Skeleton(
@@ -278,7 +236,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
                           ),
                         )
                       else if (selected == null)
-                        _EmptyDevices(onAdd: () => _setup(), onShop: _shop)
+                        _EmptyDevices(
+                          onAdd: () => _setup(),
+                          onShop: _shop,
+                          returning: widget.controller.devices.isNotEmpty,
+                        )
                       else ...[
                         Text(
                           '${devices.length} ${devices.length == 1 ? 'device' : 'devices'}',
@@ -556,8 +518,13 @@ class _DeviceShowcase extends StatelessWidget {
 }
 
 class _EmptyDevices extends StatelessWidget {
-  const _EmptyDevices({required this.onAdd, required this.onShop});
+  const _EmptyDevices({
+    required this.onAdd,
+    required this.onShop,
+    this.returning = false,
+  });
   final VoidCallback onAdd, onShop;
+  final bool returning;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -568,12 +535,16 @@ class _EmptyDevices extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'A little closer\nto your work.',
+              returning
+                  ? 'No devices connected'
+                  : 'A little closer\nto your work.',
               style: grid.AppType.display(),
             ),
             const SizedBox(height: 18),
             Text(
-              'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
+              returning
+                  ? 'Connect a device by USB-C to a computer running Harness. It will appear here automatically.'
+                  : 'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
               style: DesktopChrome.text(color: DesktopChrome.muted),
             ),
             const SizedBox(height: 28),
@@ -583,7 +554,9 @@ class _EmptyDevices extends StatelessWidget {
               children: [
                 FilledButton(
                   onPressed: onAdd,
-                  child: const Text('Add your first device'),
+                  child: Text(
+                    returning ? 'Add device' : 'Add your first device',
+                  ),
                 ),
                 TextButton(
                   onPressed: onShop,

@@ -93,6 +93,7 @@ import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../devices/devices_screen.dart';
+import '../widgets/harness_conversation_placeholder.dart';
 import '../devices/devices_harness_controller.dart';
 import '../widgets/harness_start_page.dart';
 import '../state/toolbar_notices.dart';
@@ -3671,17 +3672,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
         }
       });
     }
-    return ListenableBuilder(
-      listenable: _devicesHarness,
-      builder: (context, _) => DevicesTab(
-        key: ValueKey('devices-tab:${app.currentUser?.id}'),
-        notifier: app,
-        conversationOpening: _devicesHarness.opening,
-        conversationError: _devicesHarness.error,
-        onOpenConversation: _devicesHarness.open,
-      ),
+    return DevicesTab(
+      key: ValueKey('devices-tab:${app.currentUser?.id}'),
+      notifier: app,
     );
   }
+
+  Widget _devicesConversation(BuildContext context) => ListenableBuilder(
+    listenable: _devicesHarness,
+    builder: (context, _) => HarnessConversationPlaceholder(
+      key: const ValueKey('devices-conversation-setup'),
+      name: 'Devices',
+      opening: _devicesHarness.opening,
+      error: _devicesHarness.error,
+      onRetry: () => unawaited(_devicesHarness.open()),
+    ),
+  );
 
   void _openDevices() {
     if (!_routeIsCurrent ||
@@ -6864,6 +6870,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                   ),
                                               devicesViewer: app.devicesEnabled
                                                   ? _devicesViewer
+                                                  : null,
+                                              devicesConversation:
+                                                  app.devicesEnabled
+                                                  ? _devicesConversation
                                                   : null,
                                               companionViewer:
                                                   _creatureEnabled &&
