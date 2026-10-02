@@ -5,18 +5,11 @@
 // a per-platform release matrix into a distribution that is currently a download. A tty is a file, `stty`
 // puts it in raw mode, and that is the whole of what this needs.
 import { execFile } from 'node:child_process'
-import { constants, existsSync, readFileSync, readdirSync } from 'node:fs'
-import { open, type FileHandle } from 'node:fs/promises'
+import { closeSync, constants, existsSync, openSync, readFileSync, readdirSync } from 'node:fs'
+import { ReadStream } from 'node:tty'
 import { promisify } from 'node:util'
 
 const runFile = promisify(execFile)
-
-const waitForPort = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
-
-function wouldBlock(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code
-  return code === 'EAGAIN' || code === 'EWOULDBLOCK' || code === 'EINTR'
-}
 
 /** The SoC's own USB peripheral. The dial exposes this and nothing else — measured, see findDialPort. */
 export const DIAL_VENDOR_ID = 0x303a
@@ -184,7 +177,7 @@ function findLinux(): DialPort[] {
 }
 
 /**
- * An open port, in raw mode, with a read loop.
+ * An open port, in raw mode, driven by the kernel's readiness notifications.
  *
  * The port coming and going — a flash, a crash, a nudged cable, the dial rebooting into a new image — is
  * the NORMAL case here, not the failure case. Everything about this class is written so that closing and
@@ -193,13 +186,26 @@ function findLinux(): DialPort[] {
 export class SerialLink {
   private constructor(
     readonly path: string,
-    private handle: FileHandle,
+    private readonly stream: ReadStream,
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void,
-  ) {}
+  ) {
+    stream.on('data', (chunk: Buffer) => {
+      if (this.closed) return
+      try { this.onData(chunk) }
+      catch (error) { void this.close((error as NodeJS.ErrnoException).code ?? String(error)) }
+    })
+    stream.on('error', (error: NodeJS.ErrnoException) => { void this.close(error.code ?? String(error)) })
+    stream.once('end', () => { void this.close('end of stream') })
+    stream.once('close', () => {
+      this.streamClosed = true
+      void this.close('end of stream')
+    })
+  }
 
   private closed = false
   private closePromise: Promise<void> | null = null
+  private streamClosed = false
 
   static async open(
     path: string,
@@ -226,48 +232,29 @@ export class SerialLink {
     //
     // Measured 2026-08-24: the daemon died at the exact second the cable came out, every time, and the
     // dial then greeted an empty room until it timed out and showed no agents.
-    // An async FileHandle read still occupies a libuv worker until the syscall returns. With a
-    // blocking tty, close() waits for that read forever when the dial is silent. Reopening strands
-    // another worker each time; after four opens even DNS lookup and unrelated file I/O stop.
-    // O_NONBLOCK makes idle reads/writes return EAGAIN so they can yield without holding a worker,
-    // and lets close finish without needing the device to send another byte.
-    const handle = await open(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
-    const link = new SerialLink(path, handle, onData, onClosed)
-    void link.readLoop()
-    return link
-  }
-
-  private async readLoop(): Promise<void> {
-    const buf = Buffer.allocUnsafe(4096)
-    while (!this.closed) {
-      try {
-        const { bytesRead } = await this.handle.read(buf, 0, buf.length, null)
-        if (this.closed) return
-        if (bytesRead > 0) this.onData(Buffer.from(buf.subarray(0, bytesRead)))
-        // A zero-byte read on a tty means EOF, which for a USB CDC device means it went away.
-        else if (bytesRead === 0) return this.fail('end of stream')
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code
-        if (this.closed) return
-        // EAGAIN is a port with nothing to say, not a broken one.
-        if (wouldBlock(err)) {
-          await waitForPort()
-          continue
-        }
-        return this.fail(code ?? String(err))
-      }
+    // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A TTY stream
+    // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
+    // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
+    const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
+    let stream: ReadStream
+    try { stream = new ReadStream(fd, { readable: true, writable: true }) }
+    catch (error) { closeSync(fd); throw error }
+    // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
+    // the supplied fd itself. Check the native handle exactly once so neither path leaks a
+    // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.
+    const streamFd = (stream as ReadStream & { _handle: { fd: number } })._handle.fd
+    if (streamFd !== fd) {
+      try { closeSync(fd) }
+      catch (error) { stream.destroy(); throw error }
     }
-  }
-
-  private fail(why: string): void {
-    void this.close(why)
+    return new SerialLink(path, stream, onData, onClosed)
   }
 
   /**
-   * Write every byte of ONE frame, looping over short writes. Rejects only when the port is gone.
+   * Write every byte of ONE frame. libuv handles short writes without polling for capacity.
    *
    * ⚠️ SERIALISED, AND NOT AS A PRECAUTION. A tty accepts a few hundred bytes at a time, so an 8 KB
-   * firmware slice takes several passes through the loop below and parks on an await between each. Frames
+   * firmware slice takes several native writes before its callback completes. Frames
    * come from several places at once — the 5-second ping, the per-tick agent sync, a slice pump — and
    * without this queue a JSON frame lands in the MIDDLE of a firmware slice. The dial's decoder resyncs
    * past the wreckage, which costs it both frames, and the transfer then fails at the far end with a
@@ -289,18 +276,9 @@ export class SerialLink {
 
   private async writeFrame(bytes: Uint8Array): Promise<void> {
     if (this.closed) throw new Error('port closed')
-    let off = 0
-    while (off < bytes.length) {
-      if (this.closed) throw new Error('port closed')
-      try {
-        const { bytesWritten } = await this.handle.write(bytes, off, bytes.length - off)
-        if (bytesWritten <= 0) throw new Error('short write')
-        off += bytesWritten
-      } catch (err) {
-        if (this.closed || !wouldBlock(err)) throw err
-        await waitForPort()
-      }
-    }
+    await new Promise<void>((resolve, reject) => {
+      this.stream.write(bytes, (error) => { if (error) reject(error); else resolve() })
+    })
   }
 
   get isOpen(): boolean {
@@ -310,7 +288,13 @@ export class SerialLink {
   close(why = 'closed'): Promise<void> {
     if (this.closePromise) return this.closePromise
     this.closed = true
-    this.closePromise = this.handle.close().catch(() => {}).then(() => this.onClosed(why))
+    let finish!: () => void
+    this.closePromise = new Promise<void>((resolve) => { finish = resolve }).then(() => this.onClosed(why))
+    if (this.streamClosed) finish()
+    else {
+      this.stream.once('close', finish)
+      this.stream.destroy()
+    }
     return this.closePromise
   }
 }
