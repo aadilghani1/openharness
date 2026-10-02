@@ -1,9 +1,9 @@
 {
   "license": "MIT",
-  "tagline": "Manage sessions across your machines",
+  "tagline": "Monitor resources and AI usage across your machines",
   "examples": [
     {
-      "prompt": "Show me every harness on this machine, then pause everything nobody has touched in a day.",
+      "prompt": "Show me every harness on this machine, then stop everything nobody has touched in a day.",
       "caption": "Review idle sessions, then stop the approved ones while keeping their history"
     },
     {
@@ -11,7 +11,7 @@
       "caption": "Running, waiting on you, and idle — with what each one holds"
     },
     {
-      "prompt": "Which harnesses are on a branch that already merged? Pause those and tell me what you kept.",
+      "prompt": "Which harnesses are on a branch that already merged? Stop those and tell me what you kept.",
       "caption": "Stopped with the reason recorded and saved launch settings retained"
     }
   ]

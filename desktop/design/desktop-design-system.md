@@ -329,40 +329,37 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the right-hand controls read model, split down, split right,
-zoom, close. Use the rounded 14-point `AppPaneIcon` split/zoom variants and the
-shared 12-point close glyph in 28-point targets. The close target sits 4 points
-inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
-brighten the glyph without a fill, border, or movement. Keep the controls on one
-line; model and title text truncate before icon targets shrink. Zoom becomes
-Restore while enlarged. Unavailable controls stay in place with disabled ink.
-Split opens New Harness directly, inheriting the clicked pane's agent, machine,
-and project; the pane is created only after submission. Clicking the model focuses that
-pane and opens the same Models picker as Cmd-:. Selection stays bound to that
+**Pane header** — the right-hand controls read agent, model, close. The shared
+12-point close glyph has a 28-point target, 4 points inside the trailing edge.
+Resting ink is 45%; hover and keyboard focus brighten the glyph without a fill,
+border, or movement. Keep the controls on one line; model and title text truncate
+before the close target shrinks. Split and zoom remain in commands, menus and
+keyboard shortcuts. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. The agent name and chevron open
+the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — global harness count, local CPU/RAM/GPU,
-then subscription allowance used at the left; focused machine, project, branch
-and PR at the right. Each context field keeps its existing action. The hardware
-scope always stays on the computer running the app, even when a remote pane is
-focused. Hardware is plain status text, with no machine filter, selection or
-resource panel. Never sum percentages across machines.
-Titles stay quiet when several panes are visible. Do not repeat branches in pane
-headers, or model/effort in the footer. Context honors the selected status face,
-fields, colors and shell/Powerline treatment. Recent-harness context uses its
-monochrome presentation.
-Use whole percentages, one space between title and value, and 2.5 character cells between parts:
-`Harnesses 118   CPU 20%   RAM 50%   GPU 10%   Claude 100%   Codex 90%`.
-All labels and numbers use neutral readable ink;
-no severity color, dot separators, trailing plus or decimal figures. Subscription
-figures mean allowance used. Preserve Models' deduplicated accounts, limiting
-window and freshness rules. Unknown values show `-`, never fabricated zero.
-Hover explains scope, account identity and reset windows. Hardware has no click
-action. Clicking subscription usage opens Subscriptions without switching a model.
-At narrow widths hide complete metric groups rather than clipping percentages.
+**Focused workspace footer** — running harness count and attributable CPU/RAM/GPU/SSD across
+connected owned machines, then subscription allowance used at the left; focused machine, project,
+branch and PR at the right. Each context field keeps its action. Harness count and every resource
+metric select the existing Harness Monitor tab or create it if absent. Process-tree CPU uses 100%
+per core; GPU sums reported process utilization, which can exceed 100%. Shared servers count once. Unsupported GPU
+attribution stays unknown. RAM/SSD are absolute, rounded whole MB/GB; shared/nested workspace
+folders count once per machine. See [workspace status bar](workspace-status-bar.md) for accounting.
+Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
+model/effort in the footer. Context honors the selected status face, fields, colors and shell/
+Powerline treatment. Recent-harness context uses its monochrome presentation.
+Use whole figures, one space between title and value, and 2.5 character cells between parts:
+`Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
+Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
+decimal figures. Harness metrics show — when unavailable and ≥ for partial totals. Subscription
+figures mean allowance used and preserve Models' deduplicated accounts, limiting window and
+freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
+without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
+
 Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls

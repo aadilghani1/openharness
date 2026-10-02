@@ -33,13 +33,14 @@ import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
-import { isHiddenBuiltin } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
 import { LocalModels } from './lib/localModels.js'
+import { appEngineOps, scanAppModels } from './lib/appModels.js'
 import { ApiConnectionError, ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis, resolveApiTarget } from './lib/apiModels.js'
 import { gridCapableEngines, isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
@@ -57,6 +58,7 @@ import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
+import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
@@ -445,6 +447,10 @@ export class BackendSocket {
     machineName: () => this.machineDisplayName,
     inventory: gridInventory,
     onChanged: () => { forgetGridModels(); void this.pushGridModels() },
+    // Models Ollama, LM Studio and llama.cpp downloaded here, found by the Model Manager's own scan (the
+    // bundled harness), so the picker and that harness agree on what is here and what starts it.
+    appModels: () => scanAppModels({ node: process.execPath, packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
+    appEngines: appEngineOps(process.env),
   })
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
@@ -725,7 +731,7 @@ export class BackendSocket {
     >) | null = null
   /** Resume stopped work directly, or attach if it is already running. Never replaces a live
    * process and never falls back to a fresh conversation. */
-  onResumeAgent: BackendSocket['onRestartAgent'] = null
+  onResumeAgent: ((agentId: string, permissionMode?: string) => ReturnType<NonNullable<BackendSocket['onRestartAgent']>>) | null = null
   /** Called on `agent_fork` — cli.ts opens a NEW agent that starts with `agentId`'s whole history
    *  (lib/forkAgent.ts) and returns its process-agent, exactly as `agent_create` does. `level` says
    *  what the new agent actually got: the engine's own fork, or a handoff message. */
@@ -768,6 +774,7 @@ export class BackendSocket {
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
   harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
+  harnessStorageReader = createHarnessStorageReader()
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
    *  that lands meanwhile. */
   private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
@@ -2092,7 +2099,11 @@ export class BackendSocket {
         case 'machine_resources':
           // Sampling CPU must not hold up typing or other machine requests.
           void (payload.harnesses === true
-            ? this.harnessResourcesReader().then(harnesses => ({ harnesses }))
+            ? this.harnessResourcesReader().then(async harnesses => {
+              if (payload.storage !== true) return { harnesses }
+              const storage = await this.harnessStorageReader(registry.advertised())
+              return { harnesses: { ...harnesses, agents: harnesses.agents.map(row => ({ ...row, ...storage.get(row.agentId) })) } }
+            })
             : readMachineResources())
             .then(resources => reply(type, requestId, { ...resources }))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
@@ -2136,8 +2147,9 @@ export class BackendSocket {
           // ⚠️ Run against grid AS IT STANDS — never set up first. A Grid harness session issues these
           // on its own the moment its viewer comes up (every open one, on every daemon start), so
           // setting grid up here signed a machine in to grid right after a Harness-only sign-in,
-          // with nobody asking. A person sets grid up through the picker's Set up or by opening the
-          // Model Manager; until then grid answers these in its own words.
+          // with nobody asking. Grid is set up by the picker's Set up, by making or opening a Model
+          // Manager, and by that harness's own `harness grid setup`; until then grid answers these in
+          // its own words.
           void this.gridFleet.run(connId, requestId, request)
             .then(result => reply(type, requestId, { ...result }))
             .catch(() => reply(type, requestId, { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }))
@@ -2186,21 +2198,35 @@ export class BackendSocket {
             return
           }
           if (payload.monitor === true) {
-            const snapshot = await this.harnessResourcesReader().catch(() => ({ agents: [] }))
-            const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
-            const byId = new Map(sessions.map(s => [s.agentId, s]))
-            reply(type, requestId, { agents: projects.map(agent => {
-              const session = byId.get(agent.id)
-              const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
-              const reading = resources.get(agent.id)
-              return { ...agent, monitor: {
-                activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
-                activityKnown: this.monitorActivityProvider !== null,
-                rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
-                cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
-                pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
-              } }
-            }) })
+            // Optional telemetry must never hold the ordered terminal-input queue.
+            void (async () => {
+              const [snapshot, storage] = await Promise.all([
+                this.harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
+                this.harnessStorageReader(sessions).catch(() => new Map()),
+              ])
+              const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
+              const byId = new Map(sessions.map(s => [s.agentId, s]))
+              reply(type, requestId, { agents: projects.map(agent => {
+                const session = byId.get(agent.id)
+                const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
+                const reading = resources.get(agent.id)
+                return { ...agent, monitor: {
+                  activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
+                  activityKnown: this.monitorActivityProvider !== null,
+                  rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
+                  cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
+                  pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
+                  sampledAt: snapshot.sampledAt,
+                  processCount: reading?.processCount ?? null,
+                  gpuMemoryBytes: reading?.gpuMemoryBytes ?? null,
+                  gpuPercent: reading?.gpuPercent ?? null,
+                  diskReadBytesPerSecond: reading?.diskReadBytesPerSecond ?? null,
+                  diskWriteBytesPerSecond: reading?.diskWriteBytesPerSecond ?? null,
+                  processes: reading?.processes ?? [],
+                  ...(storage.get(agent.id) ?? {}),
+                } }
+              }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
+            })().catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           } else reply(type, requestId, { agents: projects })
           return
         }
@@ -3074,6 +3100,13 @@ export class BackendSocket {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           if (!this.onDeleteAgent) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          if (Object.hasOwn(payload, 'expectedSessionId')) {
+            const current = registry.byAgent(target)
+            if (!current || (current.sessionId || null) !== payload.expectedSessionId) {
+              reply(type, requestId, { error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.' })
+              return
+            }
+          }
           try { await this.onDeleteAgent(target) }
           catch (error) {
             if (!(error instanceof AgentStopError)) throw error
@@ -3093,12 +3126,19 @@ export class BackendSocket {
           const operation = type === 'agent_resume' ? 'resume' : 'restart'
           const restart = operation === 'resume' ? this.onResumeAgent : this.onRestartAgent
           if (!restart) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
+          const permissionMode = payload.permissionMode
+          if (permissionMode !== undefined && (operation !== 'resume' || typeof permissionMode !== 'string'
+            || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
+            reply(type, requestId, { error: 'INVALID_PERMISSION_MODE' }); return
+          }
+          const invoke = () => permissionMode === undefined ? restart(target) : this.onResumeAgent!(target, permissionMode)
           const creationId = payload.creationId
           if (creationId !== undefined) {
             if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
             try {
-              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target }), async () => {
-                const result = await restart(target)
+              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target,
+                ...(permissionMode === undefined ? {} : { permissionMode }) }), async () => {
+                const result = await invoke()
                 if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
                 // RESTART_FAILED can follow an unobserved relaunch. Never silently
                 // replace that process again when a caller checks this intent.
@@ -3112,7 +3152,7 @@ export class BackendSocket {
             }
             return
           }
-          const result = await restart(target)
+          const result = await invoke()
           if (!result.ok) {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
             return

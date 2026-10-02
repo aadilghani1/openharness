@@ -9,7 +9,7 @@ const merge = (extra = {}, options = {}) => mergeRows([agent(extra)], { machine,
 test('machine and agent form the identity, including stopped work', () => {
   const a = merge({ status: 'stopped' }), b = merge({}, { machine: { machineId: 'm2' } })
   assert.equal(a.id, rowId('m1', 'a1')); assert.notEqual(a.id, b.id)
-  assert.equal(a.state, 'paused'); assert.equal(a.activity, 'stopped'); assert.equal(a.canStop, false); assert.equal(a.canOpen, true)
+  assert.equal(a.state, 'stopped'); assert.equal(a.activity, 'stopped'); assert.equal(a.canStop, false); assert.equal(a.canOpen, true)
   assert.equal(a.engine, 'claude'); assert.equal(a.sessionId, 's1')
 })
 test('activity and last active use owning daemon facts, not process guesses', () => {
@@ -63,4 +63,31 @@ test('ambiguous IDs and pane numbers cannot choose another machine', () => {
 test('model and home parsing preserve provider IDs and directory boundaries', () => {
   assert.deepEqual(parseModel('runtime-v1:a1:opencode:opencode/muse-spark-1.3-contributor-free@auto'), { model: 'opencode/muse-spark-1.3-contributor-free', effort: 'auto' })
   assert.equal(tilde(HOME + 'other/x', HOME), HOME + 'other/x'); assert.equal(tilde(HOME + '/x', HOME), '~/x')
+})
+
+test('resource data and shared servers retain owning machine scope', async () => {
+  const result = await collect({ reportMachines: async () => ({ machines: [{ ...machine, online: true }] }),
+    inventoryFor: async () => ({ agents: [agent({ monitor: { activity: 'working', activityKnown: true, gpuPercent: 35, gpuMemoryBytes: 900, workspaceBytes: 1200, processCount: 2 } })],
+      shared: [{ kind: 'codex', agentIds: ['a1'], memoryBytes: 300, cpuPercent: 4 }] }) })
+  assert.equal(result.rows[0].gpuPercent, 35)
+  assert.equal(result.rows[0].workspaceBytes, 1200)
+  assert.equal(result.rows[0].live, true)
+  assert.equal(result.shared[0].machineId, 'm1')
+  assert.equal(result.shared[0].rssBytes, 300)
+})
+test('token velocity uses fresh ledger updates, survives clock skew, and resets on conversation changes', async () => {
+  let tokenCount = 100, sourceTime = 9_000_000, sessionId = 's1', now = 100_000
+  const remote = { at: 0, answers: new Map() }
+  const options = { remote, remoteIntervalMs: 0, reportMachines: async () => ({ machines: [{ ...machine, online: true }] }),
+    agentsFor: async () => [agent({ sessionId, tokenUsage: { totalTokens: tokenCount, updatedAt: sourceTime } })] }
+  const read = async () => (await collect({ ...options, now })).rows[0].tokensPerMinute
+  assert.equal(await read(), null)
+  now += 4000; assert.equal(await read(), null)
+  now += 6000; sourceTime += 10000; tokenCount += 1000
+  assert.equal(await read(), 6000)
+  now += 4000; assert.equal(await read(), 6000)
+  sessionId = 'new'; assert.equal(await read(), null)
+  now += 10000; sourceTime += 10000; tokenCount = 1; assert.equal(await read(), null)
+  now += 120000; sourceTime += 120000; tokenCount += 1000; assert.equal(await read(), null)
+  now += 10000; sourceTime += 10000; tokenCount += 1000; assert.equal(await read(), 6000)
 })

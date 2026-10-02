@@ -47,12 +47,15 @@ class DesktopSearchPanel extends StatelessWidget {
     ('Harnesses', ''),
     ('Machines', '@'),
     ('Projects', '#'),
+    ('Agents', '&'),
     ('Models', ':'),
     ('Store', '*'),
     ('Commands', '>'),
   ];
 
-  String get _prefix => search.isProjectMode
+  String get _prefix => search.isAgentMode
+      ? '&'
+      : search.isProjectMode
       ? '#'
       : search.isMachineMode
       ? '@'

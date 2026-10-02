@@ -1,6 +1,6 @@
 # Harness Monitor
 
-The session table works without sending a prompt. Use Ask assistant to reveal OpenCode when needed.
+The session table works without sending a prompt. The assistant stays beside the table. Use the viewer’s zoom icon when you want a full-width table.
 
 New monitors default to Muse Spark 1.3 Contributor Free for both main and auxiliary requests. This is a
 limited-time free offer whose prompts and responses may train Meta models. Choose another model with

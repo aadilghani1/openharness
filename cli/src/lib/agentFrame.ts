@@ -212,7 +212,11 @@ export async function agentFrame(
     // the open an earlier frame had reported.
     lastOpenedAt: s.lastOpenedAt ? new Date(s.lastOpenedAt).toISOString() : null,
     tokenUsage: tokenUsage?.totalTokens != null
-      ? { totalTokens: tokenUsage.totalTokens, updatedAt: tokenUsage.updatedAt } : null,
+      ? { totalTokens: tokenUsage.totalTokens, updatedAt: tokenUsage.updatedAt,
+        ...(tokenUsage.inputTokens == null ? {} : { inputTokens: tokenUsage.inputTokens }),
+        ...(tokenUsage.outputTokens == null ? {} : { outputTokens: tokenUsage.outputTokens }),
+        ...(tokenUsage.cachedTokens == null ? {} : { cachedTokens: tokenUsage.cachedTokens }),
+      } : null,
     outputStats: tokenUsage?.output ? { ...tokenUsage.output, updatedAt: tokenUsage.updatedAt } : null,
     tmuxPane: s.tmuxPane || null,
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },

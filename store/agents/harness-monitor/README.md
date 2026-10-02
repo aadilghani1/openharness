@@ -1,52 +1,77 @@
 # Harness Monitor
 
-The dock opens one reusable Harness Monitor tab. Its DSH viewer starts as a full-width session table;
-**Ask assistant** reveals its OpenCode terminal beside it. No prompt is submitted when the table opens.
+Inspect active harnesses across connected machines and decide what to stop. The workspace footer's
+Harnesses, CPU, RAM, GPU and SSD controls select the existing Harness Monitor tab, creating one when
+needed. The tab uses the standard 70% viewer / 30% assistant split. Use the pane Zoom icon for a full-width table. Opening the table submits no model prompt.
 
-The default columns are Harness, Status, Agent, Machine, Project, Branch, CPU %, RAM, Tokens and Last
-active, followed by **Open** and **×**. Headers sort; drag their separators to resize. Columns offers
-Model, PID, Harness ID, Conversation ID and Folder. Search covers metadata. Names and actions remain visible while
-scrolling horizontally. Refreshes preserve selection, controls, column widths and scroll. Arrow keys
-select and Enter opens. Engine images are copied from the desktop's existing icon assets; status marks
-and the reduced-motion-aware spinner follow its notification/tab/pane activity marks.
+Every visit starts with active sessions; RAM is the initial default sort. Filter by machine or activity, search session
+metadata, and choose Overview, Resources or AI usage. Click a header to sort; unknown readings sort
+last in either direction. Drag a separator or use its arrow keys to resize a column. Columns and
+widths persist; search and status reset on entry. The harness name stays visible during horizontal
+scrolling. Arrow keys select; Enter or double-click opens the inspector. It includes process IDs,
+parent IDs and resource readings. Open focuses one existing pane for the selected session, or starts stopped work in one new tab when no pane remains. The Stopped filter shows saved sessions.
 
-Open navigates to an existing session or resumes stopped work through the app's receipt coordinator.
-× stops the owning daemon's validated process, retaining history and the saved DSH/runtime settings.
-The daemon reports whether resume restores a conversation, a shell or a fresh conversation. Remote
-machines use the same paired bridge and lifecycle APIs. Cached offline rows remain visible with disabled
-actions. Unknown readings show a dash. Older daemons need updating for activity and resource readings.
+Stop… reviews one selected session before asking its owning daemon to stop the validated process.
+Conversation history, launch settings and files remain. The daemon checks conversation identity again
+before stopping. Offline or disconnected sessions cannot be stopped. Freeze updates holds the displayed readings
+without affecting work, and disables Stop/Open until live updates return. Offline sessions are an explicit filter;
+saved history is also available in Open Harness (Cmd-P).
 
-CPU uses the daemon's shared process sampler, measuring interval use; multiple cores can
-exceed 100%. RAM is subtree resident memory and can double-count shared pages. Token counts are the
-owning daemon's conversation ledger. Last active is conversation activity, never file mtime.
+## Metric definitions
 
-**Clean up…** defaults to harnesses outside every open tab on your linked machines. **Cancel** keeps
-them running; **Close** saves history and closes their processes and terminals. Background tabs and
-local utility tabs, including Companions, stay open. Working and unknown activity appear in the preview:
-closing them ends unfinished work. Each owning machine checks tabs and session identity again before
-closing. Offline machines, older Harness versions and save failures are reported separately. Reopen
-saved sessions through Open Harness. This requires an updated Harness CLI on each machine.
+| Metric | Meaning and availability |
+| --- | --- |
+| CPU % | Interval CPU across owned processes and children; 100% is one core, so totals can exceed 100%. macOS and Linux. The first sample is unknown. |
+| RAM | Process-tree resident memory, in rounded MB/GB. Shared pages can overlap. Nested harness roots are excluded from their parent. Shared Codex servers appear separately and count once. |
+| GPU % / GPU memory | Attributable NVIDIA process utilization and compute allocations on supported Linux drivers. Summed utilization can exceed 100% across processes or devices. macOS and unsupported drivers show —. Cloud inference is not local GPU use. |
+| Storage / footer SSD | Allocated workspace disk space, including pre-existing files, from bounded du reads cached for one minute. Shared and nested canonical folders count once per machine in totals. Stopping does not release this space. SSD is a display label, not a hardware-media probe. |
+| Disk read/s / write/s | Physical process-tree I/O deltas from Linux /proc/<pid>/io. Restricted counters, resets and macOS show —. |
+| Transcript | Individual conversation-file size when reported. Shared databases show —. |
+| Tokens | Conversation input plus output, with cached input counted once. Claude, Codex and OpenCode use the existing incremental daemon ledger. Other frameworks remain visible with unavailable token fields. |
+| Input / output / cached input | Input includes cache reads/writes. Cached input is a subset, not an extra charge. Reasoning is included in output once. |
+| Tokens/min | Recent change in conversation totals across distinct ledger updates, measured using local receipt time. Includes input/cache; not model generation speed. Session changes, counter resets or stale updates clear it. |
+| Last active | Daemon conversation activity, not filesystem modification time. |
 
-`hps cleanup --machines --json` previews the same action; `hps cleanup --machines --apply --json`
-closes it. Without `--machines`, it checks this machine only. Nothing runs automatically.
+Model, framework, machine, project, branch, folder, process count, start time and identity columns
+provide context. There is no invented dollar cost: subscription plans, caching and provider prices
+cannot be inferred reliably from total tokens.
 
-**Clean up… → By cleanup rules** previews the current policy and requires an explicit apply. Working, waiting, pinned,
-offline and unknown-activity sessions are protected and rechecked at execution. There is no automatic
-cleanup timer. The same tools are available to the assistant as `$HPS_CLI` (`toolchain/hps --help`).
-Rules/pins remain in `~/.config/harness/policy.jsonc`; receipts are under `~/.harness/monitor/`.
+Totals describe the shown sessions and their shared servers. ≥ marks partial totals; — means
+unavailable, never measured zero. Footer totals cover the running harnesses in its count across
+connected owned machines. CPU/GPU use whole percentages; RAM/SSD use whole MB/GB (10.4 GB → 10 GB).
+They do not include unrelated applications or whole-machine utilization.
 
-OpenCode defaults both `model` and `small_model` to
-`opencode/muse-spark-1.3-contributor-free`. [OpenCode Zen](https://opencode.ai/docs/zen/) currently lists
-this as a limited-time free offer. **Contributor permits Meta to train on prompts and responses.**
-The first assistant choice discloses this and offers choosing another model with `/models`. Zen login
-may be needed. There is no automatic paid fallback. Existing sessions retain their saved runtime and
-model configuration; changing the package default does not retarget them.
+The viewer polls local inventory every four seconds and linked machines every fifteen seconds while
+visible. The foreground desktop footer samples every fifteen seconds; hidden apps clear readings and
+stop polling. The daemon coalesces process reads, verifies PID birth identity, bounds NVIDIA commands
+and directory walks, and keeps telemetry off the terminal-input queue. No extra transcript scan is
+started by the table or footer. Older daemons retain basic inventory but require updating for new
+metrics. Identity and all stop actions remain machine-scoped through the paired bridge.
 
-`npm test` runs with isolated policy/state fixtures. Browser review: `node test/preview.mjs` serves
-synthetic sessions and records simulated actions; it cannot touch real harnesses.
+## Design references and checks
+
+[Activity Monitor](https://support.apple.com/guide/activity-monitor/view-information-about-processes-actmntr1001/mac)
+informs sortable columns, filtering, a focused inspector and an explicit stop review.
+[btop](https://github.com/aristocratos/btop) informs process-tree accounting, resource sorting and
+pausing display updates. This monitor adds conversation usage and machine identity to those patterns.
+GPU and I/O definitions follow [NVIDIA's process telemetry](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+and [Linux procfs](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
+
+`npm test` uses isolated policy/state fixtures. `node test/preview.mjs` serves synthetic sessions and
+simulated stops, without a daemon bridge or model call. Daemon checks live in harnessResources,
+harnessTelemetry, agentTokenUsage and backendSocket specs. Desktop tests cover footer scope,
+rounding, hidden polling and tab reuse; `tool/check_swarm_titlebar.sh` checks native clicks/layout.
+Real Linux NVIDIA counters still require hardware validation; parser fixtures do not establish
+support for every driver.
+
+The hps CLI offers explicit stop/open and reviewed cleanup commands; old pause/resume names remain compatibility aliases.
+Rules/pins live in ~/.config/harness/policy.jsonc; receipts live under ~/.harness/monitor/.
+Nothing automatically stops sessions. The assistant keeps its saved configuration, and its header offers the shared agent and model controls.
+
+New OpenCode sessions use `opencode/muse-spark-1.3-contributor-free` with automatic approvals and xhigh effort. **Contributor permits Meta to train on prompts and responses.** The Assistant model disclosure keeps this visible. There is no automatic paid fallback, and existing sessions retain their saved agent/model settings.
 
 ## Credit and stewardship
 
-Built by Autonomous for Harness, MIT. See [LICENSE](LICENSE). Process identity and lifecycle belong to
-the Harness CLI; the table, cleanup proposals and `hps` live in this package. Engine artwork is reused
-from the desktop; attribution is included beside the copied icons.
+Built by Autonomous for Harness, MIT. See [LICENSE](LICENSE). The Harness CLI owns process identity,
+telemetry and lifecycle; this package owns the table and hps. Engine artwork is reused from the
+desktop; attribution is included beside the copied icons.

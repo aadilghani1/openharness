@@ -116,6 +116,88 @@ private extension SwarmTabStrip {
 }
 
 private extension SwarmTabButton {
+  func checkLabelMeasurementChanges() throws {
+    // Reuse one populated tab through each single-property change. Compare it
+    // with a newly constructed tab so an unrelated invalidation cannot hide
+    // a stale width, stale shortcut, old font, or old foreground color.
+    func compareWithFresh(_ reason: String) throws {
+      let fresh = SwarmTabButton(id: "fresh-label-check")
+      fresh.name = name
+      fresh.displayLabel = displayLabel
+      fresh.shortcutHint = shortcutHint
+      fresh.foreground = foreground
+      fresh.labelFont = labelFont
+      fresh.selected = selected
+      fresh.attention = attention
+      fresh.activity = activity
+      fresh.activityFrame = activityFrame
+      fresh.showsShortcutHint = showsShortcutHint
+      fresh.actionsEnabled = actionsEnabled
+      fresh.frame = frame
+      layoutSubtreeIfNeeded()
+      fresh.layoutSubtreeIfNeeded()
+      try checkTitlebar(naturalTitleWidth == max(label.size().width, emphasizedLabel.size().width),
+        "\(reason): measured title matches AppKit's actual text")
+      try checkTitlebar(titleRect == fresh.titleRect && indicatorRect == fresh.indicatorRect &&
+        preferredWidth == fresh.preferredWidth && minimumWidth == fresh.minimumWidth,
+        "\(reason): retained and fresh tab geometry agree")
+      try checkTitlebar(toolTip == fresh.toolTip && renderedPixels() == fresh.renderedPixels(),
+        "\(reason): retained and fresh tab pixels and tooltip agree")
+    }
+    frame = NSRect(x: 0, y: 0, width: 230, height: 40)
+    displayLabel = "desktop"
+    shortcutHint = "⌘1"
+    activity = HarnessNativeActivity(["mark": "⠋", "label": "Working", "working": true,
+      "color": Int64(0xff64d2ff)])
+    try compareWithFresh("Initial populated tab")
+    for title in ["a-very-long-project-name-that-truncates", "", "设备 日本語", "🧑🏽‍💻 café مرحبا", "desktop"] {
+      displayLabel = title
+      try compareWithFresh("Rename displayed title")
+    }
+    for font in [NSFont.systemFont(ofSize: 20), NSFont.monospacedSystemFont(ofSize: 36, weight: .regular),
+                 NSFont.systemFont(ofSize: 13)] {
+      labelFont = font
+      try compareWithFresh("Change font")
+    }
+    for hint in ["⌃⌥⌘R", nil, "", "⌘8"] as [String?] {
+      shortcutHint = hint
+      try compareWithFresh("Remap or remove shortcut")
+    }
+    for color in [NSColor.systemRed, NSColor.black, NSColor.white] {
+      foreground = color
+      try compareWithFresh("Change foreground")
+    }
+    for active in [true, false] {
+      selected = active
+      try compareWithFresh("Change selected weight")
+    }
+    for tick in 0..<10 {
+      activityFrame = tick
+      try compareWithFresh("Animate frame \(tick)")
+    }
+    for shown in [true, false, true] {
+      showsShortcutHint = shown
+      try compareWithFresh("Show or hide Command hints")
+    }
+    for enabled in [false, true] {
+      actionsEnabled = enabled
+      try compareWithFresh("Enter or leave a modal")
+    }
+    activity = nil
+    try compareWithFresh("Remove activity")
+    for needsInput in [true, false] {
+      attention = needsInput
+      try compareWithFresh("Change legacy attention")
+    }
+    for width in [CGFloat(28), 56, 125, 400] {
+      frame.size.width = width
+      needsLayout = true
+      try compareWithFresh("Resize tab to \(width)")
+    }
+    name = "Renamed full title"
+    try compareWithFresh("Rename full tooltip")
+  }
+
   func checkActivityDrawing(states: [(String, String)]) throws {
     func payload(_ mark: String, _ label: String) -> [String: Any] {
       ["mark": mark, "label": label, "color": Int64(0xff64d2ff)]
@@ -2466,6 +2548,7 @@ do {
   try strip.checkTopActions()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
+  try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()
   try SwarmTabButton(id: "close-shortcuts").checkHoverCloseAndShortcutHints()
   try strip.checkTabPresentationAndCapture()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
@@ -2509,27 +2592,28 @@ private extension SwarmTabStrip {
   func checkHarnessMonitor() throws {
     var state: [String: Any] = ["enabled": true,
       "harnessMonitor": ["text": "Harnesses 10", "segments": [["text": "Harnesses 10"]], "label": "Harness Monitor", "detail": "View running harnesses", "interactive": true],
-      "machineResources": ["text": "CPU 20%   RAM 50%   GPU 10%", "label": "M2 machine resources", "detail": "This computer's resources", "interactive": false,
-        "segments": [["text": "CPU 20%   RAM 50%   GPU 10%"]],
-        "compactSegments": [["text": "CPU 20%   RAM 50%"]],
+      "machineResources": ["text": "CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB", "label": "Harness resources", "detail": "Resources used by active harnesses", "interactive": true,
+        "segments": [["text": "CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB"]],
+        "noStorageSegments": [["text": "CPU 20%   RAM 10 GB   GPU 10%"]],
+        "compactSegments": [["text": "CPU 20%   RAM 10 GB"]],
         "minimalSegments": [["text": "CPU 20%"]]],
       "subscriptionUsage": ["text": "Claude 100%   Codex 90%", "segments": [["text": "Claude 100%   Codex 90%"]], "interactive": true],
       "focusedContext": ["text": "M2 > openharness > main", "segments": [["text": "M2 > openharness > main"]], "interactive": true],
       "tabs": [["id": "work", "name": "Work"]], "activeId": "work"]
     var calls: [String] = []
     emit = { method, _ in calls.append(method) }
-    for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
+    for width in [CGFloat(360), CGFloat(520), CGFloat(760), CGFloat(1280)] {
       setFrameSize(NSSize(width: width, height: 40))
       update(state)
       try checkTitlebar(!harnessMonitorButton.isHidden && harnessMonitorButton.isEnabled &&
         harnessMonitorButton.frame.minX > 0 && harnessMonitorButton.frame.width > 0 &&
         harnessMonitorButton.frame.maxX <= contextButton.frame.minX,
         "Resource monitor stays at bottom left without overlapping context at width \(width)")
-      try checkTitlebar(!machineResourcesLabel.isHidden && !machineResourcesLabel.isEnabled &&
-        machineResourcesLabel.accessibilityRole() == .staticText &&
+      try checkTitlebar(!machineResourcesLabel.isHidden && machineResourcesLabel.isEnabled &&
+        machineResourcesLabel.accessibilityRole() == .button &&
         machineResourcesLabel.frame.minX >= harnessMonitorButton.frame.maxX &&
         machineResourcesLabel.frame.maxX <= contextButton.frame.minX,
-        "Read-only hardware never overlaps count or focused context at width \(width)")
+        "Harness resources never overlap count or focused context at width \(width): hidden=\(machineResourcesLabel.isHidden), enabled=\(machineResourcesLabel.isEnabled), role=\(String(describing: machineResourcesLabel.accessibilityRole())), resources=\(machineResourcesLabel.frame), count=\(harnessMonitorButton.frame), context=\(contextButton.frame)")
       try checkTitlebar(harnessMonitorButton.accessibilityLabel() == "Harness Monitor",
         "The resource counter names its action for VoiceOver")
       try checkTitlebar(subscriptionUsageButton.isHidden == (width < 1050),
@@ -2544,12 +2628,12 @@ private extension SwarmTabStrip {
     }
     machineResourcesLabel.performClick(nil)
     harnessMonitorButton.performClick(nil)
-    try checkTitlebar(calls == ["resourceMonitor"], "Only the session count opens a panel; hardware stays read-only")
+    try checkTitlebar(calls == ["resourceMonitor", "resourceMonitor"], "Count and every resource open the same Harness Monitor tab")
     state["enabled"] = false
     update(state)
     harnessMonitorButton.performClick(nil)
     machineResourcesLabel.performClick(nil)
-    try checkTitlebar(calls.count == 1, "A covered or modal footer cannot open the session monitor")
+    try checkTitlebar(calls.count == 2, "A covered or modal footer cannot open the session monitor")
     update([:])
     try checkTitlebar(harnessMonitorButton.isHidden && !harnessMonitorButton.isEnabled && machineResourcesLabel.isHidden && !machineResourcesLabel.isEnabled,
       "Clearing workspace state clears the counter, hardware and actions")

@@ -14,6 +14,7 @@ import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { opencodeMemoryPluginSource } from './opencodeMemoryPlugin.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
@@ -423,7 +424,7 @@ function forkPluginSource(engine: 'opencode' | 'kilo', port: number): string {
 // local machine daemon (127.0.0.1:${port}) so it can be mirrored to web/device. No-op if machine isn't running.
 import { readFileSync } from "node:fs"
 const hookToken = () => { try { return readFileSync(${JSON.stringify(join(env.ADAPTER_DATA_DIR, 'hook-credential'))}, "utf8").trim() } catch { return "" } }
-export const MachineRegister = async ({ directory, worktree, project }) => {
+export const MachineRegister = async ({ directory, worktree, project, client }) => {
   const seen = new Set()
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
@@ -448,7 +449,9 @@ export const MachineRegister = async ({ directory, worktree, project }) => {
       })
     } catch {}
   }
+${engine === 'opencode' ? opencodeMemoryPluginSource(port) : ''}
   return {
+    ${engine === 'opencode' ? '"chat.message": memoryMessage, "chat.params": memoryParams,' : ''}
     event: async ({ event }) => {
       if (!event) return
       if (event.type === "session.created" || event.type === "session.updated") {

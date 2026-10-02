@@ -63,6 +63,43 @@ async function start(overrides: Partial<HookServerHandlers> = {}) {
 }
 
 describe('process-owned hook server', () => {
+  it('accepts private OpenCode runtime observations only from the verified live session', async () => {
+    const entry = { engine: 'opencode', agentId: 'companion', sessionId: 'native',
+      processIdentity: { pid: 42, executable: 'opencode', startMarker: 'same-process' } } as RegisteredSession
+    const resolveHookAgent = vi.fn(async () => entry as RegisteredSession | null)
+    const onOpenCodeMemoryRuntime = vi.fn(() => ({ observe: true, recorded: true }))
+    const registration = vi.spyOn(registry, 'register')
+    try {
+      const { base, headers, handlers } = await start({ resolveHookAgent, onOpenCodeMemoryRuntime })
+      const body = { engine: 'opencode', sessionId: 'native', tmuxPane: '%41', callerPid: 42,
+        input: { kind: 'observe', snapshot: { private: 'synthetic-secret' } } }
+      const submit = (value: unknown = body, authenticated = true) => fetch(`${base}/api/hook/opencode-memory-runtime`, {
+        method: 'POST', headers: authenticated ? headers : { 'content-type': 'application/json' }, body: JSON.stringify(value) })
+      expect((await submit(body, false)).status).toBe(401)
+      expect((await submit({ ...body, sessionId: 'previous-session' })).status).toBe(403)
+      expect((await submit({ ...body, engine: 'codex' })).status).toBe(400)
+      expect((await submit({ ...body, callerPid: undefined })).status).toBe(400)
+      expect((await submit({ ...body, input: { blob: 'x'.repeat(51_000) } })).status).toBe(400)
+      expect(onOpenCodeMemoryRuntime).not.toHaveBeenCalled()
+      const accepted = await submit()
+      expect(await accepted.json()).toEqual({ observe: true, recorded: true })
+      expect(onOpenCodeMemoryRuntime).toHaveBeenCalledExactlyOnceWith(entry, body.input)
+      expect(registration).not.toHaveBeenCalled()
+      expect(handlers.onRegistered).not.toHaveBeenCalled()
+      resolveHookAgent.mockResolvedValue(null)
+      expect((await submit()).status).toBe(403)
+    } finally { registration.mockRestore() }
+  })
+
+  it('does not accept private runtime data through discovery fallback without ancestry verification', async () => {
+    const callback = vi.fn()
+    const { base, headers } = await start({ onOpenCodeMemoryRuntime: callback })
+    const result = await fetch(`${base}/api/hook/opencode-memory-runtime`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'opencode', sessionId: 'native', tmuxPane: '%41', callerPid: 42, input: { kind: 'probe' } }) })
+    expect(result.status).toBe(403)
+    expect(callback).not.toHaveBeenCalled()
+  })
+
   it('attributes prompt text only after resolving the actual engine process', async () => {
     const entry = { engine: 'claude', agentId: 'agent-scope', sessionId: 'session-scope', runtimes: [{ backend: 'tmux', paneId: '%41' }] } as RegisteredSession
     const onPromptSubmitted = vi.fn()

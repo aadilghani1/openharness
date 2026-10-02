@@ -229,12 +229,6 @@ void main() {
           final cell = find.byKey(pane.cellKey);
           final controls = [
             find.byKey(ValueKey(('pane-model', 'm', pane.agentId!))),
-            for (final key in [
-              'pane-split-down',
-              'pane-split-right',
-              'pane-zoom',
-            ])
-              find.descendant(of: cell, matching: find.byKey(ValueKey(key))),
             find.descendant(of: cell, matching: find.byType(PaneCloseButton)),
           ];
           for (var i = 1; i < controls.length; i++) {
@@ -518,30 +512,20 @@ void main() {
         if (native) {
           expect(
             updates.last['machineResources']['text'],
-            'CPU -   RAM -   GPU -',
+            'CPU 0%   RAM 0 MB   GPU 0%   SSD 0 MB',
           );
           expect(
             updates.last['machineResources']['detail'],
-            startsWith('Test host'),
+            contains('running harnesses across connected machines'),
           );
-          expect(updates.last['machineResources']['interactive'], isFalse);
-          final done = Completer<void>();
-          messenger.handlePlatformMessage(
-            channel.name,
-            const StandardMethodCodec().encodeMethodCall(
-              const MethodCall('machineResources'),
-            ),
-            (_) => done.complete(),
-          );
-          await tester.pumpAndSettle();
-          await done.future;
+          expect(updates.last['machineResources']['interactive'], isTrue);
         } else {
-          await tester.tap(
+          expect(
             find.byKey(const ValueKey('workspace-machine-resources')),
+            findsOneWidget,
           );
-          await tester.pumpAndSettle();
         }
-        expect(find.text('Memory pressure'), findsNothing);
+        // Monitor navigation is exercised with its daemon fixture in harness_monitor_test.
         expect(app.focusedPane, same(pane));
         expect(app.panes, [pane]);
         subscriptions.update([subscription('codex', 'bbbbbb', 27)]);

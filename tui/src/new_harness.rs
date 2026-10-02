@@ -411,7 +411,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
         .and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let engine = saved["engine"]
         .as_str()
-        .unwrap_or_else(|| current.map(|a| a.engine.as_str()).unwrap_or("codex"))
+        .unwrap_or("opencode")
         .to_string();
     let what = What {
         label: saved["label"]
@@ -2069,6 +2069,10 @@ mod tests {
         let Some(Modal::NewHarness(mut f)) = app.modal.take() else {
             panic!()
         };
+        assert_eq!(f.draft.what.engine, "opencode");
+        assert_eq!(f.draft.permission, "auto");
+        // Exercise remembered per-engine choices independently of the launch default.
+        set_engine(&mut f, "codex");
         f.draft.permission = "readOnly".into();
         set_engine(&mut f, "claude");
         assert_eq!(f.draft.permission, "auto");

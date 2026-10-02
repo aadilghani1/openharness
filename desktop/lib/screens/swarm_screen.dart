@@ -23,7 +23,8 @@ import '../logging/debug_surface.dart';
 import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
-import '../widgets/resting_section.dart' show confirmSwitchAnyway;
+import '../widgets/resting_section.dart'
+    show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/session_close_dialog.dart';
 import '../notify/system_notifications.dart';
 import '../settings/sections/account_device_detail.dart';
@@ -52,8 +53,7 @@ import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_monitor.dart';
-import '../state/machine_resource_monitor.dart';
-import '../widgets/workspace_machine_resources.dart';
+import '../widgets/workspace_harness_resources.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
 import '../state/harness_placement.dart';
@@ -577,9 +577,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
     _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
-    _machineResources = MachineResourceMonitor(app)
-      ..addListener(_monitorChanged);
     app.reviewSessionClose = _reviewSessionClose;
+    app.changeCompanionAgent = _changeCompanionAgent;
+    app.canChangeCompanionAgent = _canChangeCompanionAgent;
+    app.openAgentPicker = _openPaneAgents;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -720,7 +721,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         // Subscription usage is read ahead, so opening a menu shows it without waiting.
         _modelsMenu!.start();
         _harnessMonitor.start();
-        _machineResources.start();
       });
     }
     if (_menuHost) {
@@ -783,10 +783,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void dispose() {
     _devicesHarness.dispose();
     _harnessMonitor.dispose();
-    _machineResources.dispose();
     if (app.reviewSessionClose == _reviewSessionClose) {
       app.reviewSessionClose = null;
     }
+    if (app.changeCompanionAgent == _changeCompanionAgent) {
+      app.changeCompanionAgent = null;
+    }
+    if (app.canChangeCompanionAgent == _canChangeCompanionAgent) {
+      app.canChangeCompanionAgent = null;
+    }
+    if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
@@ -1485,7 +1491,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   late final HarnessMonitor _harnessMonitor;
-  late final MachineResourceMonitor _machineResources;
   void _monitorChanged() {
     if (!mounted) return;
     if (_menuHost) _syncNative();
@@ -1814,19 +1819,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'interactive': _shortcutsEnabled,
       },
       'machineResources': {
-        'text': _machineResources.label,
-        'label': _machineResources.detail,
-        'detail': _machineResources.detail,
+        'text': _harnessMonitor.metricsLabel(),
+        'label': _harnessMonitor.resourceDetail,
+        'detail': _harnessMonitor.resourceDetail,
         'segments': [
-          {'text': _machineResources.metricsLabel()},
+          {'text': _harnessMonitor.metricsLabel()},
+        ],
+        'noStorageSegments': [
+          {'text': _harnessMonitor.metricsLabel(storage: false)},
         ],
         'compactSegments': [
-          {'text': _machineResources.metricsLabel(gpu: false)},
+          {'text': _harnessMonitor.metricsLabel(gpu: false, storage: false)},
         ],
         'minimalSegments': [
-          {'text': _machineResources.metricsLabel(ram: false, gpu: false)},
+          {
+            'text': _harnessMonitor.metricsLabel(
+              ram: false,
+              gpu: false,
+              storage: false,
+            ),
+          },
         ],
-        'interactive': false,
+        'interactive': _shortcutsEnabled,
       },
       'footerCovered':
           !_showWorkspaceFooter ||
@@ -4051,9 +4065,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _companionTerminalError = switch (result['error']) {
         'ENGINE_REQUIRED' => null,
         'UNSUPPORTED' => 'Update Harness CLI to open the companion terminal.',
-        'NO_ENGINE' =>
-          result['detail'] as String? ??
-              'Install Claude Code or Codex to talk with your companion.',
+        'NO_ENGINE' => result['detail'] as String? ?? 'Install OpenCode, Codex, or Claude Code to talk with your companion.',
         _ =>
           result['detail'] as String? ??
               'The terminal could not connect. Try opening it again.',
@@ -4063,9 +4075,54 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _scheduleCompanionWorkspace();
   }
 
+  bool _canChangeCompanionAgent(String machineId, String agentId) =>
+      _brain.active &&
+      !_zoo.isPreview &&
+      _companionOpeningKey == null &&
+      _pairHarness?.machineId == machineId &&
+      _pairHarness?.agentId == agentId;
+
+  Future<Map<String, dynamic>> _changeCompanionAgent(
+    String sourceId,
+    String engine,
+  ) async {
+    final local = app.localMachineState;
+    final current = local?.agents
+        .where((a) => a.id == _pairHarness?.agentId)
+        .firstOrNull;
+    final source = local?.agents.where((a) => a.id == sourceId).firstOrNull;
+    // A reply can be lost after the collection has adopted its replacement.
+    // Rechecking that same choice may return it, never create another one.
+    if (_companionOpeningKey != null ||
+        _pairHarness == null ||
+        (_pairHarness?.agentId != sourceId &&
+            (source?.project?.cwd == null ||
+                current?.project?.cwd != source?.project?.cwd ||
+                current?.engine != engine))) {
+      return {
+        'ok': false,
+        'detail': 'The companion changed or is already opening.',
+      };
+    }
+    final result = await _brain.openConversation(engine: engine);
+    if (!mounted) {
+      return {'ok': false, 'detail': 'The companion view was closed.'};
+    }
+    _scheduleCompanionWorkspace();
+    return result;
+  }
+
   void _selectCompanionEngine(String engine) {
     final uid = _zoo.paired?.uid;
     if (uid == null || _companionOpeningKey != null || _zoo.isPreview) return;
+    if (_pairHarness case final pair?) {
+      unawaited(
+        app.changeAgent(pair.machineId, pair.agentId, engine).then((error) {
+          if (mounted && error != null) _showPaneActionHint(error);
+        }),
+      );
+      return;
+    }
     final key = '${_zoo.scope}:$uid';
     setState(() {
       _companionAttemptedKey = key;
@@ -5039,6 +5096,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _togglePaneModels() => _toggleModels();
 
+  void _openPaneAgents(String machineId, String agentId) {
+    final pane = app.panes
+        .where((p) => p.machineId == machineId && p.agentId == agentId)
+        .firstOrNull;
+    if (pane == null) return;
+    app.focusPane(pane.id);
+    _openResourcePicker('&');
+    _search?.setAgentSelection(machineId, agentId);
+    final search = _search;
+    unawaited(
+      app.probeDsh(machineId).then((_) {
+        if (mounted && identical(search, _search)) {
+          search?.setAgentSelection(machineId, agentId);
+        }
+      }),
+    );
+  }
+
   void _openPaneModels(int paneId, String machineId, String agentId) {
     if (!_shortcutsEnabled) return;
     final pane = app.panes.where((pane) => pane.id == paneId).firstOrNull;
@@ -5324,6 +5399,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final word = search.query.trim().toLowerCase();
       if (word.length >= 3 && _zoo.isEasterWord(word)) _zoo.easter(word);
     }
+    if (search.isAgentMode && search.agentSelectionId == null) {
+      final focused = WorkspacePaneContext.focused(app);
+      if (focused?.agentId case final id?) {
+        search.setAgentSelection(focused!.pane.machineId, id);
+      }
+    }
     if (_machineSearchVisible != search.isMachineMode) {
       _machineSearchVisible = search.isMachineMode;
       if (_machineSearchVisible) unawaited(search.refreshMachineResources());
@@ -5488,6 +5569,35 @@ class _SwarmScreenState extends State<SwarmScreen> {
         return;
       }
       var selected = search.selectableGridModel(choice.destination);
+      // Use and Get stop the local model running on that machine to start this one in its place. The
+      // harness being switched is moving off it; any other harness on it is asked about first.
+      if (selected == null &&
+          (search.canGetModelForUse(choice.destination) ||
+              search.canStartModelForUse(choice.destination))) {
+        if (search.otherRunningModel(choice.destination) case final other?) {
+          final users = _harnessesOn(other.name, except: chosenFor?.agentId);
+          if (users.isNotEmpty) {
+            _pickerModalChanged(true);
+            bool proceed;
+            try {
+              proceed = await confirmStopInUse(
+                context,
+                model: other.name,
+                users: users,
+              );
+            } finally {
+              _pickerModalChanged(false);
+              // Back to the picker's field: closed, the dialog left focus on no row, and Enter did nothing.
+              if (mounted && _search != null) _focusSearch();
+            }
+            if (!proceed) return;
+            // The screen reads its route as current again only at its next frame: checked before
+            // that, the switch the person just confirmed was dropped as if the picker had closed.
+            await WidgetsBinding.instance.endOfFrame;
+            if (!mounted || !current() || _search == null) return;
+          }
+        }
+      }
       if (selected == null && search.canGetModelForUse(choice.destination)) {
         selected = await search.getModelForUse(
           choice.destination,
@@ -5513,8 +5623,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
           );
         } finally {
           _pickerModalChanged(false);
+          if (mounted && _search != null) _focusSearch();
         }
-        if (!proceed || !mounted || !current() || _search == null) return;
+        if (!proceed) return;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || !current() || _search == null) return;
       }
       final now = WorkspacePaneContext.focused(app)!;
       _closeSearch();
@@ -5543,6 +5656,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
           _previewControls.invoke('picker.focus_actions');
         }
       });
+      return;
+    }
+    if (choice.destination.agentEngine case final engine?) {
+      final search = _search!;
+      final machineId = search.agentSelectionMachineId,
+          agentId = search.agentSelectionId;
+      if (machineId == null || agentId == null) return;
+      _closeSearch(restoreFocus: true);
+      final error = await app.changeAgent(machineId, agentId, engine);
+      if (mounted && error != null) _showPaneActionHint(error);
       return;
     }
     if (choice.destination.storeId case final storeId?) {
@@ -6289,6 +6412,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
         pickerQuery: '@ ',
       ),
       SwarmDestination(
+        id: 'picker:agents',
+        title: '&  Agents',
+        detail: 'Change the focused harness’s agent',
+        swarmId: null,
+        current: false,
+        pickerQuery: '& ',
+      ),
+      SwarmDestination(
         id: 'picker:models',
         title: ':  Models',
         detail: 'Local models, shared models, subscriptions and APIs',
@@ -6311,7 +6442,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ?mode(
         'harnesses.list',
         'Open Harness',
-        'Manage running and paused harnesses',
+        'Manage running and stopped harnesses',
       ),
       ?mode('terminal.new', 'New terminal', 'A shell where you are'),
       ?mode(
@@ -6951,6 +7082,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
+  /// The harnesses on grid model [model] besides [except], by name — what a stop would leave without
+  /// a model to answer with.
+  List<String> _harnessesOn(String model, {String? except}) => [
+    for (final machine in app.machineStates.values)
+      for (final agent in machine.agents)
+        if (agent.id != except &&
+            agent.gridModel?.toLowerCase() == model.toLowerCase())
+          agent.displayName,
+  ];
+
   bool _canSwitchFocusedModel(WorkspacePaneContext focused) {
     if (!_shortcutsEnabled || !modelPickerSupports(focused.engine)) {
       return false;
@@ -7106,7 +7247,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             cell.width * 2,
         resourceBudget * .4,
       );
-      final hardwareWidth = resourceBudget * .42;
+      final hardwareWidth = resourceBudget * .52;
       final usageWidth = constraints.maxWidth < 1050
           ? 0.0
           : resourceBudget * .22;
@@ -7190,9 +7331,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 SizedBox(width: resourceGap),
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: hardwareWidth),
-                  child: WorkspaceMachineResources(
+                  child: WorkspaceHarnessResources(
                     key: const ValueKey('workspace-machine-resources'),
-                    monitor: _machineResources,
+                    monitor: _harnessMonitor,
+                    onPressed: _shortcutsEnabled
+                        ? _toggleHarnessControls
+                        : null,
                   ),
                 ),
                 if (usageWidth > 0) ...[

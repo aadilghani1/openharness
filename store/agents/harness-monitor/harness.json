@@ -4,7 +4,7 @@
   "name": "Harness Monitor",
   "category": "Compute",
   "author": "Autonomous",
-  "description": "Manage sessions across your machines in a sortable table. Open sessions, stop processes while keeping history, and ask an optional OpenCode assistant to help review cleanup.",
+  "description": "Inspect active harnesses across your machines. Sort CPU, RAM, GPU, storage and conversation usage, inspect processes, and stop selected work while keeping history and files.",
   "engine": "opencode",
   "workspace": {
     "template": "template",

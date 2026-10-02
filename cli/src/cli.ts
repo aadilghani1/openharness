@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { ensureBundledDevices, ensureBundledModelManager } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, ensureBundledDevices, ensureBundledModelManager } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -81,7 +81,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess, setUpWithin } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable, managedGridPath } from './lib/gridExec.js'
@@ -98,9 +98,11 @@ import { PairControl, StartedHarnesses } from './pair/control.js'
 import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
+import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from './lib/harnessDefaults.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
+import { OpenCodeMemoryBinding } from './memory/opencodeBinding.js'
 import { MemoryExperimentSettings } from './memory/experiment.js'
 import { MemoryControl } from './memory/control.js'
 import { isOwnerProcess } from './memory/ownerProcess.js'
@@ -145,6 +147,7 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { createSessionSync } from './lib/sessionSync.js'
 import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
@@ -193,12 +196,13 @@ import {
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
+import { processIdentityKey, terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
+import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
   terminalActionNotStarted,
@@ -405,6 +409,11 @@ const PROXY_BACKEND_TIMEOUT_MS = 20_000
  *  stalled control-plane connection cannot hold it open. */
 const GRID_MINT_TIMEOUT_MS = 10_000
 
+/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
+ *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
+ *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
+const MODEL_MANAGER_GRID_WAIT_MS = 8_000
+
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
@@ -465,6 +474,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                no second browser, no second approval
   harness grid login --force   sign the harness in as a different account first, then the grid
   harness grid login --json    emit the same machine-readable NDJSON \`harness login --json\` emits
+  harness grid setup           have grid ready here through the running daemon: installed, signed in
+                               with THIS computer's Harness account, and the account's grid made
   harness grid logout [flags]  sign out of your grid — the whole of \`grid logout\`, which stops what
                                this box is serving BEFORE deleting anything. Flags go straight to it:
                                --force signs out over a serve child it could not confirm stopped
@@ -1949,6 +1960,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   let companionPromptContext: (agentId: string) => string | null = () => null
   let companionProfileChanged: () => void = () => {}
+  let openCodeMemoryBinding: OpenCodeMemoryBinding | null = null
   // Local account opt-in, exposed in Settings → Experimental. The old env flag is a migration default.
   const memoryExperiment = new MemoryExperimentSettings(join(env.ADAPTER_DATA_DIR, 'coding-memory-settings'), process.env.HARNESS_CODING_MEMORY === '1')
   const guestMemoryProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
@@ -2004,27 +2016,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!daemons.on()) return null
     try { return runtimeLessons(lessonStore, workspace) } catch { return null }
   }
-  const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
-    // A terminal is not the dial's business (see `deviceAgentRow`): it is never upserted there, and
-    // the one time it must be REMOVED from there — the engine it adopted has exited — the caller
-    // sends that `agent_deleted` itself, because this row is still very much alive for the app.
-    if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
-    if (!registry.terminalAvailable(s.agentId)) {
-      pairSensor.removed(s.agentId)
-      lessonSignals.forget(s.agentId)
-      backendRef?.send({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      return
-    }
-    if (s.launch?.state === 'failed') pairSensor.failed(s.agentId, s.launch.detail ?? s.launch.error)
-    void projectFrame(s, runtimeProfiles.selectedModel(s))
-      .then((project) => {
-        const frame = { type: 'agent_synced', payload: { agent: project } }
-        backendRef?.send(frame)
-        if (opts.device !== false) backendRef?.sendCommander(frame)
-      })
-      .catch((err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err))
-  }
+  const syncSession = createSessionSync({
+    terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
+    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s)),
+    send: (frame) => backendRef?.send(frame),
+    sendCommander: (frame) => backendRef?.sendCommander(frame),
+    onUnavailable: (agentId) => {
+      pairSensor.removed(agentId)
+      lessonSignals.forget(agentId)
+    },
+    onFailed: (agentId, detail) => pairSensor.failed(agentId, detail),
+    warn: (err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err),
+  })
   const announceRename = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
     const name = projectDisplayName(s)
@@ -4175,6 +4178,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
     },
     onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
+    onOpenCodeMemoryRuntime: (agent, input) => {
+      if (!agent.processIdentity) return { observe: false }
+      const result = openCodeMemoryBinding?.receive({ agentId: agent.agentId, sessionId: agent.sessionId,
+        processKey: processIdentityKey('opencode', agent.processIdentity) }, input) ?? { observe: false }
+      if (result.observe) codingMemory?.activity()
+      return result
+    },
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4876,14 +4886,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.pairControl = pairControl
   // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
-  // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
+  // to it, stopped when idle. Automatic approvals, scoped harnessd MCP, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
     engine: async (preferred) => {
-      if (!preferred) return null // A new collection chooses its engine in the viewer.
+      preferred ??= 'opencode' // New collections share the product default.
       const found = await probeEngines([preferred]).catch(() => [])
       return found.some(e => e.engine === preferred && e.installed) ? preferred : null
     },
@@ -4900,14 +4910,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
       if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
       const created = await backend.onCreateAgent({
-        engine, cwd, bypassPermission: false, permissionMode: 'ask', grid: null, codexHome: null,
+        engine, cwd, bypassPermission: true, permissionMode: DEFAULT_HARNESS_PERMISSION, grid: null, codexHome: null,
         dsh: PAIR_HARNESS_DSH, prompt, name, agent: null,
       })
       return created.ok ? { ok: true, agentId: created.session.agentId } : created
@@ -4917,7 +4927,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const resumed = await backend.onResumeAgent(agentId)
       return resumed.ok ? { ok: true } : resumed
     },
-    stop: async (agentId) => { await backend.onDeleteAgent?.(agentId) },
+    stop: async (agentId) => {
+      const current = registry.byAgent(agentId)
+      if (!current) return
+      if (!backend.closeAgentService) throw new Error('Safe close is unavailable.')
+      const result = await backend.closeAgentService.request({ agentId, sessionId: current.sessionId,
+        createdAt: new Date(current.registeredAt).toISOString(), mode: 'now' })
+      if (!result.closed) throw new Error(result.detail ?? 'Could not save and stop the companion.')
+    },
     send: (agentId, text) => backend.onMessage?.(agentId, text, randomUUID()),
     working: (agentId) => {
       const sessionId = registry.resolve(agentId)?.sessionId
@@ -4945,14 +4962,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const live = registry.advertised().find(s => s.agentId === agentId)
       const session = live ?? stoppedAgents.get(agentId)
       if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
+      const nativeProcessKey = live?.processIdentity ? processIdentityKey(session.engine, live.processIdentity) : null
       return { agentId, sessionId: session.sessionId, engine: session.engine,
         profile: runtimeProfiles.selectedModel(session), stopped: !live,
         startup: live ? companionStartupProfile.selected(session) : null,
+        nativeProcessKey,
+        accountKey: session.engine === 'opencode' && nativeProcessKey ? openCodeMemoryBinding?.identity({
+          agentId, sessionId: session.sessionId, processKey: nativeProcessKey,
+        }) ?? null : undefined,
         codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
     },
+    openCodeSnapshot: runtime => runtime.sessionId && runtime.nativeProcessKey ? openCodeMemoryBinding?.read({
+      agentId: runtime.agentId, sessionId: runtime.sessionId, processKey: runtime.nativeProcessKey,
+    }) ?? null : null,
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
     stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
   })
+  openCodeMemoryBinding = new OpenCodeMemoryBinding({ current: () => {
+    const ownerKey = codingMemory?.ownerKey(), status = codingMemory?.status()
+    if (!daemons.on() || !codingMemoryPreview() || !ownerKey || status?.state !== 'ready' || !status.preferences?.learn) return null
+    const session = registry.advertised().find(s => s.agentId === pairHarness.agentId())
+    if (!session || !session.active || session.dsh !== PAIR_HARNESS_DSH || session.engine !== 'opencode'
+      || !session.sessionId || !session.processIdentity) return null
+    return { ownerKey, agentId: session.agentId, sessionId: session.sessionId,
+      processKey: processIdentityKey('opencode', session.processIdentity),
+      model: parseRuntimeProfile(runtimeProfiles.selectedModel(session))?.model ?? null }
+  } })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
   {
     const roster = new MemorySessionRoster(homedir())
@@ -5113,6 +5148,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let learnTick: ReturnType<typeof setInterval> | null = null
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   applyCodingMemorySetting = async () => {
+    openCodeMemoryBinding?.clear()
     pairLearner?.cancelReviews()
     conversationReview.stop()
     memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
@@ -5138,6 +5174,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) { pairRulesConfig(); void refreshMemoryIdentity() } }, 30_000)
       pairConfigTick.unref?.()
     } else {
+      openCodeMemoryBinding?.clear()
       memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
       if (learnTick) { clearInterval(learnTick); learnTick = null }
       if (pairConfigTick) { clearInterval(pairConfigTick); pairConfigTick = null }
@@ -6240,6 +6277,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
+      // models picker): grid is set up before the workspace asks it which grid is this account's.
+      const ensureGrid = backend.ensureGrid
+      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
+        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
+      }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
         // Asked BEFORE the template goes in: afterwards every folder has content.
@@ -6365,7 +6409,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv), !!grid || !!resumeSessionId,
+        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       codexHome,
@@ -8846,6 +8891,16 @@ switch (cmd) {
     break
   case 'grid':
     if (args[0] === 'login') gridLoginCommand(flags.includes('--force'), flags.includes('--json')).catch(onError)
+    else if (args[0] === 'setup') {
+      gridSetupCommand({
+        port: daemonPort(),
+        localMachineId: readAuthSession()?.machineId ?? null,
+        daemonRunning: isDaemonRunning,
+        connect: (url) => new NewCommandSocket(url),
+        output: (line) => console.log(line),
+        error: (line) => console.error(line),
+      }).then((code) => { process.exitCode = code }).catch(onError)
+    }
     // Everything but the verb, in the order it was typed — a passthrough that allow-listed flags
     // would be a second place that has to know what `grid logout` accepts. Only the FIRST `logout`
     // token goes: filtering by value instead would eat an option's *value* the day `grid logout`

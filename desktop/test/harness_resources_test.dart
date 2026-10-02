@@ -117,6 +117,35 @@ void main() {
     expect(monitor.sharedLabel, isNull);
   });
 
+  test('footer totals round bytes, include shared servers once, and deduplicate storage', () async {
+    final connection = _Connection();
+    final app = createApp(connected: true, connectionForTest: (_) => connection);
+    final monitor = HarnessMonitor(app);
+    addTearDown(monitor.dispose);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'First', terminalAvailable: true),
+      const Agent(id: 'b', name: 'Second', terminalAvailable: true),
+    ];
+    final data = connection.reply['harnesses'] as Map;
+    data['agents'] = [
+      {'agentId': 'a0', 'memoryBytes': 10.4e9, 'cpuPercent': 125.5,
+       'gpuPercent': 24.4, 'workspaceBytes': 1.4e9, 'workspacePath': '/project'},
+      {'agentId': 'b', 'memoryBytes': 0.2e9, 'cpuPercent': 0,
+       'gpuPercent': 0, 'workspaceBytes': 0.4e9, 'workspacePath': '/project/child'},
+    ];
+    data['shared'] = [
+      {'kind': 'codex', 'agentIds': ['a0', 'b'], 'memoryBytes': 0.4e9,
+       'cpuPercent': 4.5, 'gpuPercent': 0},
+    ];
+    await monitor.refresh();
+    expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
+    app.machineStates['m']!.agents.add(
+      const Agent(id: 'unknown', name: 'Unknown', terminalAvailable: true));
+    expect(monitor.metricsLabel(), 'CPU ≥130%   RAM ≥11 GB   GPU ≥24%   SSD ≥1 GB');
+    expect(monitor.resourceDetail, contains('Files remain after stopping'));
+  });
+
   testWidgets(
     'uses one machine request for every session; tokens are existing data',
     (tester) async {
@@ -148,7 +177,7 @@ void main() {
       ); // Inventory appears without starting or opening anything.
       await monitor.refresh();
       expect(connection.calls, [
-        {'type': 'machine_resources', 'harnesses': true},
+        {'type': 'machine_resources', 'harnesses': true, 'storage': true},
       ]);
       expect(monitor.label, 'Harnesses 2');
       expect(monitor.reading(monitor.live.first)!.processCount, 3);
@@ -160,7 +189,7 @@ void main() {
   );
 
   testWidgets(
-    'samples process trees only while the session manager is open and visible',
+    'samples harness resources for the visible footer and stops while the app is hidden',
     (tester) async {
       final connection = _Connection();
       final app = createApp(
@@ -172,25 +201,22 @@ void main() {
         const Agent(id: 'a0', name: 'Work', terminalAvailable: true),
       ];
       monitor.start();
-      await tester.pump(const Duration(seconds: 30));
-      expect(connection.calls, isEmpty);
-      monitor.setExpanded(true);
       await tester.pump();
       expect(connection.calls, hasLength(1));
-      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(seconds: 15));
       expect(connection.calls, hasLength(2));
       app.appLifecycleChanged(AppLifecycleState.hidden);
+      expect(monitor.metricsLabel(), 'CPU —   RAM —   GPU —   SSD —');
       await tester.pump(const Duration(minutes: 2));
       expect(connection.calls, hasLength(2));
       app.appLifecycleChanged(AppLifecycleState.resumed);
       await tester.pump();
       expect(connection.calls, hasLength(3));
-      monitor.setExpanded(false);
-      await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(3));
+      await tester.pump(const Duration(seconds: 15));
+      expect(connection.calls, hasLength(4));
       monitor.dispose();
       await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(3));
+      expect(connection.calls, hasLength(4));
       app.dispose();
     },
   );
@@ -226,5 +252,4 @@ void main() {
       expect(monitor.label, 'Harnesses 0');
     },
   );
-
 }

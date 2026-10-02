@@ -10,6 +10,7 @@ import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridExec.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
+import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
 
 /**
  * Best-effort "skip permission prompts" flag per engine, confirmed against each vendor's own docs.
@@ -499,8 +500,9 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     : ''
   return 'harness_engine() {\n'
     + (engine === 'codex' ? codexOwnedLaunchPrelude() : '')
-    + '  harness_status=0\n'
-    + '  "$@" || harness_status=$?\n'
+    + (engine === 'codex' && tmuxBinary && isAbsolute(tmuxBinary)
+      ? codexStartupRetryScript(tmuxBinary)
+      : '  harness_status=0\n  "$@" || harness_status=$?\n')
     + '  if [ "$harness_status" -eq 127 ]; then exit 127; fi\n'
     + mark
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
@@ -509,6 +511,31 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
+}
+
+/** Keep a transient pre-session account lookup failure inside the original launch.
+ * Only the final exit gets the pane's engine-exit marker. The short backoff also
+ * keeps discovery from archiving the row between attempts. Never reparse "$@": it
+ * includes the original prompt, model, permissions and resume/fork arguments. */
+function codexStartupRetryScript(tmuxBinary: string): string {
+  const probe = `${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)}`
+  return '  harness_codex_attempt=1\n'
+    + '  while :; do\n'
+    + '    harness_codex_before=\n'
+    + `    if [ -n "\${TMUX_PANE:-}" ]; then harness_codex_before=$(${probe} before ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE") || harness_codex_before=; fi\n`
+    + '    harness_status=0\n'
+    + '    "$@" || harness_status=$?\n'
+    + '    [ "$harness_status" -eq 1 ] && [ "$harness_codex_attempt" -lt 3 ] && [ -n "$harness_codex_before" ] || break\n'
+    + `    ${probe} after ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE" "$harness_codex_before" || break\n`
+    + '    harness_codex_delay=$((harness_codex_attempt * 2))\n'
+    + '    harness_codex_attempt=$((harness_codex_attempt + 1))\n'
+    + '    harness_codex_cancelled=0\n'
+    + "    trap 'harness_codex_cancelled=1' INT\n"
+    + `    printf '\\n%s\\n' "harness: Codex account lookup timed out. Retrying startup ($harness_codex_attempt/3) in \${harness_codex_delay}s; Ctrl-C cancels."\n`
+    + '    sleep "$harness_codex_delay" || harness_codex_cancelled=1\n'
+    + '    trap - INT\n'
+    + '    if [ "$harness_codex_cancelled" -eq 1 ]; then harness_status=130; break; fi\n'
+    + '  done\n'
 }
 
 /** Codex 0.157+ otherwise puts the writer outside tmux in a shared server. Keep

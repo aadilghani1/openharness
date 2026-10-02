@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -130,6 +131,37 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('closing a mixed tab saves its work and dismisses the monitor', (
+    tester,
+  ) async {
+    app.stateOf('m')!.agents = [
+      agent('a0'),
+      Agent(
+        id: 'a1',
+        name: harnessMonitorName,
+        dsh: harnessMonitorId,
+        engine: 'opencode',
+        createdAt: DateTime.utc(2026, 10, 1),
+        closeSupported: true,
+        terminalAvailable: true,
+      ),
+    ];
+    app.adoptSessionForTest(terminal('a0', []));
+    app.adoptSessionForTest(terminal('a1', []));
+    final tab = app.activeSwarm;
+    await mount(tester, app);
+    unawaited(app.requestCloseSwarm(tab.id));
+    await tester.pumpAndSettle();
+    expect(app.swarms, isNot(contains(tab)));
+    expect(modes(), ['inspect', 'idle']);
+    expect(connection.closes.every((r) => r['agentId'] == 'a0'), isTrue);
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a1').isStopped,
+      isFalse,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('an unused idle Companions chat closes its whole tab directly', (
     tester,

@@ -1,4 +1,5 @@
 import '../core/models.dart';
+import '../core/harness_defaults.dart';
 import '../core/project_folder.dart';
 import 'app_state.dart';
 
@@ -22,6 +23,43 @@ class HarnessMonitorController {
       !_disposed && identical(app.stateOf(owner.machine.machineId), owner);
 
   Future<String?> _open() async {
+    if (_disposed) return null;
+    // The footer has fleet scope. Reuse the tab even after focus moves to a
+    // different machine, including an offline monitor that is still open.
+    for (final tab in app.swarms) {
+      for (final pane in tab.panes) {
+        final machine = app.stateOf(pane.machineId);
+        final agent = machine?.agents
+            .where(
+              (a) =>
+                  a.dsh == harnessMonitorId &&
+                  (a.id == pane.agentId || a.id == pane.ownerAgentId),
+            )
+            .firstOrNull;
+        if (agent == null) continue;
+        app.selectSwarm(tab.id);
+        final owner = machine!;
+        final machineId = owner.machine.machineId;
+        try {
+          if (agent.isStopped &&
+              owner.connectionStatus == ConnectionStatus.connected) {
+            final result = await app.resumeAgent(machineId, agent.id);
+            if (!_current(owner)) return null;
+            if (result.error != null) return result.error;
+          }
+          if (!app.viewerPaneShown(machineId, agent.id)) {
+            await app.toggleViewerPane(machineId, agent.id);
+            if (!_current(owner)) return null;
+          }
+          app.showHarnessMonitor(machineId, agent.id);
+        } catch (_) {
+          return _current(owner)
+              ? 'Could not open Harness Monitor. Try again.'
+              : null;
+        }
+        return null;
+      }
+    }
     final owner = app.ownedActionMachine;
     if (owner == null) return 'Connect a machine to open Harness Monitor.';
     if (!identical(_owner, owner)) {
@@ -54,9 +92,13 @@ class HarnessMonitorController {
             label: 'harness-monitor',
             at: DateTime.now(),
           );
+          await app.agentPreference.load();
+          if (!_current(owner)) return null;
           final error = await app.createAgent(
             machineId,
-            engine: 'opencode',
+            engine:
+                app.agentPreference.engineFor(harnessMonitorId) ??
+                defaultHarnessEngine,
             folder: null,
             projectFolder: _folder,
             dsh: harnessMonitorId,
@@ -96,7 +138,7 @@ class HarnessMonitorController {
       if (!app.viewerPaneShown(machineId, agent.id)) {
         await app.toggleViewerPane(machineId, agent.id);
       }
-      app.showHarnessMonitorTable(machineId, agent.id);
+      app.showHarnessMonitor(machineId, agent.id);
       return null;
     } catch (_) {
       return _current(owner)
