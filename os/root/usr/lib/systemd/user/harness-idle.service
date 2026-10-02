@@ -1,0 +1,7 @@
+[Unit]
+Description=Lock before suspend
+PartOf=harness-os.target
+
+[Service]
+ExecStart=/usr/bin/swayidle -w timeout 600 'swaylock -f -c 000000' before-sleep 'swaylock -f -c 000000'
+Restart=on-failure

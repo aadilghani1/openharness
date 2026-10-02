@@ -1,0 +1,3 @@
+#!/bin/sh
+export HARNESS_TUI_BIN=/usr/lib/harness/hn
+exec /usr/bin/harness tui "$@"

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=labwc
+export ADAPTER_UPDATE_DISABLE=true
+export HARNESS_TUI_BIN=/usr/lib/harness/hn
+export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
+export BROWSER=hn-browser
+export npm_config_prefix="$HOME/.local"
+mkdir -p "$HOME/.local/bin" "$HOME/Projects" "$HOME/.local/state/harness-os"
+# No shell remains between the console login and the graphical session.
+exec dbus-run-session -- labwc -C /usr/share/harness-os/labwc

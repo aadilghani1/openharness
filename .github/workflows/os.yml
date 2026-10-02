@@ -1,0 +1,58 @@
+name: Programmer OS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os/**']
+    paths: ['os/**', '.github/workflows/os.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: programmer-os-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+      - name: Record start and capacity
+        run: |
+          date -u
+          df -h .
+          free -h
+      - name: Validate installer safety and image configuration
+        run: make -C os check
+      - name: Build offline BIOS and UEFI image
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD:/src" -w /src/os \
+            -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            archlinux:base-devel \
+            bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; bash build.sh'
+      - name: Inspect image artifact
+        run: |
+          cd os/dist
+          sha256sum -c *.sha256
+          cat manifest.json
+          ls -lh *.iso
+      - name: Retain image, checksums, package inventory and build manifest
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist/
+          retention-days: 14
+          compression-level: 0
+      - name: Retain build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-build-diagnostics
+          path: |
+            os/work/profile/profiledef.sh
+            os/work/profile/pacman.conf
+            os/work/archiso/x86_64/airootfs/var/log/pacman.log
+          retention-days: 7

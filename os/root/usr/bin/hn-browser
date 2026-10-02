@@ -1,0 +1,3 @@
+#!/bin/sh
+# Chromium is a separate, optional surface. Keep its sandbox and GPU support.
+exec /usr/bin/chromium --ozone-platform=wayland --no-first-run --no-default-browser-check "$@"

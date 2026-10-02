@@ -1,0 +1,29 @@
+{
+  "request_started_utc": "2026-10-02T17:09:32Z",
+  "implementation_started_utc": "2026-10-02T17:10:08Z",
+  "implementation_complete_utc": null,
+  "validation_complete_utc": null,
+  "merge_utc": null,
+  "publication_utc": null,
+  "completion_utc": null,
+  "status": "building",
+  "evidence": [
+    {
+      "scope": "installer validation helpers and image input syntax",
+      "command": "make -C os check",
+      "result": "passed",
+      "limitations": "Does not establish image boot, installation, hardware compatibility, or performance."
+    }
+  ],
+  "waiting": [],
+  "remaining": [
+    "Build and inspect the actual ISO",
+    "BIOS and UEFI live boot and installation tests",
+    "Persistent agent sessions and optional browser integration",
+    "Chat-driven entry to real agents without required forms",
+    "Coordinated update and rollback",
+    "Measurements and performance optimization",
+    "NVIDIA hardware profile",
+    "Downloadable verified preview and installation directions"
+  ]
+}

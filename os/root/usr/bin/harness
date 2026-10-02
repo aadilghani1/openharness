@@ -1,0 +1,3 @@
+#!/bin/sh
+export ADAPTER_UPDATE_DISABLE=true
+exec /usr/bin/node /usr/lib/harness/cli.mjs "$@"

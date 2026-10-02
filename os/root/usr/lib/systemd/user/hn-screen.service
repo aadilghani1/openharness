@@ -1,0 +1,26 @@
+[Unit]
+Description=Persistent hn terminal surface
+PartOf=harness-os.target
+Wants=harness-daemon.service
+After=harness-daemon.service
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+Type=exec
+Environment=ADAPTER_UPDATE_DISABLE=true
+Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
+Environment=HARNESS_TUI_NOTIFY=off
+Environment=HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
+Environment=HARNESS_OS=1
+Environment=BROWSER=hn-browser
+WorkingDirectory=%h/Projects
+ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/hn
+Restart=always
+RestartSec=1
+KillMode=process
+# Agent daemons and PTY owners must be outside this service. The launcher starts
+# the daemon through its own service; reconnect never kills the work.
+
+[Install]
+WantedBy=harness-os.target

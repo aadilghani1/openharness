@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+out, root = map(Path, sys.argv[1:])
+lock = json.loads((Path(__file__).resolve().parents[1] / 'lock.json').read_text())
+isos = list(out.glob('*.iso'))
+if len(isos) != 1:
+    raise SystemExit('Expected exactly one ISO')
+iso = isos[0]
+digest = hashlib.file_digest(iso.open('rb'), 'sha256').hexdigest()
+(out / (iso.name + '.sha256')).write_text(f'{digest}  {iso.name}\n')
+packages = (root / 'usr/share/harness-os/packages.txt').read_text()
+(out / 'packages.txt').write_text(packages)
+manifest = {
+    'version': lock['version'], 'architecture': 'x86_64',
+    'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+    'built_at_unix': int(time.time()), 'arch_snapshot': lock['arch_snapshot'],
+    'iso': {'name': iso.name, 'bytes': iso.stat().st_size, 'sha256': digest},
+    'harness_inputs': lock['artifacts'], 'validation': 'pending',
+}
+(out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
