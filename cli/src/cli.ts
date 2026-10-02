@@ -3144,7 +3144,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
               engine: s.engine,
               transcriptPath: s.transcriptPath || null,
               header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-              // Conversation stamps only: the row's `touchedAt` moves on every discovery pass.
+              // Conversation stamps only: the row's `touchedAt` includes discovery bookkeeping.
               changedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
               readHistory,
             }]

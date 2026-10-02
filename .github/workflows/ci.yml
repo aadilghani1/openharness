@@ -133,6 +133,9 @@ jobs:
       - name: Guard fuzz and bounded hostile-input time
         run: npx vitest run src/pair/learn/guard.fuzz.spec.ts
 
+      - name: Concurrent registry discovery, hooks and durable close intents
+        run: node scripts/registry-observation-e2e.mjs "$RUNNER_TEMP/registry-observation-e2e"
+
       - name: Verify hn launcher repair in an existing installation
         run: |
           npm run bundle
