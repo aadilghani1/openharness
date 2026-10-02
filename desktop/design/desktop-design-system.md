@@ -145,9 +145,15 @@ Avoid repeatedly drawing cards inside a dialog.
 - Primary text is nearly white or nearly black. Metadata remains readable.
 - Blue filled capsules identify the primary action. Blue rows identify the
   active keyboard/pointer choice; their labels and secondary text turn white.
-- Focused pane rims use blue for this computer and `AppPalette.teal` for a
-  known remote machine. Only the focused pane carries this location cue;
-  waiting-question borders retain their amber priority.
+- Focused pane rims share one solid 1-point boundary: blue for this computer,
+  muted teal-gray (`AppPalette.remotePaneFocus`) for a known remote machine.
+  Location is a quiet cue, with less emphasis than the local focus blue; avoid
+  saturated teal, dashes, double rims or glow. The remote token is `#567C77` in
+  light appearance and `#6C9691` in dark, distinct from teal text and badge ink.
+  It retains at least 3:1 contrast against built-in pane grounds and workspace
+  gutters. Only the focused pane carries the cue; unfocused rims stay neutral
+  and waiting-question borders retain their amber priority. The footer's
+  machine name supplies explicit location context alongside the color.
 - A stored choice also has a checkmark. Focus and stored selection differ.
 - Ordinary controls use a faint neutral fill and one thin rim. Hover increases
   the fill. Press increases it again. Focus has a stable 1.5-point blue boundary.

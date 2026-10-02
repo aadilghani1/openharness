@@ -64,10 +64,13 @@ keyboard focus. Waiting-question borders remain visible above the veil.
 The overlay does not consume the first click or alter terminal state.
 
 Only the focused pane gets a location-colored rim: blue on this computer,
-teal on a known remote machine, including a single or zoomed pane. Unfocused
-panes keep their neutral rim. The existing amber waiting-question border takes
-precedence over the focus color. Location uses machine identity, independently
-of the connection's transport mode.
+muted teal-gray (`AppPalette.remotePaneFocus`) on a known remote machine,
+including a single or zoomed pane. Both use the same solid 1-point boundary.
+Remote location is a quiet cue with less emphasis than local focus blue;
+the footer identifies the machine in text. Unfocused panes keep their neutral
+rim. The existing amber waiting-question border takes precedence over the
+focus color. Location uses machine identity, independently of the connection's
+transport mode.
 
 ## Input and review
 
