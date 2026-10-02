@@ -182,6 +182,8 @@ static void inspect(const ht_scene_t *f,const char *name) {
     for(int i=0;i<s.hit_count;i++) {
         ht_rect_t b=s.hits[i].rect;
         assert(b.x>=0&&b.y>=0&&b.x+b.w<=720&&b.y+b.h<=720&&b.w>0&&b.h>=60);
+        if(s.view==LAUNCHER || s.view==LANGUAGE)
+            for(int j=i+1;j<s.hit_count;j++) assert(!overlap(b,s.hits[j].rect));
         if(s.hits[i].action==A_STOP_YES) assert(s.view==STOP);
         if(s.hits[i].action==A_ANSWER) assert(s.view==ANSWER_REVIEW);
         if(s.hits[i].action==A_DRAFT_SEND) assert(s.view==DRAFT&&!draft.page.locked);
@@ -202,19 +204,19 @@ static void portrait(const ht_scene_t *f,const char *dir,const char *name) {
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     static const struct { view_t view;const char *name; } screens[]={
-        {LAUNCHER,"launcher"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
+        {LAUNCHER,"launcher"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},
         {QUESTION,"question"},{CHOICE,"choices"},{ANSWER_REVIEW,"answer"},{SELECTION,"selection"},
         {FORM,"form"},{DRAFT,"draft"},{DRAFT_OPTIONS,"draft-options"},{STOP,"stop"},{MESSAGE,"message"},
     };
-    for(unsigned stress=0;stress<2;stress++) for(unsigned i=0;i<sizeof screens/sizeof screens[0];i++) {
-        reset(stress);s.view=screens[i].view;ht_scene_t scene;ht_scene_clear(&scene,BG);
+    for(unsigned lang=0;lang<2;lang++) for(unsigned stress=0;stress<2;stress++) for(unsigned i=0;i<sizeof screens/sizeof screens[0];i++) {
+        reset(stress);COPY(s.voice_language,lang ? "vi" : "en");s.view=screens[i].view;ht_scene_t scene;ht_scene_clear(&scene,BG);
         assert(pro_render_controls(&scene));inspect(&scene,screens[i].name);
         if(s.view==INBOX)assert(s.notice_frame==123&&action_count(A_NOTICE,false)==1);
-        if(!stress)portrait(&scene,dir,screens[i].name);
+        if(!stress) {char name[80];snprintf(name,sizeof name,"%s-%s",screens[i].name,lang ? "vi" : "en");portrait(&scene,dir,name);}
     }
-    for(unsigned sample=0;sample<pro_voice_sample_count();sample++) {
-        reset(false);s.voice_sample=sample;s.view=VOICE_SAMPLES;ht_scene_t voice;ht_scene_clear(&voice,BG);
+    for(unsigned lang=0;lang<2;lang++) for(unsigned sample=0;sample<pro_voice_sample_count();sample++) {
+        reset(false);COPY(s.voice_language,lang ? "vi" : "en");s.voice_sample=sample;s.view=VOICE_SAMPLES;ht_scene_t voice;ht_scene_clear(&voice,BG);
         assert(pro_render_controls(&voice));inspect(&voice,"voice sample");
         s.view=VOICE_PARAMS;ht_scene_clear(&voice,BG);assert(pro_render_controls(&voice));inspect(&voice,"voice params");
     }

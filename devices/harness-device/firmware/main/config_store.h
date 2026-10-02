@@ -45,7 +45,9 @@ bool config_save_pro_appearance(uint16_t value);
 // `welcome`; once the user has picked here, this wins — the person holding the dial may well speak
 // something other than the laptop is set to.
 void config_load_voicelang(char *out, size_t cap);
-void config_save_voicelang(const char *lang);
+// Pro uses the same en/vi choice for its built-in interface. False means the
+// preference was not durably saved; leave a retry available in the picker.
+bool config_save_voicelang(const char *lang);
 
 // Which way a drag on the dial moves the window's scrollback. False (the default, and what every build
 // before this one did): the text follows the finger. True: the view does.

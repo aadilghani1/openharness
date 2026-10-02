@@ -77,9 +77,10 @@ static int audio_capture_read(uint8_t *out,int capacity) {
 }
 static unsigned audio_capture_overruns(void) {return overruns;}
 static void audio_capture_stop(void) {stops++;}
-static void config_load_voicelang(char *out,size_t n) {snprintf(out,n,"en");}
+static const char *saved_language="en";
+static void config_load_voicelang(char *out,size_t n) {snprintf(out,n,"%s",saved_language);}
 static bool audio_stream_begin(const char *id,const char *cmd,const char *lang,int rate) {
-    assert(id&&!strcmp(id,"target-agent")&&!strcmp(cmd,"")&&!strcmp(lang,"en")&&rate==16000);
+    assert(id&&!strcmp(id,"target-agent")&&!strcmp(cmd,"")&&!strcmp(lang,saved_language)&&rate==16000);
     begins++;return mode!=BEGIN_FAIL;
 }
 static bool audio_stream_pcm(const uint8_t *bytes,size_t n) {
@@ -100,6 +101,7 @@ int main(void) {
     for(unsigned round=0;round<100;round++)for(mode=0;mode<MODES;mode++) {
         memset(guarded,0xa5,sizeof guarded);voice_buffer_init(&buffer,guarded+8,BUFFER_BYTES);
         if(round&1) {atomic_store(&buffer.head,UINT32_MAX-255);atomic_store(&buffer.tail,UINT32_MAX-255);}
+        saved_language = round & 1 ? "vi" : "en";
         active=recording=true;stop_requested=abort_requested=capture_done=heard=false;
         input_level=produced=high_water=read_max_us=0;
         capture_waits=sender_waits=reads=raw_bytes=sent_bytes=pcm_calls=0;

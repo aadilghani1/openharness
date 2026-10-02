@@ -63,7 +63,7 @@ typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
     LAUNCHER,
-    DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS,
+    DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE,
 #endif
     AGENTS,
     AGENT,
@@ -92,6 +92,7 @@ typedef enum {
     A_HOME,
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER,
+    A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
     A_SAMPLE_VOLUME, A_SAMPLE_PARAMS,
@@ -229,6 +230,8 @@ static EXT_RAM_BSS_ATTR struct {
     uint8_t sample_volume;
     bool sample_volume_set;
     uint32_t sample_poll_due;
+    char voice_language[8];
+    bool language_saving, language_error;
 #endif
     bool muted;
     int pet_pose;
@@ -294,6 +297,12 @@ static EXT_RAM_BSS_ATTR struct {
     int pattern_len;
     bool pattern_error;
 } s;
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_i18n.h"
+#define PRO_TR(text) pro_translate(s.voice_language, (text))
+#else
+#define PRO_TR(text) (text)
+#endif
 static QueueHandle_t actions;
 static _Atomic(TaskHandle_t) reload_waiter;
 static atomic_bool reload_requested;
@@ -689,8 +698,8 @@ static void render_brand(ht_scene_t *f)
 {
 #ifdef DEVICE_PRO_COMPANION
     ht_pro_center(f, 276, &ht_pro_56, FG, "Harness");
-    ht_pro_center(f, 374, &ht_pro_32, DIM, "A little update.");
-    ht_pro_center(f, 438, &ht_pro_24, DIM, "Keep your companion connected.");
+    ht_pro_center(f, 374, &ht_pro_32, DIM, PRO_TR("A little update."));
+    ht_pro_center(f, 438, &ht_pro_24, DIM, PRO_TR("Keep your companion connected."));
 #else
     center(f, (466 - UI_FONT->height) / 2, "Harness", FG);
 #endif
@@ -2018,8 +2027,8 @@ static void render_settings(ht_scene_t *f)
 static void render_lock(ht_scene_t *f)
 {
 #ifdef DEVICE_PRO_COMPANION
-    ht_pro_center(f, 56, &ht_pro_42, FG, "A quiet moment.");
-    ht_pro_center(f, 126, &ht_pro_24, DIM, "Draw your pattern to return.");
+    ht_pro_center(f, 56, &ht_pro_42, FG, PRO_TR("A quiet moment."));
+    ht_pro_center(f, 126, &ht_pro_24, DIM, PRO_TR("Draw your pattern to return."));
     for (int i = 0; i < 9; i++) {
         int x = HT_PATTERN_X + (i % 3) * HT_PATTERN_STEP_X;
         int y = HT_PATTERN_Y + (i / 3) * HT_PATTERN_STEP_Y;
@@ -2028,7 +2037,7 @@ static void render_lock(ht_scene_t *f)
         ht_pro_rect(f, x - 7, y - 7, 14, 14, 7, selected ? color(0xfffdf5) : DIM);
     }
     ht_pro_center(f, 668, &ht_pro_24, s.pattern_error ? ERROR : DIM,
-                  s.pattern_error ? "That pattern didn't match. Try again." : "Your companion is locked.");
+                  s.pattern_error ? PRO_TR("That pattern didn't match. Try again.") : PRO_TR("Your companion is locked."));
 #else
     center(f, 89, "Draw your pattern", FG);
     for (int i = 0; i < 9; i++) {
@@ -2071,6 +2080,7 @@ bool habitat_scene_take(ht_scene_t *f)
     case SCENES:
     case VOICE_SAMPLES:
     case VOICE_PARAMS:
+    case LANGUAGE:
         break; // Handled by the Pro controls sheet above.
 #endif
     case FORM:
@@ -2361,6 +2371,16 @@ static void dispatch(action_t a)
 #ifdef DEVICE_PRO_COMPANION
     case A_LAUNCHER:
         view(LAUNCHER);
+        break;
+    case A_LANGUAGE:
+        view(LANGUAGE);
+        break;
+    case A_LANGUAGE_SET:
+        if (s.view != LANGUAGE || s.language_saving || (a.value != 0 && a.value != 1)) break;
+        if (!strcmp(s.voice_language, a.value ? "vi" : "en") && !s.language_error) break;
+        s.language_saving = queue(a);
+        s.language_error = !s.language_saving;
+        change();
         break;
     case A_VOICE_SAMPLES:
         if (!s.sample_volume_set) { s.sample_volume = 80; s.sample_volume_set = true; }
@@ -2664,10 +2684,10 @@ static void dispatch(action_t a)
             s.nap = false;
             s.voice_return = s.view;
             int target = find(a.id);
-            if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, "Find %.48s",
+            if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, PRO_TR("Find %.48s"),
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
                 !strcmp(form.page.title, "New Harness") ? form.page.label : form.page.title);
-            else if (a.value == 7) COPY(s.voice_target, "Find in output");
+            else if (a.value == 7) COPY(s.voice_target, PRO_TR("Find in output"));
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
             else COPY(s.voice_target, target >= 0 ? s.agents[target].name : "harness");
             s.voice_started = ms();
@@ -3008,6 +3028,21 @@ static void worker(void *unused)
                 ui_cable_toast("Character changed; saving failed.");
             break;
 #ifdef DEVICE_PRO_COMPANION
+        case A_LANGUAGE_SET: {
+            if (a.value != 0 && a.value != 1) break;
+            // NVS writes stay on the action worker, away from rendering/touch.
+            const char *lang = a.value ? "vi" : "en";
+            bool saved = config_save_voicelang(lang);
+            char actual[CFG_VLANG_MAX];
+            config_load_voicelang(actual, sizeof actual);
+            display_lock();
+            COPY(s.voice_language, actual);
+            s.language_saving = false;
+            s.language_error = !saved || strcmp(actual, lang);
+            change();
+            display_unlock();
+            break;
+        }
         case A_APPEAR_SAVE:
             if (!config_save_pro_appearance((uint16_t)a.value))
                 ui_cable_toast("Appearance changed; saving failed.");
@@ -3548,6 +3583,9 @@ void ui_init(void)
     s.pressed = -1;
     s.brightness = (config_load_brightness() * 100 + 127) / 255;
     s.muted = config_load_muted();
+#ifdef DEVICE_PRO_COMPANION
+    config_load_voicelang(s.voice_language, sizeof s.voice_language);
+#endif
     memset(&character, 0, sizeof character);
 #ifdef DEVICE_TIM_ILLUSTRATED
     ht_tim_illustrated_init();

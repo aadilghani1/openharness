@@ -83,6 +83,11 @@ static ht_character_caption_t home_caption;
 static action_t pressed_action;
 static ht_rect_t pressed_rect;
 static bool scroll_reversed, recording, asleep, congested;
+static char saved_language[8]="en";
+static bool fail_language_save;
+static bool config_save_voicelang(const char *lang) { if(fail_language_save)return false; snprintf(saved_language,sizeof saved_language,"%s",lang); return true; }
+static void config_load_voicelang(char *out,size_t n) {snprintf(out,n,"%s",saved_language);}
+#define CFG_VLANG_MAX 8
 static unsigned starts, stops, discards, switches, launches, selected, down_reports, moves, ups, queued;
 static int travel;
 static action_t sent, queued_action;
@@ -175,6 +180,10 @@ for name in ("copy", "find", "is_question", "pro_speech_allowed", "pro_speech_vi
     code += function(name)
 workspace_actions = SOURCE.split("    case A_TABS:", 1)[1].split("    case A_MACHINE:", 1)[0]
 code += "static void workspace_action(action_t a) { switch(a.kind) { case A_TABS:" + workspace_actions + "default: break; } }\n"
+language_actions = SOURCE.split("    case A_LANGUAGE:", 1)[1].split("    case A_VOICE_SAMPLES:", 1)[0]
+code += "static bool language_action(action_t a) { switch(a.kind) { case A_LANGUAGE:" + language_actions + "default: return false; } return true; }\n"
+language_save = function("worker").split("        case A_LANGUAGE_SET: {", 1)[1].split("        case A_APPEAR_SAVE:", 1)[0]
+code += "static void language_worker(action_t a) { switch(a.kind) { case A_LANGUAGE_SET: {" + language_save + "default: break; } }\n"
 sample_actions = SOURCE.split("    case A_VOICE_SAMPLES:", 1)[1].split("    case A_DAEMONS:", 1)[0]
 code += "static bool sample_action(action_t a) { switch(a.kind) { case A_VOICE_SAMPLES:" + sample_actions + "default: return false; } return true; }\n"
 code += function("ht_character_select", (NATIVE / "character.c").read_text())
@@ -183,7 +192,7 @@ const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definiti
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
-    if (sample_action(action)) return;
+    if (language_action(action) || sample_action(action)) return;
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -236,7 +245,7 @@ void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_m
 '''
 controls = (NATIVE / "pro_controls.inc").read_text()
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
-code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls)
+code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -253,6 +262,7 @@ static void reset(void) {
     memset(&pressed_rect,0,sizeof pressed_rect); memset(&sent,0,sizeof sent); memset(&queued_action,0,sizeof queued_action);
     memset(&speech_audio,0,sizeof speech_audio);
     changes=speech_aborts=speech_snapshots=0;aborted_id=0;
+    config_load_voicelang(s.voice_language,sizeof s.voice_language);
     s.ready = s.connected = true; s.view = HOME; s.count = 2; s.active = 0; s.pressed = -1;
     strcpy(s.agents[0].id,"a"); strcpy(s.agents[0].name,"Design");
     strcpy(s.agents[1].id,"b"); strcpy(s.agents[1].name,"Code");
@@ -877,6 +887,36 @@ static void appearance_interrupted(void) {
 }
 typedef void (*test_fn)(void);
 
+static void language_controls(void) {
+    strcpy(saved_language,"en");fail_language_save=false;reset();s.connected=false;
+    s.view=LAUNCHER;s.hit_count=0;ht_scene_t frame;ht_scene_clear(&frame,BG);pro_launcher(&frame);
+    const hit_t *entry=action_hit(A_LANGUAGE);assert(entry&&entry->enabled);
+    tap(entry->rect.x+40,entry->rect.y+30,75);assert(s.view==LANGUAGE&&!queued);
+    s.hit_count=0;ht_scene_clear(&frame,BG);pro_language(&frame);
+    const hit_t *english=action_hit(A_LANGUAGE_SET);assert(english&&english->value==0);
+    tap(100,442,75); // Vietnamese row: real hit geometry and production dispatch.
+    assert(s.language_saving&&queued==1&&!strcmp(saved_language,"en"));
+    assert(queued_action.kind==A_LANGUAGE_SET&&queued_action.value==1);
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=0});assert(queued==1);
+    language_worker(queued_action);assert(!s.language_saving&&!s.language_error);
+    assert(!strcmp(saved_language,"vi")&&!strcmp(PRO_TR("Language"),"Ngôn ngữ"));
+    reset();assert(!strcmp(s.voice_language,"vi")); // Fresh UI reads persisted choice.
+    s.view=LANGUAGE;congested=true;
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=0});
+    assert(s.language_error&&!s.language_saving&&!strcmp(s.voice_language,"vi"));
+    congested=false;fail_language_save=true;
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=0});language_worker(queued_action);
+    assert(s.language_error&&!s.language_saving&&!strcmp(s.voice_language,"vi"));
+    fail_language_save=false;
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=0});language_worker(queued_action);
+    assert(!s.language_error&&!strcmp(s.voice_language,"en")&&!strcmp(saved_language,"en"));
+    unsigned before=queued;
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=0});
+    dispatch((action_t){.kind=A_LANGUAGE_SET,.value=2});assert(queued==before);
+    view(HOME);dispatch((action_t){.kind=A_LANGUAGE_SET,.value=1});assert(queued==before);
+    assert(!starts&&!recording); // Changing a preference cannot start/send audio.
+}
+
 static void voice_sample_controls(void) {
     reset();s.connected=false;s.loading=true;native_voice_available=true;
     s.view=LAUNCHER;s.hit_count=0;ht_scene_t frame;ht_scene_clear(&frame,BG);pro_launcher(&frame);
@@ -907,7 +947,7 @@ static void voice_sample_controls(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
+        {"language_controls",language_controls},{"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
         {"thumb_drift",thumb_drift},{"panes",panes},{"pane_after_diagonal_start",pane_after_diagonal_start},
         {"scroll_output",scroll_output},
         {"congested_scroll",congested_scroll},{"diagonal",diagonal},{"hold_launcher",hold_launcher},

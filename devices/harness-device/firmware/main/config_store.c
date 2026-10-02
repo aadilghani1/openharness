@@ -111,13 +111,14 @@ void config_load_voicelang(char *out, size_t cap)
     if (out[0] == '\0' && cap > 2) { strncpy(out, "en", cap - 1); out[cap - 1] = '\0'; }   // factory default: English (Settings › Voice flips it)
 }
 
-void config_save_voicelang(const char *lang)
+bool config_save_voicelang(const char *lang)
 {
     nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok = nvs_set_str(h, "vlang", lang) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
     ESP_LOGI(TAG, "save_voicelang '%s': %s", lang, ok ? "ok" : "FAILED");
+    return ok;
 }
 
 uint8_t config_load_brightness(void)

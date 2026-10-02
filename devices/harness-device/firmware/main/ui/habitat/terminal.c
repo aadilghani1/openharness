@@ -96,6 +96,11 @@ uint32_t ht_utf8_next(const char **p)
 static bool native_glyph(const ht_font_t *font, uint32_t cp)
 {
     if (cp < 32 || (cp >= 127 && cp < 160)) return false;
+#ifdef DEVICE_PRO_COMPANION
+    // The Pro's proportional atlases carry these letters. Keep their UTF-8
+    // intact through display normalization instead of transliterating it.
+    if (ht_pro_vietnamese_index(cp) >= 0) return true;
+#endif
     const ht_font_t *face = glyph_font(font, cp);
     cp = punctuation_alias(cp);
     return cp >= face->first && cp <= face->last;

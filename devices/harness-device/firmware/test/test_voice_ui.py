@@ -25,6 +25,8 @@ harness += r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+// This fixture exercises the round renderer, where localization is inert.
+#define PRO_TR(text) (text)
 #include <assert.h>
 #include "../../cable_features.h"
 static uint32_t host_features=31;

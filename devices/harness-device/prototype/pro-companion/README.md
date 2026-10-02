@@ -18,6 +18,15 @@ connected or offline. There is no layout switch, portable mode, battery meter
 or runtime estimate. Normal operation needs no connection badge; connection
 guidance appears only when the app is unavailable.
 
+## Language
+
+Open **Menu → Language** and choose **English** or **Tiếng Việt**. The choice
+changes the built-in Pro interface immediately and the recognition language for
+the next voice recording. It is saved on the device and survives restarts.
+Vietnamese uses accented glyphs at every Pro font size. Agent/workspace names,
+messages, results and the words in saved voice recordings keep their original
+language. The picker is available offline; a failed save offers a retry.
+
 ## Trial status
 
 Current development lives on **`dev/firmware-pro`**, separate from Diego's
@@ -285,6 +294,7 @@ Run the focused checks and the shared regression gates:
 ```sh
 python3 devices/harness-device/firmware/test/test_pro_power.py
 python3 devices/harness-device/firmware/test/test_pro_canvas.py
+python3 devices/harness-device/firmware/test/test_pro_language.py
 python3 devices/harness-device/firmware/test/test_pro_controls.py
 python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
 python3 devices/harness-device/firmware/test/test_pro_voice_samples.py

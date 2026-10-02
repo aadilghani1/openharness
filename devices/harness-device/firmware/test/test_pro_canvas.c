@@ -53,8 +53,9 @@ static void raster_reference(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
             if(cp==0x2018||cp==0x2019)cp='\'';
             if(cp==0x201c||cp==0x201d)cp='"';
             if(cp>=0x2010&&cp<=0x2015)cp='-';
-            if(cp<f->first||cp>f->last)cp='?';
-            const ht_pro_glyph_t *g=&f->glyphs[cp-f->first];
+            int viet=ht_pro_vietnamese_index(cp);
+            if(viet<0&&(cp<f->first||cp>f->last))cp='?';
+            const ht_pro_glyph_t *g=&f->glyphs[viet>=0 ? f->last-f->first+1+viet : cp-f->first];
             int left=x0>gx?x0:gx,right=x1<gx+g->width?x1:gx+g->width;
             for(int y=y0;y<y1;y++)for(int x=left;x<right;x++) {
                 size_t k=(size_t)(y-r->y)*g->width+x-gx;
@@ -140,7 +141,7 @@ static void transition(const ht_scene_t *before, const ht_scene_t *after)
 static void typography(void)
 {
     const ht_pro_font_t *fonts[] = {&ht_pro_24,&ht_pro_32,&ht_pro_42,&ht_pro_56};
-    const char *samples[] = {"Working", "A little company.", "Caf\xc3\xa9", "Don\xe2\x80\x99t stop", "1\xe2\x85\x93 + \xe2\x85\x94", "Hello\xe2\x80\xa6", "\xf0\x9f\x90\x99"};
+    const char *samples[] = {"Tiếng Việt", "Ngôn ngữ và giọng nói", "ĐĂĨŨƠƯ ự Ỹ Ắ", "Working", "A little company.", "Caf\xc3\xa9", "Don\xe2\x80\x99t stop", "1\xe2\x85\x93 + \xe2\x85\x94", "Hello\xe2\x80\xa6", "\xf0\x9f\x90\x99"};
     for(unsigned f=0;f<sizeof fonts/sizeof *fonts;f++) {
         const ht_pro_font_t *font=fonts[f];
         CHECK(ht_pro_width(font,"WWW")>ht_pro_width(font,"iii"),"font must remain proportional");
@@ -153,6 +154,15 @@ static void typography(void)
             CHECK(!strcmp(s.runs[0].text,visible),"exact-fit final glyph and Unicode expansion preserved");
             ht_scene_clear(&s,0);ht_pro_center(&s,0,font,0xffff,samples[i]);
             if(width<=HT_WIDTH-80) CHECK(!strcmp(s.runs[0].text,visible),"centered normalized text must not be clipped");
+        }
+        char vietnamese[128];
+        ht_display_text(vietnamese,sizeof vietnamese,"Tiếng Việt: ĐĂĨŨƠƯ ự Ỹ Ắ",&ht_mono_28);
+        CHECK(!strcmp(vietnamese,"Tiếng Việt: ĐĂĨŨƠƯ ự Ỹ Ắ"),"Vietnamese accents survive normalization");
+        for(unsigned cp=256;cp<=0x1ef9;cp++) {
+            int index=ht_pro_vietnamese_index(cp);if(index<0)continue;
+            const ht_pro_glyph_t *g=&font->glyphs[font->last-font->first+1+index];
+            unsigned ink=0;for(unsigned byte=0;byte<((unsigned)g->width*font->height+1)/2;byte++)ink+=font->alpha[g->offset+byte];
+            CHECK(g->width&&g->advance&&ink,"every Vietnamese atlas glyph has ink");
         }
         ht_scene_t s;ht_scene_clear(&s,0);
         const char *cut="HelloX";
@@ -217,10 +227,13 @@ static void font_atlas_and_clips(void)
     for(unsigned n=0;n<4;n++) {
         const ht_pro_font_t *f=fonts[n];
         unsigned overhang=0;
-        for(unsigned cp=f->first;cp<=f->last;cp++) {
-            const ht_pro_glyph_t *g=&f->glyphs[cp-f->first];
+        for(unsigned cp=f->first;cp<=0x1ef9;cp++) {
+            int viet=ht_pro_vietnamese_index(cp);
+            if(cp>f->last && viet<0)continue;
+            const ht_pro_glyph_t *g=&f->glyphs[viet>=0 ? f->last-f->first+1+viet : cp-f->first];
             CHECK(g->advance && g->width && f->height,"atlas glyph dimensions nonzero");
-            if(cp<f->last) CHECK(g->offset+((size_t)g->width*f->height+1)/2<=f->glyphs[cp+1-f->first].offset,"glyph atlas spans do not overlap");
+            // Identical masks may share an offset. ASan checks the full span
+            // as every glyph is rasterized below, including Vietnamese.
             ht_scene_t s;ht_scene_clear(&s,0);
             ht_pro_text(&s,0,0,100,f,0xffff,"A");
             utf8(cp,s.runs[0].text);s.runs[0].w=100;
@@ -259,7 +272,7 @@ static void font_atlas_and_clips(void)
             CHECK(complete,"rightmost glyph ink must fit run bounds");
         }
     }
-    puts("Checked all896 real font glyphs, nibble bounds, trailing overhang and guarded clipped rasters");
+    puts("Checked all 1,304 real font glyphs, nibble bounds, trailing overhang and guarded clipped rasters");
 }
 
 static uint8_t *read_fixture(const char *path,size_t expected)

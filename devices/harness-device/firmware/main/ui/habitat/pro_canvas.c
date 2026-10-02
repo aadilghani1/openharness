@@ -76,6 +76,9 @@ static void glyph_span(uint16_t *dst, const uint8_t *mask, size_t first, int cou
 }
 static unsigned code(const ht_pro_font_t *f, uint32_t cp)
 {
+    int vietnamese = ht_pro_vietnamese_index(cp);
+    if (vietnamese >= 0 && f->last - f->first + 1 + vietnamese < f->glyph_count)
+        return f->last + 1 + (unsigned)vietnamese;
     if (cp == 0x2018 || cp == 0x2019) cp = '\'';
     if (cp == 0x201c || cp == 0x201d) cp = '"';
     if (cp >= 0x2010 && cp <= 0x2015) cp = '-';
