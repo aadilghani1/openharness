@@ -11,24 +11,24 @@ browser, mobile and physical-device interfaces.
 - Use the same machine and OS user for Harness, OpenCode and Pushary.
 - Have a Pushary operator account with an active trial or subscription and a connected phone.
   Pushary is a separate hosted service. See its [setup and billing information](https://pushary.com).
-- With `pushary@1.9.2`, start at the root of a disposable Git repository. Its plugin
-  uses the Git worktree as the approval directory: non-Git workspaces can be reported
-  as `/`, and nested folders can be reported as the repository root. Keep your
-  existing configuration and permissions.
+- Use a disposable workspace. `pushary@1.9.4` uses OpenCode's active directory for
+  approval context, including non-Git workspaces and nested repository folders.
+  Keep your existing configuration and permissions.
 
 ## Connect the existing integration
 
 On a machine already connected to Pushary, check it first:
 
 ```sh
-npx pushary@1.9.2 status --json
-npx pushary@1.9.2 doctor
+npx pushary@1.9.4 status --json
+npx pushary@1.9.4 doctor
 ```
 
-If OpenCode is not connected yet, use the normal Pushary setup and select OpenCode:
+If OpenCode is not connected, or you installed its Pushary plugin before 1.9.4, run setup
+to generate the current plugin and select OpenCode:
 
 ```sh
-npx pushary@1.9.2 setup --agents opencode
+npx pushary@1.9.4 setup --agents opencode
 ```
 
 Setup can install the CLI globally and create a per-user service. Run it explicitly as the
@@ -52,7 +52,7 @@ Harness defaults OpenCode to Auto mode, which adds `--auto`. For this workflow, 
 **Ask first** under New Harness → Advanced, or launch from the CLI with an explicit mode:
 
 ```sh
-cd /path/to/disposable-git-repository
+cd /path/to/disposable-workspace
 harness new opencode --mode ask
 ```
 
@@ -74,7 +74,7 @@ a notification does not establish that an operation waited for a human.
 
 ## Try one harmless operation
 
-Use a new Git repository root with no `phone-approval.txt`. Ask OpenCode:
+Use a new disposable workspace with no `phone-approval.txt`. Ask OpenCode:
 
 ```text
 Run printf 'approved\n' >> phone-approval.txt once using the bash tool.
@@ -91,12 +91,13 @@ Repeat from a new OpenCode process to check that both installed plugins remain a
 
 ## Verification boundary
 
-On October 2, 2026, a disposable macOS ARM64 check used OpenCode 1.18.34, published
-`pushary@1.9.2`, and the Harness installer at
-`afea68e8f2f802fed5a7886f6c76ae07fdbb18e1`. A real OpenCode server ran a deterministic local
-model fixture and the published Pushary hook against a local decision fixture at a
-disposable Git repository root. Approval
-created one harmless receipt; denial, cancellation, expiry, unanswered timeout and a terminal
+On October 2, 2026 (UTC), a disposable macOS ARM64 check used OpenCode 1.18.34, published
+`pushary@1.9.4`, and the Harness installer at
+`e1e9e2fa02d18dc50c2b9ce996417614d42f9cef`. The Pushary plugin and hook came from the
+registry-installed package, without source injection. A real OpenCode server ran a
+deterministic local model and decision fixture in both a non-Git workspace and a nested Git
+repository folder. The active workspace name appeared in each approval. Approval
+created one harmless receipt in each workspace; denial, cancellation, expiry, unanswered timeout and a terminal
 withdrawal created none. Settled native requests rejected replay. A new process loaded both
 plugins, and the Harness discovery plugin sent the same session id to a recording local
 endpoint. This does not certify an authenticated Harness daemon, relay or mobile UI session.
