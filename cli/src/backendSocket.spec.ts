@@ -3110,6 +3110,39 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     expect(removed).toBe(0)
     await plain.stop()
   })
+
+  it('keeps running when the removed key is ANOTHER key under this machine id (an earlier install it waits behind)', async () => {
+    // A reinstall that kept the computer id finds its machine id held by the old install's key
+    // (device_conflict). Removing that key makes the backend send `machine_revoked` to the machine id —
+    // which this daemon now answers for. That removal is what lets this key register, not a sign-out.
+    const socket = new BackendSocket('token')
+    const seen: string[] = []
+    socket.isOwnDeviceKey = (pub) => pub === 'MINE'
+    socket.onDeviceRemoved = (pub) => { seen.push(`removed:${pub}`) }
+    socket.onRevoked = () => { seen.push('revoked') }
+    socket.onDeviceKeysChanged = () => { seen.push('reread') }
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: { reason: 'device_removed', pub: 'OLD_INSTALL' } } })
+    await vi.waitFor(() => expect(seen).toEqual(['reread']))
+    // Still linked: a later frame for its OWN key signs it out as before.
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: { reason: 'device_removed', pub: 'MINE' } } })
+    await vi.waitFor(() => expect(seen).toEqual(['reread', 'removed:MINE', 'revoked']))
+    await socket.stop()
+
+    // A plain revoke (the machine deleted) still ends the sign-in whatever the key.
+    const plain = new BackendSocket('token')
+    let revoked = 0
+    plain.isOwnDeviceKey = () => false
+    plain.onRevoked = () => { revoked += 1 }
+    plain.connect()
+    const ws2 = wsMock.instances.at(-1)!
+    ws2.open()
+    ws2.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: {} } })
+    await vi.waitFor(() => expect(revoked).toBe(1))
+    await plain.stop()
+  })
 })
 
 /** The read-only hardware line for the run-a-harness-compute dialog, answered next to `grid_models_list`. */

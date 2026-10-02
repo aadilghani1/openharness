@@ -801,6 +801,9 @@ export class BackendSocket {
   onDeviceKeysChanged: (() => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
   onDeviceRemoved: ((pub: string) => void) | null = null
+  /** Whether [pub] is this machine's own device key. Set, a `machine_revoked` naming another key (an earlier
+   *  install under the same machine id) does not sign this one out. Null: every removal signs out. */
+  isOwnDeviceKey: ((pub: string) => boolean) | null = null
   /** The link to the backend just came up (each reconnect too). */
   onLinkUp: (() => void) | null = null
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
@@ -1909,9 +1912,16 @@ export class BackendSocket {
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. `closed` blocks the reconnect that would otherwise fire on socket drop.
     if (type === 'machine_revoked') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
+      // Another key under this machine id was removed — an earlier install of this computer that this one
+      // waits behind (`device_conflict`). The frame goes to the machine id, so it reaches this install too:
+      // that removal is what lets this key register, not a sign-out. Re-read the log instead.
+      if (p.reason === 'device_removed' && typeof p.pub === 'string' && this.isOwnDeviceKey && !this.isOwnDeviceKey(p.pub)) {
+        this.onDeviceKeysChanged?.()
+        return
+      }
       this.closed = true
       // Removed from the account's device key log (not just signed out): the key itself is spent.
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
       if (p.reason === 'device_removed' && typeof p.pub === 'string') {
         try { this.onDeviceRemoved?.(p.pub) } catch { /* signing out still happens */ }
       }
