@@ -4178,6 +4178,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
     },
     onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
+    onMemoryContext: async (agentId, prompt, adapter) => {
+      const recalled = await codingMemory?.preparePromptRecall(agentId, { query: prompt }, adapter)
+      return recalled?.packet.text ? { additionalContext: recalled.packet.text,
+        ...(recalled.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) } : null
+    },
     onOpenCodeMemoryRuntime: (agent, input) => {
       if (!agent.processIdentity) return { observe: false }
       const result = openCodeMemoryBinding?.receive({ agentId: agent.agentId, sessionId: agent.sessionId,

@@ -1,0 +1,2313 @@
+{
+  "version": "1.18.34",
+  "requests": [
+    {
+      "phase": "on",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "off",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "source-private",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "unavailable",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "other-session",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "compaction",
+      "agent": "compaction",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "compaction",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": false
+    },
+    {
+      "phase": "auto-compact",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "corrected",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 1,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "forgotten",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "hasCurrentRequest": true
+    }
+  ],
+  "result": {
+    "nativeModelRequestReceivedContext": true,
+    "persistedMemoryParts": 0,
+    "offReceivedContext": false,
+    "unavailableBlockedPrompt": false,
+    "otherSessionReceivedContext": false,
+    "compactionReceivedContext": false,
+    "automaticContinuationReceivedContext": true,
+    "correctedReceivedLatestRevision": true,
+    "forgottenReceivedContext": false,
+    "sourcePrivacyRespected": true,
+    "sourceEngine": "claude",
+    "receivingEngine": "opencode",
+    "learnOffRecallOn": true
+  },
+  "limitations": [
+    "Synthetic seeded Claude evidence/proposal; no real model extraction or semantic usefulness measurement.",
+    "Production plugin and shared runtime/store; fixture HTTP/process binding, not production ancestry resolution.",
+    "No interactive TUI, overflow replay or provider matrix certification."
+  ],
+  "observations": [
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909825904
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b43740014ep7cXDiUlDOIn"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909825904
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b43740014ep7cXDiUlDOIn",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828457
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4d69002TbrMuxtmqM78kH"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909825904
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b43740014ep7cXDiUlDOIn",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909826185,
+              "completed": 1790909828443
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4489001Mad4L9VpDTGpT9",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d52001Z5pFk4yUXvh1VZ",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d54001eGFVGWX4T3W7Jk",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d580016qlw8oHrXtcVjg",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828457
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d69002TbrMuxtmqM78kH",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828493
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4d8d002DJ5UvdLG8uDSLx"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909825904
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b43740014ep7cXDiUlDOIn",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909826185,
+              "completed": 1790909828443
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4489001Mad4L9VpDTGpT9",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d52001Z5pFk4yUXvh1VZ",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d54001eGFVGWX4T3W7Jk",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d580016qlw8oHrXtcVjg",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828457
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d69002TbrMuxtmqM78kH",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828461,
+              "completed": 1790909828482
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4d6d001gXpgPRpPK4MtcM",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d7c001aKM7ool8RzNCDf",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d7e001vKe4IjNzBmU9X2",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d80001mrwIZ4w1CS9u2B",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828493
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d8d002DJ5UvdLG8uDSLx",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4db3001XPY3o0u6WN2fZE",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828531
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4db3001XPY3o0u6WN2fZE",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4db4001mRglkleIVLsAXQ"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909825904
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b43740014ep7cXDiUlDOIn",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909826185,
+              "completed": 1790909828443
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4489001Mad4L9VpDTGpT9",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d52001Z5pFk4yUXvh1VZ",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d54001eGFVGWX4T3W7Jk",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d580016qlw8oHrXtcVjg",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828457
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d69002TbrMuxtmqM78kH",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828461,
+              "completed": 1790909828482
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4d6d001gXpgPRpPK4MtcM",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d7c001aKM7ool8RzNCDf",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d7e001vKe4IjNzBmU9X2",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d80001mrwIZ4w1CS9u2B",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828493
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d8d002DJ5UvdLG8uDSLx",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828498,
+              "completed": 1790909828521
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4d92001w8F6lkwySQnM3M",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4da4001eOD5pXPZ1ElzHS",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4da6001Esr6XhqdmsjvbL",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4da8001eXCLk8kFnoXmXY",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828531
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4db3001XPY3o0u6WN2fZE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4db4001mRglkleIVLsAXQ",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574b232ffeQh63HO55hz3aQN",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4dd1001zZc18fbVRhF9G4",
+        "role": "user",
+        "sessionID": "ses_f0574b232ffeQh63HO55hz3aQN",
+        "time": {
+          "created": 1790909828561
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4dd1001zZc18fbVRhF9G4",
+          "sessionID": "ses_f0574b232ffeQh63HO55hz3aQN",
+          "id": "prt_0fa8b4dd20018x5rvohS1qpF7J"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828561
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4dd1001zZc18fbVRhF9G4",
+            "sessionID": "ses_f0574b232ffeQh63HO55hz3aQN"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4dd20018x5rvohS1qpF7J",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574b232ffeQh63HO55hz3aQN"
+    },
+    {
+      "hook": "compacting",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+      }
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909825904
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b43740014ep7cXDiUlDOIn",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b436f0012pUIfR1vOa9Rew",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909826185,
+              "completed": 1790909828443
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4489001Mad4L9VpDTGpT9",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d52001Z5pFk4yUXvh1VZ",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d54001eGFVGWX4T3W7Jk",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d580016qlw8oHrXtcVjg",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828457
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d69002TbrMuxtmqM78kH",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4d69001nU9Ny35zs1Q7oE",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828461,
+              "completed": 1790909828482
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4d6d001gXpgPRpPK4MtcM",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d7c001aKM7ool8RzNCDf",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4d7e001vKe4IjNzBmU9X2",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4d80001mrwIZ4w1CS9u2B",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828493
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4d8d002DJ5UvdLG8uDSLx",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4d8d001E4XqRQZS3OYB7c",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828498,
+              "completed": 1790909828521
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4d92001w8F6lkwySQnM3M",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4da4001eOD5pXPZ1ElzHS",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4da6001Esr6XhqdmsjvbL",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4da8001eXCLk8kFnoXmXY",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828531
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4db3001XPY3o0u6WN2fZE",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4db4001mRglkleIVLsAXQ",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4db3001XPY3o0u6WN2fZE",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828536,
+              "completed": 1790909828547
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4db80017UiOrgnKn3jzem",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4dbe001s3eFYHasl3nJQr",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4dbf001YILOPA6XG8qwUK",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4dc1001BnxhzryyjJS9cq",
+              "type": "step-finish"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "compaction",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4e080010onbbTUtKU5igv",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828616
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4e080010onbbTUtKU5igv",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4e080021rF4dlKC0uKYvf"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "agent": "memory_fixture",
+            "time": {
+              "created": 1790909828587
+            },
+            "id": "msg_0fa8b4deb001a9D5pkOXj0YZz0",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4deb002NXNvRaT0sVERUw",
+              "type": "compaction",
+              "auto": false
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "assistant",
+            "parentID": "msg_0fa8b4deb001a9D5pkOXj0YZz0",
+            "mode": "compaction",
+            "agent": "compaction",
+            "summary": true,
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828597,
+              "completed": 1790909828605
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4df5001iZKyBcd3vLkdCt",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4df8001kS3X0hScnFrjgX",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4df90016KPnFYswoQaVBt",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4dfb001VXoPw3doASOnr9",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828616
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e080010onbbTUtKU5igv",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e080021rF4dlKC0uKYvf",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "compacting",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+      }
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828616
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e080010onbbTUtKU5igv",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e080021rF4dlKC0uKYvf",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e080010onbbTUtKU5igv",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 127002,
+              "input": 127000,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828620,
+              "completed": 1790909828634
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e0c001vv2RYtsIjCvqzx",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e15001rkLJaJ5n80hqYq",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e16001QkxoyxTnBHJ1sy",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e190015qDa0ot4rv3Lx6",
+              "type": "step-finish"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "compaction",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "autocontinue",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "message": {
+          "role": "user",
+          "model": {
+            "providerID": "fixture",
+            "modelID": "model"
+          },
+          "agent": "memory_fixture",
+          "time": {
+            "created": 1790909828635
+          },
+          "id": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+        },
+        "overflow": false
+      }
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "agent": "memory_fixture",
+            "time": {
+              "created": 1790909828635
+            },
+            "id": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e1c001sTlVIfkp7KFAHJ",
+              "type": "compaction",
+              "auto": true,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "assistant",
+            "parentID": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "mode": "compaction",
+            "agent": "compaction",
+            "summary": true,
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828645,
+              "completed": 1790909828653
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e250013BQJwTklUxq9op",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e28001ziDG0ohF3fRQBU",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e2900196iuT8gW0JzBuC",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e2b001SyZzVKS8hQrGXV",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828655
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e2f002B22OOSGtU5sK4h",
+              "type": "text",
+              "synthetic": true,
+              "metadata": {
+                "compaction_continue": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4e4d0018twN51XxyECAYf",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828685
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4e4d0018twN51XxyECAYf",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4e4d002r2iSH2kypa3B6d"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "agent": "memory_fixture",
+            "time": {
+              "created": 1790909828635
+            },
+            "id": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e1c001sTlVIfkp7KFAHJ",
+              "type": "compaction",
+              "auto": true,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "assistant",
+            "parentID": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "mode": "compaction",
+            "agent": "compaction",
+            "summary": true,
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828645,
+              "completed": 1790909828653
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e250013BQJwTklUxq9op",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e28001ziDG0ohF3fRQBU",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e2900196iuT8gW0JzBuC",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e2b001SyZzVKS8hQrGXV",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828655
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e2f002B22OOSGtU5sK4h",
+              "type": "text",
+              "synthetic": true,
+              "metadata": {
+                "compaction_continue": true
+              }
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828657,
+              "completed": 1790909828674
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e310015lN34D3BH4ReN7",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e3e001AkiFIX12wWNX8C",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e3f001zc0GGKuK3kiw67",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e40001fsC8M6xyL1QXTW",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828685
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e4d0018twN51XxyECAYf",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e4d002r2iSH2kypa3B6d",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4e78001cMPQvS69S7cHRG",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828728
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4e78001cMPQvS69S7cHRG",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4e79001N1PbjU7NXMHjPv"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "agent": "memory_fixture",
+            "time": {
+              "created": 1790909828635
+            },
+            "id": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e1c001sTlVIfkp7KFAHJ",
+              "type": "compaction",
+              "auto": true,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "assistant",
+            "parentID": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "mode": "compaction",
+            "agent": "compaction",
+            "summary": true,
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828645,
+              "completed": 1790909828653
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e250013BQJwTklUxq9op",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e28001ziDG0ohF3fRQBU",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e2900196iuT8gW0JzBuC",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e2b001SyZzVKS8hQrGXV",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828655
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e2f002B22OOSGtU5sK4h",
+              "type": "text",
+              "synthetic": true,
+              "metadata": {
+                "compaction_continue": true
+              }
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828657,
+              "completed": 1790909828674
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e310015lN34D3BH4ReN7",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e3e001AkiFIX12wWNX8C",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e3f001zc0GGKuK3kiw67",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e40001fsC8M6xyL1QXTW",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828685
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e4d0018twN51XxyECAYf",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e4d002r2iSH2kypa3B6d",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e4d0018twN51XxyECAYf",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828689,
+              "completed": 1790909828709
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e51001lGeektUmcLqr8P",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e590011XN8VFoV96FJwz",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e5a001UJj6vsGbGM8oDF",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e5b001MxkDQ8cz5Qvbon",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828728
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e78001cMPQvS69S7cHRG",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e79001N1PbjU7NXMHjPv",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    },
+    {
+      "hook": "chat.message",
+      "input": {
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "message": {
+        "id": "msg_0fa8b4e9d001lIRso4l4B3wrKz",
+        "role": "user",
+        "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+        "time": {
+          "created": 1790909828765
+        },
+        "agent": "memory_fixture",
+        "model": {
+          "providerID": "fixture",
+          "modelID": "model"
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[synthetic prompt]",
+          "messageID": "msg_0fa8b4e9d001lIRso4l4B3wrKz",
+          "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8",
+          "id": "prt_0fa8b4e9e001693mFs4BtnVHIM"
+        }
+      ]
+    },
+    {
+      "hook": "messages.transform",
+      "messages": [
+        {
+          "info": {
+            "role": "user",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "agent": "memory_fixture",
+            "time": {
+              "created": 1790909828635
+            },
+            "id": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e1c001sTlVIfkp7KFAHJ",
+              "type": "compaction",
+              "auto": true,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "assistant",
+            "parentID": "msg_0fa8b4e1b001Rz87dQUMoeMeds",
+            "mode": "compaction",
+            "agent": "compaction",
+            "summary": true,
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828645,
+              "completed": 1790909828653
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e250013BQJwTklUxq9op",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e28001ziDG0ohF3fRQBU",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e2900196iuT8gW0JzBuC",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e2b001SyZzVKS8hQrGXV",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828655
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e2f002B22OOSGtU5sK4h",
+              "type": "text",
+              "synthetic": true,
+              "metadata": {
+                "compaction_continue": true
+              }
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e2f00181bLiO3faRK39m",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828657,
+              "completed": 1790909828674
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e310015lN34D3BH4ReN7",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e3e001AkiFIX12wWNX8C",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e3f001zc0GGKuK3kiw67",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e40001fsC8M6xyL1QXTW",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828685
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e4d0018twN51XxyECAYf",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e4d002r2iSH2kypa3B6d",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e4d0018twN51XxyECAYf",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828689,
+              "completed": 1790909828709
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e51001lGeektUmcLqr8P",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e590011XN8VFoV96FJwz",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e5a001UJj6vsGbGM8oDF",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e5b001MxkDQ8cz5Qvbon",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828728
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e78001cMPQvS69S7cHRG",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e79001N1PbjU7NXMHjPv",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "info": {
+            "parentID": "msg_0fa8b4e78001cMPQvS69S7cHRG",
+            "role": "assistant",
+            "mode": "memory_fixture",
+            "agent": "memory_fixture",
+            "path": {
+              "cwd": "/fixture/work",
+              "root": "/fixture/work"
+            },
+            "cost": 0,
+            "tokens": {
+              "total": 102,
+              "input": 100,
+              "output": 2,
+              "reasoning": 0,
+              "cache": {
+                "write": 0,
+                "read": 0
+              }
+            },
+            "modelID": "model",
+            "providerID": "fixture",
+            "time": {
+              "created": 1790909828733,
+              "completed": 1790909828753
+            },
+            "finish": "stop",
+            "id": "msg_0fa8b4e7d00164euVDf1yU45X6",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e8c001LQ64WTQUiJBrH0",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_0fa8b4e8d001ufTuuCBStii0T7",
+              "type": "text"
+            },
+            {
+              "id": "prt_0fa8b4e8f001MBYQ5FAU6Sgjyw",
+              "type": "step-finish"
+            }
+          ]
+        },
+        {
+          "info": {
+            "role": "user",
+            "time": {
+              "created": 1790909828765
+            },
+            "agent": "memory_fixture",
+            "model": {
+              "providerID": "fixture",
+              "modelID": "model"
+            },
+            "id": "msg_0fa8b4e9d001lIRso4l4B3wrKz",
+            "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+          },
+          "parts": [
+            {
+              "id": "prt_0fa8b4e9e001693mFs4BtnVHIM",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hook": "chat.params",
+      "agent": "memory_fixture",
+      "sessionID": "ses_f0574bcb5ffeeHw0Qw4cvhudd8"
+    }
+  ],
+  "validationKind": "native transport with synthetic seeded memory; no semantic accuracy score",
+  "sourceDigests": {
+    "cli/src/lib/opencodeRecallPlugin.ts": "63476b1701d04f833277b264bf3aa3e89afa389cbcbc183f38973aa80a2c0986",
+    "cli/src/memory/runtime.ts": "23d34368b23bad39a6fedc95e8d0b6515a41cb18f07288b6621b1918ba9c351b",
+    "cli/scripts/memory-native-opencode-recall-probe.mjs": "84e61636c0894f8e19e7bd5ac56da32a4844ace4337afabed69134a7cb0dcb63"
+  }
+}

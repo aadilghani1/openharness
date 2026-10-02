@@ -258,18 +258,24 @@ export class CodingMemoryRuntime {
       receipt: result.receipt ? { id: result.receipt.id, delivery: result.receipt.delivery } : null }
   }
 
-  async preparePromptRecall(agentId: string, request: RecallRequest): Promise<PreparedRecall> {
+  async preparePromptRecall(agentId: string, request: RecallRequest,
+    adapter?: { engine: string; cliVersion: string }): Promise<PreparedRecall> {
     const session = this.session(agentId)
+    // A process-verified plugin can observe its native version without publishing that observation
+    // into the registry. It cannot select a different framework, owner, session or project.
+    if (adapter && adapter.engine !== session?.engine) return { packet: empty('unavailable'), receipt: null }
+    const version = adapter?.cliVersion ?? session?.cliVersion
     // These releases demonstrated additionalContext in an outgoing native model request.
     // An extraction certificate or a successful stdout write does not certify hook delivery.
     // Manual recall remains available; add native releases after the same isolated transport check.
-    const tested = session?.engine === 'claude' ? session.cliVersion === '2.1.286'
-      : session?.engine === 'codex' && ['0.159.0', '0.159.3'].includes(session.cliVersion ?? '')
+    const tested = session?.engine === 'claude' ? version === '2.1.286'
+      : session?.engine === 'codex' ? ['0.159.0', '0.159.3'].includes(version ?? '')
+      : session?.engine === 'opencode' && version === '1.18.34'
     if (!tested) return { packet: empty('unavailable'), receipt: null }
     return this.recallBound(agentId, request, 'prompt_hook')
   }
 
-  /** A host-verified hook acknowledges its stdout write; this is not model-context verification. */
+  /** A verified adapter handed context to the native prompt path; not proof of model consumption. */
   async promptRecallEmitted(agentId: string, receiptId: string): Promise<boolean> {
     try {
       const active = this.requireActive()

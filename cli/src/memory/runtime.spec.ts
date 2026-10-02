@@ -235,6 +235,44 @@ it.each(['0.159.0', '0.159.3'])('prepares Codex prompt memory for tested native 
   expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
 })
 
+it('recalls a Claude lesson through a verified OpenCode adapter without changing ownership or requiring learning', async () => {
+  await learn()
+  sessions[0] = { ...sessions[0], engine: 'opencode', sessionId: 'opencode_native', cliVersion: null }
+  await runtime.configure({ learn: false, recall: true })
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
+  const adapter = { engine: 'opencode', cliVersion: '1.18.34' }
+  const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' }, adapter)
+  expect(prepared.packet.items[0]).toMatchObject({ claim: preference, sources: [{ engine: 'claude' }] })
+  expect(prepared.receipt?.delivery).toBe('unverified')
+  expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(true)
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding' }, { engine: 'codex', cliVersion: '0.159.3' })).packet.status).toBe('unavailable')
+  await runtime.configure({ learn: false, recall: false })
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding' }, adapter)).packet.status).toBe('off')
+  expect(sessions[0].cliVersion).toBeNull()
+})
+
+it('shares a correction and deletion across Codex and OpenCode without copying the memory', async () => {
+  await learn()
+  const first = (await runtime.recall('agent', { query: 'coding changes' })).items[0]
+  const store = stores.get('owner_a')!, access = { profileId: 'owner_a', projectIds: [first.scope.projectId!], includeProfile: true }
+  const { schemaVersion: _schema, id: _id, revision: _revision, state: _state, createdAt: _created, updatedAt: _updated,
+    evidence: _evidence, evidenceClass: _class, ...draft } = store.read(first.id, access)!
+  const corrected = store.correctFromUser(first.id, first.revision,
+    { ...draft, claim: 'Group related coding changes together.', futureAction: 'Group related coding changes together.' }, access)
+  for (const [engine, cliVersion] of [['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+    sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
+    const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+    expect(prepared.packet.items).toHaveLength(1)
+    expect(prepared.packet.items[0]).toMatchObject({ id: first.id, revision: corrected.revision, claim: corrected.claim })
+  }
+  expect(store.list(access)).toHaveLength(1)
+  store.forget(first.id, corrected.revision, access)
+  for (const [engine, cliVersion] of [['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+    sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
+    expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.items).toEqual([])
+  }
+})
+
 it('withholds prepared context when privacy changes before the hook response', async () => {
   await learn()
   intercept = async operation => { if (operation === 'prepareRecall') stores.get('owner_a')!.setSessionIncluded('claude', 'native', false) }
