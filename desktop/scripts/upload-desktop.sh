@@ -37,7 +37,8 @@ set -euo pipefail
 set +x
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repository root
-APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/Harness.app"
+APP_BUNDLE="${APP_BUNDLE:-$APP_DIR/build/macos/Build/Products/Release/Harness.app}"
+OUTPUT_DIR="${OUTPUT_DIR:-$APP_DIR/build}"
 
 # --- GCS config (all overridable via env) ---
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
@@ -194,6 +195,8 @@ echo ">> releasing version: $VER (build $BUILD_NUM)"
 
 # --- Step 2: build ---
 if [ "$DO_BUILD" -eq 1 ]; then
+  [ "$APP_BUNDLE" = "$APP_DIR/build/macos/Build/Products/Release/Harness.app" ] \
+    || { echo "error: APP_BUNDLE requires --no-build" >&2; exit 1; }
   echo ">> building release $VER"
   # Xcode's incremental build sometimes decides the Info.plist processing step is already
   # up to date and skips re-stamping MARKETING_VERSION/CURRENT_PROJECT_VERSION into it, silently
@@ -215,7 +218,8 @@ STAMPED="$(plutil -extract CFBundleShortVersionString raw "$APP_BUNDLE/Contents/
 [ "$STAMPED" = "$VER" ] || { echo "error: bundle CFBundleShortVersionString is '$STAMPED', expected '$VER'" >&2; exit 1; }
 
 # --- Step 3: package ---
-ZIP="$APP_DIR/build/Harness-macos-$VER.zip"
+mkdir -p "$OUTPUT_DIR"
+ZIP="$OUTPUT_DIR/Harness-macos-$VER.zip"
 rm -f "$ZIP"
 echo ">> packaging $ZIP"
 ( cd "$(dirname "$APP_BUNDLE")" && ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_BUNDLE")" "$ZIP" )
@@ -263,7 +267,7 @@ fi
 # `hdiutil` rather than `create-dmg`: the latter is a dependency the release machine would have to
 # install, and all it buys here is window chrome. The `/Applications` symlink is what actually makes
 # the drag-to-install gesture obvious, and that is one line.
-DMG="$APP_DIR/build/Harness-macos-$VER.dmg"
+DMG="$OUTPUT_DIR/Harness-macos-$VER.dmg"
 DMG_STAGE="$(mktemp -d)"   # removed by cleanup() on EXIT
 echo ">> packaging $DMG"
 rm -f "$DMG"

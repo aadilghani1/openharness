@@ -142,8 +142,23 @@ commit, differing in one Info.plist key, `FLTEnableImpeller` — which renderer 
 | Intel | Skia (`FLTEnableImpeller = false`) | `desktop-macos`, `desktop-macos-dmg` | `Harness-macos.{zip,dmg}` | Intel Macs, **every install from before the split on either CPU**, and the website download |
 | Apple Silicon | Impeller (the engine default) | `desktop-macos-arm64`, `desktop-macos-arm64-dmg` | `Harness-macos-arm64.{zip,dmg}` | Apple Silicon Macs whose updater knows the key |
 
-`scripts/publish-macos-variant.sh intel|apple-silicon <version>` builds and publishes one of them;
-`release-desktop.yml` runs both side by side.
+CI calls `scripts/build-macos-variants.py <version> --metadata-prefix <run-prefix>`.
+It compiles one universal app, copies it into separate directories, pins and verifies each
+renderer, then packages, notarizes and uploads both variants in parallel. Version/build-number,
+arm64/x86_64 slices, signatures and hardened runtime are checked before publication. Each variant
+still receives both app and DMG notarization, with the stapled app inside the DMG. Separate scratch
+manifests are combined only after all macOS and Linux builds succeed, followed by verification of
+all six public downloads. `macos-build-timings` records the bounded build and per-variant phases.
+
+`scripts/publish-macos-variant.sh intel|apple-silicon <version>` remains the single-variant entry
+point. With `--no-build`, `APP_BUNDLE` selects an existing bundle; the uploader's `OUTPUT_DIR`
+keeps parallel archives separate. These overrides do not permit rebuilding an arbitrary path.
+Without `--metadata-prefix`, the coordinator only builds and verifies local bundles.
+
+To validate workflow changes with real signing and notarization, dispatch
+`desktop-internal-build.yml` on the candidate branch with `test_build=true`. It builds both
+renderers, verifies all four internal downloads, records timings, and deletes only that run's
+random artifact prefix. It does not update release tags or the live updater manifest.
 
 **Why.** Intel users report the app stuttering; Apple Silicon users do not. Flutter renders macOS with
 Impeller by default, and the one thing that differs between those two users running the same universal
