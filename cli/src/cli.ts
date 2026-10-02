@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { ensureBundledModelManager } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -80,7 +80,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess, setUpWithin } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable, managedGridPath } from './lib/gridExec.js'
@@ -201,6 +201,7 @@ import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDi
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
+import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
   terminalActionNotStarted,
@@ -407,6 +408,11 @@ const PROXY_BACKEND_TIMEOUT_MS = 20_000
  *  stalled control-plane connection cannot hold it open. */
 const GRID_MINT_TIMEOUT_MS = 10_000
 
+/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
+ *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
+ *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
+const MODEL_MANAGER_GRID_WAIT_MS = 8_000
+
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
@@ -467,6 +473,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                no second browser, no second approval
   harness grid login --force   sign the harness in as a different account first, then the grid
   harness grid login --json    emit the same machine-readable NDJSON \`harness login --json\` emits
+  harness grid setup           have grid ready here through the running daemon: installed, signed in
+                               with THIS computer's Harness account, and the account's grid made
   harness grid logout [flags]  sign out of your grid — the whole of \`grid logout\`, which stops what
                                this box is serving BEFORE deleting anything. Flags go straight to it:
                                --force signs out over a serve child it could not confirm stopped
@@ -6266,6 +6274,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
+      // models picker): grid is set up before the workspace asks it which grid is this account's.
+      const ensureGrid = backend.ensureGrid
+      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
+        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
+      }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
         // Asked BEFORE the template goes in: afterwards every folder has content.
@@ -8853,6 +8868,16 @@ switch (cmd) {
     break
   case 'grid':
     if (args[0] === 'login') gridLoginCommand(flags.includes('--force'), flags.includes('--json')).catch(onError)
+    else if (args[0] === 'setup') {
+      gridSetupCommand({
+        port: daemonPort(),
+        localMachineId: readAuthSession()?.machineId ?? null,
+        daemonRunning: isDaemonRunning,
+        connect: (url) => new NewCommandSocket(url),
+        output: (line) => console.log(line),
+        error: (line) => console.error(line),
+      }).then((code) => { process.exitCode = code }).catch(onError)
+    }
     // Everything but the verb, in the order it was typed — a passthrough that allow-listed flags
     // would be a second place that has to know what `grid logout` accepts. Only the FIRST `logout`
     // token goes: filtering by value instead would eat an option's *value* the day `grid logout`

@@ -23,7 +23,8 @@ import '../logging/debug_surface.dart';
 import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
-import '../widgets/resting_section.dart' show confirmSwitchAnyway;
+import '../widgets/resting_section.dart'
+    show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/session_close_dialog.dart';
 import '../notify/system_notifications.dart';
 import '../settings/sections/account_device_detail.dart';
@@ -5501,6 +5502,35 @@ class _SwarmScreenState extends State<SwarmScreen> {
         return;
       }
       var selected = search.selectableGridModel(choice.destination);
+      // Use and Get stop the local model running on that machine to start this one in its place. The
+      // harness being switched is moving off it; any other harness on it is asked about first.
+      if (selected == null &&
+          (search.canGetModelForUse(choice.destination) ||
+              search.canStartModelForUse(choice.destination))) {
+        if (search.otherRunningModel(choice.destination) case final other?) {
+          final users = _harnessesOn(other.name, except: chosenFor?.agentId);
+          if (users.isNotEmpty) {
+            _pickerModalChanged(true);
+            bool proceed;
+            try {
+              proceed = await confirmStopInUse(
+                context,
+                model: other.name,
+                users: users,
+              );
+            } finally {
+              _pickerModalChanged(false);
+              // Back to the picker's field: closed, the dialog left focus on no row, and Enter did nothing.
+              if (mounted && _search != null) _focusSearch();
+            }
+            if (!proceed) return;
+            // The screen reads its route as current again only at its next frame: checked before
+            // that, the switch the person just confirmed was dropped as if the picker had closed.
+            await WidgetsBinding.instance.endOfFrame;
+            if (!mounted || !current() || _search == null) return;
+          }
+        }
+      }
       if (selected == null && search.canGetModelForUse(choice.destination)) {
         selected = await search.getModelForUse(
           choice.destination,
@@ -5526,8 +5556,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
           );
         } finally {
           _pickerModalChanged(false);
+          if (mounted && _search != null) _focusSearch();
         }
-        if (!proceed || !mounted || !current() || _search == null) return;
+        if (!proceed) return;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || !current() || _search == null) return;
       }
       final now = WorkspacePaneContext.focused(app)!;
       _closeSearch();
@@ -6974,6 +7007,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
       if (target != position.pixels) _tabScroll.jumpTo(target);
     });
   }
+
+  /// The harnesses on grid model [model] besides [except], by name — what a stop would leave without
+  /// a model to answer with.
+  List<String> _harnessesOn(String model, {String? except}) => [
+    for (final machine in app.machineStates.values)
+      for (final agent in machine.agents)
+        if (agent.id != except &&
+            agent.gridModel?.toLowerCase() == model.toLowerCase())
+          agent.displayName,
+  ];
 
   bool _canSwitchFocusedModel(WorkspacePaneContext focused) {
     if (!_shortcutsEnabled || !modelPickerSupports(focused.engine)) {

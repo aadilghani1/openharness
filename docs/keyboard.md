@@ -42,7 +42,7 @@ A harness can have views in several swarms, with one view per swarm; closing a p
 The view closes immediately, without a minimize animation.
 
 Cmd-P opens an empty search field. Cmd-O inserts an editable `#` for projects.
-Type `&` to choose a different agent for the focused harness. The pane header's agent name opens the same picker.
+Type `&` to choose a different agent for the focused harness. The pane header's agent name opens the same picker. Switching saves the old session, keeps the project and pane in place, and passes recent requests and saved answers to agents that accept an initial message (OpenCode, Codex, Claude Code and Hermes). This is a bounded handoff, not the full original transcript; the original session remains saved.
 Delete the prefix to return to harness search. These fields use a thin caret and
 no separate prompt character.
 

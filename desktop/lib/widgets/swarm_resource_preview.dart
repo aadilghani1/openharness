@@ -1307,6 +1307,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           errorLine(widget.search.modelUseError!),
         SizedBox(height: cell.height),
         if (local != null) ...[
+          // A model another app downloaded starts in that app, joined to the grid from there.
+          if (local.app case final app?) labelValue('Runs in', app),
           // What decides between models: what it costs to get, whether it fits, how fast it answers.
           if (local.sizeBytes case final size?)
             labelValue(
@@ -1389,8 +1391,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           ],
           labelValue('Source', entry.source),
         ],
+        // While Use stops the model running there, the host is busy with that stop: the hint says so.
         if (widget.search.modelUseReason(row) case final reason?
-            when reason != 'No active harness' &&
+            when widget.search.usingModelId != row?.modelId &&
+                reason != 'No active harness' &&
                 reason != entry.status &&
                 reason != 'Tools only' &&
                 reason != 'Download first')
@@ -1424,10 +1428,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final search = widget.search;
     final selected = row;
     if (selected == null || search.modelRowInUse(selected)) return null;
-    // One local model runs at a time: a second one waits for the first to stop.
+    // One local model runs at a time: Use and Get stop the one running, then start this one.
     final other = search.otherRunningModel(selected)?.name;
     if (search.canGetModelForUse(selected)) {
-      return 'Get downloads it, starts it, and moves this harness onto it.';
+      return other == null
+          ? 'Get downloads it, starts it, and moves this harness onto it.'
+          : 'Get downloads it, stops $other, starts it, and moves this harness onto it.';
     }
     if (search.canGetModel(selected)) {
       return other == null
@@ -1439,7 +1445,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           ? 'Use moves this harness onto it.'
           : other == null
           ? 'Use starts it and moves this harness onto it.'
-          : 'Stop $other first: one local model runs at a time.';
+          : 'Use stops $other, starts this one, and moves this harness onto it.';
     }
     return null;
   }

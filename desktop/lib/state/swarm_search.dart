@@ -15,6 +15,7 @@ import '../core/models.dart'
     show Agent, ConnectionStatus, GridModels, GridModel;
 
 import 'app_state.dart';
+import 'agent_switch_handoff.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
@@ -289,6 +290,11 @@ class SwarmSearchController extends ChangeNotifier {
         operation?.failed == true) {
       return catalog.localStatusWord(local, controller: owner);
     }
+    // Use under way: running is not yet the harness on it. Until it moves, the row keeps saying so —
+    // a row that turned to Use there read as a second click to make.
+    if (usingModelId == row.modelId) {
+      return local.downloaded ? 'Starting' : 'Downloading';
+    }
     return modelRowAction(row) ??
         (local.running
             ? 'Running'
@@ -356,7 +362,8 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// What sets one model of yours apart from the next, in two aligned columns ahead of the row's
   /// word: its size, and its speed — measured while it runs, else the catalog's estimate for this
-  /// machine (`~`). Null for any other row. Widths are fixed so every row's columns line up.
+  /// machine (`~`), else the app it came from (`Ollama`). Null for any other row. Widths are fixed
+  /// so every row's columns line up.
   String? modelRowFacts(SwarmDestination row) {
     final local = models?.entries[row.modelId]?.local;
     if (local == null) return null;
@@ -368,7 +375,7 @@ class SwarmSearchController extends ChangeNotifier {
         ? '${measured.round()} tok/s'
         : local.estTokS != null
         ? '~${local.estTokS!.round()} tok/s'
-        : '';
+        : local.app ?? '';
     return '${size.padLeft(6)}  ${speed.padLeft(9)}';
   }
 
@@ -613,17 +620,14 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   /// Whether Get on [row] can go on to put the picker's harness on the model: a download of yours,
-  /// chosen for a harness that can run on a local model. Otherwise Get only downloads.
-  ///
-  /// Not while another model runs on that machine: its daemon runs one local model at a time and
-  /// refuses the start, so Get would download and then fail. It only downloads, and says why.
+  /// chosen for a harness that can run on a local model. Otherwise Get only downloads. Another model
+  /// running on that machine is stopped first ([otherRunningModel]): it runs one at a time.
   bool canGetModelForUse(SwarmDestination? row) =>
       canGetModel(row) &&
       modelSelectionEngine != null &&
       _modelChoices?.reachable == true &&
       _modelChoices?.canRunLocally(modelSelectionEngine) == true &&
-      models!.entries[row!.modelId]!.own &&
-      otherRunningModel(row) == null;
+      models!.entries[row!.modelId]!.own;
 
   /// Another model of yours running on [row]'s machine — the one to stop before [row]'s can run.
   LocalModel? otherRunningModel(SwarmDestination? row) {
@@ -652,11 +656,15 @@ class SwarmSearchController extends ChangeNotifier {
     );
   }
 
+  /// The model Use or Get is stopping to make room — its machine runs one local model at a time.
+  String? stoppingOther;
+
   /// What the picker is doing for Use or Get, for its hint: `Downloading 42%…`, `Starting…`.
   String? get usingLabel {
     final entry = models?.entries[usingModelId];
     final local = entry?.local;
     if (usingModelId == null) return null;
+    if (stoppingOther case final other?) return 'Stopping $other…';
     if (entry == null || local == null) return 'Starting…';
     final owner = entry.controller ?? models!.manager;
     final operation = owner.operationFor(local);
@@ -706,6 +714,54 @@ class SwarmSearchController extends ChangeNotifier {
     LocalModel? model() =>
         owner.localModels.where((model) => model.id == modelId).firstOrNull;
 
+    /// The model running on that machine besides this one, stopped and gone before this one starts:
+    /// the machine runs one local model at a time, and Use is a switch, not two steps to make.
+    Future<bool> stopOther() async {
+      final other = otherRunningModel(row);
+      if (other == null) return true;
+      stoppingOther = other.name;
+      notifyListeners();
+      try {
+        await owner.control(other, 'stop');
+        final deadline = DateTime.now().add(timeout);
+        while (current()) {
+          if (hostGone()) {
+            fail('Reconnect to ${entry.node} to use this model.');
+            return false;
+          }
+          final now = owner.localModels
+              .where((model) => model.id == other.id)
+              .firstOrNull;
+          final operation = now == null ? null : owner.operationFor(now);
+          if (operation?.failed == true ||
+              (owner.error != null && !owner.busy)) {
+            fail(
+              operation?.error ??
+                  owner.error ??
+                  'Could not stop ${other.name}. Try again.',
+            );
+            return false;
+          }
+          if (now?.canStop != true &&
+              operation?.active != true &&
+              !owner.busy) {
+            return true;
+          }
+          if (DateTime.now().isAfter(deadline)) {
+            fail('${other.name} is still stopping. Try again in a moment.');
+            return false;
+          }
+          await _modelUsePause();
+          if (!current()) return false;
+          await owner.refresh();
+        }
+        return false;
+      } finally {
+        stoppingOther = null;
+        if (!_disposed) notifyListeners();
+      }
+    }
+
     try {
       if (download) {
         await owner.control(
@@ -734,7 +790,10 @@ class SwarmSearchController extends ChangeNotifier {
               got.downloaded &&
               operation?.active != true &&
               !owner.busy) {
-            if (!got.running) await owner.control(got, 'start');
+            if (!got.running) {
+              if (!await stopOther()) return null;
+              await owner.control(model() ?? got, 'start');
+            }
             break;
           }
           await _modelUsePause();
@@ -742,7 +801,8 @@ class SwarmSearchController extends ChangeNotifier {
           await owner.refresh();
         }
       } else {
-        await owner.control(entry.local!, 'start');
+        if (!await stopOther()) return null;
+        await owner.control(model() ?? entry.local!, 'start');
       }
       final deadline = DateTime.now().add(timeout);
       while (current()) {
@@ -761,7 +821,10 @@ class SwarmSearchController extends ChangeNotifier {
           return null;
         }
         if (started?.running == true && operation?.active != true) {
-          await models!.manager.refresh(force: true);
+          // The grid's models only: the harness moves onto one of them, and this machine's own list
+          // already says the model runs. A full forced read held the move 16s past "running" [run],
+          // with the row saying Use — and a second Use looked needed.
+          await models!.manager.refresh(force: true, local: false);
           if (!current()) return null;
           final machineId = _modelSelectionMachineId;
           if (machineId != null) {
@@ -1555,7 +1618,9 @@ class SwarmSearchController extends ChangeNotifier {
                   : agentSelection?.engine == engine.id
                   ? 'Current agent'
                   : engine.id == 'opencode'
-                  ? 'Muse Spark 1.3 · new conversation'
+                  ? 'Muse Spark 1.3 · continue with recent context'
+                  : supportsAgentHandoff(engine.id)
+                  ? 'Continue this project with recent context'
                   : 'New conversation in the same project',
               swarmId: null,
               current: agentSelection?.engine == engine.id,
