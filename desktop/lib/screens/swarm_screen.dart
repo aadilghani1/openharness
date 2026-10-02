@@ -7484,23 +7484,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -
-            cell.width * 6 -
+            cell.width * 5 -
+            grid.AppDesktop.tabBarTrailingInset -
             actionsWidth -
             (_slotShown ? 44 : 0) -
             leadingWidth,
       );
-      _tabWidths = [
-        for (var i = 0; i < labels.length; i++)
-          math.min(
-            DesktopWorkspaceTab.widthOf(
-              context,
-              labels[i],
-              shortcutHint: _keymap.hint('swarm.select_${i + 1}'),
-              hasActivity: activities[i] != null,
-            ),
-            tabBudget,
-          ),
-      ];
+      _tabWidths = List.filled(
+        labels.length,
+        DesktopWorkspaceTab.widthForStrip(tabBudget, labels.length),
+      );
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
       // Arrows come out of the tabs' own budget, so the bar never reflows.
       final arrows = chrome?.scrollsTabsByArrows == true && total > tabBudget;
@@ -7665,7 +7658,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 ),
               ],
               if (kIsWeb && _slotShown) _daemonTabButton(),
-              SizedBox(width: cell.width),
+              const SizedBox(width: grid.AppDesktop.tabBarTrailingInset),
             ],
           ),
         ),

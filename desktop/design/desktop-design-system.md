@@ -314,8 +314,12 @@ The GitHub entry starts with only “Enter GitHub URL”; a valid address reveal
 its clone action and an invalid submission reveals inline validation. Do not
 add a duplicate example line or an empty results area beneath an empty field.
 
-**Workspace tabs and pane frames** — tabs use the 13-point system control face,
-independent of the status bar and terminal font. Center the name and its adjacent
+**Workspace tabs and pane frames** — tabs share one width, independent of label
+length, selection, activity and shortcut hints. Divide the available tab area
+equally, capped at 256 points; shrink together down to 128 points, then scroll.
+A tab area narrower than 128 points can show one clipped tab. Mirror these limits
+in Flutter and AppKit. Tabs use the 13-point system control face, independent of
+the status bar and terminal font. Center the name and its adjacent
 status as one compact group, without permanent number prefixes. Navigation ink
 follows the tab-bar surface, including beside light app content. The default label
 is New Tab. A small right-hand close icon appears on hover, with its 32-point
@@ -327,6 +331,12 @@ name. An idle tab has no empty status slot; its name centers on its own. Hover
 never moves the name, and Command never changes tab width. Long names truncate
 and retain a full-name tooltip. Selection, dragging, middle-click close and the
 existing keyboard commands keep their meaning.
+
+Devices and Harness Store use compact 28-point capsules, centered in the
+40-point row with 6-point vertical gutters and a 12-point trailing inset.
+Keep 12-point internal horizontal padding and an 8-point icon-to-label gap.
+Flutter capsules grow with platform text scaling and retain at least 6 points
+above and below the label; search and New Tab keep their 32-point icon targets.
 
 The selected tab has 10-point upper corners and 8-point outward lower shoulders,
 joining the workspace along its bottom edge. It starts 6 points below the top

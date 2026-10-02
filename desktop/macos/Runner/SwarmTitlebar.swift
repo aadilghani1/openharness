@@ -1012,7 +1012,7 @@ private final class SwarmStoreButton: SwarmIconButton {
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil(workspaceBarTextWidth(title,
-      font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular))) + 52
+      font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular))) + 48
   }
 
   override func draw(_ dirtyRect: NSRect) {
@@ -2316,22 +2316,25 @@ private final class SwarmTabStrip: NSView {
     let previousScrollSize = scroll.frame.size
     let previousDocumentSize = document.frame.size
     let cell: CGFloat = 8
-    let trailing = cell
+    let trailing: CGFloat = 12 // AppDesktop.tabBarTrailingInset.
     let toolHeight: CGFloat = 32
+    let capsuleHeight: CGFloat = 28 // AppControl.heightSmall.
     let storeWidth = min(storeButton.preferredWidth,
       max(0, bounds.width - cell * 14))
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth,
-      y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
+      y: (bounds.height - capsuleHeight) / 2, width: storeWidth, height: capsuleHeight)
     let iconWidth = cell * 4
     let devicesWidth = devicesButton.isHidden ? 0 : devicesButton.preferredWidth
     devicesButton.frame = NSRect(x: storeButton.frame.minX - devicesWidth - 8,
-      y: (bounds.height - toolHeight) / 2, width: devicesWidth, height: toolHeight)
+      y: (bounds.height - capsuleHeight) / 2, width: devicesWidth, height: capsuleHeight)
     let searchEdge = devicesButton.isHidden ? storeButton.frame.minX : devicesButton.frame.minX
     searchButton.frame = NSRect(x: searchEdge - iconWidth - 8,
       y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
     // Only navigation actions share the tab row. Context has the full footer.
     let tabBudget = max(0, searchButton.frame.minX - cell * 6)
-    let widths = tabs.map { min($0.preferredWidth, tabBudget) }
+    let tabWidth = min(tabBudget, max(SwarmTabButton.minimumLayoutWidth,
+      min(SwarmTabButton.maximumLayoutWidth, floor(tabBudget / CGFloat(max(1, tabs.count))))))
+    let widths = Array(repeating: tabWidth, count: tabs.count)
     let total = widths.reduce(0, +)
     let occupied = min(total, tabBudget)
     let scrollX = cell
@@ -2499,6 +2502,9 @@ private final class SwarmTabStrip: NSView {
 }
 
 private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidation {
+  // Mirrors AppDesktop.tabMinWidth/tabMaxWidth. Labels never size the tabs.
+  static let minimumLayoutWidth: CGFloat = 128
+  static let maximumLayoutWidth: CGFloat = 256
   // Mirrors AppDesktop.tabRadius/tabShoulder in desktop-design-system.md.
   private static let upperRadius: CGFloat = 10
   private static let shoulder: CGFloat = 8
@@ -2536,9 +2542,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   private var naturalTitleWidth: CGFloat { max(labelLayout.size.width, emphasizedLabelLayout.size.width) }
   var minimumWidth: CGFloat { Self.contentInset * 2 + reservedIndicatorSpace + 16 }
-  var preferredWidth: CGFloat {
-    min(260, max(112, ceil(naturalTitleWidth + reservedIndicatorSpace + Self.contentInset * 2)))
-  }
+  var preferredWidth: CGFloat { Self.maximumLayoutWidth }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
   var activity: HarnessNativeActivity? {

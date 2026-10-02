@@ -611,9 +611,10 @@ private extension SwarmTabButton {
       "The close action stays inset inside the tab's curved body")
   }
 
-  func checkCompleteNameFits() throws {
-    try checkTitlebar(titleRect.width >= naturalTitleWidth,
-      "The eight-tab fixture keeps each ordinary name readable")
+  func checkNameFitsOrHasTooltip() throws {
+    try checkTitlebar(titleRect.width >= naturalTitleWidth ||
+      toolTip?.components(separatedBy: "\n").contains(displayLabel) == true,
+      "Equal-width tabs retain the full name in a tooltip when the title truncates")
   }
 
   func clickBothActions() {
@@ -1197,6 +1198,7 @@ private extension SwarmTabStrip {
         devicesButton.font == storeButton.font &&
         accessibilityChildren()?.contains(where: { $0 as? NSView === devicesButton }) == true,
         "Opted-in navigation reads Search, Devices, Store at width \(width)")
+      try captureTabPresentation("native-tabs-tools-\(Int(width))")
     }
     devicesButton.performClick(nil)
     try checkTitlebar(calls == ["sessions", "store", "devices"],
@@ -1313,20 +1315,14 @@ private extension SwarmTabStrip {
     }
     try checkTitlebar(tabs[0].frame.width == tabs[0].preferredWidth &&
       tabs[1].frame.width == tabs[1].preferredWidth &&
-      tabs[0].frame.width < tabs[1].frame.width,
-      "Tabs keep their label widths instead of expanding to fill the row")
+      tabs[0].frame.width == tabs[1].frame.width,
+      "Tabs share a capped width independent of their labels")
     try checkTitlebar(tabs[0].menu?.font == menuFont, "Native context menus retain the system menu font")
 
   }
 
   func checkTabPresentationAndCapture() throws {
     setFrameSize(NSSize(width: 900, height: 40))
-    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
-      let assets = URL(fileURLWithPath: root)
-      storeButton.image = SwarmHistoryIcons(assetURL: { asset in
-        assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
-      }).image(engine: "store", asset: "assets/store/polymath.png")
-    }
     let rows: [[String: Any]] = [
       ["id": "new", "name": "New Tab", "label": "New Tab", "shortcutHint": "⌘1"],
       ["id": "work", "name": "Desktop", "label": "Desktop", "shortcutHint": "⌘2",
@@ -1389,7 +1385,7 @@ private extension SwarmTabStrip {
         "Eight ordinary tab names with inset close targets fit a 1440pt strip: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
       for tab in tabs {
         try tab.checkCenteredLabel()
-        try tab.checkCompleteNameFits()
+        try tab.checkNameFitsOrHasTooltip()
       }
       setShortcutHintsVisible(true)
       try captureTabPresentation("native-tabs-eight-\(name)-command")
@@ -1402,6 +1398,12 @@ private extension SwarmTabStrip {
 
   func captureTabPresentation(_ name: String) throws {
     guard let directory = ProcessInfo.processInfo.environment["HARNESS_TAB_CAPTURE_DIR"] else { return }
+    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
+      let assets = URL(fileURLWithPath: root)
+      storeButton.image = SwarmHistoryIcons(assetURL: { asset in
+        assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+      }).image(engine: "store", asset: "assets/store/polymath.png")
+    }
     let height = Int(bounds.height) + 40
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width), pixelsHigh: height,
       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -1420,7 +1422,7 @@ private extension SwarmTabStrip {
       tab.drawWithHoverControl()
       NSGraphicsContext.restoreGraphicsState()
     }
-    for control in [newButton, searchButton, storeButton] {
+    for control in [newButton, searchButton, devicesButton, storeButton] where !control.isHidden {
       NSGraphicsContext.saveGraphicsState()
       let transform = NSAffineTransform()
       transform.translateX(by: control.frame.minX, yBy: control.frame.minY + 40)

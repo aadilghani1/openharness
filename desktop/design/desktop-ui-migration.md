@@ -64,6 +64,28 @@ The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
 
+## Consistent tab widths and compact toolbar — 2026-10-02
+
+Flutter and AppKit tabs now share the available row width, capped at 256 points.
+They shrink together to 128 points, then scroll. Names, selection, activity and
+Command hints do not change a tab's width; clipped names retain their full-name
+tooltip. This uses the shared-width approach in
+[Chromium's tab layout](https://raw.githubusercontent.com/chromium/chromium/main/chrome/browser/ui/views/tabs/tab_strip_layout.cc)
+with limits chosen for this app's centered labels and hover close targets.
+
+Native Devices and Harness Store capsules are 28 points tall, with 6-point
+vertical gutters in the 40-point row. Their right inset is 12 points. Flutter
+keeps the same compact minimum and grows for platform text scaling, preserving
+the label's internal padding. Native search and New Tab retain 32-point targets.
+
+Inspected production AppKit renders show [equal-width dark tabs](images/workspace-tabs-equal-dark.png),
+[light tabs](images/workspace-tabs-equal-light.png), and the
+[compact toolbar controls](images/workspace-tab-tools-compact.png).
+Coverage includes hover/Command states, narrow toolbars at 360 and 640 points,
+and Flutter at normal and doubled text size. All 56 targeted Flutter tests and
+4,352 AppKit checks pass; changed-file static analysis is clean. Captures use
+synthetic data and real fonts. The installed app was not exercised.
+
 ## Pane header spacing and long names — 2026-10-02
 
 The refinement builds on main's shared plain-text agent and model controls.

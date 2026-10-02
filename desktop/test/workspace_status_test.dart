@@ -567,7 +567,7 @@ void main() {
           );
           expect(
             updates.last['machineResources']['detail'],
-            contains('running harnesses across connected machines'),
+            contains('open harnesses across connected machines'),
           );
           expect(updates.last['machineResources']['interactive'], isTrue);
         } else {
@@ -1345,8 +1345,13 @@ void main() {
       }
       expect(
         tester.getSize(secondTab).width,
-        lessThanOrEqualTo(160 + grid.AppDesktop.tabCloseInset * 2),
-        reason: 'short tab labels keep their compact width in a roomy window',
+        tester.getSize(find.byKey(ValueKey(first.id))).width,
+        reason: 'workspace tabs share one width',
+      );
+      expect(
+        tester.getSize(secondTab).width,
+        lessThanOrEqualTo(grid.AppDesktop.tabMaxWidth),
+        reason: 'tabs stop growing at the shared maximum in a roomy window',
       );
       expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
       expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
