@@ -15,10 +15,21 @@ name: CI
 on:
   # The only way this runs on its own: Actions -> CI -> Run workflow, on any branch.
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Affected components (full for shared protocols or uncertain impact)'
+        type: choice
+        options: [full, cli, tui, backend]
+        default: full
   # Callable as a reusable workflow. release.yml used to gate on this and take the Node pin from
   # its output; it no longer does (see the note above `publish` there) and pins the same version
   # itself, so the output below is kept only for any future caller.
   workflow_call:
+    inputs:
+      scope:
+        description: 'full, cli, tui, or backend'
+        type: string
+        default: full
     outputs:
       node-version:
         description: The Node the suite ran on. release.yml bundles the release with it.
@@ -28,16 +39,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: cli-ci-${{ github.workflow }}-${{ github.ref }}
+  group: cli-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
   # Every run here was started by a person or by a release, and is the record of whether that commit
   # was green — never killed to make room for a newer one.
   cancel-in-progress: false
 
 jobs:
+  process-checks:
+    if: ${{ contains(fromJSON('["full","cli","tui","backend"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validation deadlines, cleanup, receipts and release version guards
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+  # workflow_dispatch restricts the choice; reusable callers can pass any string.
+  # Fail invalid calls rather than reporting success after skipping every check.
+  invalid-scope:
+    if: ${{ !contains(fromJSON('["full","cli","tui","backend"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo '::error::scope must be full, cli, tui, or backend'; exit 1
+
   # tty.ReadStream uses libuv's native TTY handle. Exercise descriptor ownership,
   # binary backpressure and unplug behavior on both supported OSes and runtimes.
   # These are disposable PTYs; no USB device or existing daemon is touched.
   serial-native:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +94,7 @@ jobs:
 
   # Typecheck, the full suite, and the package updater's complete-coverage gate.
   typecheck-test:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -152,6 +182,7 @@ jobs:
   # Native shell lifecycle checks on the Linux platforms used over SSH. This workflow
   # remains on demand; it builds and tests without publishing or installing a release.
   tui-test:
+    if: ${{ contains(fromJSON('["full","tui"]'), inputs.scope || 'full') }}
     strategy:
       fail-fast: false
       matrix:
@@ -253,6 +284,7 @@ jobs:
         run: python3 -u tests/terminal-attributes.py target/${{ matrix.target }}/release/harness-tui
 
   backend-desk:
+    if: ${{ contains(fromJSON('["full","backend"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

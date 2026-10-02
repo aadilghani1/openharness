@@ -23,6 +23,11 @@ it from memory. The harness CLI (`autonomous-harness`) still carries its own gri
 
 ## Toolchain and commands
 
+Choose and time-bound validation using the repository's
+[validation and release guide](../docs/validation-and-release.md). The full-suite
+command below is available for broad changes and suite maintenance; it is not an
+extra mandatory run after affected checks and equivalent CI have already passed.
+
 `pubspec.yaml` pins `sdk: ^3.13.0`, i.e. **Flutter ≥ 3.47 / Dart ≥ 3.13**. An older Flutter fails at
 `flutter pub get` ("version solving failed") and every command below fails with it — check
 `flutter --version` first.

@@ -6022,6 +6022,37 @@ mod scroll_settle_tests {
 mod recovery_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn respawn_reply_and_fast_exit_deliver_one_death_hook_in_either_order() {
+        for exit_before_reply in [false, true] {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19789, sink, (80, 24));
+            // State/hook test only: never persist a fixture session.
+            app.handed_over = true;
+            let mut tab = Tab::with_wid("Respawn", 4);
+            tab.root = Some(Node::new(1, 80, 23));
+            tab.focus = Some(1);
+            app.tabs = vec![tab];
+            app.panes.insert(1, Pane::new(1, crate::local::MACHINE, "fixture", 80, 23));
+            app.options.global_window.insert("remain-on-exit".into(), "on".into());
+            crate::commands::execute(&mut app, "set-hook -g pane-died 'set -ag @deaths x'");
+            let old = pane::Exit { id: "old-process".into(), status: Some(7), signal: None, time: 1 };
+            let new = pane::Exit { id: "replacement-process".into(), status: Some(9), signal: None, time: 2 };
+            app.local_ended(1, old.clone());
+            assert_eq!(app.pending_hooks.len(), 1);
+            app.pending_hooks.clear();
+            if exit_before_reply { app.local_ended(1, new.clone()); }
+            app.panes.get_mut(&1).unwrap().complete_restart(Some(&old.id), Some("exit 9".into()));
+            if !exit_before_reply { app.local_ended(1, new.clone()); }
+            // Reopening a stream replays the current exit. It must not emit a
+            // second pane-died after the callback has handled the RPC reply.
+            app.local_ended(1, new.clone());
+            assert_eq!(app.pending_hooks.len(), 1, "exit before RPC reply: {exit_before_reply}");
+            assert_eq!(app.panes[&1].dead.as_ref(), Some(&new));
+            assert_eq!(app.panes[&1].start_command.as_deref(), Some("exit 9"));
+        }
+    }
+
     // Current-thread tests never yield to this link: it is cancelled before it can connect.
     // No daemon, disk cache, real pane or server socket is used.
     fn fixture() -> App {
