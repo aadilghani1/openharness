@@ -10,11 +10,14 @@ import '../teams/team_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
+import '../viewer/direct_login.dart';
 import '../viewer/group_sync.dart';
+import '../viewer/sign_in_browser.dart';
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
 import '../auth/sign_in_client.dart';
+import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../core/config.dart';
 import '../core/agent_git_context.dart';
@@ -360,6 +363,10 @@ class AppNotifier extends ChangeNotifier {
     _profileInFlight = null;
     _retryInFlight = null;
     machinesLoading = false;
+    _registeringDevice = false;
+    _deviceRegisteredAt = null;
+    _awaitingVouched.clear();
+    _vouchedRedials.clear();
     return ++_authRevision;
   }
 
@@ -953,6 +960,10 @@ class AppNotifier extends ChangeNotifier {
   /// while it is set, rather than dropping them onto a bare full-screen spinner.
   bool signingIn = false;
 
+  /// The account whose sign-in page is up, from the press of its button until the flow settles —
+  /// so the welcome screen's pressed button says what it is waiting on, and only it.
+  SignInProvider? signInProvider;
+
   AppNotifier({
     required AppConfig config,
     required AuthSession authSession,
@@ -1417,6 +1428,7 @@ class AppNotifier extends ChangeNotifier {
     _invalidateAuthWork();
     currentUser = null;
     signingIn = false;
+    signInProvider = null;
     // The code was scanned into the session that just ended — see [logout].
     pendingPairing = null;
     _desk.reset();
@@ -1512,6 +1524,76 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Sign in with [provider]'s account — "Continue with Google", "Continue with Apple" — through
+  /// the SSO page, opened in the app (`viewer/direct_login.dart`, `viewer/sign_in_browser.dart`),
+  /// and go in.
+  ///
+  /// Thrown and kept like [signInWithCode], for the welcome screen to show — except a cancel
+  /// ([cancelProviderSignIn]), which the person chose and needs no sentence.
+  Future<void> signInWithProvider(SignInProvider provider) async {
+    final login = viewer.login;
+    if (_disposed || signingIn) return;
+    final revision = _invalidateAuthWork();
+    _closedHistory.clear();
+    _lastError = null;
+    signingIn = true;
+    signInProvider = provider;
+    notifyListeners();
+    try {
+      await login.login(
+        provider: provider,
+        onAuthorizeUrl: (url) =>
+            unawaited(_openSignInPage(url, login, revision)),
+      );
+      // iOS takes its sheet down here; Android's Custom Tab is the person's to close.
+      unawaited(closeSignInPage());
+      if (!_authWorkCurrent(revision)) return;
+      status = AppStatus.bootstrapping;
+      notifyListeners();
+      await _enterSignedIn(revision);
+    } on SignInCancelled {
+      unawaited(closeSignInPage());
+      if (_authWorkCurrent(revision)) status = AppStatus.unauthenticated;
+    } catch (_) {
+      unawaited(closeSignInPage());
+      if (_authWorkCurrent(revision)) status = AppStatus.unauthenticated;
+      rethrow;
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        signingIn = false;
+        signInProvider = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// The page [signInWithProvider] waits on, shown. One that cannot be shown ends that sign-in
+  /// with the reason — it would otherwise wait out its timeout on a page nobody can see — but
+  /// only while it is still the sign-in in flight: a later one is not this failure's to end.
+  Future<void> _openSignInPage(Uri url, DirectLogin login, int revision) async {
+    DirectAuthException reason;
+    try {
+      if (await openSignInPage(url)) return;
+      // iOS answers false for a page closed before it had loaded: the person's own cancel.
+      reason = const SignInCancelled();
+    } catch (error) {
+      debugPrint('signInWithProvider: could not open the sign-in page: $error');
+      reason = const DirectAuthException(
+        'Could not open the sign-in page. Check your connection and try again.',
+      );
+    }
+    if (_authWorkCurrent(revision) && signInProvider != null) {
+      login.cancel(reason);
+    }
+  }
+
+  /// Stop the sign-in [signInWithProvider] is waiting on — the person closed the page, or chose
+  /// another way in. The welcome screen settles back with nothing to report.
+  void cancelProviderSignIn() {
+    if (signInProvider == null) return;
+    viewer.login.cancel();
+  }
+
   Future<void> logout() async {
     // Signing out takes this phone's key out of the account's devices, while the sign-in still works
     // to say so. Best effort, and brief.
@@ -1522,6 +1604,7 @@ class AppNotifier extends ChangeNotifier {
     }
     final revision = _invalidateAuthWork();
     signingIn = false;
+    signInProvider = null;
     // A scanned code belongs to the session it was scanned into. Held past this,
     // the next sign-in — perhaps another account's — would spend it on the first
     // locked machine of that id and show a pairing error where its password form
@@ -1590,6 +1673,9 @@ class AppNotifier extends ChangeNotifier {
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
+    // …unless the log already vouches for it and this phone's key is new to it: then the machine
+    // has only not read that key yet — see [_redialOnceVouched].
+    unawaited(_redialOnceVouched(machineId));
     // A 4404 can also arrive MID-SESSION ("peer revoked trust" in the CLI's
     // remoteRelay.ts) with terminals open on this machine. The disconnect
     // that follows deliberately no longer marks the node offline (see the
@@ -1645,6 +1731,8 @@ class AppNotifier extends ChangeNotifier {
     if (nextStatus == ConnectionStatus.connected) {
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
+      // Let in: a later refusal is a new story ([_redialOnceVouched]).
+      _vouchedRedials.remove(machineId);
       // A relay socket reports `connected` only after the machine's welcome
       // proved the link (`WsConn._markReady`), so a code held to pair this
       // machine has nothing left to do. Kept, it would be spent the next time
@@ -1720,7 +1808,9 @@ class AppNotifier extends ChangeNotifier {
       // before the log existed), and every machine it names is reached with no password.
       if (_authWorkCurrent(revision) && status == AppStatus.authenticated && _deviceLogRegistered != revision) {
         _deviceLogRegistered = revision;
-        unawaited(_deviceLog?.register(freshSignIn: viewer.auth.consumeFreshSignIn()));
+        if (_deviceLog case final log?) {
+          unawaited(_registerDevice(log, revision));
+        }
       }
     } finally {
       // Said out loud: the list's own notify fires before this, so a flag
@@ -2093,6 +2183,104 @@ class AppNotifier extends ChangeNotifier {
     );
     final links = peerLinks;
     if (links is DirectLink) links.deviceLog = log;
+  }
+
+  /// True while trust between this phone and the account's machines is still being settled by the
+  /// device key log: this phone reading the log and putting its own key into it
+  /// ([ViewerDeviceLog.register]), or a machine the log vouches for being dialled again because it
+  /// had not caught up with this phone's key yet ([_redialOnceVouched]).
+  ///
+  /// ⚠️ **A machine is "locked" the moment a fresh phone dials it, and that is not yet an answer.**
+  /// With nothing pinned, the relay codec refuses the dial on the spot (`NO_PEER_LINK`, 16ms in), long
+  /// before the log has been read and verified — seconds on a phone; and once it is, the machine
+  /// itself still has to read this phone's new key before it stops answering `e2e_denied`. The home
+  /// screen fell through to the machines list, "locked · scan its code", in between. While this is
+  /// set it waits on a locked machine instead (`phone/agent_home.dart` `_loadingMessage`); once it
+  /// clears, a machine still locked really wants its password.
+  bool get deviceTrustSettling =>
+      _registeringDevice || _awaitingVouched.isNotEmpty;
+
+  bool _registeringDevice = false;
+
+  /// When this phone's key last went into the log, in this sign-in — see [_vouchedRedialWindow].
+  DateTime? _deviceRegisteredAt;
+
+  /// Machines waiting out a [_vouchedRedialDelays] step, and how many each has been through.
+  final Set<String> _awaitingVouched = {};
+  final Map<String, int> _vouchedRedials = {};
+
+  /// [_deviceTrustSettleCap]: a log that never answers still lets the screen move on.
+  static const _deviceTrustSettleCap = Duration(seconds: 20);
+
+  /// How long after this phone's key went into the log a machine the log vouches for may still not
+  /// have read it — its CLI hears `device_keys_changed` and reads the log itself, a few seconds.
+  static const _vouchedRedialWindow = Duration(minutes: 1);
+  static const _vouchedRedialDelays = [
+    Duration(milliseconds: 1500),
+    Duration(seconds: 3),
+    Duration(seconds: 5),
+    Duration(seconds: 8),
+    Duration(seconds: 12),
+  ];
+
+  Future<void> _registerDevice(ViewerDeviceLog log, int revision) async {
+    _registeringDevice = true;
+    notifyListeners();
+    try {
+      await log
+          .register(freshSignIn: viewer.auth.consumeFreshSignIn())
+          .timeout(_deviceTrustSettleCap);
+    } catch (_) {
+      // Timed out: the register goes on by itself, and a machine it vouches for is still redialled.
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        _registeringDevice = false;
+        _deviceRegisteredAt = DateTime.now();
+        notifyListeners();
+      }
+    }
+  }
+
+  /// A machine refused this phone ([_onLocalFailure]) although the device key log vouches for it —
+  /// this phone pins it — while this phone's own key is new to the log: the machine has most likely
+  /// just not read that key yet, so it is dialled again, a few times, a little later each time.
+  ///
+  /// ⚠️ **Nothing else would ever dial it again.** [_redialNewlyTrusted] runs when the log CHANGES,
+  /// and from this phone's side it already has: the pin landed, the dial went out, and THEN the
+  /// phone's key went in — so the machine, still behind, answered `e2e_denied` to a dial nobody
+  /// retried, and a fresh sign-in sat on "locked" over a machine that would have let it in seconds
+  /// later. Outside [_vouchedRedialWindow] a refusal stands: that is trust revoked, not trust late.
+  Future<void> _redialOnceVouched(String machineId) async {
+    final revision = _authRevision;
+    final attempt = _vouchedRedials[machineId] ?? 0;
+    if (attempt >= _vouchedRedialDelays.length) return;
+    final registeredAt = _deviceRegisteredAt;
+    final keyIsNew =
+        _registeringDevice ||
+        (registeredAt != null &&
+            DateTime.now().difference(registeredAt) < _vouchedRedialWindow);
+    if (!keyIsNew) return;
+    if (await viewer.keys.peer(machineId) == null) return;
+    if (!_authWorkCurrent(revision) || _awaitingVouched.contains(machineId)) {
+      return;
+    }
+    _vouchedRedials[machineId] = attempt + 1;
+    _awaitingVouched.add(machineId);
+    notifyListeners();
+    await Future<void>.delayed(_vouchedRedialDelays[attempt]);
+    // A sign-out meanwhile emptied the set and moved the revision on: nothing here is ours.
+    if (!_authWorkCurrent(revision)) return;
+    _awaitingVouched.remove(machineId);
+    final state = machineStates[machineId];
+    if (state != null && state.needsLink && state.nodeOnline != false) {
+      // Unlocked before the socket goes, as [_redialNewlyTrusted] does: the screen reads it as
+      // connecting from here on, never as locked in between.
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(machineId);
+      _connectMachine(state);
+    }
+    notifyListeners();
   }
 
   /// A machine waiting for its password that the device key log now vouches for: dial it again.
@@ -6446,6 +6634,8 @@ class AppNotifier extends ChangeNotifier {
     }
     _channelControllers.clear();
     _disposed = true;
+    // A sign-in page still up has nobody left to come back to: its listener goes.
+    if (signInProvider != null) viewer.login.cancel();
     _closedHistory.clear();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();

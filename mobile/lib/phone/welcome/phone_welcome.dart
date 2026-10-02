@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/auth/sign_in_provider.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -13,9 +14,10 @@ import '../tty_controls.dart';
 import 'connect_code.dart';
 import 'scan_to_connect.dart';
 import 'set_up_computer.dart';
+import 'sign_in_provider_button.dart';
 
-/// The phone's first screen, signed out: what Harness is in one breath, and one question anyone
-/// can answer — is Harness on your computer?
+/// The phone's first screen, signed out: what Harness is in one breath, one question anyone can
+/// answer — is Harness on your computer? — and the account, for whoever would rather start there.
 ///
 /// ```
 /// harness▌
@@ -31,6 +33,13 @@ import 'set_up_computer.dart';
 /// ┌──────────────────────────────┐
 /// │ Not yet — set it up        › │
 /// └──────────────────────────────┘
+/// ──────── or sign in with ────────
+/// ┌──────────────────────────────┐
+/// │ G  Continue with Google      │
+/// └──────────────────────────────┘
+/// ┌──────────────────────────────┐
+/// │   Continue with Apple       │
+/// └──────────────────────────────┘
 /// ```
 ///
 /// **Yes** scans the code the desktop app shows ([ScanToConnectPage]), and the scan signs the phone
@@ -38,8 +47,11 @@ import 'set_up_computer.dart';
 /// ([AppNotifier.signInWithScan]). A QR without one — an older computer — or one that has expired
 /// names the account instead: the email is filled in and its code sent, so signing in is the four
 /// digits (`viewer/email_code_api.dart`, no browser). **Not yet** gets Harness onto the computer ([SetUpComputerPage]). Both
-/// buttons weigh the same: the question decides, not us. Nothing else is on the screen — no
-/// pretend agents, no diagram — for someone who has never seen Harness.
+/// buttons weigh the same: the question decides, not us.
+///
+/// Under them, the two accounts the desktop and web sign in with ([SignInProviderButton]): the
+/// SSO page opens in the app on that account ([AppNotifier.signInWithProvider]). Nothing else is
+/// on the screen — no pretend agents, no diagram — for someone who has never seen Harness.
 class PhoneWelcome extends StatefulWidget {
   const PhoneWelcome({
     super.key,
@@ -136,7 +148,23 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     unawaited(_sendCode());
   }
 
+  /// "Continue with Google / Apple": the account's own sign-in page, in the app. Its failure is
+  /// said here, under the buttons; a cancel says nothing ([AppNotifier.signInWithProvider]).
+  Future<void> _signInWith(SignInProvider provider) async {
+    if (widget.notifier.signingIn) return;
+    setState(() => _error = null);
+    try {
+      await widget.notifier.signInWithProvider(provider);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = _plain(e.toString()));
+    }
+  }
+
   void _go(_Step step) {
+    // Leaving for another way in takes the account's page with it: whatever it came back with
+    // would sign the phone in behind the step the person chose instead.
+    if (step != _Step.hello) widget.notifier.cancelProviderSignIn();
     setState(() {
       _step = step;
       _error = null;
@@ -237,6 +265,17 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               onSample: widget.onTrySample == null
                   ? null
                   : () => unawaited(_trySample()),
+              onProvider: signingIn
+                  ? null
+                  : (provider) => unawaited(_signInWith(provider)),
+              waitingOn: widget.notifier.signInProvider,
+              // Past the page and the exchange, the session is saved and the machines are on
+              // their way: nothing is waited on in the browser any more, and nothing to cancel.
+              entering:
+                  signingIn &&
+                  widget.notifier.status == AppStatus.bootstrapping,
+              onCancel: widget.notifier.cancelProviderSignIn,
+              error: _error,
             ),
             _Step.setUp => SetUpComputerPage(
               onScan: () => _go(_Step.scan),
@@ -328,15 +367,39 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   }
 }
 
-/// The first thing anyone sees: the headline, the question and its two answers.
+/// The first thing anyone sees: the headline, the question and its two answers, and the two
+/// accounts under them.
 class _Hello extends StatelessWidget {
-  const _Hello({required this.onScan, required this.onSetUp, this.onSample});
+  const _Hello({
+    required this.onScan,
+    required this.onSetUp,
+    required this.onProvider,
+    required this.onCancel,
+    this.onSample,
+    this.waitingOn,
+    this.entering = false,
+    this.error,
+  });
 
   final VoidCallback onScan;
   final VoidCallback onSetUp;
 
   /// Behind a long press on the wordmark — see `_PhoneWelcomeState._trySample`.
   final VoidCallback? onSample;
+
+  /// "Continue with …" pressed. Null while any sign-in is in flight, which both buttons wait out.
+  final ValueChanged<SignInProvider>? onProvider;
+
+  /// The account whose page is up — its button says so, and [onCancel] is offered under it.
+  final SignInProvider? waitingOn;
+
+  /// The page is done with and the phone is going in: the button says so, and there is nothing
+  /// left to cancel.
+  final bool entering;
+  final VoidCallback onCancel;
+
+  /// Why the last account's sign-in did not finish.
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
@@ -392,6 +455,41 @@ class _Hello extends StatelessWidget {
                   _Answer(label: 'Yes — scan to connect', onTap: onScan),
                   const SizedBox(height: 10),
                   _Answer(label: 'Not yet — set it up', onTap: onSetUp),
+                  const SizedBox(height: 18),
+                  const _OrDivider(label: 'or sign in with'),
+                  const SizedBox(height: 14),
+                  for (final provider in SignInProvider.values) ...[
+                    if (provider != SignInProvider.values.first)
+                      const SizedBox(height: 10),
+                    SignInProviderButton(
+                      provider: provider,
+                      onPressed: onProvider == null
+                          ? null
+                          : () => onProvider!(provider),
+                      busyLabel: provider == waitingOn
+                          ? (entering
+                                ? 'Signing in…'
+                                : 'Waiting for ${provider.label}…')
+                          : null,
+                    ),
+                  ],
+                  if (error case final error?)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        '✗ $error',
+                        style: tty.style(size: TtySize.meta, color: tty.red),
+                      ),
+                    ),
+                  if (waitingOn != null && !entering) ...[
+                    const SizedBox(height: 4),
+                    Center(
+                      child: TtyTextButton(
+                        label: 'Cancel',
+                        onPressed: onCancel,
+                      ),
+                    ),
+                  ],
                   if (onSample != null) ...[
                     const SizedBox(height: 8),
                     TtyTextButton(label: 'Try the sample', onPressed: onSample),
@@ -448,6 +546,32 @@ class _Answer extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The line between the question's answers and the accounts: a rule each side of a few faint
+/// words, in the terminal's own furniture colour.
+class _OrDivider extends StatelessWidget {
+  const _OrDivider({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final rule = Expanded(child: Container(height: 1, color: tty.dim));
+    return Row(
+      children: [
+        rule,
+        // Its own width: at the app's largest text size (2x) it is still well inside a 375pt
+        // phone, and the rules give way around it.
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: TtyText(label, color: tty.faint, size: TtySize.meta),
+        ),
+        rule,
+      ],
     );
   }
 }

@@ -574,9 +574,17 @@ class _AgentHomeState extends State<AgentHome> {
     // that agent is genuinely on its way.
     if (machines.any(phoneMachineListsAgents)) return null;
     // Then each machine's own socket. `connecting` covers both the dial and the handshake after it.
+    //
+    // ⚠️ A machine locked while the device key log is still being read counts as connecting: on a
+    // phone just signed in, every machine is locked until the log vouches for it, which it does a
+    // few seconds later and opens the machine by itself — see [AppNotifier.deviceTrustSettling].
+    // Drawn as the machines list meanwhile, it said "locked · scan its code" and then jumped away.
     if (machines.any(
-      (machine) =>
-          phoneMachineStatusOf(machine) == PhoneMachineStatus.connecting,
+      (machine) => switch (phoneMachineStatusOf(machine)) {
+        PhoneMachineStatus.connecting => true,
+        PhoneMachineStatus.needsPassword => notifier.deviceTrustSettling,
+        PhoneMachineStatus.ready || PhoneMachineStatus.offline => false,
+      },
     )) {
       return 'Connecting to your machine…';
     }
