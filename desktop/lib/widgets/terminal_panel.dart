@@ -2754,10 +2754,7 @@ class _TerminalHeader extends StatelessWidget {
             final controlsWidth = onClose != null
                 ? PaneHeaderButton.width
                 : 0.0;
-            final controlsGap = controlsWidth > 0 && pickerWidth > 0
-                ? 8.0
-                : 0.0;
-            final actionsWidth = pickerWidth + controlsGap + controlsWidth;
+            final actionsWidth = pickerWidth + controlsWidth;
             // At the smallest widths, connection state takes the leading
             // mark's place so the pane name survives beside the fixed tools.
             final leadingStatus =
@@ -2815,7 +2812,6 @@ class _TerminalHeader extends StatelessWidget {
             final desiredRightWidth = narrow
                 ? math.max(
                     controlsWidth +
-                        controlsGap +
                         (showModelPicker ? 96.0 : 0.0) +
                         (agent != null ? 90.0 : 0.0) +
                         badgeWidth,
@@ -3001,10 +2997,7 @@ class _TerminalHeader extends StatelessWidget {
                   ),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: math.max(
-                      0,
-                      rightWidth - controlsWidth - controlsGap,
-                    ),
+                    maxWidth: math.max(0, rightWidth - controlsWidth),
                   ),
                   child: PaneHeaderActions(
                     agentPicker: agent == null
@@ -3107,7 +3100,6 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
-                if (controlsGap > 0) SizedBox(width: controlsGap),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );

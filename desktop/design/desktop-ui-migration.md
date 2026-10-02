@@ -38,6 +38,26 @@ The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
 
+## Pane header spacing and long names — 2026-10-02
+
+The refinement builds on main's shared plain-text agent and model controls.
+They use 8-point horizontal padding, matching the close glyph's inset, without
+an extra gap before close. A short agent leaves its unused width for the model;
+the model can use that space beyond the former 220-point text cap. Longer agent
+names stay bounded so the model remains visible. Both names truncate on one line
+and expose their full text on hover; the close target remains fixed at 28 points.
+
+Real-font widget renders were inspected in four- and nine-pane layouts in both
+appearances, including long session, agent and model labels. Header crops show
+the [four-pane dark layout](images/pane-header-long-names-dark.png) and
+[nine-pane light layout](images/pane-header-long-names-narrow-light.png).
+Validation passed on the rebased source: 110 targeted Flutter tests and static
+analysis of the changed Dart files. Checks cover plain-text controls, narrow
+headers, existing picker actions, tooltips, stable standalone context, close
+geometry, and text-scale isolation. Four additional temporary fixture cases
+supplied the long-name renders. These are synthetic widget captures; the running
+desktop app was not exercised.
+
 ## Footer spacing refinement — 2026-10-02
 
 Resource totals now show their available number without a ≥ prefix; partial

@@ -19,8 +19,7 @@ class PaneHeaderTextButton extends StatelessWidget {
     this.onPressed,
   });
 
-  static const horizontalPadding = 6.0;
-  static const maxTextWidth = 220.0;
+  static const horizontalPadding = grid.AppDesktop.controlGap;
 
   final String text, label;
   final String? fullText, tooltip;
@@ -38,10 +37,7 @@ class PaneHeaderTextButton extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final padding = math.min(horizontalPadding, constraints.maxWidth / 2);
-        final textWidth = math.max(
-          0.0,
-          math.min(maxTextWidth, constraints.maxWidth - padding * 2),
-        );
+        final textWidth = math.max(0.0, constraints.maxWidth - padding * 2);
         return WorkspaceBarControl(
           label: label,
           tooltip: [
