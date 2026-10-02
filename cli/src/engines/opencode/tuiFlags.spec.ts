@@ -7,7 +7,7 @@
  * flag a release drops fails here instead of in someone's pane. Skipped where opencode is not
  * installed.
  */
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { buildEngineCommandArgv, namedAgentArgs, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
@@ -17,7 +17,11 @@ import { opencodeMajorVersion } from './version.js'
 const installed = binaryOnPath('opencode')
 
 describe.skipIf(!installed)('the installed opencode TUI accepts every flag we pass it', () => {
-  const help = installed ? execFileSync('opencode', ['--help'], { encoding: 'utf8', timeout: 15_000 }) : ''
+  const helpResult = installed ? spawnSync('opencode', ['--help'], { encoding: 'utf8', timeout: 15_000 }) : null
+  if (helpResult?.error) throw helpResult.error
+  if (helpResult && helpResult.status !== 0) throw new Error(`opencode --help exited ${helpResult.status}: ${helpResult.stderr}`)
+  // v1 writes help to stderr; v2 uses stdout. Verify the actual flags from either stream.
+  const help = helpResult ? `${helpResult.stdout}\n${helpResult.stderr}` : ''
   const major = installed ? opencodeMajorVersion() : null
   const deps: LaunchOverridesDeps = {
     machine: () => ({ hermesSystemManaged: false, opencodeMajor: major }),
