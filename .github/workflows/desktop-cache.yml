@@ -9,6 +9,7 @@ on:
       - 'desktop/pubspec.yaml'
       - '**/pubspec.lock'
       - '.github/actions/desktop-flutter/**'
+      - '.github/actions/desktop-flutter-arm64/**'
       - '.github/workflows/desktop-cache.yml'
       - '.github/workflows/release-desktop.yml'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'desktop/pubspec.yaml'
       - '**/pubspec.lock'
       - '.github/actions/desktop-flutter/**'
+      - '.github/actions/desktop-flutter-arm64/**'
       - '.github/workflows/desktop-cache.yml'
       - '.github/workflows/release-desktop.yml'
   workflow_dispatch:
@@ -43,6 +45,12 @@ jobs:
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/desktop-flutter
+        if: runner.os != 'Linux' || runner.arch != 'ARM64'
+        with:
+          version: ${{ steps.toolchain.outputs.version }}
+          save-cache: 'true'
+      - uses: ./.github/actions/desktop-flutter-arm64
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
         with:
           version: ${{ steps.toolchain.outputs.version }}
           save-cache: 'true'
