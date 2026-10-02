@@ -234,6 +234,19 @@ export class PairHarness {
 
   constructor(private readonly deps: PairHarnessDeps) {}
 
+  /** Refresh an existing collection's release files without starting a turn or changing its session. */
+  refreshPackage(): boolean {
+    const daemonId = this.deps.pairedDaemon()
+    const saved = this.saved()
+    if (!daemonId || !saved) return true
+    const engine = this.deps.find().find(row => row.agentId === saved.agentId)?.engine ?? saved.engine
+    if (!engine) return true
+    const identity = this.deps.pairedUid?.()
+    const uid = identity && /^[A-Za-z0-9_-]{1,64}$/.test(identity) ? identity : undefined
+    return this.deps.install(pairPackage({ daemonId, name: this.deps.pairedName?.() ?? null, uid, engine,
+      mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file }))
+  }
+
   /** `talk` / `daemon_talk`: one at a time, in order — two quick talks never start two harnesses. */
   talk(text: string, expectedUid?: string): Promise<Record<string, unknown>> {
     if (!text.trim()) return Promise.resolve({ ok: false, error: 'EMPTY' })

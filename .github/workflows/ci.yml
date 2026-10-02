@@ -143,6 +143,9 @@ jobs:
           npm run bundle
           node scripts/test-hn-upgrade.mjs
 
+      - name: Verify core harness rollout in the release bundle
+        run: node scripts/test-core-harness-upgrade.mjs dist/cli.js
+
       - name: Require complete harness updater coverage
         run: npm run test:dsh-updates
 

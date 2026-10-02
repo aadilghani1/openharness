@@ -740,7 +740,7 @@ HARNESSJS
 if [ "$INSTALL_MODE" != "host" ]; then
   echo "▸ Installing the managed grid into $RUNTIME_DIR"
   install_managed_grid || echo "  · the grid runtime will be fetched by the daemon on its next start"
-  "$NODE_BIN" "$HOME/.harness/cli/cli.js" dsh builtins || echo "  · Model Manager will be prepared on the next start"
+  "$NODE_BIN" "$HOME/.harness/cli/cli.js" dsh builtins || echo "  · Core harnesses will be prepared on the next start"
 fi
 
 # 3c. hn's binary (the standalone install; Desktop's CLI fetches it on the first `hn`).

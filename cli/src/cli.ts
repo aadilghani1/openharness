@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { MODEL_MANAGER_ID, ensureBundledDevices, ensureBundledModelManager } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, ensureBundledCoreHarnesses } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -2228,10 +2228,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backendRef = backend
   backend.viewerTargetProvider = (agentId) => dshViewers.forwardingUrl(agentId)
 
-  try { ensureBundledModelManager() }
-  catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
-  try { ensureBundledDevices() }
-  catch (error) { console.warn('[devices] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
+  ensureBundledCoreHarnesses()
 
   // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
   // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
@@ -4017,6 +4014,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let guestCompanion: CompanionIdentity | null = null
   let guestAutonomy: Autonomy | null = null
   let guestConsent = false
+  let refreshPairPackage: () => void = () => {}
   // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
   // Nothing is watched until the person said yes on the first-day consent screen (zoo `consent.watching`,
   // or a guest window's `consent`): until then the sensor stays off and the dial stays at watch.
@@ -4029,6 +4027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented, epoch: pairing.epoch })
     // A guest window names only a species; the account's zoo names the individual too.
     pairSensor.setPair(pairing.pair, zooPair.known && pairing.pair === zooPair.pair ? zooPair.name : null)
+    refreshPairPackage()
     // Pairing on or off already refreshed the brain (onPairToggled); another daemon paired, or the dial moved,
     // reaches the windows attached here now. The brain sends only what they were not already sent.
     pairBrain?.refresh()
@@ -4958,6 +4957,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
   })
   pairTalk = (text, uid) => pairHarness.talk(text, uid)
+  refreshPairPackage = () => {
+    try { pairHarness.refreshPackage() }
+    catch (error) { console.warn('[core-harnesses] Could not refresh Companions:', error instanceof Error ? error.message : String(error)) }
+  }
+  refreshPairPackage()
   isCollectionAgent = (agentId) => agentId === pairHarness.agentId()
   companionPromptContext = (agentId) => daemons.on() ? pairHarness.context(agentId) : null
   pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }

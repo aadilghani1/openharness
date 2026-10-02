@@ -331,7 +331,15 @@ The sidebar starts with Search, followed by Discover and six broad sections: Des
 Media, Science, Games and Code. Cards show Get, Update or Open for each harness; its page manages installation
 on this computer. Package manifests keep their precise domain labels, grouped only for browsing.
 
-Updates are explicit. The Store shows **Update** when a matching catalog source publishes a different
+Core app harnesses are part of each CLI release: Harness Monitor, Devices and Model Manager are
+installed or refreshed automatically before their viewers are restored. Existing official Store
+copies of these packages move onto this release-managed path on the next CLI update; their previous
+files, workspaces and conversations are retained. Companions refresh their generated package when
+the saved collection's identity is restored, without sending a prompt or replacing its conversation.
+Linked developer checkouts and custom forks remain owner-managed. Core resources are versioned
+beside the CLI, so a CLI rollback restores its corresponding core package revision as well.
+
+Other Store applications, such as Blender, keep explicit updates. The Store shows **Update** when a matching catalog source publishes a different
 commit with changed package content. Built-in catalog entries carry their package folder's Git tree
 revision, so a change elsewhere in the monorepo does not flag every installed harness. Hover over the
 short installed version on a package page to see the installed and available commits.
