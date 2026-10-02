@@ -841,7 +841,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterHatch?.call();
     _hatchOverlay?.remove();
     _hatchOverlay?.dispose();
-    _dismissMachinePrompt();
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
@@ -898,6 +897,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       unawaited(_menuBus.send('update', {'tabs': [], 'enabled': false}));
     }
     if (widget.projectStore == null) _projects.dispose();
+    // Dismissing notifies app listeners. Detach our views and catalogs first so
+    // that notification cannot rebuild an element already being unmounted.
+    _dismissMachinePrompt();
     super.dispose();
   }
 
