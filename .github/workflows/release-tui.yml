@@ -66,25 +66,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-unit
+          cache-bin: false
       - name: Unit tests
         working-directory: tui
         run: cargo test --locked
-      # The real binary, driven in tmux against tests/mock-daemon.mjs: no account, no real harnesses.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: End-to-end against the mock daemon
-        run: |
-          set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y tmux
-          (cd cli && npm ci --no-audit --no-fund)
-          (cd tui && cargo build --locked --release)
-          tui/tests/e2e.sh
-      - name: Native terminal lifecycle and concurrent window creation
-        run: python3 -u tui/tests/native-terminal.py
 
+  # Compile platforms alongside unit tests. Publication still requires both;
+  # native checks below exercise the exact Linux artifact that will be uploaded.
   build:
-    needs: test
+    needs: version
     strategy:
       fail-fast: true
       matrix:
@@ -100,6 +94,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.target }}
+          cache-bin: false
       - name: musl toolchain
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -120,6 +119,27 @@ jobs:
             echo "sha256  $(shasum -a 256 "$bin" | awk '{print $1}')"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v7
+        if: matrix.platform == 'linux-x64'
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install native test dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get install -y tmux
+          npm ci --prefix cli --no-audit --no-fund
+      - name: End-to-end against the mock daemon
+        if: matrix.platform == 'linux-x64'
+        env:
+          HARNESS_TUI_BIN: ${{ runner.temp }}/dist/harness-tui-linux-x64
+        run: bash tui/tests/e2e.sh
+      - name: Native terminal lifecycle and concurrent window creation
+        if: matrix.platform == 'linux-x64'
+        env:
+          HN_NATIVE_TEST_BINARY: ${{ runner.temp }}/dist/harness-tui-linux-x64
+        run: python3 -u tui/tests/native-terminal.py
       - uses: actions/upload-artifact@v4
         with:
           name: harness-tui-${{ matrix.platform }}
@@ -129,7 +149,7 @@ jobs:
 
   publish:
     if: ${{ inputs.publish }}
-    needs: [version, build]
+    needs: [version, test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
