@@ -880,3 +880,32 @@ benefit. The programmer perspectives continue to mean source-grounded design
 reviews. No private transcript, live memory, account setting, app or firmware was
 changed. The experimental implementation has clearer instructions; the full
 memory-quality gates remain unmet.
+
+### Resolve exact evidence in the host, then review meaning — October 2
+
+An actual offline extraction rejected a useful proposal after the model normalized
+whitespace in its quotation. The host now supplies bounded source-excerpt references
+and resolves selected references into exact original text, source identity and
+captured verification. Existing storage, scope, authorship, coverage, size and
+durable queue checks remain in force. Unknown references and metadata overrides
+fail; legacy quotations still need exact matching. Original source text and episode
+boundaries remain available in full. The prompt is versioned `coding-memory-v6`.
+
+The [measured comparison](../research/2026-10-02-memory-source-references.md) covers
+unchanged single and multi-episode diagnostic suites with the same local model.
+All eight cases completed, retaining six memories judged supported and useful by
+the implementing agent; six positive and twelve negative recall probes passed
+semantic review. This is development evidence, not an independent or held-out score.
+
+Five consented private excerpts were also processed entirely offline with external
+networking blocked on both the driver and model worker. The whitespace failure was
+resolved, but semantic review rejected two of six memories for overgeneralization
+and treating tentative options as settled. Their private evidence remains local.
+All structural presence checks passed, demonstrating why presence alone is an
+insufficient quality measure. Faithful real-user extraction, selected-companion
+learning, automatic contextual recall and coding-task benefit remain open.
+
+Review against Parnas's module boundaries, Liskov/Wing's behavioral contracts,
+Dijkstra's distinction between checks and broader claims, and Knuth's readable
+explanations is recorded with the evidence. These remain our applications of
+published principles, not reviews or endorsements by those authors.
