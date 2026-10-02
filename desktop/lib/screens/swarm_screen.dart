@@ -1798,7 +1798,25 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (widget.chrome?.showsKeyHints != false) ?_keymap.hint(command),
   ].join(' · ');
 
+  bool _nativeSyncQueued = false;
+
   void _syncNative() {
+    if (_nativeSyncQueued) return;
+    _nativeSyncQueued = true;
+    // One app change can notify the workspace, monitor, and notices together.
+    // Read the latest state once after those synchronous listeners finish;
+    // don't wait for a frame or slow terminal input with a debounce timer.
+    scheduleMicrotask(() {
+      _nativeSyncQueued = false;
+      if (!mounted) return;
+      _flushNative();
+    });
+  }
+
+  void _flushNative() {
+    // Another listener may have captured rows before the last inventory change
+    // in this turn. This payload must consistently describe the final state.
+    _sessionsThisTick = null;
     _syncMachines();
     final monitor = _harnessMonitor;
     final focused = WorkspacePaneContext.focused(app);
