@@ -204,9 +204,15 @@ class _RootShellState extends ConsumerState<RootShell>
 
   @override
   void dispose() {
+    flushAppLog();
     WidgetsBinding.instance.removeObserver(this);
     _appMenuChannel.setMethodCallHandler(null);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) flushAppLog();
   }
 
   @override
@@ -217,10 +223,14 @@ class _RootShellState extends ConsumerState<RootShell>
     if (app.canCancelLogin) app.cancelLogin();
     // Save the final arrangement, with a bound so an unavailable disk cannot
     // trap the user in the app. Input and tab switching never wait for disk.
-    await app.flushPaneLayout().timeout(
-      const Duration(seconds: 1),
-      onTimeout: () {},
-    );
+    try {
+      await app.flushPaneLayout().timeout(
+        const Duration(seconds: 1),
+        onTimeout: () {},
+      );
+    } finally {
+      flushAppLog();
+    }
     return AppExitResponse.exit;
   }
 

@@ -5095,6 +5095,7 @@ class AppNotifier extends ChangeNotifier {
             'This copy of Harness cannot install updates automatically.';
         return false;
       }
+      flushAppLog();
       exit(0);
     } catch (error) {
       updateError = 'Could not install Harness ${info.version}: $error';

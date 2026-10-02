@@ -569,7 +569,11 @@ its headless debug timings do not establish native display or network latency.
   `redactSecretsInText` (`logging/redact.dart`, beside the frame-level `redactValue`) before
   anything is written. The Debug pane is a **mirror** of those sinks, not a second stream
   (`log_stream.dart` + `log_stream_sinks.dart`): a bounded ring of the last 500 entries that
-  `installFileLogs` tees into, so a line on screen is a line the file already has. It is developer
+  `installFileLogs` tees into. Routine DEBUG records use a one-second flush deadline,
+  256 entries or 64 Ki characters. INFO/WARN and admitted ERROR records flush their preceding context;
+  export, backgrounding, normal quit and updater handoff also flush. An abrupt process kill
+  can lose the pending DEBUG batch. CLI transcripts remain immediately
+  flushed. No timer runs with an empty buffer. It is developer
   furniture — `kDebugSurfaceEnabled` (`logging/debug_surface.dart`, `kDebugMode` or
   `--dart-define=HARNESS_DEBUG_SURFACE=true`) gates the rail row, the ⌘D shortcut
   (`kDebugShortcut`, in `appShortcuts()` rather than `kAppShortcuts`) and the ring itself; the log
