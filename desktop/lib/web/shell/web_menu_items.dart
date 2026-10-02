@@ -10,10 +10,11 @@ typedef WebMenuItem = ({String command, String label, WebMenuWidth width});
 /// other door in the browser chrome: new work is the `+` beside the tabs
 /// (a new tab opens on "Start an agent"), agents the search button, tabs the
 /// tab bar and switcher, attention the bell, closing a pane its own header;
-/// keyboard tours and grid layout stay out of a mouse-first menu. Sharing and
-/// splitting are here because the header gave them up: Share is an
-/// experimental button, off until asked for, and a split is an edge to hover,
-/// which a finger cannot. All commands still reaches every one.
+/// keyboard tours and grid layout stay out of a mouse-first menu. Splitting is
+/// here because the header gave it up: a split is an edge to hover, which a
+/// finger cannot. Sharing is not — Share is an experimental button, off until
+/// its setting is switched on, and a row here would put it back for everyone.
+/// All commands still reaches every one.
 const List<List<WebMenuItem>> kWebMenuGroups = [
   [
     (command: 'machines.list', label: 'Machines', width: WebMenuWidth.any),
@@ -22,7 +23,6 @@ const List<List<WebMenuItem>> kWebMenuGroups = [
     (command: 'app.store', label: 'Store', width: WebMenuWidth.compact),
   ],
   [
-    (command: 'agent.share', label: 'Share harness', width: WebMenuWidth.any),
     // One split, always to the right: a second "down" row only lengthens the
     // menu, and All commands still has Split down.
     (command: 'pane.split_right', label: 'Split pane', width: WebMenuWidth.any),
