@@ -116,7 +116,7 @@ fi
 for binary in "$APP_BUNDLE/Contents/MacOS/Harness" \
               "$APP_BUNDLE/Contents/Frameworks/App.framework/App" \
               "$APP_BUNDLE/Contents/Frameworks/FlutterMacOS.framework/FlutterMacOS"; do
-  lipo -verify_arch arm64 x86_64 "$binary" || die "not a universal macOS binary: $binary"
+  lipo "$binary" -verify_arch arm64 x86_64 || die "not a universal macOS binary: $binary"
 done
 
 # --- pin the renderer ---
