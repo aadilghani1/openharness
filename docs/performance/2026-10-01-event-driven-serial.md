@@ -45,19 +45,32 @@ opened, stopped or restarted for these measurements.
   survives serial close, and close needs no input.
 - Unit checks cover direct versus duplicated native descriptor ownership,
   constructor/configuration failure, frame ordering and callback failures.
-- All 419 cable tests passed on managed Node 22.23.2/macOS, plus 40 guard fuzz
-  tests and TypeScript checking. The transport class has 60/60 statements and
-  16/16 functions covered; macOS covers 20/21 branch arms, with the remaining arm
+- All 421 cable tests passed on managed Node 22.23.2/macOS, plus TypeScript
+  checking. All 40 guard fuzz tests also passed on Linux after the correction.
+  The transport class has 62/62 statements and 16/16 functions covered;
+  macOS covers 24/25 branch arms, with the remaining arm
   selecting Linux's `stty -F`. The unchanged discovery code is not fully covered.
-  Runtime compatibility
-  runs are defined in the on-demand CI workflow for Node 20.19.0 and 22.23.2 on
-  macOS and Linux. Physical USB hardware is not covered by the PTY tests.
+  All 19 serial unit/native tests passed on each of the four compatibility rows:
+  Node 20.19.0 and 22.23.2 on macOS and Linux. Physical USB hardware is not covered
+  by the PTY tests.
 
 The broad local CLI run passed 8,276 tests and skipped 45, but failed 15 checks in
 three unchanged suites: hook subprocess deadlines, installer subprocess deadlines
 and installed OpenCode flags. A clean-main run reproduced hook deadlines and all
-five OpenCode failures; its installer checks passed. These results are retained
-as failures, not reported as a completely green local suite.
+five OpenCode failures; its installer checks passed. An isolated candidate run
+passed all 100 hook/installer checks and retained the five installed-OpenCode
+failures. These results are retained as failures, not reported as a completely
+green local suite.
+
+On the corrected commit, the full Linux CLI job passed 8,287 tests (50 skipped),
+all 40 guard fuzz tests, TypeScript checking, the launcher upgrade check and
+844 updater tests (9 skipped, the existing updater coverage gate remains 100%).
+The four native serial compatibility jobs also passed. The first full CI run
+passed both Linux TUI end-to-end jobs; the corrected run hit the unchanged ARM
+native-terminal `respawn death` timing check, then passed its isolated job rerun.
+All jobs finished green in [CI run 36949101625, attempt 2](https://github.com/autonomous-ai/openharness/actions/runs/36949101625).
+The failed first attempts remain available for inspection. Only this validation
+note changed after the tested production commit `ac6cb26ed2e8294a10006fb3786ce7b1158fd633`.
 
 The first native compatibility run caught a Node 20 cancellation difference on
 both operating systems: its write callback can omit an error after stream
