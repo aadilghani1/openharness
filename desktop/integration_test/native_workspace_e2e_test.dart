@@ -1584,6 +1584,13 @@ void main() {
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller
             .task,
+        isEmpty,
+      );
+      // Ordinary Cmd-N forms now start fresh after dismissal or retargeting.
+      // Enter a reviewed task here, then keep checking that creation hands
+      // input directly to its new terminal rather than the original session.
+      await tester.enterText(
+        find.byKey(const ValueKey('new-harness-task')),
         expectedTask,
       );
       await startHarness(tester);
