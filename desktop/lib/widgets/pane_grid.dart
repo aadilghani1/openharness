@@ -1518,26 +1518,25 @@ class _PaneContent extends StatelessWidget {
               agent?.terminalUnavailableReason ??
               'This harness is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
+      } else if (agent.launchState == 'starting') {
+        notice = terminalNotice(
+          label: 'Starting',
+          icon: AppIcons.terminal,
+          detail: 'You can answer setup prompts in this terminal while the agent starts.',
+          banner: true,
+        );
       } else if (agent.launchState == 'failed') {
-        // A resume the daemon could not CONFIRM is not a start that failed: the
-        // engine is usually still running in this pane, which is why output
-        // keeps arriving while the keyboard is locked. Asking again is cheap —
-        // the daemon re-checks a resume it never confirmed rather than
-        // relaunching (`resumeStoppedAgent.ts`) — so that is the button, and
-        // Restart is kept for the failures where something really must be
-        // started again.
+        // Unconfirmed can mean the shell has not reached the engine at all.
+        // Keep input available for setup prompts, and re-check the existing
+        // resume rather than starting another conversation.
         final unconfirmed = agent.launchError == 'RESUME_UNCONFIRMED';
         notice = terminalNotice(
           label: unconfirmed ? 'Not confirmed' : 'Start failed',
           icon: unconfirmed ? AppIcons.circleHelp : AppIcons.circleAlert,
           detail: unconfirmed
-              ? 'The engine is still running here; the daemon has not confirmed '
-                    'which conversation it reopened.'
+              ? 'Answer setup prompts below, then check again.'
               : agent.launchDetail ??
                     'The engine failed to start. Terminal output is preserved.',
-          // The one notice that needs saying out loud rather than hovering:
-          // the pane keeps printing while its keyboard is locked, and nothing
-          // about a chip explains that.
           banner: true,
           actionLabel: unconfirmed ? 'Check again' : 'Restart',
           onAction: unconfirmed
@@ -1570,7 +1569,15 @@ class _PaneContent extends StatelessWidget {
           visible: visible,
           compactHeader: swarmMode,
           composerVisible: pane.composerVisible,
-          readOnly: notice != null,
+          // Launch progress/failure describes the engine, not permission to
+          // type into its terminal. Connection and control ownership still
+          // gate input independently in TerminalPanel/TerminalSession.
+          readOnly:
+              machine == null ||
+              needsLink ||
+              offline ||
+              agent == null ||
+              !agent.terminalAvailable,
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,

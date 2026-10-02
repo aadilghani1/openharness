@@ -68,7 +68,7 @@ describe('buildEngineLaunchArgv', () => {
 
   it('wraps zsh in its interactive login form and execs the resolved binary', () => {
     expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)).toEqual([
-      '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
     ])
   })
 
@@ -81,7 +81,7 @@ describe('buildEngineLaunchArgv', () => {
   it('enters the workspace only after interactive startup has completed', () => {
     const argv = buildEngineLaunchArgv('claude', { cwd: '/work/project' }, '/bin/zsh', undefined, undefined, NO_TMUX)
     expect(argv).toEqual([
-      '/bin/zsh', '-lic',
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic',
       `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\nharness_engine "$@"`,
       'harness-engine', '/work/project', engineBin('claude'),
     ])
@@ -369,10 +369,10 @@ describe('buildEngineLaunchArgv', () => {
     // On this branch every pane script opens with the open-files raise, the engine-in-a-shell
     // wrapper and the grid prelude; the Node line lands after them, and a launch without
     // `harnessNode` is exactly the baseline above.
-    expect(argv[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}harness_engine "$@"`)
+    expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}harness_engine "$@"`)
     expect(harnessNodePrelude('/opt/harness runtime/bin/node')).toBe(
       'if ! command -v node >/dev/null 2>&1; then PATH="${PATH:+$PATH:}"\'/opt/harness runtime/bin\'; export PATH; fi\n')
-    expect(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX)[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
   })
 
   it('the DSH prelude, run by a real shell, reaches the engine\'s PATH only when node is missing', () => {
@@ -894,7 +894,7 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
 
   it('puts the resolved grid first on PATH and turns its update check off, before the engine', () => {
     const managed = '/opt/harness/runtime/grid-0.3.47-darwin-arm64/grid'
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed)[2]
+    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed)[4]
 
     expect(script).toContain(`PATH='/opt/harness/runtime/grid-0.3.47-darwin-arm64'"\${PATH:+:$PATH}"\nexport PATH\n`)
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\n')
@@ -902,7 +902,7 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
   })
 
   it('leaves PATH alone when grid is only a name on it, but still turns the update check off', () => {
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid')[2]
+    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid')[4]
 
     expect(script).not.toContain('export PATH')
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1')
@@ -954,10 +954,10 @@ describe('buildEngineLaunchArgv with installFirst', () => {
   // Doing so reproduces the `command not found` this feature exists to replace, with a screenful of
   // installer output above it to bury the cause.
   const script = (install: string): string =>
-    buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[2]
+    buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[4]
 
   it('leaves the plain launch alone when nothing has to be installed', () => {
-    expect(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX)[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
   })
 
   it('keeps the engine argv positional, so the shell never re-parses a path or a flag', () => {
@@ -965,9 +965,9 @@ describe('buildEngineLaunchArgv with installFirst', () => {
       installFirst: 'npm install -g opencode-ai',
       bypassPermission: true,
     }, '/bin/zsh')
-    expect(argv.slice(0, 2)).toEqual(['/bin/zsh', '-lic'])
-    expect(argv.slice(3)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
-    expect(argv[2]).toContain('harness_engine "$@"')
+    expect(argv.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
+    expect(argv.slice(5)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
+    expect(argv[4]).toContain('harness_engine "$@"')
   })
 
   it('runs the engine only when the install succeeded', async () => {
@@ -1007,7 +1007,7 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     executable: EngineInstallRecipe['executable'] = { names: ['harness-no-such-engine'] },
   ): EngineInstallRecipe => ({ command, source: 'test fixture', executable })
   const script = (install: EngineInstallRecipe, runtimeNode?: string): string =>
-    buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[2]
+    buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[4]
 
   it('execs an installed engine without running the installer', async () => {
     await expect(runPaneScript(script(recipe('false')))).resolves.toMatchObject({ code: 0, ranEngine: true })

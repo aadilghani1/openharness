@@ -60,6 +60,8 @@ jobs:
         run: python3 -c 'import pty'
       - name: Serial lifecycle, binary transfer and descriptor cleanup
         run: npx vitest run src/cable/serial.spec.ts src/cable/serial.real.spec.ts --maxWorkers=1
+      - name: Agent startup through the system zsh login shell
+        run: npx vitest run src/lib/engineShellStartup.spec.ts
 
   # Typecheck, the full suite, and the package updater's complete-coverage gate.
   typecheck-test:

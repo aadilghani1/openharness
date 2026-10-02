@@ -69,10 +69,8 @@ typedef TerminalNotice = ({
   String? actionLabel,
   VoidCallback? onAction,
 
-  /// Whether this one also earns the band across the top of the pane, over the
-  /// output. The chip is the resting place for a notice; the band is for the
-  /// few that are CONFUSING as well as blocking — a pane still printing while
-  /// its keyboard is locked — where the sentence has to be read, not hovered.
+  /// Whether this one also earns a band above the terminal output.
+  /// Startup and failure guidance needs to be read, not hovered.
   /// An offline machine is neither confusing nor rare, and a band on every one
   /// of those would cost rows in every tile.
   bool banner,
@@ -810,11 +808,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// usually a beat long — the app reattaches them itself
   /// (`_paneNeedsAttach`) — and a band that flashes up for those frames is
   /// noise, where a taken-over pane stays taken over until somebody acts.
-  /// Never a pane-level [TerminalPanel.notice] (offline, unlinked — nothing
-  /// here would help) and never a shared read-only view.
+  /// Unavailable/read-only panes cannot take control. A writable startup
+  /// notice must still allow it: setup prompts need a controlling client.
   bool get _inputBlocked =>
       !widget.readOnly &&
-      widget.notice == null &&
       // A watcher is the same situation seen from the other side: this window
       // has the output but another client has the terminal, and the band's
       // button is how a person here asks for it.
@@ -2215,6 +2212,12 @@ class _TerminalPanelState extends State<TerminalPanel>
             // [PhoneHeader], and keeping this one would stack two.
             if (widget.showHeader) Divider(height: 1, color: AppColors.border),
             ?_modelNote(),
+            // Reserve space for launch guidance so it cannot cover the shell
+            // prompt on the first line. Stream-ownership notices below remain
+            // overlays over frozen output until control is restored.
+            if (widget.notice case final notice?
+                when notice.banner && !_inputBlocked && !_retakingControl)
+              _ControlBanner.notice(notice),
             Expanded(
               // Any press into the pane's body — the terminal, the band, its
               // scrollbar; not the header, which is chrome — is the person
@@ -2306,13 +2309,6 @@ class _TerminalPanelState extends State<TerminalPanel>
                     // frozen output itself, where the eyes already are, and
                     // stays through `opening` so the pane does not jump when
                     // it is answered.
-                    //
-                    // It also carries a pane-level notice that has something to
-                    // DO about itself (a failed start offering Check again or
-                    // Restart). One strip, never two: a noticed pane is already
-                    // excluded from `_inputBlocked` — nothing the takeover band
-                    // offers would help a pane whose machine or launch is the
-                    // problem — so these two conditions cannot both hold.
                     if (_passageId != null && !_inputBlocked)
                       Positioned(
                         top: 0,
@@ -2341,14 +2337,6 @@ class _TerminalPanelState extends State<TerminalPanel>
                               ? () => unawaited(_takeControl())
                               : null,
                         ),
-                      )
-                    else if (widget.notice case final notice?
-                        when notice.banner && notice.onAction != null)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: _ControlBanner.notice(notice),
                       ),
                     if (session.uploadProgress != null ||
                         _previewProgress != null)

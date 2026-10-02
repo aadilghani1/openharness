@@ -410,6 +410,17 @@ export function interactiveEngineShell(shell: string | undefined = undefined): I
   }
 }
 
+/** Automated zsh launches must set this BEFORE rc files run. Oh My Zsh otherwise waits for an
+ * update answer before the engine exists, while an agent switch is still showing the old pane.
+ * DISABLE_UPDATE_PROMPT would auto-update instead; DISABLE_AUTO_UPDATE skips that work entirely.
+ * Keep ordinary terminal launches unchanged, and keep loading rc files for PATH/version managers. */
+function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[]): string[] {
+  const prefix = basename(shell.path).toLowerCase() === 'zsh'
+    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true']
+    : []
+  return [...prefix, shell.path, ...shell.args, ...args]
+}
+
 /**
  * Full argv for a fresh tmux pane. `exec` replaces the shell with the engine,
  * preserving process discovery while loading the same startup files a user
@@ -455,7 +466,7 @@ export function buildEngineLaunchArgv(
   // started the server, and an engine (Claude Code refuses outright) or an npm install under 256 is
   // the failure the person then reads in the pane. See openFiles.ts.
   const wait = opts.waitForPid ? waitForPidScript(opts.waitForPid) : ''
-  return [interactive.path, ...interactive.args, RAISE_OPEN_FILES_SH + prelude + cwdPrelude + wait + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command]
+  return engineShellArgv(interactive, [RAISE_OPEN_FILES_SH + prelude + cwdPrelude + wait + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command])
 }
 
 /** Waits in the pane for [wait]'s process to end before the engine starts: see `waitForPid`. */
@@ -864,10 +875,11 @@ export async function commandAvailableInInteractiveShell(
     return binaryOnPath(command)
       || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
   }
+  const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
   return await new Promise((resolve) => {
     execFile(
-      interactive.path,
-      [...interactive.args, availabilityScript(recipe), 'harness-engine-probe', command],
+      file,
+      args,
       { timeout: 5_000 },
       (error) => resolve(!error),
     )
@@ -929,10 +941,11 @@ export async function commandSupportsFlagInInteractiveShell(
     // ending the help. `[!…]` is POSIX and behaves the same in sh, bash and zsh (measured).
     `case "$help" in *"$2"[!A-Za-z0-9-]*|*"$2") exit 0 ;; *) exit ${FLAG_UNSUPPORTED_EXIT} ;; esac`,
   ].join('\n')
+  const [file, ...args] = engineShellArgv(interactive, [script, 'harness-engine-capability', command, flag])
   return await new Promise((resolve) => {
     execFile(
-      interactive.path,
-      [...interactive.args, script, 'harness-engine-capability', command, flag],
+      file,
+      args,
       { timeout: 5_000 },
       (error) => {
         const answer: CommandFlagSupport = !error

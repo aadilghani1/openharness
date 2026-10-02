@@ -40,8 +40,11 @@ opens New Harness with the focused pane's agent, machine and project. Clicking
 the agent opens the shared `&` Agents picker; clicking the model opens Models;
 the footer does not repeat model or effort. Agent switching saves the original
 session before starting its replacement in the same project. Its pane and layout
-survive peer cleanup of the stopped source. Agents that accept an initial message
-receive bounded recent requests and saved answers, preserving the handoff across
+survive peer cleanup of the stopped source. Show the replacement terminal as soon
+as its creation is confirmed, including during startup. Setup and resume warnings
+preserve keyboard input on an available terminal, with guidance above the output
+so it cannot cover a prompt. Agents that accept an initial message receive bounded
+recent requests and saved answers, preserving the handoff across
 retries; the saved original session keeps the full transcript. Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.

@@ -11040,8 +11040,8 @@ class AppNotifier extends ChangeNotifier {
     ];
   }
 
-  /// One switch intent owns its creation receipt. All views move together only
-  /// after the new agent is ready and the old conversation can be saved safely.
+  /// One switch intent owns its creation receipt. Save the old conversation,
+  /// then move all views as soon as the replacement terminal can be attached.
   Future<String?> changeAgent(String machineId, String agentId, String engine) {
     final source = stateOf(machineId)?.agents
         .where((a) => a.id == agentId)
@@ -11188,20 +11188,18 @@ class AppNotifier extends ChangeNotifier {
     if (nextId == null) {
       return 'The new agent has not confirmed its start yet. Choose it again to check.';
     }
-    Agent? next() => machine.agents.where((a) => a.id == nextId).firstOrNull;
-    for (var i = 0; i < 60 && next()?.launchState == 'starting'; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      if (!_machineWorkCurrent(machine, change.revision)) {
-        return 'This switch is no longer active.';
-      }
+    if (!_machineWorkCurrent(machine, change.revision)) {
+      return 'This switch is no longer active.';
     }
-    final target = next();
-    if (target == null ||
-        target.launchState != 'ready' ||
-        !target.terminalAvailable) {
+    final target = machine.agents.where((a) => a.id == nextId).firstOrNull;
+    // A launch receipt identifies the replacement's terminal before its engine
+    // is ready. Attach now: shell, installer and onboarding prompts need input
+    // during startup. Waiting for readiness leaves a stopped source onscreen
+    // and can deadlock the very prompt the person must answer to become ready.
+    if (target == null || !target.terminalAvailable) {
       change.launchFailed = target?.launchState == 'failed';
       return target?.launchDetail ??
-          'The new agent is still starting. Choose it again to check.';
+          'The new terminal is not available yet. Choose the agent again to check.';
     }
     final terminals = allPanes
         .where((p) => p.machineId == machineId && p.agentId == source.id)
