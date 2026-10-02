@@ -121,6 +121,14 @@ it('waits for the native streaming reply to finish before advancing past it', as
   expect(sources().sources).toHaveLength(6)
 })
 
+it('does not borrow another engine\'s completion marker when deciding that context is complete', async () => {
+  const reply = recorded.turn.messages.at(-1)!
+  const data = JSON.parse(reply.data); data.finish = 'end-turn'
+  db.prepare('UPDATE message SET data=? WHERE id=?').run(JSON.stringify(data), reply.id)
+  await capture.poll({ ...session, busy: false })
+  expect(sources().episodes[0].context).toBe('bounded')
+})
+
 it('captures a fresh fork instruction without treating copied source IDs as independent evidence', async () => {
   insert(recorded.forkWithNewTurn); session.sessionId = recorded.forkWithNewTurn.sessions[0].id
   await capture.poll(session)

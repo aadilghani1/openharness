@@ -81,7 +81,7 @@ export function decodeOpenCodeMemoryMessage(message: OpenCodeSourceMessage): Ope
   }
   if (data.role === 'assistant') {
     const completed = timestamp(object(data.time).completed)
-    result.ended = completed && (data.finish === 'stop' || data.finish === 'end-turn' || !!data.error)
+    result.ended = completed && (data.finish === 'stop' || !!data.error)
     if (!completed || data.error) result.incomplete = true
   }
   return result
