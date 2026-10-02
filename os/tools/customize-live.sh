@@ -8,13 +8,14 @@ ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 useradd -m -G wheel,video,audio -s /bin/bash programmer
 passwd -d programmer
+passwd -d root
 mkdir -p /etc/sudoers.d /home/programmer/Projects /etc/systemd/system/getty@tty1.service.d
 echo 'programmer ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-live
 chmod 440 /etc/sudoers.d/10-live
 chown programmer:programmer /home/programmer/Projects
 systemctl enable NetworkManager systemd-resolved systemd-timesyncd getty@tty1.service
 systemctl --global enable harness-daemon.service
-loginctl enable-linger programmer || mkdir -p /var/lib/systemd/linger
+mkdir -p /var/lib/systemd/linger
 touch /var/lib/systemd/linger/programmer
 # Agent auth and browser downloads never block boot. No SSH listener by default.
 systemctl disable NetworkManager-wait-online.service || true

@@ -25,7 +25,7 @@
   </keyboard>
   <mouse><context name="Root"><mousebind button="Right" action="Press"><action name="None" /></mousebind></context></mouse>
   <windowRules>
-    <windowRule identifier="hn" serverDecoration="no"><action name="ToggleFullscreen" /></windowRule>
+    <windowRule identifier="hn" serverDecoration="no" />
     <windowRule identifier="chromium*" type="normal" serverDecoration="no"><action name="Maximize" /></windowRule>
   </windowRules>
 </labwc_config>

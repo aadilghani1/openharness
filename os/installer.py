@@ -126,10 +126,22 @@ def install(config, source, target):
         for name, subvol in [('home', '@home'), ('.snapshots', '@snapshots')]:
             (target / name).mkdir()
             run('mount', '-o', f'subvol={subvol},compress=zstd:1,noatime', root_device, target / name)
-        (target / 'boot').mkdir()
-        run('mount', boot, target / 'boot')
         print('Copying the verified offline system...', flush=True)
         run('unsquashfs', '-f', '-no-progress', '-d', target, source)
+        # Extract on Btrfs first: FAT cannot represent the image's Unix metadata.
+        # Copy boot contents without that metadata before regenerating initramfs.
+        boot_staging = target / 'boot.from-image'
+        (target / 'boot').rename(boot_staging)
+        (target / 'boot').mkdir()
+        run('mount', boot, target / 'boot')
+        for path in boot_staging.rglob('*'):
+            destination = target / 'boot' / path.relative_to(boot_staging)
+            if path.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+            elif path.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, destination)
+        shutil.rmtree(boot_staging)
         print('Configuring account, boot and recovery...', flush=True)
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
@@ -143,6 +155,8 @@ def install(config, source, target):
         chroot(target, 'useradd', '-m', '-G', 'wheel,video,audio', '-s', '/bin/bash', config['username'])
         chroot(target, 'chpasswd', input=f"{config['username']}:{config['password']}\n".encode())
         chroot(target, 'passwd', '-l', 'root')
+        (target / 'var/lib/systemd/linger/programmer').unlink(missing_ok=True)
+        write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
         home = target / 'home' / config['username']
         (home / 'Projects').mkdir(exist_ok=True)
         chroot(target, 'chown', '-R', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
@@ -166,6 +180,8 @@ def install(config, source, target):
             write(target, '/etc/systemd/system/getty@tty1.service.d/autologin.conf',
                   '[Service]\nExecStart=\n' + f'ExecStart=-/usr/bin/agetty --autologin {config["username"]} --noclear %I $TERM\n')
         kernel_args = 'quiet loglevel=3 rootflags=subvol=@'
+        if config.get('serial_console'):
+            kernel_args += ' console=tty0 console=ttyS0,115200'
         if luks_uuid:
             kernel_args += f' rd.luks.name={luks_uuid}=cryptroot'
         write(target, '/etc/default/grub',

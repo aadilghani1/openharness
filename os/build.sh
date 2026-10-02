@@ -19,6 +19,7 @@ cat > "$PROFILE/pacman.conf" <<EOF
 [options]
 Architecture = auto
 CheckSpace
+ParallelDownloads = 8
 SigLevel = Required DatabaseOptional
 LocalFileSigLevel = Optional
 [harness-build]
@@ -35,7 +36,25 @@ cp installer.py "$BUILD_DIR/package/usr/lib/harness-os/install.py"
 install -m 755 tools/customize-live.sh "$BUILD_DIR/package/usr/lib/harness-os/setup-live"
 install -m 755 tools/hn-os "$BUILD_DIR/package/usr/bin/hn-os"
 cp lock.json "$BUILD_DIR/package/usr/share/harness-os/lock.json"
-python3 tools/fetch.py "$BUILD_DIR/package/usr/lib/harness"
+if [[ -n ${HARNESS_OS_RUNTIME_DIR:-} ]]; then
+    install -m 755 "$HARNESS_OS_RUNTIME_DIR/harness-tui" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
+    install -m 644 "$HARNESS_OS_RUNTIME_DIR/cli.js" "$BUILD_DIR/package/usr/lib/harness/cli.mjs"
+    install -m 644 "$HARNESS_OS_RUNTIME_DIR/notify.mjs" "$BUILD_DIR/package/usr/lib/harness/notify.mjs"
+else
+    python3 tools/fetch.py "$BUILD_DIR/package/usr/lib/harness"
+    mv "$BUILD_DIR/package/usr/lib/harness/hn" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
+fi
+ln -s harness-tui "$BUILD_DIR/package/usr/lib/harness/hn"
+python3 - "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/package/usr/share/harness-os/runtime.json" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+data = {'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA'),
+        'mode': 'source' if os.environ.get('HARNESS_OS_RUNTIME_DIR') else 'published',
+        'files': {p.name: {'sha256': hashlib.file_digest(p.open('rb'), 'sha256').hexdigest(), 'bytes': p.stat().st_size}
+                  for p in root.iterdir() if p.is_file() and not p.is_symlink()}}
+Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
+PY
 find "$BUILD_DIR/package/usr/bin" "$BUILD_DIR/package/usr/lib/harness-os" -type f -exec chmod 755 {} +
 chmod 755 "$BUILD_DIR/package/usr/share/harness-os/labwc/"{autostart,shutdown}
 cat > "$BUILD_DIR/package/.PKGINFO" <<EOF

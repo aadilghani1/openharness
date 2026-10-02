@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,9 +19,9 @@ packages = (root / 'usr/share/harness-os/packages.txt').read_text()
 (out / 'packages.txt').write_text(packages)
 manifest = {
     'version': lock['version'], 'architecture': 'x86_64',
-    'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+    'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'built_at_unix': int(time.time()), 'arch_snapshot': lock['arch_snapshot'],
     'iso': {'name': iso.name, 'bytes': iso.stat().st_size, 'sha256': digest},
-    'harness_inputs': lock['artifacts'], 'validation': 'pending',
+    'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
