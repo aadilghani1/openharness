@@ -451,7 +451,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
   }
 ${engine === 'opencode' ? opencodeMemoryPluginSource(port) : ''}
   return {
-    ${engine === 'opencode' ? '"chat.params": memoryParams,' : ''}
+    ${engine === 'opencode' ? '"chat.message": memoryMessage, "chat.params": memoryParams,' : ''}
     event: async ({ event }) => {
       if (!event) return
       if (event.type === "session.created" || event.type === "session.updated") {

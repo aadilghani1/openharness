@@ -5,7 +5,7 @@
   "semanticQualityMeasured": false,
   "runs": [
     {
-      "at": "2026-10-01T18:08:49.920Z",
+      "at": "2026-10-02T00:46:04.231Z",
       "version": "1.18.34",
       "keySource": "auth",
       "requests": [
@@ -26,6 +26,13 @@
           "selectedCredential": true
         },
         {
+          "phase": "compaction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
           "phase": "extraction",
           "route": "/v1/chat/completions",
           "model": "provider-native-id",
@@ -56,6 +63,7 @@
         "observedSelection": true,
         "selectedProcessAliveDuringExtraction": true,
         "inheritedAccountModelVariant": true,
+        "manualCompactionPreservedSelection": true,
         "offSentCredentials": false,
         "offLaunchedExtraction": false,
         "credentialsPersistedInProfile": false,
@@ -68,7 +76,7 @@
       ]
     },
     {
-      "at": "2026-10-01T18:11:02.422Z",
+      "at": "2026-10-02T00:45:02.210Z",
       "version": "1.18.34",
       "keySource": "config",
       "requests": [
@@ -89,6 +97,13 @@
           "selectedCredential": true
         },
         {
+          "phase": "compaction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
           "phase": "extraction",
           "route": "/v1/chat/completions",
           "model": "provider-native-id",
@@ -119,6 +134,7 @@
         "observedSelection": true,
         "selectedProcessAliveDuringExtraction": true,
         "inheritedAccountModelVariant": true,
+        "manualCompactionPreservedSelection": true,
         "offSentCredentials": false,
         "offLaunchedExtraction": false,
         "credentialsPersistedInProfile": false,
@@ -133,7 +149,7 @@
   ],
   "validation": {
     "affectedTestFiles": 34,
-    "affectedTestsPassed": 514,
+    "affectedTestsPassed": 516,
     "typecheck": "passed",
     "bundle": "passed",
     "tmuxDiscovery": {
@@ -155,5 +171,12 @@
   "limits": [
     "Local mock responses establish request routing and authorization behavior, not model understanding.",
     "Production daemon settings and the installed review app were not changed."
+  ],
+  "regressions": [
+    {
+      "case": "Manual native compaction with the same provider and model",
+      "before": "Internal compaction replaced the user-selected high variant with its default.",
+      "after": "Only chat.params for the latest submitted chat.message and its selected agent may observe credentials; the native compaction path does not request a grant."
+    }
   ]
 }

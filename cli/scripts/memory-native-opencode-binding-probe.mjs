@@ -63,7 +63,7 @@ try {
   binding = new OpenCodeMemoryBinding({ current: owner })
   const plugin = join(fixture, 'plugin.mjs')
   await writeFile(plugin, `const hookToken = () => 'synthetic-hook-token';
-    export const Fixture = async ({client}) => { ${opencodeMemoryPluginSource(model.address().port)}; return { 'chat.params': memoryParams } }`, { mode: 0o600 })
+    export const Fixture = async ({client}) => { ${opencodeMemoryPluginSource(model.address().port)}; return { 'chat.message': memoryMessage, 'chat.params': memoryParams } }`, { mode: 0o600 })
   const selectedModel = 'memory-fixture/alias'
   const config = { autoupdate: false, share: 'disabled', snapshot: false, permission: { '*': 'deny' },
     plugin: [pathToFileURL(plugin).href], mcp: {}, instructions: [], enabled_providers: ['memory-fixture'],
@@ -113,6 +113,11 @@ try {
   assert.equal(snapshot?.model, selectedModel)
   assert.equal(snapshot?.auth.key, 'synthetic-selected-account')
   assert.equal(snapshot?.variant, 'high')
+  phase = 'compaction'
+  const observedBeforeCompaction = binding.identity(actor()), hooksBeforeCompaction = hooks.length
+  await call(`/session/${sessionId}/summarize`, { providerID: 'memory-fixture', modelID: 'alias' })
+  assert.equal(binding.identity(actor()), observedBeforeCompaction, 'Internal compaction cannot replace the user selection')
+  assert.equal(hooks.length, hooksBeforeCompaction, 'Internal compaction must not request a new selection grant')
   assert.ok(alive())
   const intelligence = new CompanionIntelligence({ enabled: () => enabled, current: () => ({ ...actor(),
     engine: 'opencode', stopped: !alive(), profile: null, nativeProcessKey: processKey(),
@@ -132,7 +137,8 @@ try {
   assert.deepEqual(await readdir(join(fixture, 'reasoning')), [])
   for (const request of requests) {
     assert.equal(request.model, 'provider-native-id'); assert.equal(request.selectedCredential, true)
-    assert.equal(request.reasoningEffort, 'high'); assert.deepEqual(request.tools, [])
+    if (request.phase !== 'compaction') assert.equal(request.reasoningEffort, 'high')
+    assert.deepEqual(request.tools, [])
   }
   enabled = false; binding.clear()
   const before = requests.length
@@ -141,6 +147,7 @@ try {
   assert.equal(requests.length, before)
   console.log(JSON.stringify({ at: new Date().toISOString(), version: health.version, keySource, requests, hooks,
     result: { observedSelection: true, selectedProcessAliveDuringExtraction: true, inheritedAccountModelVariant: true,
+      manualCompactionPreservedSelection: true,
       offSentCredentials: false, offLaunchedExtraction: false, credentialsPersistedInProfile: false, privateStorageRemoved: true },
     limitations: ['Synthetic localhost responses; no personal conversations or semantic-quality measurement.',
       'Consent and process ownership are fixture inputs; the actual hook-server authorization is covered separately.',

@@ -1,6 +1,17 @@
 /** Standalone source embedded in the existing 1.x plugin; no additional installation artifact. */
 export function opencodeMemoryPluginSource(port: number): string {
   return `
+  const memoryMessages = new Map()
+  const memoryMessage = async (input, output) => {
+    const message = output.message
+    if (!input.sessionID || message?.sessionID !== input.sessionID || message.role !== "user"
+      || typeof message.id !== "string" || typeof message.agent !== "string") return
+    // Only chat.message observes an actual submitted request. Compaction and its synthetic
+    // auto-continue messages are written internally and must not replace the user's selection.
+    memoryMessages.delete(input.sessionID)
+    memoryMessages.set(input.sessionID, { id: message.id, agent: message.agent })
+    if (memoryMessages.size > 128) memoryMessages.delete(memoryMessages.keys().next().value)
+  }
   const memoryRequest = async (sessionID, input) => {
     const pane = process.env.TMUX_PANE, token = hookToken()
     if (!pane || !token || !sessionID) return null
@@ -14,6 +25,9 @@ export function opencodeMemoryPluginSource(port: number): string {
   }
   const memoryParams = async (input) => {
     try {
+      const submitted = memoryMessages.get(input.sessionID)
+      if (!submitted || submitted.id !== input.message?.id || submitted.agent !== input.agent
+        || input.message.agent !== input.agent) return
       // Internal title/summary calls can use a different small model; they are not a new selection.
       const model = input.model, selection = input.message?.model
       if (!model || selection?.providerID !== model.providerID || selection?.modelID !== model.id) return

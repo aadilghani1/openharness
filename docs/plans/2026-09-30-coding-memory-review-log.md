@@ -617,7 +617,8 @@ The observed provider, model alias, API credential and native variant stay in vo
 No credential enters the session registry, saved profile, browser/device frames or research logs.
 The binding expires after fifteen minutes and is withdrawn on an owner, process, session, selected
 model or authorization change. Identical model credentials cannot carry a result across Harness
-owners. Internal calls using a different small model do not replace the user's selection.
+owners. Only the latest submitted `chat.message` and its selected agent may observe request settings.
+Internal title, summary and compaction requests do not replace the user's selection.
 
 `CompanionIntelligence` now uses this binding for OpenCode extraction and companion reasoning,
 with checks before launch and after completion. It never guesses a provider from the machine's
@@ -634,7 +635,14 @@ Off sent no credential snapshot and launched no extraction; scratch storage was 
 first probe exposed the 1.x SDK's missing health wrapper, so the hook now uses that pinned SDK's
 in-process HTTP client for `/global/health`; the corrected path was exercised natively.
 
-Validation: **514 tests across 34 affected suites**, TypeScript checking and the CLI bundle passed.
+A further native manual-compaction check caught an internal request replacing the user's `high`
+variant with the compaction default. Matching the request to its submitted message and agent fixed
+that regression. Both native account cases now compact and then extract with the original selected
+variant, while compaction itself requests no observation grant. Synthetic continuations are also
+excluded by the message binding; automatic compaction remains uncertified. The hook boundaries are
+defined in the [pinned plugin interface](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/plugin/src/index.ts).
+
+Validation: **516 tests across 34 affected suites**, TypeScript checking and the CLI bundle passed.
 The first unprivileged hook-server run could not bind localhost (`EPERM`); the permitted run passed.
 The required real multiplexer suite ran in a separate temporary tmux 3.7c server: nine checks
 passed, including discovery for Claude 2.1.287, Codex 0.159.3, OpenCode 1.18.34, Pi 0.85.1,
