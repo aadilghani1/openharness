@@ -710,6 +710,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // The app's shared controller, so this menu and every pane's model picker show one reading.
     _modelsMenu = widget.modelsMenu ?? app.modelsMenu;
     _modelsMenu!.addListener(_subscriptionUsageChanged);
+    _pickerModels = ModelSearchCatalog(
+      app.modelManager,
+      _modelsMenu!,
+      pollHosts: !kUnderTest,
+    )..addListener(_modelInventoryChanged);
     app.modelManager.addListener(_modelManagerChanged);
     _modelsRequests = app.modelsRequests.listen((_) {
       if (mounted && !_modelsVisible) {
@@ -720,6 +725,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         app.modelManager.start();
+        _pickerModels!.watchInstalled();
         // Subscription usage is read ahead, so opening a menu shows it without waiting.
         _modelsMenu!.start();
         _harnessMonitor.start();
@@ -1501,6 +1507,38 @@ class _SwarmScreenState extends State<SwarmScreen> {
   WorkspaceSubscriptionUsage get _subscriptionUsage =>
       WorkspaceSubscriptionUsage.fromRows(_modelsMenu?.rows ?? const []);
 
+  List<MachineState> get _footerMachines => app.machineStates.values
+      .where(
+        (machine) =>
+            !machine.machine.isShared &&
+            (machine.isLocalMachine || !machine.needsLink),
+      )
+      .toList();
+  String get _footerMachineLabel => 'Machines ${_footerMachines.length}';
+  String get _footerMachineDetail {
+    final machines = _footerMachines;
+    final online = machines
+        .where(
+          (machine) =>
+              machine.connectionStatus == ConnectionStatus.connected &&
+              !machine.isOffline,
+        )
+        .length;
+    return '${machines.length} linked machines · $online online · ${machines.length - online} offline.\n'
+        '${_commandTooltip('Open Machines', 'machines.list')}';
+  }
+
+  String get _footerModelLabel =>
+      'Models ${_pickerModels?.installedCount ?? '—'}';
+  String get _footerModelDetail =>
+      _pickerModels?.installedDetail ?? 'Reading installed local models.';
+
+  void _modelInventoryChanged() {
+    if (!mounted) return;
+    if (_menuHost) _syncNative();
+    setState(() {});
+  }
+
   void _subscriptionUsageChanged() {
     if (!mounted) return;
     if (_native) _syncNative();
@@ -1776,6 +1814,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       terminalThemeStore.value,
     );
     final barStyle = workspaceBarTextStyle();
+    final usage = _subscriptionUsage;
     int activityInk(HarnessActivity activity) =>
         activityColor(activity, terminalTheme, color: prefs.color).toARGB32();
     final payload = {
@@ -1809,6 +1848,38 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ],
         'interactive': _shortcutsEnabled,
       },
+      'footerMachines': {
+        'text': _footerMachineLabel,
+        'detail': _footerMachineDetail,
+        'segments': [
+          {'text': _footerMachineLabel},
+        ],
+        'interactive': _shortcutsEnabled,
+      },
+      'footerModels': {
+        'text': _footerModelLabel,
+        'detail': _footerModelDetail,
+        'segments': [
+          {'text': _footerModelLabel},
+        ],
+        'interactive': _shortcutsEnabled,
+      },
+      if (usage.accounts.isNotEmpty)
+        'subscriptionUsage': {
+          'text': usage.text,
+          'detail': usage.detail,
+          'interactive': _shortcutsEnabled,
+          'paddedFields': true,
+          'overflowFields': true,
+          'fields': [
+            for (final account in usage.accounts)
+              account.native(
+                terminalTheme.foreground,
+                grid.AppTheme.palette.value.workspace,
+                _shortcutsEnabled,
+              ),
+          ],
+        },
       'footerCovered':
           !_showWorkspaceFooter ||
           (!_routeIsCurrent && !_footerPreviewCurrent) ||
@@ -2117,7 +2188,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     }
     if (call.method == 'subscriptions') {
-      if (_shortcutsEnabled) _toggleModels(initialTab: ModelsTab.subscriptions);
+      if (_shortcutsEnabled) _openSubscription(args['id'] as String?);
       return;
     }
     if (call.method == 'focusedContext') {
@@ -5070,6 +5141,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
+  void _openSubscription(String? searchId) {
+    _toggleModels(initialTab: ModelsTab.subscriptions);
+    final search = _search;
+    if (search == null || !search.isModelMode || searchId == null) return;
+    final index = search.rows.indexWhere((row) => row.id == searchId);
+    if (index >= 0) search.move(index - search.cursor);
+    if (!search.previewVisible) search.togglePreview();
+  }
+
   void _togglePaneModels() => _toggleModels();
 
   void _openPaneAgents(String machineId, String agentId) {
@@ -7145,6 +7225,33 @@ class _SwarmScreenState extends State<SwarmScreen> {
             ].where((part) => part.isNotEmpty).join(' · '),
       items: [
         WorkspaceFooterItem(
+          title: _harnessMonitor.label,
+          detail: _harnessMonitor.detail,
+          onPressed: _shortcutsEnabled ? _toggleHarnessControls : null,
+        ),
+        WorkspaceFooterItem(
+          title: _footerMachineLabel,
+          detail: _footerMachineDetail,
+          onPressed: _shortcutsEnabled
+              ? () => unawaited(_openMachines())
+              : null,
+        ),
+        WorkspaceFooterItem(
+          title: _footerModelLabel,
+          detail: _footerModelDetail,
+          onPressed: _shortcutsEnabled
+              ? () => _toggleModels(initialTab: ModelsTab.local)
+              : null,
+        ),
+        for (final account in _subscriptionUsage.accounts)
+          WorkspaceFooterItem(
+            title: '${account.name} ${account.figure}',
+            detail: account.detail,
+            onPressed: _shortcutsEnabled
+                ? () => _openSubscription(account.searchId)
+                : null,
+          ),
+        WorkspaceFooterItem(
           title: 'Subscriptions',
           detail: _subscriptionUsage.text,
           onPressed: _shortcutsEnabled
@@ -7172,6 +7279,40 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? () => _runShortcut('agent.share')
                   : null,
             ),
+    );
+  }
+
+  Widget _footerCount(
+    String key,
+    String text,
+    String detail,
+    VoidCallback open,
+    double width,
+  ) {
+    final cell = workspaceBarCellSizeOf(context);
+    return SizedBox(
+      width: width,
+      child: WorkspaceBarControl(
+        key: ValueKey(key),
+        label: detail,
+        tooltip: detail,
+        onPressed: _shortcutsEnabled ? open : null,
+        builder: (context, emphasized) => Padding(
+          padding: EdgeInsets.symmetric(horizontal: cell.width),
+          child: SizedBox(
+            height: workspaceBarControlHeight(context),
+            child: Center(
+              widthFactor: 1,
+              child: Text.rich(
+                workspaceBarGroupTextSpan(text, cellWidth: cell.width),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: workspaceBarTextStyle(emphasized: emphasized),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -7219,52 +7360,73 @@ class _SwarmScreenState extends State<SwarmScreen> {
             cell.width * 5 -
             resourceGap * 2,
       );
-      final monitorWidth = math.min(
-        workspaceBarTextSizeOf(
-              context,
-              _harnessMonitor.label,
-              grouped: true,
-            ).width +
-            cell.width * 2,
-        resourceBudget * .4,
+      final countWidths = [
+        for (final text in [
+          _harnessMonitor.label,
+          _footerMachineLabel,
+          _footerModelLabel,
+        ])
+          workspaceBarTextSizeOf(context, text, grouped: true).width +
+              cell.width * 2,
+      ];
+      final countTotal = countWidths.fold(0.0, (a, b) => a + b);
+      final countScale = math.min(1.0, resourceBudget * .8 / countTotal);
+      final usage = _subscriptionUsage;
+      final usageWidth = math.min(
+        usage.accounts.fold(
+          0.0,
+          (width, account) =>
+              width +
+              cell.width * 3 +
+              MediaQuery.textScalerOf(context).scale(14) +
+              workspaceBarTextSizeOf(context, account.figure).width,
+        ),
+        math.max(0.0, resourceBudget - countTotal * countScale),
       );
       final hasFooterDaemon = !kIsWeb && _slotShown;
-      final paneContext = Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          if (focused != null)
-            Flexible(
-              child: WorkspaceStatusLine(
-                key: const ValueKey('workspace-pane-context'),
-                parts: parts!,
-                links: _contextLinks(focused),
-                color: prefs.color,
-                nextBackground: prBackground,
-              ),
-            ),
-          if (pr != null) ...[
-            if (!joined) SizedBox(width: cell.width),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: constraints.maxWidth * .2),
-              child: WorkspaceBarControl(
-                key: const ValueKey('workspace-pull-request'),
-                label: '${pr.label} — Open on GitHub',
-                tooltip: '${pr.label} — Open on GitHub',
-                onPressed: _shortcutsEnabled
-                    ? () => _openFocusedPullRequest(pr.url.toString())
-                    : null,
-                builder: (context, emphasized) => WorkspacePullRequestLabel(
-                  number: pr.number,
-                  state: pr.state,
-                  emphasized: emphasized,
+      final paneContext = LayoutBuilder(
+        builder: (context, contextConstraints) => Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            if (focused != null)
+              Flexible(
+                child: WorkspaceStatusLine(
+                  key: const ValueKey('workspace-pane-context'),
+                  parts: parts!,
+                  links: _contextLinks(focused),
                   color: prefs.color,
-                  style: prefs.statusStyle,
-                  segmentOffset: parts?.segments.length ?? 0,
+                  nextBackground: prBackground,
                 ),
               ),
-            ),
+            if (pr != null) ...[
+              if (!joined)
+                SizedBox(
+                  width: math.min(cell.width, contextConstraints.maxWidth * .1),
+                ),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: contextConstraints.maxWidth * .3,
+                ),
+                child: WorkspaceBarControl(
+                  key: const ValueKey('workspace-pull-request'),
+                  label: '${pr.label} — Open on GitHub',
+                  tooltip: '${pr.label} — Open on GitHub',
+                  onPressed: _shortcutsEnabled
+                      ? () => _openFocusedPullRequest(pr.url.toString())
+                      : null,
+                  builder: (context, emphasized) => WorkspacePullRequestLabel(
+                    number: pr.number,
+                    state: pr.state,
+                    emphasized: emphasized,
+                    color: prefs.color,
+                    style: prefs.statusStyle,
+                    segmentOffset: parts?.segments.length ?? 0,
+                  ),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       );
       return Material(
         key: const ValueKey('workspace-status-bar'),
@@ -7275,43 +7437,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
             padding: EdgeInsets.symmetric(horizontal: cell.width),
             child: Row(
               children: [
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: monitorWidth),
-                  child: ListenableBuilder(
-                    listenable: _harnessMonitor,
-                    builder: (context, _) {
-                      final summary = _harnessMonitor;
-                      return WorkspaceBarControl(
-                        key: const ValueKey('workspace-harness-monitor'),
-                        label: summary.detail,
-                        tooltip: summary.detail,
-                        onPressed: _shortcutsEnabled
-                            ? () => _toggleHarnessControls()
-                            : null,
-                        builder: (context, emphasized) => Padding(
-                          padding: EdgeInsets.symmetric(horizontal: cell.width),
-                          child: SizedBox(
-                            height: workspaceBarControlHeight(context),
-                            child: Center(
-                              widthFactor: 1,
-                              child: Text.rich(
-                                workspaceBarGroupTextSpan(
-                                  summary.label,
-                                  cellWidth: cell.width,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: workspaceBarTextStyle(
-                                  emphasized: emphasized,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                ListenableBuilder(
+                  listenable: _harnessMonitor,
+                  builder: (context, _) {
+                    final summary = _harnessMonitor;
+                    return _footerCount(
+                      'workspace-harness-monitor',
+                      summary.label,
+                      summary.detail,
+                      _toggleHarnessControls,
+                      countWidths[0] * countScale,
+                    );
+                  },
                 ),
+                _footerCount(
+                  'workspace-machines',
+                  _footerMachineLabel,
+                  _footerMachineDetail,
+                  () => unawaited(_openMachines()),
+                  countWidths[1] * countScale,
+                ),
+                _footerCount(
+                  'workspace-models',
+                  _footerModelLabel,
+                  _footerModelDetail,
+                  () => _toggleModels(initialTab: ModelsTab.local),
+                  countWidths[2] * countScale,
+                ),
+                if (usage.accounts.isNotEmpty && usageWidth > 0)
+                  SizedBox(
+                    width: usageWidth,
+                    child: WorkspaceSubscriptionStrip(
+                      key: const ValueKey('workspace-subscription-usage'),
+                      usage: usage,
+                      foreground: theme.foreground,
+                      surface: grid.AppTheme.palette.value.workspace,
+                      onOpen: _shortcutsEnabled ? _openSubscription : null,
+                    ),
+                  ),
                 if (hasFooterDaemon) ...[
                   SizedBox(width: resourceGap),
                   _daemonTabButton(),

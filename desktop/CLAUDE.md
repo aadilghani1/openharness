@@ -381,7 +381,7 @@ add a kind there, not at the call site.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
 - The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
-  with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  with harness, machine and installed local model counts plus subscription allowance remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
   and quiet, with larger click targets. Terminal panes end with matching
@@ -427,7 +427,10 @@ add a kind there, not at the call site.
   have spent. Each account shows its `tightest` window, the limit that stops the work first.
   The shared controller reads ahead at startup and every five minutes; opening a menu requests
   a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
-  and freshness rules, displaying whole allowance-used percentages (100 − remaining) in neutral ink.
+  and freshness rules, displaying one provider icon and remaining percentage per account.
+  Values are neutral above 20%, muted amber at 6–20%, and red at 5% or less; tooltips identify
+  the account, machines, limiting window and resets. Models counts distinct installed local
+  model variants across linked owned machines, sharing the picker's cached inventories.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read

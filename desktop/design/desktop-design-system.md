@@ -382,13 +382,23 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — only the open harness count at the left, such as `Harnesses 118`;
-focused machine, project, branch and PR at the right. Count connected owned harnesses, including
-idle and starting sessions. Clicking the count reuses Harness Monitor or creates it when absent.
-The footer performs no resource polling. CPU, RAM, GPU, workspace/session storage and their detailed
-accounting belong in the Monitor. Subscription usage stays available in Models/Subscriptions.
+**Focused workspace footer** — `Harnesses N`, `Machines N`, `Models N`, then subscription
+icons with remaining percentages at the left; focused machine, project, branch and PR at the right.
+Harnesses counts connected owned sessions, including idle and starting sessions, and opens Harness
+Monitor. Machines counts linked owned computers, including this computer, and opens the `@` picker.
+Models counts distinct installed local model variants across those computers, running or stopped,
+and opens local models. Exclude downloadable catalog, API, subscription and shared-grid rows.
+The picker and footer share cached model inventory; background reads never force a disk scan,
+set up Grid, download models or create harnesses. CPU/RAM/GPU/storage remain in Monitor.
 
-Labels use neutral readable ink. Preserve focused context actions and the selected status face,
+Each distinct subscription account has its own authentic provider icon and remaining percentage.
+Account identity, machines, limiting window, freshness and resets stay in its tooltip; clicking
+selects that subscription in Models. Percentages use neutral ink above 20%, `usageLow` amber at
+6–20%, and `usageCritical` red at 5% or less. Keep positive fractions as `<1%`, zero as `0%`,
+unknown as `—`. Color only the value; retain provider artwork. Omit signed-out accounts. Compact
+widths preserve whole account controls and expose overflow through `+N`.
+
+Count labels use neutral readable ink. Preserve focused context actions and the selected status face,
 fields, colors and shell/Powerline treatment. Companion and sharing controls follow the count;
 the companion's fixed gutter replaces the preceding control's trailing padding. See the
 [status bar contract](workspace-status-bar.md). Do not repeat branches in pane headers or model/effort
