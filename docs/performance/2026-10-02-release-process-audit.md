@@ -98,13 +98,22 @@ matches exactly. A null direct PR does not imply there were no included PRs.
 
 - 59 affected CLI tests passed with inherited npm prefix values deliberately set;
   CLI TypeScript checking passed on managed Node 22.23.2.
-- Validation runner/version-guard integration tests pass locally.
+- All 20 process regression tests pass locally. The real TUI
+  publisher shell is exercised against a disposable object store for fresh upload,
+  duplicate version, immutable-object collision, corrupt manifest, and concurrent
+  manifest update. Desktop notes are exercised with annotated and lightweight tags.
 - Changed workflow files pass actionlint 1.7.12.
-- Rust regression, native validation, and final CI are recorded in the accompanying PR.
+- The Rust restart regression passes with the fix and fails with the old unconditional
+  exit clearing (two death hooks instead of one).
+- [Full CI](https://github.com/autonomous-ai/openharness/actions/runs/36992127857)
+  passed all nine applicable jobs on `c748f0a203f8c022c2c3693a6fc9fdbdbaf4c235`,
+  including both native TUI platforms, four serial-platform jobs, CLI, backend, and
+  process checks. The final follow-up adds only seven locally passing workflow
+  regression tests and this result; production code and workflow inputs are unchanged.
+  See [PR #602](https://github.com/autonomous-ai/openharness/pull/602).
 - No production release is claimed as validation of this process patch.
 
 The target is to restore the team's previous 10–15 minute **merge/release overhead
 for small changes**, without counting only the build. Request-to-completion time
 also includes implementation and review. Measure the next ten tasks end to end
 before claiming the target is achieved.
-
