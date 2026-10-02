@@ -158,6 +158,21 @@ void main() {
     },
   );
 
+  axTest('switching without resize restores clean portal nodes', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      for (var i = 0; i < 30; i++) {
+        await tester.pumpWidget(_sliders(i % 2));
+        await tester.pumpAndSettle();
+        expect(_disconnectedUpdates(binding.batches), isEmpty);
+      }
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   axTest('dialogs and editable controls keep their labels and actions', (
     tester,
   ) async {
@@ -251,7 +266,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     expect(
       binding.createSemanticsUpdateBuilder(),
-      isA<ConnectedSemanticsUpdateBuilder>(),
+      isNot(isA<_RecordingBuilder>()),
     );
     debugDefaultTargetPlatformOverride = null;
   });

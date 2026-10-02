@@ -63,6 +63,9 @@ def run(command, cwd, log, deadline, env):
 
 
 def main():
+    # Let an outer validation deadline unwind run() and kill only our child
+    # process group, including any compiler descendants.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--flutter', type=Path, required=True)
     parser.add_argument('--unguarded', action='store_true')
@@ -126,8 +129,10 @@ flutter:
         receipt['steps'].append(dict(name='native', **step))
         output = (root / 'native.log').read_text()
         if args.unguarded:
-            if step['exit_code'] != -signal.SIGSEGV or 'Failed to update ui::AXTree' not in output:
-                raise RuntimeError('Expected stock-engine segmentation fault was not reproduced')
+            # The broken tree can fail while reparenting (SIGSEGV) or while
+            # AppKit enumerates its missing children (SIGABRT).
+            if step['exit_code'] not in (-signal.SIGSEGV, -signal.SIGABRT) or 'Failed to update ui::AXTree' not in output:
+                raise RuntimeError('Expected stock-engine native accessibility crash was not reproduced')
             receipt['status'] = 'baseline_crash_reproduced'
         else:
             if step['exit_code'] != 0 or 'ACCESSIBILITY_REGRESSION_PASS cycles=160 native_actions=160' not in output:

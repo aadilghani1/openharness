@@ -20,7 +20,6 @@ Widget _slider(int index) => Center(
       value: value,
       onChanged: (value) {
         _values[index].value = value;
-        _actions++;
       },
     ),
   ),
@@ -33,16 +32,26 @@ Future<void> _run() async {
   } else {
     HarnessWidgetsBinding();
   }
-  final binding = WidgetsBinding.instance;
-  final semantics = binding.ensureSemantics();
   await _host.invokeMethod<void>('semantics', true);
   runApp(
     MaterialApp(
       home: Scaffold(
-        body: ValueListenableBuilder<int>(
-          valueListenable: _selected,
-          builder: (_, selected, _) =>
-              IndexedStack(index: selected, children: [_slider(0), _slider(1)]),
+        body: Column(
+          children: [
+            Expanded(
+              child: ValueListenableBuilder<int>(
+                valueListenable: _selected,
+                builder: (_, selected, _) => IndexedStack(
+                  index: selected,
+                  children: [_slider(0), _slider(1)],
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _actions++,
+              child: const Text('Native action'),
+            ),
+          ],
         ),
       ),
     ),
@@ -57,21 +66,23 @@ Future<void> _run() async {
     _selected.value = step % 2;
     await _host.invokeMethod<void>('resize', step);
     await Future<void>.delayed(const Duration(milliseconds: 35));
-    // Ask AppKit to invoke the real Flutter AX node, verifying more than mere
-    // process survival. The action must travel back through the native bridge.
+    // The native fixture requires one visible slider, then presses a button
+    // through AppKit and the real Flutter AX bridge. This engine advertises
+    // slider increment but does not implement dispatching it; tap is supported.
     final before = _actions;
-    final result = await _host.invokeMethod<bool>('increment');
-    await Future<void>.delayed(const Duration(milliseconds: 15));
+    final result = await _host.invokeMethod<bool>('activate');
+    for (var attempt = 0; _actions == before && attempt < 100; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
     if (result != true || _actions != before + 1) {
       throw StateError(
-        'Native slider action failed at step $step: $result, $_actions vs $before',
+        'Native button action failed at step $step: $result, $_actions vs $before',
       );
     }
-    // Keep the slider below its maximum so every increment remains actionable.
-    _values[_selected.value].value = .5;
+    // Exercise value changes as well as view switching.
+    _values[_selected.value].value = step.isEven ? .25 : .75;
     await Future<void>.delayed(const Duration(milliseconds: 15));
   }
-  semantics.dispose();
   stdout.writeln(
     'ACCESSIBILITY_REGRESSION_PASS cycles=160 native_actions=$_actions',
   );

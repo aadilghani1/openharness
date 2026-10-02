@@ -12,11 +12,15 @@ import '../logging/app_log.dart';
 /// reparent then dereferences a null parent and terminates the process.
 ///
 /// Filter at Flutter's public builder seam, before the native update is made.
-/// Use the current framework tree, not a second retained tree: this also handles
-/// removals, view changes, and disabling/re-enabling semantics without stale IDs.
+/// Derive connectivity from the current framework tree. Keep immutable copies
+/// of node updates while their paint nodes exist: a clean hidden portal may
+/// reconnect without Flutter serializing it again. Replay its latest data when
+/// it reconnects, and discard snapshots when nodes leave the framework tree.
 /// https://github.com/flutter/flutter/issues/193410
 mixin ConnectedSemanticsBinding on RendererBinding {
   bool _reportedDisconnectedSemantics = false;
+  final _updates = <int, _NodeUpdate>{};
+  final _previousConnected = <int>{};
 
   @protected
   ui.SemanticsUpdateBuilder createPlatformSemanticsUpdateBuilder() =>
@@ -31,6 +35,7 @@ mixin ConnectedSemanticsBinding on RendererBinding {
       return delegate;
     }
     final connected = <int>{};
+    final attached = <int>{};
     for (final view in renderViews) {
       final root = view.owner?.semanticsOwner?.rootSemanticsNode;
       if (root == null) continue;
@@ -39,6 +44,7 @@ mixin ConnectedSemanticsBinding on RendererBinding {
       // in paint order, but its traversal parent is no longer in the tree.
       final portals = <Object, List<SemanticsNode>>{};
       void collect(SemanticsNode node) {
+        attached.add(node.id);
         final identifier = node.traversalChildIdentifier;
         if (node.traversalParentIdentifier == null && identifier != null) {
           portals.putIfAbsent(identifier, () => []).add(node);
@@ -72,9 +78,12 @@ mixin ConnectedSemanticsBinding on RendererBinding {
 
       visit(root);
     }
-    return ConnectedSemanticsUpdateBuilder(
+    _updates.removeWhere((id, _) => !attached.contains(id));
+    return _ConnectedSemanticsUpdateBuilder(
       delegate,
       connected: connected,
+      updates: _updates,
+      previousConnected: _previousConnected,
       onDiscard: (id) {
         if (_reportedDisconnectedSemantics) return;
         _reportedDisconnectedSemantics = true;
@@ -92,21 +101,28 @@ mixin ConnectedSemanticsBinding on RendererBinding {
 class HarnessWidgetsBinding extends WidgetsFlutterBinding
     with ConnectedSemanticsBinding {}
 
-@visibleForTesting
-class ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
-  ConnectedSemanticsUpdateBuilder(
+typedef _NodeUpdate = void Function(ui.SemanticsUpdateBuilder, Set<int>);
+
+class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
+  _ConnectedSemanticsUpdateBuilder(
     this._delegate, {
     required this.connected,
+    required Map<int, _NodeUpdate> updates,
+    required Set<int> previousConnected,
     this.onDiscard,
-  });
+  }) : _updates = updates,
+       _previousConnected = previousConnected;
 
+  final Map<int, _NodeUpdate> _updates;
+  final Set<int> _previousConnected;
+  final _changed = <int>{};
   final ui.SemanticsUpdateBuilder _delegate;
   final Set<int> connected;
   final void Function(int id)? onDiscard;
 
   // Root 0 can never be another node's child. Leave traversal/hit-test order
   // otherwise intact: OverlayPortal legitimately uses different lists.
-  Int32List _children(Int32List ids) {
+  static Int32List _children(Int32List ids, Set<int> connected) {
     if (ids.every((id) => id != 0 && connected.contains(id))) return ids;
     return Int32List.fromList(
       ids.where((id) => id != 0 && connected.contains(id)).toList(),
@@ -161,11 +177,22 @@ class ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
     required String minValue,
     required String maxValue,
   }) {
-    if (!connected.contains(id)) {
-      onDiscard?.call(id);
-      return;
-    }
-    _delegate.updateNode(
+    if (!connected.contains(id)) onDiscard?.call(id);
+    // Framework matrices and typed arrays can be reused and mutated after this
+    // batch. Own the data that may be replayed when a hidden node reconnects.
+    transform = Float64List.fromList(transform);
+    hitTestTransform = Float64List.fromList(hitTestTransform);
+    childrenInTraversalOrder = Int32List.fromList(childrenInTraversalOrder);
+    childrenInHitTestOrder = Int32List.fromList(childrenInHitTestOrder);
+    additionalActions = Int32List.fromList(additionalActions);
+    labelAttributes = List.of(labelAttributes);
+    valueAttributes = List.of(valueAttributes);
+    increasedValueAttributes = List.of(increasedValueAttributes);
+    decreasedValueAttributes = List.of(decreasedValueAttributes);
+    hintAttributes = List.of(hintAttributes);
+    controlsNodes = controlsNodes == null ? null : List.of(controlsNodes);
+    _changed.add(id);
+    _updates[id] = (delegate, currentConnected) => delegate.updateNode(
       id: id,
       flags: flags,
       actions: actions,
@@ -196,8 +223,14 @@ class ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
       textDirection: textDirection,
       transform: transform,
       hitTestTransform: hitTestTransform,
-      childrenInTraversalOrder: _children(childrenInTraversalOrder),
-      childrenInHitTestOrder: _children(childrenInHitTestOrder),
+      childrenInTraversalOrder: _children(
+        childrenInTraversalOrder,
+        currentConnected,
+      ),
+      childrenInHitTestOrder: _children(
+        childrenInHitTestOrder,
+        currentConnected,
+      ),
       additionalActions: additionalActions,
       headingLevel: headingLevel,
       linkUrl: linkUrl,
@@ -226,5 +259,19 @@ class ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
   );
 
   @override
-  ui.SemanticsUpdate build() => _delegate.build();
+  ui.SemanticsUpdate build() {
+    // Native AX deletes unreachable nodes. A newly reachable node needs its
+    // snapshot even when Flutter considers it clean and omits it from this batch.
+    final pending = <int>{
+      ..._changed,
+      ...connected.difference(_previousConnected),
+    };
+    for (final id in pending) {
+      if (connected.contains(id)) _updates[id]?.call(_delegate, connected);
+    }
+    _previousConnected
+      ..clear()
+      ..addAll(connected);
+    return _delegate.build();
+  }
 }

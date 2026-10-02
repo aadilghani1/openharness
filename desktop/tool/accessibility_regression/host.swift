@@ -23,14 +23,16 @@ private enum AccessibilityRegression {
         let step = call.arguments as! Int
         window.setContentSize(NSSize(width: 700 + (step % 3) * 70, height: 500 + (step % 4) * 50))
         result(nil)
-      case "increment":
+      case "activate":
         var seen = Set<ObjectIdentifier>()
         var sliders = [NSObject]()
+        var buttons = [NSObject]()
         func visit(_ value: Any) {
           guard let node = value as? NSAccessibilityProtocol,
             let object = value as? NSObject else { return }
           guard seen.insert(ObjectIdentifier(node as AnyObject)).inserted else { return }
           if node.accessibilityRole() == .slider { sliders.append(object) }
+          if node.accessibilityRole() == .button { buttons.append(object) }
           for child in node.accessibilityChildren() ?? [] { visit(child) }
         }
         visit(controller.view)
@@ -40,12 +42,16 @@ private enum AccessibilityRegression {
         }
         // Flutter's AXPlatformNodeCocoa implements the legacy AppKit action
         // entry point; this is also what macOS accessibility clients invoke.
-        let slider = sliders[0]
-        guard slider.accessibilityActionNames().contains(.increment) else {
+        guard buttons.count == 1 else {
+          result(FlutterError(code: "button_count", message: "Expected 1 button, found \(buttons.count)", details: nil))
+          return
+        }
+        let button = buttons[0]
+        guard button.accessibilityActionNames().contains(.press) else {
           result(false)
           return
         }
-        slider.accessibilityPerformAction(.increment)
+        button.accessibilityPerformAction(.press)
         result(true)
       default:
         result(FlutterMethodNotImplemented)
