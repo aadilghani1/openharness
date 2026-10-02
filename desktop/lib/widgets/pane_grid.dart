@@ -57,6 +57,7 @@ class PaneGrid extends StatelessWidget {
     this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
+    this.companionConversation,
     this.devicesViewer,
     this.devicesConversation,
   });
@@ -75,6 +76,7 @@ class PaneGrid extends StatelessWidget {
 
   /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? companionConversation;
   final WidgetBuilder? devicesViewer;
   final WidgetBuilder? devicesConversation;
 
@@ -93,6 +95,7 @@ class PaneGrid extends StatelessWidget {
             onSplitPane: onSplitPane,
             soloFocused: soloFocused,
             companionViewer: companionViewer,
+            companionConversation: companionConversation,
             devicesViewer: devicesViewer,
             devicesConversation: devicesConversation,
           );
@@ -112,6 +115,7 @@ class PaneGrid extends StatelessWidget {
           onOpenModels: onOpenModels,
           onSplitPane: onSplitPane,
           companionViewer: companionViewer,
+          companionConversation: companionConversation,
           devicesViewer: devicesViewer,
           devicesConversation: devicesConversation,
         );
@@ -264,6 +268,7 @@ class _SwarmCanvas extends StatefulWidget {
     this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
+    this.companionConversation,
     this.devicesViewer,
     this.devicesConversation,
   });
@@ -275,6 +280,7 @@ class _SwarmCanvas extends StatefulWidget {
   final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final bool soloFocused;
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? companionConversation;
   final WidgetBuilder? devicesViewer;
   final WidgetBuilder? devicesConversation;
   @override
@@ -630,6 +636,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     onSplitPane: widget.onSplitPane,
                                     solo: widget.soloFocused,
                                     companionViewer: widget.companionViewer,
+                                    companionConversation:
+                                        widget.companionConversation,
                                     devicesViewer: widget.devicesViewer,
                                     devicesConversation:
                                         widget.devicesConversation,
@@ -1234,6 +1242,7 @@ class _PaneCell extends StatelessWidget {
     this.onSplitPane,
     this.solo = false,
     this.companionViewer,
+    this.companionConversation,
     this.devicesViewer,
     this.devicesConversation,
   });
@@ -1247,6 +1256,7 @@ class _PaneCell extends StatelessWidget {
   onOpenModels;
   final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? companionConversation;
   final WidgetBuilder? devicesViewer;
   final WidgetBuilder? devicesConversation;
 
@@ -1395,6 +1405,14 @@ class _PaneCell extends StatelessWidget {
                                       tab.isDevices && tab.panes.contains(pane),
                                 )
                           ? devicesConversation!(context)
+                          : pane.agentId == null &&
+                                companionConversation != null &&
+                                notifier.swarms.any(
+                                  (tab) =>
+                                      tab.isCompanions &&
+                                      tab.panes.contains(pane),
+                                )
+                          ? companionConversation!(context)
                           : _PaneContent(
                               notifier: notifier,
                               pane: pane,

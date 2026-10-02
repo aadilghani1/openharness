@@ -1748,6 +1748,16 @@ class AppNotifier extends ChangeNotifier {
         tab.focusedPaneId ??= viewer.id;
         changed = true;
       }
+      if (enabled) {
+        if (!tab.panes.any((pane) => !pane.isViewer)) {
+          tab.panes.add(TerminalPane(id: _nextPaneId++, machineId: ''));
+          changed = true;
+        }
+        tab.paneSizes.putIfAbsent(
+          '2:manual',
+          () => PaneArrangement.viewerBesideTerminal,
+        );
+      }
     }
     if (changed) notifyListeners();
   }
@@ -1767,11 +1777,16 @@ class AppNotifier extends ChangeNotifier {
     viewer.ownerAgentId = agentId;
     viewer.machineId = machineId ?? '';
     for (final pane in tab.panes.where((p) => !p.isCompanion).toList()) {
+      if (pane.agentId == null) continue;
       if (pane.machineId == machineId && pane.agentId == agentId) continue;
       tab.remove(pane);
       if (!allPanes.contains(pane)) {
         unawaited(_detachSession(pane, sendClose: true));
       }
+      changed = true;
+    }
+    if (!tab.panes.any((pane) => !pane.isViewer)) {
+      tab.panes.add(TerminalPane(id: _nextPaneId++, machineId: ''));
       changed = true;
     }
     if (changed) notifyListeners();
@@ -1781,7 +1796,10 @@ class AppNotifier extends ChangeNotifier {
       tab.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
     }
     await assignAgentToPane(
-      null,
+      tab.panes
+          .where((pane) => !pane.isViewer && pane.agentId == null)
+          .firstOrNull
+          ?.id,
       machineId,
       agentId,
       swarmId: tab.id,

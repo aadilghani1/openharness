@@ -315,6 +315,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool get _creatureChoice =>
       ExperimentalFeature.focusBarCreature.available &&
       app.viewer == null &&
+      _experimentalFeatures.isAvailable(ExperimentalFeature.focusBarCreature) &&
       _experimentalFeatures.enabled(ExperimentalFeature.focusBarCreature);
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
@@ -3992,13 +3993,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _syncCompanionWorkspace() {
-    final enabled = _creatureEnabled && _zoo.loaded;
+    final enabled = _creatureEnabled;
     app.syncCompanionViewer(
       enabled: enabled,
       machineId: app.localMachineState?.machine.machineId,
     );
     if (!enabled) {
       _companionAttemptedKey = null;
+      return;
+    }
+    if (!_zoo.loaded) {
+      unawaited(app.showCompanionTerminal(null, null));
       return;
     }
     final pair = _zoo.isPreview ? null : _pairHarness;
@@ -4083,29 +4088,53 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return result;
   }
 
-  Widget _companionViewer(BuildContext context) => CompanionHome(
-    key: ValueKey('companion-home:${_zoo.scope}'),
-    face: _face,
-    brain: _brain,
-    openMemoryConnection: _zoo.isPreview
-        ? null
-        : app.openCodingMemoryConnection,
-    onHatch: _hatch,
-    onOpenControls: _openCompanionControls,
-    terminalStatus:
+  Widget _companionViewer(BuildContext context) => !_zoo.loaded
+      ? const Center(child: Text('Opening your collection…'))
+      : CompanionHome(
+          key: ValueKey('companion-home:${_zoo.scope}'),
+          face: _face,
+          brain: _brain,
+          openMemoryConnection: _zoo.isPreview
+              ? null
+              : app.openCodingMemoryConnection,
+          onHatch: _hatch,
+          onOpenControls: _openCompanionControls,
+          terminalStatus:
+              _companionTerminalError ??
+              (_companionOpeningKey != null
+                  ? 'Opening your companion’s terminal…'
+                  : null),
+          onOpenConversation: _companionTerminalError == null
+              ? null
+              : () {
+                  _companionAttemptedKey = null;
+                  _focusCompanionTerminal = true;
+                  _scheduleCompanionWorkspace();
+                },
+          dial: app.dial,
+          onDeviceSettings: app.setDeviceSettings,
+        );
+
+  Widget _companionConversation(
+    BuildContext context,
+  ) => HarnessConversationPlaceholder(
+    key: const ValueKey('companion-conversation-setup'),
+    name: 'Companion',
+    opening:
+        _companionOpeningKey != null ||
+        (!_zoo.loaded && _zoo.daemons == DaemonsSwitch.unknown),
+    error:
         _companionTerminalError ??
-        (_companionOpeningKey != null
-            ? 'Opening your companion’s terminal…'
-            : null),
-    onOpenConversation: _companionTerminalError == null
-        ? null
-        : () {
-            _companionAttemptedKey = null;
-            _focusCompanionTerminal = true;
-            _scheduleCompanionWorkspace();
-          },
-    dial: app.dial,
-    onDeviceSettings: app.setDeviceSettings,
+        (!_zoo.loaded
+            ? 'Your collection could not connect. Try again.'
+            : _zoo.paired == null
+            ? 'Hatch and pair a companion in your collection to start chatting.'
+            : 'Connect Harness on this computer and choose an agent for your companion.'),
+    onRetry: () {
+      if (!_zoo.loaded) _zoo.refresh();
+      _companionAttemptedKey = null;
+      _scheduleCompanionWorkspace();
+    },
   );
 
   /// `~/.config/harness/pair.jsonc`, written with no rules when it is not
@@ -6766,13 +6795,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             offstage:
                                 app.activeSwarm.isStore ||
                                 (app.activeSwarm.isCompanions &&
-                                    (!_creatureEnabled || !_zoo.loaded)) ||
+                                    !_creatureEnabled) ||
                                 app.activeSwarm.isOrchestrator,
                             child: ExcludeFocus(
                               excluding:
                                   app.activeSwarm.isStore ||
                                   (app.activeSwarm.isCompanions &&
-                                      (!_creatureEnabled || !_zoo.loaded)) ||
+                                      !_creatureEnabled) ||
                                   app.activeSwarm.isOrchestrator,
                               child: Padding(
                                 padding: app.panes.isEmpty
@@ -6815,10 +6844,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                   app.devicesEnabled
                                                   ? _devicesConversation
                                                   : null,
-                                              companionViewer:
-                                                  _creatureEnabled &&
-                                                      _zoo.loaded
+                                              companionViewer: _creatureEnabled
                                                   ? _companionViewer
+                                                  : null,
+                                              companionConversation:
+                                                  _creatureEnabled
+                                                  ? _companionConversation
                                                   : null,
                                               soloFocused: _compact(context),
                                               empty:
@@ -6935,14 +6966,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               recentHarnesses: _navigation.recent,
                               source: 'tab',
                             ),
-                          if (app.activeSwarm.isCompanions &&
-                              (!_creatureEnabled || !_zoo.loaded))
-                            Center(
+                          if (app.activeSwarm.isCompanions && !_creatureEnabled)
+                            const Center(
                               child: Text(
-                                _creatureEnabled &&
-                                        _zoo.daemons == DaemonsSwitch.unknown
-                                    ? 'Opening your collection…'
-                                    : 'Companions is available in Settings → Experimental.',
+                                'Companions is available in Settings → Experimental.',
                               ),
                             ),
                           if (_hasCommandBar && _commandBarOpen)
