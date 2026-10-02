@@ -22,7 +22,7 @@ class HarnessMonitor extends ChangeNotifier {
 
   List<HarnessSession> get sessions => harnessSessions(app, includeLive: true);
   List<HarnessSession> get live => sessions
-      .where((row) => row.running && !row.machine.machine.isShared)
+      .where((row) => row.live && !row.machine.machine.isShared)
       .toList();
 
   HarnessResources? reading(HarnessSession row) {
@@ -127,15 +127,15 @@ class HarnessMonitor extends ChangeNotifier {
   }
 
   String get resourceDetail =>
-      '${live.length} running harnesses across connected machines.\n'
+      '${live.length} open harnesses across connected machines. Totals cover these harnesses only.\n'
       '${metricsLabel()}\n'
       'CPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\n'
-      'GPU: summed process utilization; can exceed 100% across processes or devices. Unsupported counters are unavailable. Cloud inference is not local GPU usage.\n'
+      'GPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show —. Cloud model GPU usage is not reported.\n'
       'SSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\n'
       'Totals include available readings and may be partial. — means unavailable. Click to open Harness Monitor.';
 
   String get detail =>
-      '${live.length} running across connected machines. Click to open Harness Monitor.\n'
+      '${live.length} open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\n'
       '${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the session monitor.'}';
 
   void start() {

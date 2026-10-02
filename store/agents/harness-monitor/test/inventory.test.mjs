@@ -28,6 +28,15 @@ test('monitor cannot stop itself, and starts/failures outrank activity', () => {
   assert.equal(merge({ launch: { state: 'starting' } }).activity, 'starting')
   assert.equal(merge({ launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } }).activity, 'needsInput')
 })
+test('starting harnesses stay live before their terminal becomes available', () => {
+  const starting = merge({ terminal: { available: false }, launch: { state: 'starting' } })
+  assert.equal(starting.state, 'starting')
+  assert.equal(starting.live, true)
+  assert.equal(starting.canStop, false)
+  const exited = merge({ terminal: { available: false }, launch: { state: 'failed' } })
+  assert.equal(exited.state, 'gone')
+  assert.equal(exited.live, false)
+})
 test('cached remote rows survive disconnect; reconnection refreshes and unlinked machines disappear', async () => {
   const remote = { at: 0, answers: new Map() }; let online = true, linked = true, reads = 0
   const options = { remote, remoteIntervalMs: 0, reportMachines: async () => ({ machines: linked ? [{ machineId: 'm1', name: 'Office', online }] : [] }),

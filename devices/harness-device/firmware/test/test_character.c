@@ -412,13 +412,12 @@ static void focus_face(void)
             assert(above > 0 && (below - above == 0 || below - above == 1));
         }
 
-        // Resting: one of the invitations, the same one for the same agent on every frame, centred,
-        // and two agents do not all say the same thing.
+        // Resting: one of the invitations, centred, holding still while the face stays up (both draws
+        // of an agent say the same), and picked afresh when the face comes back.
         f.activity = ""; f.elapsed = 0;
         static const char *const resting[] = {"Let's build it", "Do anything", "What's next?",
             "Ready when you are", "Tap to talk", "Say the word", "Make it happen", "Start something"};
         char first[64] = "";
-        int distinct = 0;
         const char *names[] = {"Payments refactor", "Landing page", "Deploy firmware", "Docs sweep",
                                "Bug triage", "Release notes"};
         for (unsigned k = 0; k < sizeof names / sizeof names[0]; k++) {
@@ -443,11 +442,38 @@ static void focus_face(void)
                 int top = scene.runs[1].y - (56 - pet_of("claude")->h) / 2;
                 int above = top - TITLE_BOTTOM, below = l1->y - (top + 56);
                 assert(above > 0 && (below - above == 0 || below - above == 1));
-                if (!k && !again) snprintf(first, sizeof first, "%s", said);
-                else if (!again && strcmp(said, first)) distinct++;
+                if (!again) snprintf(first, sizeof first, "%s", said);
+                else assert(!strcmp(said, first));   // a redraw never swaps it
             }
         }
-        assert(distinct > 0);
+        /*
+         * RANDOM WHEREVER IT SHOWS (owner, 2026-10-02): the same name every time — "Choose a pane",
+         * the face with no agent — still gets a new line each time the resting face returns, never
+         * the one it just showed, and over a few returns most of the list.
+         */
+        {
+            f.recipient = "Choose a pane";
+            char last[64] = "", seen[8][64];
+            int kinds = 0;
+            for (int visit = 0; visit < 24; visit++) {
+                f.activity = "Working"; f.elapsed = 3; f.clock_ms = 1000u + (uint32_t)visit * 977u;
+                ht_scene_clear(&scene, 0);
+                ht_character_face(&scene, &c, &f, 0xffff, "");   // away: the working line
+                f.activity = ""; f.elapsed = 0;
+                ht_scene_clear(&scene, 0);
+                ht_character_face(&scene, &c, &f, 0xffff, "");   // back to resting
+                char said[64];
+                snprintf(said, sizeof said, "%s%s", scene.runs[8].text, scene.runs[9].text);
+                squeeze(said);
+                assert(strcmp(said, last));
+                snprintf(last, sizeof last, "%s", said);
+                bool known = false;
+                for (int k = 0; k < kinds; k++) known |= !strcmp(seen[k], said);
+                if (!known && kinds < 8) snprintf(seen[kinds++], sizeof seen[0], "%s", said);
+            }
+            assert(kinds >= 5);
+            f.clock_ms = 0;
+        }
         f.recipient = "Payments refactor";
 
         // An engine this build has no mark for leaves the mark's place empty, not a wrong mark.

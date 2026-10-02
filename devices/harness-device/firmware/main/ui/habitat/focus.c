@@ -41,19 +41,35 @@ enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, CARD_X = 41
 
 /*
  * WHAT AN AGENT WITH NOTHING YET SAYS, in place of "No activity yet" (owner, 2026-10-01): an
- * invitation rather than a report. One per agent, picked by its name, so the line does not change
- * every time the face is drawn but two agents side by side read differently. Each fits two lines of
+ * invitation rather than a report, picked at random each time the resting face appears — on arrival,
+ * after a turn, on another agent, back from voice — and never the same line twice running (owner,
+ * 2026-10-02). It holds while that face stays up, so a redraw never swaps it. Each fits two lines of
  * geist_reg_38 at EMPTY_W.
  */
 static const char *const RESTING[] = {
     "Let's build it", "Do anything", "What's next?", "Ready when you are",
     "Tap to talk", "Say the word", "Make it happen", "Start something",
 };
-static const char *resting_line(const char *name)
+static struct {
+    bool showing;           // the last home face drawn was a resting one
+    char who[64];           // ... for this recipient
+    const char *line;
+    uint32_t seed;
+} resting;
+static const char *resting_line(const ht_character_face_t *f)
 {
-    uint32_t h = 2166136261u;   // FNV-1a
-    for (const char *p = name ? name : ""; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
-    return RESTING[h % (sizeof RESTING / sizeof RESTING[0])];
+    const char *who = f->recipient ? f->recipient : "";
+    if (!resting.showing || !resting.line || strncmp(resting.who, who, sizeof resting.who - 1)) {
+        const unsigned n = sizeof RESTING / sizeof RESTING[0];
+        // An LCG stirred with the clock: no entropy source is needed to look random on a dial.
+        resting.seed = resting.seed * 1664525u + 1013904223u + f->clock_ms;
+        unsigned pick = (resting.seed >> 16) % n;
+        if (RESTING[pick] == resting.line) pick = (pick + 1) % n;
+        resting.line = RESTING[pick];
+        snprintf(resting.who, sizeof resting.who, "%s", who);
+    }
+    resting.showing = true;
+    return resting.line;
 }
 
 /*
@@ -355,7 +371,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                    const char *recap)
 {
     (void)ink;
-    if (f->voice) { voice_face(s, f, frame); return; }
+    if (f->voice) { resting.showing = false; voice_face(s, f, frame); return; }
     bool has_recap = recap && *recap;
     bool working = !has_recap && f->activity && *f->activity;
     bool retry = !has_recap && !working && f->status && *f->status;
@@ -368,6 +384,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     else if (working) status_text(status, sizeof status, f);
     else if (retry) snprintf(status, sizeof status, "%s", f->status);
     bool empty = !has_recap && !status[0];
+    if (!empty) resting.showing = false;
 
     // The body, laid out first: a recap is centred in its card; without one the line is centred on
     // the glass.
@@ -382,7 +399,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         ht_lv_label(&body, sf, status, CARD_W, 1, true);   // no card around it: the full width
         body_h = sf->height;
     } else {
-        int n = ht_lv_label(&body, ef, resting_line(f->recipient), EMPTY_W, 2, false);
+        int n = ht_lv_label(&body, ef, resting_line(f), EMPTY_W, 2, false);
         body_h = (n < 2 ? n : 2) * ef->height;
     }
     int body_y = has_recap ? CARD_Y + (CARD_H - body_h) / 2 : HT_HEIGHT / 2 - body_h / 2;

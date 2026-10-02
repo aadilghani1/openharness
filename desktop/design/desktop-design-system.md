@@ -343,8 +343,12 @@ Agent and model share `PaneHeaderTextButton`: plain 13-point workspace text,
 regular weight, matching padding and a 28-point target height. No pill, border or
 chevron. Both brighten on hover and keyboard focus without changing weight or
 geometry; use a hand cursor and Change agent / Change model tooltips. Their labels
-rest at 75% foreground (85% with Increase Contrast). Keep them close together,
-then leave an 8-point gap before close. Remove a coding-agent logo
+rest at 75% foreground (85% with Increase Contrast). Both selectors use 8-point
+horizontal padding, matching the close glyph's inset within its target. Their
+targets meet without an extra gap, leaving 16 points between adjacent contents.
+The agent keeps its natural width up to 140 points; the model uses the remaining
+selector space. Long names truncate with an ellipsis and show their full text on
+hover, without wrapping or reducing the font size. Remove a coding-agent logo
 that repeats the agent selector; keep a distinct domain-harness mark on the left.
 The session name and its activity/status remain on the left.
 

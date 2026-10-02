@@ -72,6 +72,9 @@ class HarnessSession {
           machine.connectionStatus == ConnectionStatus.connected) &&
       (!machine.isLocalMachine || machine.usesLocalTransport);
   bool get running => online && !agent.isStopped && agent.terminalAvailable;
+  bool get live =>
+      running ||
+      (online && !agent.isStopped && agent.launchState == 'starting');
   bool get canOpen =>
       open ||
       (online &&
@@ -140,7 +143,7 @@ List<HarnessSession> harnessSessions(
             (includeLive &&
                 !machine.machine.isShared &&
                 !agent.isStopped &&
-                agent.terminalAvailable))
+                (agent.terminalAvailable || agent.launchState == 'starting')))
           HarnessSession(
             machine: machine,
             agent: agent,
