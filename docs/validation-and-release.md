@@ -31,6 +31,16 @@ bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its nat
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
 
+CLI's default Vitest suite runs as four file shards on separate runners, retaining
+its worker cap and isolation. Typecheck, lockfile checks, guard fuzz, registry and
+release-bundle integration, and updater coverage run alongside them. Guard fuzz
+keeps its own process and timing budget. The existing `typecheck-test` job is the
+aggregate: it requires passing shard/contract jobs and verifies that their JSON
+reports cover every discovered file exactly once. Missing, duplicated, failed or
+unfinished results fail it. Review the complete workflow result, including the
+serial/login-shell matrix, rather than one early finishing job. Shard reports,
+inventories and the combined summary are retained as artifacts for seven days.
+
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate
 application changes. Workflow edits also need `actionlint` and a run exercising
