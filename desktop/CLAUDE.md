@@ -42,7 +42,7 @@ back to CocoaPods and rewrites tracked files (`project.pbxproj`, `contents.xcwor
 ```bash
 flutter pub get
 flutter analyze                                   # lints: package:flutter_lints, no custom rules
-flutter test                                      # whole unit/widget suite (test/)
+make -C .. desktop-test                           # bounded VM suite, workers + receipt
 flutter test test/terminal_session_test.dart      # one file
 flutter test test/ws_conn_test.dart --plain-name "reconnects"   # one test by name substring
 flutter run -d macos                              # or: flutter run -d linux

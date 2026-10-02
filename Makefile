@@ -4,12 +4,17 @@
 #   make install-cli ARGS="--no-restart"
 #   make release-cli ARGS="--dry-run"
 
-.PHONY: validate cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop release-web remote-machine upload-circle device-test
+.PHONY: validate desktop-test cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop release-web remote-machine upload-circle device-test
 
 ## validate: bounded independent checks with logs and a source/timing receipt.
 ## See docs/validation-and-release.md. ARGS="path/to/plan.json".
 validate:
 	python3 scripts/validate-change.py $(ARGS)
+
+## desktop-test: bounded VM tests, host-sized workers and recorded startup recovery.
+## ARGS="test/affected_test.dart --workers 2"; omit paths for the full VM suite.
+desktop-test:
+	python3 scripts/test-desktop.py $(ARGS)
 
 ## cli-test: typecheck + run the CLI test suite.
 cli-test:

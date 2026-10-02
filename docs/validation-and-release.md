@@ -102,6 +102,30 @@ an outer limit (initial budget: 15 minutes); investigate a timeout instead of wa
 through multiple ten-minute stalled fixtures. Budgets are diagnostic deadlines,
 not permission to turn failures into success.
 
+For Desktop VM tests, `make desktop-test` provides a bounded full-suite command.
+Use `make desktop-test ARGS="test/affected_test.dart --workers 2"` for named files,
+or add `--flutter /path/to/flutter` when the pinned SDK is not on `PATH`.
+It runs the selected files once, with half the host's logical CPUs capped at eight
+workers by default; lower `--workers` when memory or other running checks need it.
+Its `--timeout 900` budget includes the initial test process and any recovery.
+Dependencies must already be installed. Browser files under `test/web/` and native
+integration checks remain separate; this command does not validate those platforms.
+
+The Desktop command records every attempt, its log hash, registered/completed case
+counts, existing skips, worker count, source and toolchain/environment identities
+in `.harness/validation/*-desktop-*/receipt.json`. A file counts as verified only
+when all its registered cases and setup/teardown work finish successfully.
+Only Flutter's exact pre-test `Invalid WebSocket upgrade request` loader error
+can trigger recovery: no cases or root group may have registered in that file,
+every other file must be complete, and the source/environment must still match.
+Those files run once more with one worker, within the original budget. Assertions,
+unknown errors, missing files/cases, timeouts and cleanup failures cannot trigger
+recovery. A second startup failure still fails the command. Successful recovery
+is explicitly `passed_after_startup_retry`, with the failed attempt preserved;
+it must not be described as an uninterrupted passing run. Use `--no-loader-retry`
+when diagnosing the startup failure itself. This bounds its cost; it does not fix
+the external trigger, which remains unproven.
+
 The runner writes logs and `receipt.json` under ignored `.harness/validation/`.
 It records source commit/tree, dirty-source fingerprint, start/end times, exit codes,
 timeouts, and disk preflight. A source edit during validation invalidates the receipt.
