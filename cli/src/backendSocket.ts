@@ -3106,19 +3106,27 @@ export class BackendSocket {
         case 'agent_purge': {
           if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
           if (!this.purgeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges } = payload
+          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges, choices, includeWorktree } = payload
+          const selected = choices && typeof choices === 'object' ? choices as Record<string, unknown> : null
           if (typeof agentId !== 'string' || !(sessionId === null || typeof sessionId === 'string')
             || typeof createdAt !== 'number' || !Number.isFinite(createdAt)
-            || (mode !== 'inspect' && mode !== 'delete') || (mode === 'delete' && typeof reviewId !== 'string')) {
+            || (mode !== 'inspect' && mode !== 'delete' && !(type === 'agent_worktree_delete' && mode === 'describe'))
+            || (mode === 'delete' && typeof reviewId !== 'string')
+            || (choices !== undefined && (!selected
+              || typeof selected.sessionData !== 'boolean' || typeof selected.worktreeData !== 'boolean'))) {
             reply(type, requestId, { error: 'INVALID_DELETE_REQUEST' }); return
           }
-          const operation = type === 'agent_worktree_delete' ? this.purgeAgentService.worktreeRequest.bind(this.purgeAgentService) : this.purgeAgentService.request.bind(this.purgeAgentService)
           const deletion = { agentId, sessionId, createdAt, mode: mode as 'inspect' | 'delete',
             ...(typeof reviewId === 'string' ? { reviewId } : {}),
-            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true }
-          void operation(deletion)
+            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true,
+            includeWorktree: includeWorktree === true,
+            ...(selected ? { choices: { sessionData: selected.sessionData as boolean, worktreeData: selected.worktreeData as boolean } } : {}) }
+          const operation = type === 'agent_worktree_delete'
+            ? this.purgeAgentService.worktreeRequest({ ...deletion, mode: mode as 'describe' | 'inspect' | 'delete' })
+            : this.purgeAgentService.request(deletion)
+          void operation
             .then(result => {
-              if (result.deleted === true) void this.harnessStorageReader([], true)
+              if (result.deleted === true || result.worktreeDeleted === true) void this.harnessStorageReader([], true)
               reply(type, requestId, result)
             }, () => reply(type, requestId, { error: 'DELETE_FAILED' }))
           return
