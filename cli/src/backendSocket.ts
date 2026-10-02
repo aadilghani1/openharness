@@ -1,3 +1,4 @@
+import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
@@ -509,6 +510,7 @@ export class BackendSocket {
   /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
    *  process and forgets the session. Keeps recap + agent name. */
   onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
+  purgeAgentService: PurgeAgentService | null = null
   closeAgentService: CloseAgentService | null = null
   cleanupPreview: (() => Promise<Record<string, unknown>>) | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
@@ -1847,6 +1849,11 @@ export class BackendSocket {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
+    const lifecycleTarget = (frame.payload as { agentId?: unknown } | undefined)?.agentId
+    if (typeof lifecycleTarget === 'string' && this.purgeAgentService?.busy(lifecycleTarget)
+      && ['agent_close', 'agent_delete', 'agent_resume', 'agent_restart', 'agent_retarget', 'agent_update'].includes(type)) {
+      reply(type, (frame.payload as { requestId?: unknown }).requestId, { error: 'DELETE_IN_PROGRESS' }); return
+    }
     if (SHARE_REQUEST_TYPES.has(type)) {
       const p = (frame.payload ?? {}) as Record<string, unknown>
       const result = await this.harnessSharing?.manage(type, p).catch(() => ({ error: 'SHARING_UNAVAILABLE', detail: 'Sharing is temporarily unavailable. Try again.' }))
@@ -2183,9 +2190,8 @@ export class BackendSocket {
           const projects = await Promise.all(sessions.map((s) => this.toProject(s)))
           // Older clients/devices keep their live-only contract. The desktop picker
           // explicitly asks for stopped work and receives no stale terminal routes.
-          if (payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device') {
-            projects.push(...await Promise.all(stoppedAgents.available(registry.advertised()).map(s => this.toStoppedProject(s))))
-          }
+          const savedSessions = payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device' ? stoppedAgents.available(sessions) : []
+          projects.push(...await Promise.all(savedSessions.map(s => this.toStoppedProject(s))))
           // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
           // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
           // order is TOTAL: without it two agents registered in the same millisecond fall through to array
@@ -2202,7 +2208,7 @@ export class BackendSocket {
             void (async () => {
               const [snapshot, storage] = await Promise.all([
                 this.harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
-                this.harnessStorageReader(sessions).catch(() => new Map()),
+                this.harnessStorageReader([...sessions, ...savedSessions]).catch(() => new Map()),
               ])
               const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
               const byId = new Map(sessions.map(s => [s.agentId, s]))
@@ -3094,6 +3100,27 @@ export class BackendSocket {
           void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
             ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
             .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
+          return
+        }
+        case 'agent_worktree_delete':
+        case 'agent_purge': {
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          if (!this.purgeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges } = payload
+          if (typeof agentId !== 'string' || !(sessionId === null || typeof sessionId === 'string')
+            || typeof createdAt !== 'number' || !Number.isFinite(createdAt)
+            || (mode !== 'inspect' && mode !== 'delete') || (mode === 'delete' && typeof reviewId !== 'string')) {
+            reply(type, requestId, { error: 'INVALID_DELETE_REQUEST' }); return
+          }
+          const operation = type === 'agent_worktree_delete' ? this.purgeAgentService.worktreeRequest.bind(this.purgeAgentService) : this.purgeAgentService.request.bind(this.purgeAgentService)
+          const deletion = { agentId, sessionId, createdAt, mode: mode as 'inspect' | 'delete',
+            ...(typeof reviewId === 'string' ? { reviewId } : {}),
+            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true }
+          void operation(deletion)
+            .then(result => {
+              if (result.deleted === true) void this.harnessStorageReader([], true)
+              reply(type, requestId, result)
+            }, () => reply(type, requestId, { error: 'DELETE_FAILED' }))
           return
         }
         case 'agent_delete': {

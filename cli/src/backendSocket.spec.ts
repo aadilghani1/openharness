@@ -14,6 +14,7 @@ import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { AgentStopError } from './lib/stopAgentService.js'
+import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
 import * as machineResources from './lib/machineResources.js'
@@ -136,6 +137,40 @@ describe('safe session close RPC', () => {
     expect(frames.some(f => f.type === 'agent_close_result')).toBe(false)
     finish({ closed: true })
     await vi.waitFor(() => expect(frames.find(f => f.type === 'agent_close_result')?.payload).toMatchObject({ requestId: 'closing', closed: true }))
+    await socket.stop()
+  })
+})
+
+describe('reviewed permanent deletion RPCs', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it.each(['agent_purge', 'agent_worktree_delete'])('%s requires an owner, explicit identity and a review token', async type => {
+    const socket = new BackendSocket('fixture')
+    const internals = socket as any, frames: any[] = []
+    socket.registerLocalClient('local:purge', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const request = vi.fn(async () => ({ reviewId: 'review', sessionBytes: 4096 }))
+    socket.purgeAgentService = { busy: () => false, request, worktreeRequest: request } as unknown as PurgeAgentService
+    const payload = { requestId: 'delete', agentId: 'selected', sessionId: 'history', createdAt: 1234, mode: 'inspect' }
+    expect(encryptDownFrame(type)).toBe(true)
+    expect(encryptRpcResult(type + '_result')).toBe(true)
+    await internals.dispatchDown({ type, payload }, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('device')
+    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue({ type, payload })
+    vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: type + '_result', payload: { __e2e: 'sealed' } })
+    const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    role.mockReturnValue('web')
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).toHaveBeenCalledOnce()
+    request.mockClear()
+    for (const invalid of [{ ...payload, sessionId: undefined }, { ...payload, createdAt: '1234' }, { ...payload, mode: 'delete' }]) {
+      await internals.dispatchDown({ type, payload: invalid }, 'local:purge', 'local')
+    }
+    expect(request).not.toHaveBeenCalled()
+    expect(frames.filter(f => f.payload.error === 'INVALID_DELETE_REQUEST')).toHaveLength(3)
+    await internals.dispatchDown({ type, payload: { ...payload, mode: 'delete', reviewId: 'review', path: '/reviewed', discardChanges: true } }, 'local:purge', 'local')
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ reviewId: 'review', path: '/reviewed', discardChanges: true }))
     await socket.stop()
   })
 })

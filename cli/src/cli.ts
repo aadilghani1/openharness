@@ -150,6 +150,7 @@ import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { createSessionSync } from './lib/sessionSync.js'
 import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
+import { PurgeAgentService } from './lib/purgeAgentService.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -6242,6 +6243,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ownerBusy = adopted.busy
       resumeArgs = adopted.launchArgs
     }
+    if (backend.purgeAgentService?.blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
     } catch {
@@ -6682,6 +6684,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * indistinguishable from a working one until the bill arrives.
    */
   backend.onRetargetAgent = async ({ agentId, grid }) => {
+    if (backend.purgeAgentService?.busy(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
@@ -6895,6 +6898,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forgetSession, markDeleted, clearDeleted,
   })
   backend.onDeleteAgent = stopAgent
+  backend.purgeAgentService = new PurgeAgentService({
+    live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
+    stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
+    restarting: id => restartJobs.busy(id) || stopJobs.has(id),
+    deleted: s => {
+      if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
+      registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
+      backend.send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
+    },
+  })
   backend.closeAgentService = new CloseAgentService({
     registry,
     openTabs: cleanupTabs,
@@ -6924,11 +6937,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return { version: 1, agents, kept: sessions.length - agents.length }
   }
 
-  backend.onResumeAgent = createResumeAgentService({
+  const resumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
     refreshGridWebSearch, clearDeleted, attachDsh,
   })
+  backend.onResumeAgent = (id, permissionMode) => backend.purgeAgentService?.busy(id) || backend.purgeAgentService?.blocksFolder(stoppedAgents.get(id)?.cwd)
+    ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resumeAgent(id, permissionMode)
 
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -6950,7 +6965,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * from inside the engine's own terminal since launch).
    */
   backend.onRestartAgent = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
-    if (stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
+    if (backend.purgeAgentService?.busy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }

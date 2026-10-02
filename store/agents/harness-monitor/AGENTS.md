@@ -29,8 +29,8 @@ Rules and pins live in `~/.config/harness/policy.jsonc`; preserve comments when 
 A timed-out open is uncertain. Check its original receipt; never launch another process to compensate.
 An offline machine is not a stopped session. Unknown CPU, RAM or tokens are not zero. RAM sums process
 resident sets (shared pages can be counted twice); CPU is interval process-tree use, with 100% meaning
-one core. GPU readings are attributable driver counters; missing counters are unavailable. Storage
-includes existing workspace files and remains when a session stops. Last active comes from real
+one core. GPU readings are attributable driver counters; missing counters are unavailable. Workspace storage includes project/worktree files; Session data measures conversation history and
+checkpoints separately. Both remain when a session stops. Last active comes from real
 daemon conversation activity, not file mtime.
 
 The default OpenCode model is Muse Spark 1.3 Contributor Free. It is a limited-time offer and allows
@@ -38,5 +38,10 @@ Meta to train on prompts and responses. Both the main and small model are explic
 that ID. Never silently switch to a paid model. The viewer includes an Assistant model disclosure; users can choose another model with
 OpenCode's `/models` command.
 
-Never start another viewer: Harness already manages this one. Never delete transcripts or projects.
+Never start another viewer: Harness already manages this one. For permanent deletion, direct the
+person to the table's Delete Harness confirmation (session data only) or Inspect → Delete Worktree
+(path, branch, size and uncommitted-change review). Do not use shell deletion to bypass these reviews.
+Never delete a main project folder, branch or another harness's files. Worktree cleanup keeps the
+conversation and branch; Delete Harness keeps workspace files. Shared database deletion may reuse
+space without shrinking the database file. Never imply all Workspace bytes are session data.
 Report actual tool results, including refusals and uncertain outcomes, without inventing activity.

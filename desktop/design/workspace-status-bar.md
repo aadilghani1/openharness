@@ -14,7 +14,7 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%
+Harnesses 118
                                                      M2 > project > branch > #439
 ```
 
@@ -22,15 +22,17 @@ The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab keeps the footer when
 there are live sessions to inspect.
 
-The left side shows open harnesses (including idle and starting sessions) and their CPU, RAM, GPU and SSD consumption across connected
-owned machines, followed by subscription allowance used per account. The focused-pane context
-remains at the right. Count each live session even when no tab currently displays it.
+The left side shows only the number of open harnesses across connected owned machines, including
+idle and starting sessions. Count each live session even when no tab currently displays it. The
+focused-pane context remains at the right. Clicking Harnesses selects the existing Harness Monitor
+across all tabs/machines, creating one only when absent.
 
-Clicking Harnesses or any resource metric selects the existing Harness Monitor tab across all tabs
-and machines. Create one only when absent. Clicking does not open a separate resource popover.
-Saved sessions and open/resume actions belong in Open Harness (Cmd-P). The monitor itself starts
-with only open sessions, sortable resource and AI metrics, an inspector and a visible × close
-button on every row. Closing reviews one harness, ends its work and retains history and files.
+Monitor starts with open sessions; a Stopped harnesses filter exposes retained work for cleanup.
+Storage is shown as separate Workspace and Session data columns before RAM, CPU and GPU. Explicit
+Stop Harness and Delete Harness buttons review one session. Stop retains history and files; Delete
+Harness permanently removes the selected conversation data while keeping workspace files.
+Inspect → Delete Worktree separately reviews its path, branch, size and uncommitted changes.
+See [Harness Monitor](../../store/agents/harness-monitor/README.md) for accounting and safeguards.
 
 Use spaces of 0.75 character cells within components and two cells between complete groups,
 including the count. Adjacent controls contribute one cell of horizontal padding on each side;
@@ -39,32 +41,13 @@ already has its own optical gutter. Do not add extra separation. The shared `wor
 and `workspaceBarGroupGapCells` keep Flutter and native views aligned. Use neutral
 workspace ink at every usage level. Do not pad numbers or add dots, decimal figures or plus suffixes.
 
-CPU is the sum of attributable process-tree interval use; 100% is one core, so multicore and fleet
-totals can exceed 100%. RAM is process-tree resident memory. Nested harness roots are excluded from
-the parent and shared Codex servers count once; shared memory pages may still overlap. GPU uses
-process GPU time per interval on supported macOS drivers and process utilization on Linux NVIDIA.
-Multiple contexts/devices can exceed 100%. First samples and unavailable counters show —;
-whole-host GPU activity is not a substitute for attribution. Cloud inference is not local GPU use.
+The footer reads existing live inventory and never polls resource metrics. The Monitor viewer samples
+local inventory every four seconds and linked machines every fifteen seconds while visible, with
+bounded storage work cached separately. Native and Flutter footers share the count, tooltip and
+navigation. Keep the count usable at narrow widths and preserve focused context. Subscription usage
+remains in Models/Subscriptions.
 
-RAM and SSD use rounded whole MB/GB, such as `RAM 10 GB` and `SSD 1 GB` (10.4 rounds to 10).
-SSD means allocated workspace disk space, including existing files. Shared and nested canonical
-folders count once per machine. It is not free space, capacity or a claim that every host uses an
-SSD. Stopping a process keeps its files. Directory sizes use bounded reads cached for one minute.
-
-Unknown readings show —, with valid zero preserved. Partial totals show the available number without
-a prefix. The tooltip explains partial coverage, scope, units and shared accounting. Samples expire
-after 45 seconds. The count and resource totals cover the same connected owned sessions and never
-substitute whole-machine utilization.
-
-Sample connected owners every fifteen seconds while the app is foregrounded. Clear readings and
-stop polling when hidden; refresh on return. Coalesce process samples in the owning daemon, verify
-PID birth identity and keep telemetry off the terminal-input queue. The viewer samples local
-inventory every four seconds and linked machines every fifteen seconds while visible. Reading
-token usage uses the existing incremental ledger and does not trigger a new transcript scan.
-
-Native and Flutter footers share data, tooltips and button behavior. At narrow widths remove SSD,
-then GPU, then RAM as complete groups, keeping CPU and the full tooltip. Subscription usage remains
-visible in wide windows and accessible through Models at every size. Preserve focused context.
+The captures below are historical and include resource groups that have since moved into Monitor.
 
 ![Compact footer and companion with synthetic readings, dark](images/workspace-footer-compact-dark.png)
 
@@ -74,12 +57,10 @@ The previous capture below documents spacing; its whole-machine percentages have
 
 ![Historical status spacing with synthetic readings](images/workspace-resources.png)
 
-Validation covers harness scope, shared/nested totals, unavailable/late responses, rounding, hidden
-polling, tab reuse and native/Flutter clicks. Run `harness_resources_test.dart`,
-`harness_monitor_test.dart` and `workspace_status_test.dart`. Set
-`HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR` for Flutter fixtures and `HARNESS_RESOURCE_CAPTURE_DIR` for
-native captures from `tool/check_swarm_titlebar.sh`. CLI ownership, telemetry and failure checks live
-in `harnessResources.spec.ts` and `harnessTelemetry.spec.ts`.
+Validation covers harness count, no footer resource polling, tab reuse, full 70/30 Monitor recovery,
+and native/Flutter clicks. Run `harness_monitor_summary_test.dart`, `harness_monitor_test.dart` and
+`workspace_status_test.dart`; set `HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR` for Flutter captures.
+`tool/check_swarm_titlebar.sh` verifies AppKit layout and hidden legacy resource controls.
 
 The layout takes cues from [Stats' combined view](https://github.com/exelban/stats/blob/master/Stats/Views/CombinedView.swift)
 and [Mini widget](https://github.com/exelban/stats/blob/master/Kit/Widgets/Mini.swift): compact modules

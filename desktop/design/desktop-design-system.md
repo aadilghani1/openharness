@@ -382,29 +382,17 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — running harness count and attributable CPU/RAM/GPU/SSD across
-connected owned machines, then subscription allowance used at the left; focused machine, project,
-branch and PR at the right. Each context field keeps its action. Harness count and every resource
-metric select the existing Harness Monitor tab or create it if absent. Process-tree CPU uses 100%
-per core; GPU sums reported process utilization, which can exceed 100%. Shared servers count once. Unsupported GPU
-attribution stays unknown. RAM/SSD are absolute, rounded whole MB/GB; shared/nested workspace
-folders count once per machine. See [workspace status bar](workspace-status-bar.md) for accounting.
-Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
-model/effort in the footer. Context honors the selected status face, fields, colors and shell/
-Powerline treatment. Recent-harness context uses its monochrome presentation.
-Use whole figures, spaces of 0.75 character cells within components, and two cells between parts:
-`Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
-Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
-decimal figures. Harness metrics show — when unavailable; partial totals show the available number
-without a prefix, with coverage explained in the tooltip. Subscription figures mean allowance
-used and preserve Models' deduplicated accounts, limiting window and
-freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
-without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
+**Focused workspace footer** — only the open harness count at the left, such as `Harnesses 118`;
+focused machine, project, branch and PR at the right. Count connected owned harnesses, including
+idle and starting sessions. Clicking the count reuses Harness Monitor or creates it when absent.
+The footer performs no resource polling. CPU, RAM, GPU, workspace/session storage and their detailed
+accounting belong in the Monitor. Subscription usage stays available in Models/Subscriptions.
 
-Companion and sharing controls follow usage. The companion uses the same gap between controls as
-the resource and subscription groups; the gutter in its fixed slot replaces the preceding control's
-trailing padding so the artwork has the same visible separation as text. See the full
-[status bar contract](workspace-status-bar.md).
+Labels use neutral readable ink. Preserve focused context actions and the selected status face,
+fields, colors and shell/Powerline treatment. Companion and sharing controls follow the count;
+the companion's fixed gutter replaces the preceding control's trailing padding. See the
+[status bar contract](workspace-status-bar.md). Do not repeat branches in pane headers or model/effort
+in the footer. Recent-harness context uses its monochrome presentation.
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,

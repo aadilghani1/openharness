@@ -2666,6 +2666,22 @@ private extension SwarmTabStrip {
     harnessMonitorButton.performClick(nil)
     machineResourcesLabel.performClick(nil)
     try checkTitlebar(calls.count == 2, "A covered or modal footer cannot open the session monitor")
+    state["enabled"] = true
+    state.removeValue(forKey: "machineResources")
+    state.removeValue(forKey: "subscriptionUsage")
+    for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!harnessMonitorButton.isHidden && harnessMonitorButton.isEnabled &&
+        harnessMonitorButton.frame.maxX <= contextButton.frame.minX &&
+        machineResourcesLabel.isHidden && subscriptionUsageButton.isHidden,
+        "The count-only footer preserves context and hides omitted resource and usage groups")
+      if let capture = ProcessInfo.processInfo.environment["HARNESS_RESOURCE_CAPTURE_DIR"] {
+        try statusBar.renderedTree(background: NSColor(white: 0.12, alpha: 1))
+          .representation(using: .png, properties: [:])!.write(to:
+            URL(fileURLWithPath: capture).appendingPathComponent("native-count-\(Int(width)).png"))
+      }
+    }
     update([:])
     try checkTitlebar(harnessMonitorButton.isHidden && !harnessMonitorButton.isEnabled && machineResourcesLabel.isHidden && !machineResourcesLabel.isEnabled,
       "Clearing workspace state clears the counter, hardware and actions")

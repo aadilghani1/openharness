@@ -53,7 +53,6 @@ import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_monitor.dart';
-import '../widgets/workspace_harness_resources.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
 import '../state/harness_placement.dart';
@@ -577,7 +576,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceNavigationAllowed = _allowDeviceNavigation;
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
-    _harnessMonitor = HarnessMonitor(app)..addListener(_monitorChanged);
+    _harnessMonitor = HarnessMonitor(app, sampleResources: false)
+      ..addListener(_monitorChanged);
     app.reviewSessionClose = _reviewSessionClose;
     app.changeCompanionAgent = _changeCompanionAgent;
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
@@ -1762,7 +1762,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _syncNative() {
     _syncMachines();
-    final monitor = _harnessMonitor.summary;
+    final monitor = _harnessMonitor;
     final focused = WorkspacePaneContext.focused(app);
     final prefs = appearancePrefsStore.value.prompt;
     final parts = focused?.format(prefs);
@@ -1799,49 +1799,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'foreground': terminalTheme.foreground.toARGB32(),
         'selection': terminalTheme.selection.toARGB32(),
       },
-      'subscriptionUsage': {
-        'text': _subscriptionUsage.text,
-        'label': _subscriptionUsage.detail,
-        'detail': _subscriptionUsage.detail,
-        'segments': _subscriptionUsage
-            .paintSegments(
-              foreground: terminalTheme.foreground,
-              surface: grid.AppPalette.swarmField,
-            )
-            .map((part) => part.toJson())
-            .toList(),
-        'interactive': _shortcutsEnabled,
-      },
       'harnessMonitor': {
         'text': monitor.label,
         'label': monitor.detail,
         'detail': monitor.detail,
         'segments': [
           {'text': monitor.label},
-        ],
-        'interactive': _shortcutsEnabled,
-      },
-      'machineResources': {
-        'text': monitor.metricsLabel(),
-        'label': monitor.resourceDetail,
-        'detail': monitor.resourceDetail,
-        'segments': [
-          {'text': monitor.metricsLabel()},
-        ],
-        'noStorageSegments': [
-          {'text': monitor.metricsLabel(storage: false)},
-        ],
-        'compactSegments': [
-          {'text': monitor.metricsLabel(gpu: false, storage: false)},
-        ],
-        'minimalSegments': [
-          {
-            'text': monitor.metricsLabel(
-              ram: false,
-              gpu: false,
-              storage: false,
-            ),
-          },
         ],
         'interactive': _shortcutsEnabled,
       },
@@ -7243,7 +7206,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           : 0.0;
       final download = kIsWeb && !_compact(context);
       final downloadWidth = download ? available * .16 : 0.0;
-      final usage = _subscriptionUsage;
       final resourceGap = cell.width * (workspaceBarGroupGapCells - 2);
       final resourceBudget = math.max(
         0.0,
@@ -7263,10 +7225,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
             cell.width * 2,
         resourceBudget * .4,
       );
-      final hardwareWidth = resourceBudget * .52;
-      final usageWidth = constraints.maxWidth < 1050
-          ? 0.0
-          : resourceBudget * .22;
       final hasFooterDaemon = !kIsWeb && _slotShown;
       final paneContext = Row(
         mainAxisAlignment: MainAxisAlignment.end,
@@ -7319,7 +7277,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   child: ListenableBuilder(
                     listenable: _harnessMonitor,
                     builder: (context, _) {
-                      final summary = _harnessMonitor.summary;
+                      final summary = _harnessMonitor;
                       return WorkspaceBarControl(
                         key: const ValueKey('workspace-harness-monitor'),
                         label: summary.detail,
@@ -7351,69 +7309,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     },
                   ),
                 ),
-                SizedBox(width: resourceGap),
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: hardwareWidth),
-                  child: WorkspaceHarnessResources(
-                    key: const ValueKey('workspace-machine-resources'),
-                    monitor: _harnessMonitor,
-                    // The fixed companion slot supplies its own optical gutter.
-                    trailingPadding: hasFooterDaemon && usageWidth == 0
-                        ? 0
-                        : null,
-                    onPressed: _shortcutsEnabled
-                        ? _toggleHarnessControls
-                        : null,
-                  ),
-                ),
-                if (usageWidth > 0) ...[
-                  SizedBox(width: resourceGap),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: usageWidth),
-                    child: WorkspaceBarControl(
-                      key: const ValueKey('workspace-subscription-usage'),
-                      label: usage.detail,
-                      tooltip: usage.detail,
-                      onPressed: _shortcutsEnabled
-                          ? () => _toggleModels(
-                              initialTab: ModelsTab.subscriptions,
-                            )
-                          : null,
-                      builder: (context, emphasized) => Padding(
-                        padding: EdgeInsets.only(
-                          left: cell.width,
-                          right: hasFooterDaemon ? 0 : cell.width,
-                        ),
-                        child: SizedBox(
-                          height: workspaceBarControlHeight(context),
-                          child: Center(
-                            widthFactor: 1,
-                            child: Text.rich(
-                              TextSpan(
-                                children: [
-                                  for (final part in usage.paintSegments(
-                                    foreground: theme.foreground,
-                                    surface: grid.AppPalette.swarmField,
-                                  ))
-                                    workspaceBarGroupTextSpan(
-                                      part.text,
-                                      cellWidth: cell.width,
-                                      style: TextStyle(color: part.foreground),
-                                    ),
-                                ],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: workspaceBarTextStyle(
-                                emphasized: emphasized,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
                 if (hasFooterDaemon) ...[
                   SizedBox(width: resourceGap),
                   _daemonTabButton(),

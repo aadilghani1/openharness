@@ -1,13 +1,30 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { stop, open } from '../lib/actions.mjs'
+import { stop, open, previewDelete, deleteHarness, worktreeAction } from '../lib/actions.mjs'
 import { mergeRows } from '../lib/inventory.mjs'
 import { frame } from './fixtures.mjs'
 const observed = Date.now()
-const agent = extra => frame({ updatedAt: observed, resumeMode: 'conversation', monitor: { activity: 'idle', activityKnown: true }, ...extra })
+const agent = extra => frame({ createdAt: new Date(observed - 1000).toISOString(), updatedAt: observed, resumeMode: 'conversation', monitor: { activity: 'idle', activityKnown: true }, ...extra })
 const row = extra => mergeRows([agent(extra)], { machine: { machineId: 'remote', name: 'Office' }, local: false })[0]
 const intent = async () => ({ creationId: 'same-operation', path: '/fixture', existing: false })
 const clearIntent = async () => {}
+
+test('deletion binds the review to the owning daemon and never retries a lost response', async () => {
+  const selected = row(), calls = []
+  const rpc = async (...args) => { calls.push(args); return { reviewId: 'reviewed', sessionBytes: 4096 } }
+  assert.equal((await previewDelete(selected, { list: async () => [agent()], rpc })).reviewId, 'reviewed')
+  assert.deepEqual(calls[0], ['remote', 'agent_purge', { agentId: selected.agentId, sessionId: selected.sessionId, createdAt: selected.createdAt, mode: 'inspect' }])
+  const lost = async (...args) => { calls.push(args); throw new Error('connection lost') }
+  assert.equal((await deleteHarness(selected, { rpc: lost })).ok, false)
+  assert.equal(calls.length, 1)
+  const result = await deleteHarness(selected, { reviewId: 'reviewed', rpc: lost })
+  assert.equal(result.ok, false); assert.match(result.detail, /never retried/)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1][2].reviewId, 'reviewed')
+  await worktreeAction(selected, { reviewId: 'tree', path: '/exact/path', discardChanges: true, rpc: lost })
+  assert.equal(calls.length, 3)
+  assert.deepEqual(calls[2], ['remote', 'agent_worktree_delete', { agentId: selected.agentId, sessionId: selected.sessionId, createdAt: selected.createdAt, mode: 'delete', reviewId: 'tree', path: '/exact/path', discardChanges: true }])
+})
 
 test('remote stop uses daemon identity, never a signal or tmux command', async () => {
   const calls = []

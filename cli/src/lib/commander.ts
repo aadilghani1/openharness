@@ -966,6 +966,15 @@ export class CommanderMirror {
   }
 
   // ── persistence ──────────────────────────────────────────────────────────────────────────────
+  deleteHistory(sessionId: string): void {
+    this.forget(sessionId)
+    this.summaries.delete(sessionId)
+    this.history.delete(sessionId)
+    this.fullTexts.delete(sessionId)
+    this.asks.delete(sessionId)
+    this.save(true)
+  }
+
   private load(): void {
     try {
       const obj = JSON.parse(readFileSync(this.file, 'utf-8')) as Record<string, string>
@@ -998,7 +1007,7 @@ export class CommanderMirror {
     this.saveTimer = setTimeout(() => this.save(), 200)
   }
 
-  private save(): void {
+  private save(strict = false): void {
     try {
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
       writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.summaries), null, 2))
@@ -1006,6 +1015,7 @@ export class CommanderMirror {
       writeFileSync(this.fullTextFile, JSON.stringify(Object.fromEntries(this.fullTexts), null, 2))
       writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
     } catch (err) {
+      if (strict) throw err
       console.error('[commander] save summaries failed:', err)
     }
   }

@@ -172,6 +172,29 @@ test('a policy is validated before it is written', async (t) => {
   assert.match(rules, /"pinned": true/, 'the pane may only change the thresholds it draws, never a guard')
 })
 
+test('permanent deletion requires one explicit target, matching identity, and a review token', async t => {
+  const target = row({ id: 'a1', createdAt: 1234 }), calls = []
+  const previewDelete = async target => { calls.push('review'); return { ok: true, id: target.id, reviewId: 'review-token' } }
+  const deleteHarness = async (target, options) => { calls.push(options.reviewId); return { ok: true, id: target.id, deleted: true } }
+  const worktreeAction = async (target, options) => { calls.push(options); return { ok: true, id: target.id, deleted: true } }
+  const { viewer, base } = await serve([target], { verbs: { previewDelete, deleteHarness, worktreeAction } })
+  t.after(() => viewer.close())
+  const request = payload => post(base, viewer.token, '/api/act', payload)
+  const approved = { ids: ['a1'], manual: true, expected: [target] }
+  for (const verb of ['delete', 'delete-review', 'worktree-review', 'worktree-delete']) {
+    assert.ok((await request({ verb, ids: ['a1'] })).error)
+    assert.ok((await request({ ...approved, verb, ids: ['a1', 'a2'] })).error)
+    const changed = await request({ ...approved, verb, reviewId: 'token', expected: [{ ...target, createdAt: 5678 }] })
+    assert.equal(changed.results[0].ok, false)
+  }
+  assert.ok((await request({ ...approved, verb: 'delete' })).error)
+  assert.deepEqual(calls, [])
+  assert.equal((await request({ ...approved, verb: 'delete-review' })).results[0].reviewId, 'review-token')
+  assert.equal((await request({ ...approved, verb: 'delete', reviewId: 'review-token' })).results[0].deleted, true)
+  assert.equal((await request({ ...approved, verb: 'worktree-delete', reviewId: 'worktree-token', path: '/reviewed/path', discardChanges: true })).results[0].deleted, true)
+  assert.deepEqual(calls, ['review', 'review-token', { reviewId: 'worktree-token', path: '/reviewed/path', discardChanges: true }])
+})
+
 test('the pane header verdict is written from the same plan the page draws', async (t) => {
   const { viewer, workspace } = await serve()
   t.after(() => viewer.close())

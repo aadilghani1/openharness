@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:convert';
 
@@ -486,7 +485,7 @@ void main() {
 
   for (final native in [false, true]) {
     testWidgets(
-      'footer usage updates and opens subscriptions (native=$native)',
+      'footer shows only harness count beside focused work (native=$native)',
       (tester) async {
         final updates = <Map>[];
         const channel = MethodChannel('harness/swarm_tabs');
@@ -497,117 +496,62 @@ void main() {
         });
         addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
         final subscriptions = _FooterSubscriptions()
-          ..values = [
-            subscription('claude', 'aaaaaa', 0),
-            subscription('codex', 'bbbbbb', 13),
-          ];
+          ..values = [subscription('codex', 'bbbbbb', 13)];
         final app = createApp();
         app.machineStates['m']!.localOnly = true;
         final pane = app.adoptSessionForTest(terminal('a0', []));
         addTearDown(app.dispose);
         addTearDown(subscriptions.dispose);
         tester.view.devicePixelRatio = 1;
-        tester.view.physicalSize = const Size(1280, 800);
         addTearDown(tester.view.reset);
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: grid.buildAppTheme(brightness: Brightness.dark),
-            home: SwarmScreen(
-              notifier: app,
-              nativeTabs: native,
-              modelsMenu: subscriptions,
+        for (final width in [1280.0, 640.0, 480.0]) {
+          tester.view.physicalSize = Size(width, 800);
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: grid.buildAppTheme(brightness: Brightness.dark),
+              home: SwarmScreen(
+                notifier: app,
+                nativeTabs: native,
+                modelsMenu: subscriptions,
+              ),
             ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        const label = 'Claude 100%   Codex 87%';
-        if (native) {
-          expect(updates.last['subscriptionUsage']['text'], label);
-          final parts = updates.last['subscriptionUsage']['segments'] as List;
-          expect(parts.map((part) => part['text']), [
-            'Claude ',
-            '100%',
-            '   Codex ',
-            '87%',
-          ]);
-          expect(parts[0]['foreground'], parts[2]['foreground']);
-          expect(parts[1]['foreground'], parts[0]['foreground']);
-          expect(parts[3]['foreground'], parts[0]['foreground']);
-          expect(updates.last['subscriptionUsage']['detail'], contains('used'));
-        } else {
-          expect(find.text(label), findsOneWidget);
-          final usage = find.byKey(
-            const ValueKey('workspace-subscription-usage'),
           );
-          final context = find.byKey(const ValueKey('workspace-pane-context'));
-          expect(
-            tester.getRect(usage).right,
-            lessThan(tester.getRect(context).left),
-          );
-          await captureControls(tester, 'subscription-usage-footer');
-          for (final width in [480.0, 640.0]) {
-            tester.view.physicalSize = Size(width, 800);
-            await tester.pump();
-            expect(tester.takeException(), isNull);
-            expect(usage, findsNothing);
+          await tester.pumpAndSettle();
+          if (native) {
+            expect(updates.last['subscriptionUsage'], isNull);
+            expect(updates.last['machineResources'], isNull);
+            expect(updates.last['harnessMonitor']['text'], 'Harnesses 0');
+          } else {
+            expect(
+              find.byKey(const ValueKey('workspace-subscription-usage')),
+              findsNothing,
+            );
+            expect(
+              find.byKey(const ValueKey('workspace-machine-resources')),
+              findsNothing,
+            );
             final monitor = find.byKey(
               const ValueKey('workspace-harness-monitor'),
             );
+            final context = find.byKey(
+              const ValueKey('workspace-pane-context'),
+            );
+            expect(monitor, findsOneWidget);
             expect(
               tester.getRect(monitor).right,
               lessThan(tester.getRect(context).left),
             );
+            if (width == 1280) {
+              await captureControls(tester, 'harness-count-footer');
+            }
           }
-          tester.view.physicalSize = const Size(1280, 800);
+          expect(tester.takeException(), isNull);
         }
-        if (native) {
-          expect(
-            updates.last['machineResources']['text'],
-            'CPU 0%   RAM 0 MB   GPU 0%   SSD 0 MB',
-          );
-          expect(
-            updates.last['machineResources']['detail'],
-            contains('open harnesses across connected machines'),
-          );
-          expect(updates.last['machineResources']['interactive'], isTrue);
-        } else {
-          expect(
-            find.byKey(const ValueKey('workspace-machine-resources')),
-            findsOneWidget,
-          );
-        }
-        // Monitor navigation is exercised with its daemon fixture in harness_monitor_test.
-        expect(app.focusedPane, same(pane));
-        expect(app.panes, [pane]);
         subscriptions.update([subscription('codex', 'bbbbbb', 27)]);
         await tester.pump();
-        if (native) {
-          expect(updates.last['subscriptionUsage']['text'], 'Codex 73%');
-          final done = Completer<void>();
-          messenger.handlePlatformMessage(
-            channel.name,
-            const StandardMethodCodec().encodeMethodCall(
-              const MethodCall('subscriptions'),
-            ),
-            (_) => done.complete(),
-          );
-          await tester.pumpAndSettle();
-          await done.future;
-        } else {
-          expect(find.text('Codex 73%'), findsOneWidget);
-          await tester.tap(
-            find.byKey(const ValueKey('workspace-subscription-usage')),
-          );
-          await tester.pumpAndSettle();
-        }
-        final search = find.byKey(const ValueKey('swarm-search-input'));
-        expect(
-          tester.widget<TextField>(search).controller!.text,
-          ':subscription',
-        );
+        expect(find.text('Codex 73%'), findsNothing);
         expect(app.focusedPane, same(pane));
         expect(app.panes, [pane]);
-        expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
       },
     );
