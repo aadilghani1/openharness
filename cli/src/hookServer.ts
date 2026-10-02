@@ -78,6 +78,8 @@ export interface HookServerHandlers {
   onPromptContext?: (agentId: string, prompt: string) => PromptContext | Promise<PromptContext>
   /** Called only for the same process-owned native session after its hook writes context to stdout. */
   onMemoryContextEmitted?: (agentId: string, receiptId: string) => Promise<boolean>
+  /** Private, process-verified OpenCode request metadata. Never enters the session registry or clients. */
+  onOpenCodeMemoryRuntime?: (agent: RegisteredSession, input: unknown) => Record<string, unknown>
   onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
@@ -588,6 +590,21 @@ export function startHookServer(
           ? await boundedPromptContext(() => handlers.onPromptContext!(result.entry.agentId, body.prompt ?? '')) : null
         json(200, { ok: true, ...context })
         return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/opencode-memory-runtime') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: BoundHookBody
+        try {
+          const parsed: unknown = JSON.parse(await readBody(req))
+          if (!validHookBody(parsed) || parsed.engine !== 'opencode' || !parsed.callerPid
+            || !optionalBoundedJson(parsed.input, 50_000)) { json(400, { error: 'invalid hook body' }); return }
+          body = parsed
+        } catch { json(400, { error: 'bad json' }); return }
+        // Unlike discovery fallback, credentials always require the host's live ancestry resolver.
+        const agent = handlers.resolveHookAgent ? await verifiedBoundMutation(body, handlers) : null
+        if (!agent?.processIdentity) { json(403, { error: 'UNBOUND_HOOK' }); return }
+        json(200, handlers.onOpenCodeMemoryRuntime?.(agent, body.input) ?? { observe: false }); return
       }
 
       if (req.method === 'POST' && url === '/api/hook/memory-emitted') {

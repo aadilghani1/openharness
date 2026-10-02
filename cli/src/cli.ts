@@ -100,6 +100,7 @@ import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
+import { OpenCodeMemoryBinding } from './memory/opencodeBinding.js'
 import { MemoryExperimentSettings } from './memory/experiment.js'
 import { MemoryControl } from './memory/control.js'
 import { isOwnerProcess } from './memory/ownerProcess.js'
@@ -192,7 +193,7 @@ import {
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
+import { processIdentityKey, terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
@@ -1948,6 +1949,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   let companionPromptContext: (agentId: string) => string | null = () => null
   let companionProfileChanged: () => void = () => {}
+  let openCodeMemoryBinding: OpenCodeMemoryBinding | null = null
   // Local account opt-in, exposed in Settings → Experimental. The old env flag is a migration default.
   const memoryExperiment = new MemoryExperimentSettings(join(env.ADAPTER_DATA_DIR, 'coding-memory-settings'), process.env.HARNESS_CODING_MEMORY === '1')
   const guestMemoryProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
@@ -4172,6 +4174,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
     },
     onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
+    onOpenCodeMemoryRuntime: (agent, input) => {
+      if (!agent.processIdentity) return { observe: false }
+      const result = openCodeMemoryBinding?.receive({ agentId: agent.agentId, sessionId: agent.sessionId,
+        processKey: processIdentityKey('opencode', agent.processIdentity) }, input) ?? { observe: false }
+      if (result.observe) codingMemory?.activity()
+      return result
+    },
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4942,14 +4951,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const live = registry.advertised().find(s => s.agentId === agentId)
       const session = live ?? stoppedAgents.get(agentId)
       if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
+      const nativeProcessKey = live?.processIdentity ? processIdentityKey(session.engine, live.processIdentity) : null
       return { agentId, sessionId: session.sessionId, engine: session.engine,
         profile: runtimeProfiles.selectedModel(session), stopped: !live,
         startup: live ? companionStartupProfile.selected(session) : null,
+        nativeProcessKey,
+        accountKey: session.engine === 'opencode' && nativeProcessKey ? openCodeMemoryBinding?.identity({
+          agentId, sessionId: session.sessionId, processKey: nativeProcessKey,
+        }) ?? null : undefined,
         codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
     },
+    openCodeSnapshot: runtime => runtime.sessionId && runtime.nativeProcessKey ? openCodeMemoryBinding?.read({
+      agentId: runtime.agentId, sessionId: runtime.sessionId, processKey: runtime.nativeProcessKey,
+    }) ?? null : null,
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
     stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
   })
+  openCodeMemoryBinding = new OpenCodeMemoryBinding({ current: () => {
+    const ownerKey = codingMemory?.ownerKey(), status = codingMemory?.status()
+    if (!daemons.on() || !codingMemoryPreview() || !ownerKey || status?.state !== 'ready' || !status.preferences?.learn) return null
+    const session = registry.advertised().find(s => s.agentId === pairHarness.agentId())
+    if (!session || !session.active || session.dsh !== PAIR_HARNESS_DSH || session.engine !== 'opencode'
+      || !session.sessionId || !session.processIdentity) return null
+    return { ownerKey, agentId: session.agentId, sessionId: session.sessionId,
+      processKey: processIdentityKey('opencode', session.processIdentity),
+      model: parseRuntimeProfile(runtimeProfiles.selectedModel(session))?.model ?? null }
+  } })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
   {
     const roster = new MemorySessionRoster(homedir())
@@ -5110,6 +5137,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let learnTick: ReturnType<typeof setInterval> | null = null
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   applyCodingMemorySetting = async () => {
+    openCodeMemoryBinding?.clear()
     pairLearner?.cancelReviews()
     conversationReview.stop()
     memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
@@ -5135,6 +5163,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) { pairRulesConfig(); void refreshMemoryIdentity() } }, 30_000)
       pairConfigTick.unref?.()
     } else {
+      openCodeMemoryBinding?.clear()
       memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
       if (learnTick) { clearInterval(learnTick); learnTick = null }
       if (pairConfigTick) { clearInterval(pairConfigTick); pairConfigTick = null }

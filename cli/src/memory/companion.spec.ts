@@ -34,3 +34,14 @@ it('uses only the selected companion for foreground priority and waits when that
   expect(await inference.target()).toEqual({ state: 'waiting' })
   expect(capability).not.toHaveBeenCalled()
 })
+
+it('checks OpenCode native compatibility without probing a different engine', async () => {
+  const claude = vi.fn(), codex = vi.fn()
+  const opencode = vi.fn(async () => ({ supported: false, version: '2.0.0' }))
+  const inference = companionMemoryInference({ extractionStatus: async () => ({ state: 'ready', agentId: 'companion',
+    engine: 'opencode', contextKey: 'native-binding' }), extract: async () => null }, () => false, codex, claude, opencode)
+  expect(await inference.target()).toEqual({ state: 'unsupported' })
+  opencode.mockResolvedValue({ supported: true, version: '1.18.34' })
+  expect(await inference.target()).toEqual({ state: 'ready', key: 'native-binding', foregroundBusy: false })
+  expect(codex).not.toHaveBeenCalled(); expect(claude).not.toHaveBeenCalled()
+})

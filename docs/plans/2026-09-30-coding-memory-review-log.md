@@ -607,3 +607,40 @@ the foreground OpenCode account/configuration and the host runtime binding still
 implemented. OpenCode capture and recall are separate remaining work. No real model evaluated
 the user's private sample, and no model-quality, useful-memory or task-benefit claim follows
 from the transport checks.
+
+### OpenCode foreground binding and companion integration
+
+The 1.x Harness plugin now observes the selected companion's native request. It asks the host
+before inspecting credentials; the host grants a five-second, one-use challenge only for the
+process-owned companion session while Coding memory, watching consent and Learn are enabled.
+The observed provider, model alias, API credential and native variant stay in volatile memory.
+No credential enters the session registry, saved profile, browser/device frames or research logs.
+The binding expires after fifteen minutes and is withdrawn on an owner, process, session, selected
+model or authorization change. Identical model credentials cannot carry a result across Harness
+owners. Internal calls using a different small model do not replace the user's selection.
+
+`CompanionIntelligence` now uses this binding for OpenCode extraction and companion reasoning,
+with checks before launch and after completion. It never guesses a provider from the machine's
+default configuration or falls back to Claude/Codex. This requires a fresh foreground request
+from the updated plugin; already-running OpenCode processes must restart to load it. The native
+version remains pinned to 1.18.34. OAuth/function-based credential wrappers, managed system
+configuration, other SDKs and OpenCode 2.x remain unsupported.
+
+The [native binding probe](../research/2026-10-01-memory-opencode-binding.json) kept a disposable
+OpenCode process alive, observed a real foreground request through the generated hook, and then
+ran the actual companion extraction against a localhost model. Both a native API login and an
+explicit provider-key override used the expected account, provider model ID and `high` variant.
+Off sent no credential snapshot and launched no extraction; scratch storage was removed. The
+first probe exposed the 1.x SDK's missing health wrapper, so the hook now uses that pinned SDK's
+in-process HTTP client for `/global/health`; the corrected path was exercised natively.
+
+Validation: **514 tests across 34 affected suites**, TypeScript checking and the CLI bundle passed.
+The first unprivileged hook-server run could not bind localhost (`EPERM`); the permitted run passed.
+The required real multiplexer suite ran in a separate temporary tmux 3.7c server: nine checks
+passed, including discovery for Claude 2.1.287, Codex 0.159.3, OpenCode 1.18.34, Pi 0.85.1,
+Hermes 0.18.0 (2026.7.1), Grok 1.0.44 and its `agent` alias. Nine unavailable engine rows were
+skipped. This verifies discovery/lifecycle behavior, not those engines' memory-inference support.
+These are synthetic integration results. The host's ownership/consent inputs are supplied by the
+fixture and tested separately through the real hook server. The installed review app, its settings,
+and personal memories remain unchanged. OpenCode source capture and prompt recall, real-user
+extraction quality and the broader task-benefit/rollout requirements are still open.

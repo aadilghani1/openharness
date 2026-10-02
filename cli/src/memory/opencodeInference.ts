@@ -37,6 +37,9 @@ const snapshotSchema = z.object({
 
 /** Supplied by a native account/config observer, never by an extraction response or remembered text. */
 export type OpenCodeMemorySnapshot = z.infer<typeof snapshotSchema>
+export function parseOpenCodeMemorySnapshot(value: unknown): OpenCodeMemorySnapshot {
+  return parse(snapshotSchema, value)
+}
 export interface OpenCodeMemoryInferenceOptions extends MemoryInferenceOptions {
   expectedSnapshot: string
   /** Fresh observation of the same selected runtime's provider, account, model and variant. */
