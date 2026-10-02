@@ -56,6 +56,7 @@ import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
+import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
@@ -436,6 +437,7 @@ function gridModelsPayload(gridName: string | null, sections: GridSection[], row
 }
 
 export class BackendSocket {
+  harnessDevices: HarnessDevicesService | null = null
   private readonly gridFleet = new GridFleetRpc()
   // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
   // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
@@ -3400,6 +3402,17 @@ export class BackendSocket {
           const tail = await this.sessionTailProvider(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
           if (!tail) { reply(type, requestId, { error: 'NOT_INDEXED', sessionId }); return }
           reply(type, requestId, { ...tail })
+          return
+        }
+
+        // Physical devices belong to this machine; only its owner or loopback tools may manage them.
+        case 'harness_devices_list':
+        case 'harness_device_settings': {
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') {
+            reply(type, requestId, { error: 'OWNER_REQUIRED' })
+            return
+          }
+          reply(type, requestId, await harnessDevicesRequest(this.harnessDevices, type, payload))
           return
         }
 

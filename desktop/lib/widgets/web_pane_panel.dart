@@ -403,9 +403,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
               ),
             // coverage:ignore-end
             _ViewerActions(
-              zoomed: widget.zoomed,
               onReload: _controller == null && _remote == null ? null : _reload,
-              onZoom: widget.onToggleZoom,
               onClose: widget.onClose,
             ),
           ],
@@ -471,15 +469,9 @@ class _WebPanePanelState extends State<WebPanePanel> {
 
 /// Viewer navigation never stops the harness that owns it.
 class _ViewerActions extends StatelessWidget {
-  const _ViewerActions({
-    required this.zoomed,
-    this.onReload,
-    this.onZoom,
-    this.onClose,
-  });
+  const _ViewerActions({this.onReload, this.onClose});
 
-  final bool zoomed;
-  final VoidCallback? onReload, onZoom, onClose;
+  final VoidCallback? onReload, onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -490,12 +482,6 @@ class _ViewerActions extends StatelessWidget {
           label: 'Reload viewer',
           icon: AppPaneSymbol.reload,
           onPressed: onReload,
-        ),
-        PaneHeaderButton(
-          label: zoomed ? 'Restore harnesses' : 'Zoom viewer',
-          command: 'pane.zoom',
-          icon: zoomed ? AppPaneSymbol.restore : AppPaneSymbol.zoom,
-          onPressed: onZoom,
         ),
         PaneHeaderButton(
           label: 'Close viewer',

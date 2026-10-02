@@ -30,6 +30,7 @@ code = r'''
 #include "octopus.h"
 #include "character.h"
 #include "focus.h"
+#include "focus_faces.h"
 #include "pets.h"
 #include "workspace.h"
 #include "command_face.h"
@@ -346,6 +347,18 @@ static bool title_is(const char *text) {
     for(int i=0;i<scene.count;i++)
         if((scene.runs[i].arc==1 || (s.straight_title && scene.runs[i].y==41)) && !strcmp(scene.runs[i].text,text)) return true;
     return false;
+}
+// A Focus scene draws in Geist: no Roboto face, and a curved run is GeistMono; then the portrait.
+static void portrait(const char *dir, const char *name);
+static void portrait_focus(const char *dir, const char *name) {
+    const ht_pfont_t *roboto[] = {&ht_lv_roboto_med_38, &ht_lv_roboto_med_32, &ht_lv_roboto_med_30,
+        &ht_lv_roboto_med_28, &ht_lv_roboto_med_24, &ht_lv_roboto_med_22, &ht_lv_roboto_reg_38,
+        &ht_lv_roboto_reg_25, &ht_lv_roboto_reg_20};
+    for (int i = 0; i < scene.count; i++) {
+        for (unsigned g = 0; g < sizeof roboto / sizeof roboto[0]; g++) assert(scene.runs[i].font != &roboto[g]->base);
+        if (scene.runs[i].arc == 1) assert(scene.runs[i].font == &ht_mono_24);
+    }
+    portrait(dir, name);
 }
 static void portrait(const char *dir, const char *name) {
     if (!dir) return;
@@ -1746,7 +1759,7 @@ int main(int argc, char **argv) {
      */
     // The Focus SKIN's home face, footer and all — the "focus" portrait above is the legacy
     // focus-face option on the default character, which draws no microphone.
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait(dir, "focus-skin");
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); scene_take(); portrait_focus(dir,"focus-skin");
     /*
      * THE DOORS on Focus (owner, 2026-10-01), laid out like the octopus: a tap on the curved name opens
      * the pane list, a hold on the face the tab list, and a tap anywhere else talks. There is no tab
@@ -1755,7 +1768,7 @@ int main(int argc, char **argv) {
     workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     ui_project_emit(s.agents[0].id, "sess", "summary", "Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks pass.",
                     "Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks pass.");
-    scene_take(); portrait(dir, "focus-recap");
+    scene_take(); portrait_focus(dir,"focus-recap");
     assert(!action_enabled(A_TAB_LIST));
     for (int i = 0; i < scene.count; i++) assert(scene.runs[i].sprite.pixels != ht_icon_mic.px);
     tap(1000, 233, 30); assert(s.view == AGENTS && !starts);
@@ -1847,7 +1860,7 @@ int main(int argc, char **argv) {
     {
         cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",.summary="Retry queue shipped."},
                                {.agent_id="b",.name="Landing page",.machine="Studio Mac",.summary="Hero and pricing are in."}};
-        ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait(dir, "focus-inbox");
+        ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait_focus(dir,"focus-inbox");
         assert(s.view == INBOX && scene.background == BG);   // black, like the face
         int cards = 0;
         for (int i = 0; i < s.hit_count; i++) cards += s.hits[i].action == A_NOTICE;
@@ -1864,12 +1877,12 @@ int main(int argc, char **argv) {
                                 {.agent_id="b",.name="Website",.summary="The site is deployed."}};
         COPY(asked[0].agent_id, s.agents[0].id); COPY(asked[0].name, s.agents[0].name);
         s.tab_count=1; COPY(s.tabs[0].id,"tab-0"); COPY(s.tabs[0].name,"Daily life"); COPY(s.selected_tab,"tab-0");
-        ui_notif_replace(asked,2); scene_take(); portrait(dir, "focus-question");
+        ui_notif_replace(asked,2); scene_take(); portrait_focus(dir,"focus-question");
         assert(s.view == HOME && action_enabled(A_INBOX));
         int last_text = 0, bell_top = HT_HEIGHT;
         for (int i = 0; i < scene.count; i++) {
             const ht_run_t *r = &scene.runs[i];
-            if (r->font == &ht_lv_geist_med_28.base && r->text[0]) last_text = r->y + r->font->height;
+            if (r->font == &ht_lv_geist_med_30.base && r->text[0]) last_text = r->y + r->font->height;
             if (r->box.h && r->box.fill == color(0x006fff) && r->y < bell_top) bell_top = r->y;
         }
         assert(last_text && bell_top < HT_HEIGHT && last_text <= bell_top);
@@ -2014,7 +2027,7 @@ int main(int argc, char **argv) {
     {
         const char *names[3]={"claude - Harness","Energy","Opencode"};
         for(int i=0;i<3;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); COPY(s.agents[i].name,names[i]); }
-        view(AGENTS); scene_take(); portrait(dir,"focus-panes");
+        view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes");
         int rows=0, rims=0;
         for(int i=0;i<scene.count;i++) {
             if (scene.runs[i].box.h == 58 && scene.runs[i].box.border == color(HT_THEME_VOICE)) {
@@ -2045,13 +2058,13 @@ int main(int argc, char **argv) {
         for(int i=0;i<scene.count;i++) { const char *t=scene.runs[i].text; size_t n=strlen(t);
             if(!strncmp(t,"Payments",8) && n>3 && !strcmp(t+n-3,"...")) cut=true; }
         assert(cut);
-        portrait(dir,"focus-panes-scrolled");
+        portrait_focus(dir,"focus-panes-scrolled");
     }
     // And its tabs: the same carousel, the tab you are in green.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS);
     s.tab_count=3; COPY(s.tabs[0].id,"t0"); COPY(s.tabs[0].name,"Harness repo"); COPY(s.tabs[1].id,"t1"); COPY(s.tabs[1].name,"Doi");
     COPY(s.tabs[2].id,"t2"); COPY(s.tabs[2].name,"Research"); COPY(s.selected_tab,"t0");
-    dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"focus-tabs");
+    dispatch((action_t){.kind=A_TABS}); scene_take(); portrait_focus(dir,"focus-tabs");
     {
         bool green=false;
         for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Harness") && scene.runs[i].fg==color(HT_THEME_VOICE) &&
@@ -2097,7 +2110,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
-                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'pets.c'),str(native/'terminal.c'),
+                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'terminal.c'),
                     str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui')],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):

@@ -715,6 +715,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // forwarded: a robot plugged into this computer is nothing a remote machine can act on, and the
         // reply is the ordinary `dial_status` the device's own answer produces.
         if (parsed?.type === 'dial_settings') {
+          // Legacy settings are only for this desk. Remote management uses the
+          // encrypted harness_device_settings RPC, dispatched by the host.
+          if (relay || boundMachineId !== options.machineId) return
           const payload = (parsed.payload ?? {}) as Record<string, unknown>
           const id = typeof payload.id === 'string' ? payload.id : ''
           options.onDialSettings?.(id, payload)

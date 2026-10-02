@@ -5,6 +5,7 @@ import { env } from '../config/env.js'
 import { promisify } from 'node:util'
 import type { ProcessIdentity } from './terminalTypes.js'
 import { readProcessTelemetry, type ProcessTelemetry } from './harnessTelemetry.js'
+import { macProcessGpuPercent } from './macosProcessGpu.js'
 
 const exec = promisify(execFile)
 type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null }
@@ -152,7 +153,14 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
       const telemetry = await deps.telemetry([...counted]).catch(() => new Map<number, ProcessTelemetry>())
       const enrich = (value: HarnessResource | NonNullable<HarnessResources['shared']>[number], pids: number[]) => {
         const gpu = pids.map(pid => telemetry.get(pid)?.gpuMemoryBytes).filter((n): n is number => n != null)
-        const gpuUsage = pids.map(pid => telemetry.get(pid)?.gpuPercent).filter((n): n is number => n != null)
+        const macGpu = pids.some(pid => telemetry.get(pid)?.macGpu != null)
+        const gpuUsage = pids.map(pid => {
+          const next = telemetry.get(pid)
+          if (!macGpu) return next?.gpuPercent ?? null
+          if (previous?.rows.get(pid)?.start !== byPid.get(pid)?.start) return null
+          return macProcessGpuPercent(previousTelemetry.get(pid)?.macGpu, next?.macGpu)
+        })
+        const knownGpu = gpuUsage.filter((n): n is number => n != null)
         const rate = (key: 'readBytes' | 'writeBytes') => {
           if (!pids.length || elapsed <= 0 || elapsed > 60_000) return null
           let delta = 0
@@ -164,7 +172,8 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
           return delta * 1000 / elapsed
         }
         value.gpuMemoryBytes = gpu.length ? gpu.reduce((sum, n) => sum + n, 0) : null
-        value.gpuPercent = gpuUsage.length ? gpuUsage.reduce((sum, n) => sum + n, 0) : null
+        value.gpuPercent = knownGpu.length && (!macGpu || knownGpu.length === pids.length)
+          ? knownGpu.reduce((sum, n) => sum + n, 0) : null
         value.diskReadBytesPerSecond = rate('readBytes')
         value.diskWriteBytesPerSecond = rate('writeBytes')
         value.processes = pids.flatMap(pid => {

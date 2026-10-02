@@ -45,6 +45,26 @@ it('refuses an unreadable process table or an unbound conversation before contro
   await expect(stopSharedCodexSession(row, () => true, deps)).rejects.toThrow('identify')
   expect(deps.connect).not.toHaveBeenCalled()
 })
+it('requires a verified process before accepting an unused conversation', async () => {
+  row.sessionId = ''
+  const confirmUnused = vi.fn(async () => true)
+  await expect(stopSharedCodexSession(row, () => true, deps, confirmUnused)).rejects.toThrow('identify')
+  expect(confirmUnused).not.toHaveBeenCalled()
+  expect(deps.connect).not.toHaveBeenCalled()
+})
+it('rechecks cancellation after confirming an unused conversation', async () => {
+  row.sessionId = ''
+  row.processIdentity = { pid: 99, executable: 'codex', startMarker: 'born' }
+  vi.mocked(deps.rows).mockResolvedValue([
+    ...(await deps.rows())!, { ...row.processIdentity, parentPid: 1, args: 'codex' },
+  ])
+  let current = true
+  await expect(stopSharedCodexSession(row, () => current, deps, async () => {
+    current = false
+    return true
+  })).rejects.toThrow('cancelled')
+  expect(deps.connect).not.toHaveBeenCalled()
+})
 it('leaves a process-owned conversation and an unrelated shared server untouched', async () => {
   loaded = false
   await stopSharedCodexSession(row, () => true, deps)
@@ -118,5 +138,14 @@ it.each(['codex --remote ws://fixture.invalid resume conversation', 'codex resum
   vi.mocked(deps.rows).mockResolvedValue([{ ...row.processIdentity, parentPid: 1, args }])
   vi.mocked(deps.daemonIdentity).mockResolvedValue(null)
   await expect(stopSharedCodexSession(row, () => true, deps)).rejects.toThrow('remote Codex server')
+  expect(deps.connect).not.toHaveBeenCalled()
+})
+it('does not bypass a remote server for an unbound chat', async () => {
+  row.sessionId = ''
+  row.processIdentity = { pid: 99, executable: 'codex', startMarker: 'born' }
+  vi.mocked(deps.rows).mockResolvedValue([{ ...row.processIdentity, parentPid: 1, args: 'codex --remote=ws://fixture.invalid' }])
+  const confirmUnused = vi.fn(async () => true)
+  await expect(stopSharedCodexSession(row, () => true, deps, confirmUnused)).rejects.toThrow('remote Codex server')
+  expect(confirmUnused).not.toHaveBeenCalled()
   expect(deps.connect).not.toHaveBeenCalled()
 })

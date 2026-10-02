@@ -509,6 +509,53 @@ describe('harness login --json', () => {
     expect(lines).toEqual([{ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: expect.any(String) }])
   })
 
+  it('names the account the person chose and the surface that asked, and nothing it was not told', async () => {
+    // `--google` / `--apple` are what the app's two buttons and the terminal picker send; a client
+    // that predates them sends neither and still gets the sign-in page's own chooser. The surface
+    // is the auth-service client the sign-in is made as: the terminal's, or the desktop app's.
+    for (const [flags, expected] of [
+      [['--google'], { provider: 'google', clientId: 'harness-cli' }],
+      [['--apple', '--entry-point=desktop'], { provider: 'apple', clientId: 'harness-desktop' }],
+      [[], { provider: undefined, clientId: 'harness-cli' }],
+    ] as const) {
+      let body: Record<string, unknown> = {}
+      const { base } = await fakeBackend({
+        authorizeNative: (sent) => { body = sent; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      })
+      const login = jsonChild(tempRoot(), base, ['login', '--force', ...flags, '--json'])
+      const page = await login.next()
+      expect(page).toMatchObject({ type: 'authorize_url' })
+      // This backend's page does not name the account (one from before `provider`): the page the
+      // browser is sent to names it all the same.
+      expect(new URL(String(page.url)).searchParams.get('provider')).toBe(expected.provider ?? null)
+      expect(body.provider).toBe(expected.provider)
+      expect(body.clientId).toBe(expected.clientId)
+      login.child.kill()
+      await login.exit
+    }
+  }, 30_000)
+
+  it('keeps the client the backend exchanged as — not the one it asked for — with the session', async () => {
+    // A refresh has to name the client the tokens were issued to. A backend from before the
+    // clients were split exchanges as its configured one and names none: the session keeps none.
+    for (const [answered, kept] of [['harness-cli', 'harness-cli'], [undefined, undefined], ['someone-else', undefined]] as const) {
+      const root = tempRoot()
+      let redirectUri = ''
+      const { base } = await fakeBackend({
+        authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+        exchange: () => ({ token: 'tok_new', refreshToken: 'refresh_new', expiresIn: 3600, autonomousEnv: 'prod', ...(answered ? { clientId: answered } : {}) }),
+        resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+      })
+      const login = jsonChild(root, base, ['login', '--google', '--json'])
+      expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+      await fetch(`${redirectUri}?code=code_123&state=state_456`)
+      expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+      await login.exit
+      const session = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
+      expect(session.clientId).toBe(kept)
+    }
+  }, 45_000)
+
   it('drives the full loopback flow: emits authorize_url, then a success result once the callback lands', async () => {
     const root = tempRoot()
     let capturedRedirectUri = ''

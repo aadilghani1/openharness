@@ -314,8 +314,12 @@ The GitHub entry starts with only “Enter GitHub URL”; a valid address reveal
 its clone action and an invalid submission reveals inline validation. Do not
 add a duplicate example line or an empty results area beneath an empty field.
 
-**Workspace tabs and pane frames** — tabs use the 13-point system control face,
-independent of the status bar and terminal font. Center the name and its adjacent
+**Workspace tabs and pane frames** — tabs share one width, independent of label
+length, selection, activity and shortcut hints. Divide the available tab area
+equally, capped at 256 points; shrink together down to 128 points, then scroll.
+A tab area narrower than 128 points can show one clipped tab. Mirror these limits
+in Flutter and AppKit. Tabs use the 13-point system control face, independent of
+the status bar and terminal font. Center the name and its adjacent
 status as one compact group, without permanent number prefixes. Navigation ink
 follows the tab-bar surface, including beside light app content. The default label
 is New Tab. A small right-hand close icon appears on hover, with its 32-point
@@ -328,6 +332,12 @@ never moves the name, and Command never changes tab width. Long names truncate
 and retain a full-name tooltip. Selection, dragging, middle-click close and the
 existing keyboard commands keep their meaning.
 
+Devices and Harness Store use compact 28-point capsules, centered in the
+40-point row with 6-point vertical gutters and a 12-point trailing inset.
+Keep 12-point internal horizontal padding and an 8-point icon-to-label gap.
+Flutter capsules grow with platform text scaling and retain at least 6 points
+above and below the label; search and New Tab keep their 32-point icon targets.
+
 The selected tab has 10-point upper corners and 8-point outward lower shoulders,
 joining the workspace along its bottom edge. It starts 6 points below the top
 of the strip. Pane frames use the related 10-point radius, with a 9-point clipped
@@ -335,14 +345,38 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the right-hand controls read agent, model, close. The shared
-12-point close glyph has a 28-point target, 4 points inside the trailing edge.
-Resting ink is 45%; hover and keyboard focus brighten the glyph without a fill,
-border, or movement. Keep the controls on one line; model and title text truncate
-before the close target shrinks. Split and zoom remain in commands, menus and
-keyboard shortcuts. Clicking the model focuses that
-pane and opens the same Models picker as Cmd-:. The agent name and chevron open
-the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
+**Pane header** — terminal panes show agent, model and close at every width.
+Splitting is revealed at the pane edges; zoom remains available through menus,
+command search and shortcuts. Keep split, add and zoom icons out of the header.
+
+Agent and model share `PaneHeaderTextButton`: plain 13-point workspace text,
+regular weight, matching padding and a 28-point target height. No pill, border or
+chevron. Both brighten on hover and keyboard focus without changing weight or
+geometry; use a hand cursor and Change agent / Change model tooltips. Their labels
+rest at 75% foreground (85% with Increase Contrast). Both selectors use 8-point
+horizontal padding, matching the close glyph's inset within its target. Their
+targets meet without an extra gap, leaving 16 points between adjacent contents.
+The agent keeps its natural width up to 140 points; the model uses the remaining
+selector space. Long names truncate with an ellipsis and show their full text on
+hover, without wrapping or reducing the font size. Remove a coding-agent logo
+that repeats the agent selector; keep a distinct domain-harness mark on the left.
+The session name and its activity/status remain on the left.
+
+Use the shared 12-point close glyph in a 28-point target, sitting 4 points
+inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
+brighten the glyph without a fill, border, or movement. Keep the controls on one
+line; the session title yields first, then the model truncates while the agent
+retains readable identity. Never shrink the close target.
+
+Hovering within 44 points of the right or bottom edge reveals one 32-point
+target, inset 8 points and centered along that edge. Use the rounded
+`AppPaneIcon` with `AppPaneSymbol.splitRight` or `splitDown` at 16 points, not a plus. Keep the header
+and corners clear and the resize gaps unobstructed. Hide edge controls while
+dragging, zoomed, in a phone's single-pane view, or unable to add a pane. Hover
+does not focus, resize or rebuild the terminal. Split opens New Harness directly,
+inheriting the clicked pane's agent, machine,
+and project; the pane is created only after submission. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. The agent name opens the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
@@ -358,15 +392,19 @@ folders count once per machine. See [workspace status bar](workspace-status-bar.
 Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
 model/effort in the footer. Context honors the selected status face, fields, colors and shell/
 Powerline treatment. Recent-harness context uses its monochrome presentation.
-Use whole figures, one space between title and value, and 2.5 character cells between parts:
+Use whole figures, spaces of 0.75 character cells within components, and two cells between parts:
 `Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
 Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
-decimal figures. Harness metrics show — when unavailable and ≥ for partial totals. Subscription
-figures mean allowance used and preserve Models' deduplicated accounts, limiting window and
+decimal figures. Harness metrics show — when unavailable; partial totals show the available number
+without a prefix, with coverage explained in the tooltip. Subscription figures mean allowance
+used and preserve Models' deduplicated accounts, limiting window and
 freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
 without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
 
-Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
+Companion and sharing controls follow usage. The companion uses the same gap between controls as
+the resource and subscription groups; the gutter in its fixed slot replaces the preceding control's
+trailing padding so the artwork has the same visible separation as text. See the full
+[status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,

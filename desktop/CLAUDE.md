@@ -143,6 +143,17 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
 
 - **Auth** lives in the CLI. `lib/auth/cli_login.dart` shells out to `harness auth status --json` and
   drives `harness login --json` (NDJSON event stream); `cli_link.dart` wraps `harness link create/import/list`.
+  The login screen's way in is two buttons, Continue with Google and Continue with Apple
+  (`widgets/sign_in_provider_button.dart`), on desktop and web alike: `AppNotifier.login(provider)`
+  hands a `SignInProvider` to the sign-in client — `--google`/`--apple` to the CLI, `provider` to the
+  backend's authorize routes in a viewer build — and auth-service opens that account's own sign-in.
+  A caller with no button of its own (`login()` with none) still gets the page's chooser.
+  Each surface signs in as its own auth-service client (backend `SSO_CLIENT_IDS`): the CLI as
+  `harness-cli`, or `harness-desktop` when this app runs it (`--entry-point=desktop`); a viewer
+  build as `auth/sso_client.dart` says (`harness-web` in the browser). ⚠️ A token belongs to the
+  client it was issued to, so the session keeps the client the backend's exchange REPORTS — never
+  the one it asked for, since an older backend exchanges as its configured client and names none
+  — and every refresh names it again (`AuthSession.ssoClientId`, the CLI's `session.json`).
   Sign-out owns its CLI process, checks its exit, and terminates it on timeout. `AppNotifier` joins
   repeated sign-out requests and blocks another sign-in until credential and connection cleanup
   finish; failure offers keyboard-focused Retry sign out. Development fixture disconnects never
@@ -342,8 +353,10 @@ its headless debug timings do not establish native display or network latency.
   with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each terminal pane ends with agent, model,
-  close. Split and zoom remain in commands, menus and keyboard shortcuts.
+  and quiet, with larger click targets. Terminal panes end with matching
+  plain-text agent/model selectors and close at every width. Hovering the right
+  or bottom edge reveals its split icon; zoom stays in commands, menus and keyboard
+  shortcuts. Only distinct domain-harness icons stay on the left.
   Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
@@ -556,7 +569,11 @@ its headless debug timings do not establish native display or network latency.
   `redactSecretsInText` (`logging/redact.dart`, beside the frame-level `redactValue`) before
   anything is written. The Debug pane is a **mirror** of those sinks, not a second stream
   (`log_stream.dart` + `log_stream_sinks.dart`): a bounded ring of the last 500 entries that
-  `installFileLogs` tees into, so a line on screen is a line the file already has. It is developer
+  `installFileLogs` tees into. Routine DEBUG records use a one-second flush deadline,
+  256 entries or 64 Ki characters. INFO/WARN and admitted ERROR records flush their preceding context;
+  export, backgrounding, normal quit and updater handoff also flush. An abrupt process kill
+  can lose the pending DEBUG batch. CLI transcripts remain immediately
+  flushed. No timer runs with an empty buffer. It is developer
   furniture — `kDebugSurfaceEnabled` (`logging/debug_surface.dart`, `kDebugMode` or
   `--dart-define=HARNESS_DEBUG_SURFACE=true`) gates the rail row, the ⌘D shortcut
   (`kDebugShortcut`, in `appShortcuts()` rather than `kAppShortcuts`) and the ring itself; the log

@@ -4,6 +4,7 @@ import 'dart:io';
 import '../auth/cli_login.dart';
 import '../auth/phone_sign_in.dart';
 import '../auth/sign_in_client.dart';
+import '../auth/sign_in_provider.dart';
 import '../core/local_hostname.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
@@ -30,6 +31,7 @@ class DirectLogin implements SignInClient, PhoneSignInClient {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
   }) async {
     cancel();
     final revision = _loginRevision;
@@ -40,6 +42,7 @@ class DirectLogin implements SignInClient, PhoneSignInClient {
       callback = _pending = _LoopbackCallback(server);
       final start = await auth.api.authorizeNative(
         'http://127.0.0.1:${server.port}/callback',
+        provider: provider,
       );
       _requireCurrent(revision);
       onAuthorizeUrl(start.authorizeUrl);

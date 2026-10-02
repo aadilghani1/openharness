@@ -652,3 +652,126 @@ These are synthetic integration results. The host's ownership/consent inputs are
 fixture and tested separately through the real hook server. The installed review app, its settings,
 and personal memories remain unchanged. OpenCode source capture and prompt recall, real-user
 extraction quality and the broader task-benefit/rollout requirements are still open.
+
+### OpenCode native capture and collection recall
+
+OpenCode 1.18.34 conversations now enter the same consent-controlled capture queue as Claude
+and Codex. The host supplies the database and current session/workspace identity; the reader
+checks native ownership, parent-session exclusion, version and directory before reading that
+session. SQL bounds both returned JSON bytes and part counts. The persisted cursor survives
+host restarts, detects database replacement and changed/deleted messages, and keeps a monotonic
+position after native undo cleanup. Learn-off, session exclusion and project exclusion intervals
+are not backfilled when re-enabled.
+
+Forked messages retain their original native timestamps despite receiving new row IDs and SQL
+insertion times. Comparing those timestamps with the new session's creation time excludes copied
+history. Generated summaries, compaction markers, synthetic prompts, ignored parts and reasoning
+are not fresh user evidence. Quoted user material remains a reference; tool calls and results
+have separate roles and do not manufacture verification. Streaming replies wait for native
+completion. Interrupted or incomplete context admits only the queue's existing bounded-context
+rules, preserving readable instructions around oversized results.
+
+The verified OpenCode collection session can now retrieve shared personal memories through its
+existing scoped MCP tool. Receipt/activity schemas and desktop labels recognize OpenCode.
+Automatic prompt delivery remains disabled for OpenCode pending an outgoing native-model-request
+test; capture and extraction transport do not establish prompt delivery or useful recall.
+
+The reproducible `cli/scripts/memory-native-opencode-source-probe.mjs` uses the real 1.18.34
+binary, an isolated HOME/database, fixture-only file permission and synthetic localhost responses.
+It recorded a native completed `read` call, fork, manual compaction and undo, then exercised the
+actual capture implementation against the running database: six original role-separated sources,
+zero duplicates on a repeated poll, zero copied-fork sources, two fresh fork sources, zero summary
+sources, and capture suspended while undo was active. The sanitized source recording is committed
+under `cli/src/memory/__fixtures__`; no personal conversations or credentials are included.
+
+Validation: 401 memory checks, TypeScript checking, CLI bundling, 56 desktop memory widget checks
+and targeted Flutter analysis passed. The full CLI suite ran 8,480 tests: 8,433 passed, 45 skipped,
+and two unrelated tmux probes failed near their timeouts while another suite was active on this Mac.
+Both complete tmux suites then passed all 36 checks with one worker. The required isolated native
+tmux suite passed nine checks and skipped nine unavailable engine rows. No app, firmware or release
+was installed by this increment. Real-user extraction quality remains unmeasured: the prepared
+private sample is waiting for explicit approval of its selected external model destination.
+
+### Shared recall through a native OpenCode adapter
+
+The memory library remains owned by the Harness profile and project. The new authenticated
+`/api/hook/memory-context` endpoint accepts a query and an observed framework version; it resolves
+the live process and session before invoking the existing shared memory runtime. It does not accept
+caller-selected profile or project authority, and it never falls back to ownership inferred from a
+pane alone. Recall does not require a provider credential, an extraction-model binding or Learn
+being enabled. Existing experimental, Recall, source-privacy and project controls still apply.
+
+OpenCode 1.18.34's adapter inserts historical context into the outgoing user-message conversion,
+without writing it to native conversation storage. It revalidates recall for every request, removes
+its prior transient parts, bounds responses and abandons an optional lookup after 700 ms including
+native-version discovery and host transport. The core retains its 200 ms deadline. Neither deadline
+is a measurement of live-host latency. Receipt acknowledgement means the adapter handed over context;
+the product continues to label model delivery unverified.
+
+The native probe exposed a lifecycle distinction: `experimental.chat.messages.transform` also runs
+inside compaction. A preceding compaction hook now suppresses recall for that summary input. The
+recorded automatic-continuation hook and native synthetic-part marker allow the ordinary agent's
+next request to obtain freshly retrieved context for the last actual user request. A newly submitted
+request replaces that query, including when it contains only files. Unknown releases, missing host
+ownership, unavailable memory and late responses continue without added context.
+
+`cli/scripts/memory-native-opencode-recall-probe.mjs` exercised the production plugin and shared
+runtime/store with the real 1.18.34 binary and a localhost mock model. The seeded memory cites a
+synthetic Claude user source. The outgoing OpenCode request received it with Learn off and Recall
+on; turning Recall off, hiding the Claude source, using another session or returning an unavailable
+service withheld it. An explicit correction replaced the old revision on the next request, and
+forgetting removed it. Both manual and automatic compaction requests contained no injected memory;
+the automatic continuation received fresh context. SQLite contained zero saved injected parts after
+all phases. The complete sanitized hook shapes and results are in
+[`opencode-1.18.34-recall.json`](../../cli/src/memory/__fixtures__/opencode-1.18.34-recall.json).
+
+These are transport and state-transition checks with a seeded proposal, not semantic extraction or
+task-benefit results. The native probe uses a fixture HTTP/process binding; production endpoint
+authorization is tested separately. Interactive TUI delivery, overflow replay and the provider
+matrix are not certified by this recording. Cross-framework runtime tests additionally verify that
+Codex and OpenCode see the same corrected record ID/revision and the same deletion. No installed app,
+global plugin, live memory, provider setting, firmware or release was changed by this increment.
+
+### One user submission stays one source after native overflow recovery
+
+The real OpenCode 1.18.34 binary exposed a capture bug when a localhost mock provider returned a
+context-length error. Native recovery compacted the history and copied the pending user request with
+new IDs and timestamps, without marking it synthetic. Capture counted that single submission twice.
+That would let a framework retry look like independent support for a lesson.
+
+The existing plugin now stamps submitted parts with Harness-owned origin metadata containing only
+the native session/message IDs and a schema version. Native recovery preserves that stamp. Capture
+excludes the copy; a genuine later submission remains eligible, even when its text repeats an earlier
+request. Only a valid origin in the bound session can establish a fresh submission. The native model
+request contained no origin metadata. Stamping does not turn on learning, recall or model binding.
+
+For existing sessions without stamps, the read-only reader recognizes the first user record after a
+successful automatic overflow compaction from native causal metadata. The previous-user lookup uses
+the recorded `(session_id,time_created,id)` index. In a 10,000-message synthetic query comparison,
+median reads at the beginning, middle and end stayed approximately 1.3 ms, similar to the pre-change
+reader. This is an in-memory SQLite query measurement, not live capture latency. Manual compaction,
+non-overflow compaction and failed summaries do not trigger this fallback. An unmarked new request
+after a process crash between compaction and replay is ambiguous and is conservatively withheld;
+newly stamped submissions resolve that ambiguity.
+
+The native source probe now exercises overflow, forks, new fork instructions, manual compaction and
+undo. Both stamped and unmarked recordings yielded one source for the replayed user statement;
+restarting capture yielded no duplicate. Regression cases also cover enabling learning between the
+original and copied request, genuine repetitions, foreign origins and missing compaction records.
+The raw synthetic records and exact source hashes are in
+[`opencode-1.18.34-overflow.json`](../../cli/src/memory/__fixtures__/opencode-1.18.34-overflow.json).
+
+Recall follows the verified original submission through overflow recovery and retrieves fresh
+context. The updated native recall recording shows the same shared Claude-sourced memory in the
+original and retried OpenCode requests, none in the compaction request, and zero injected parts in
+native storage. Its correction, deletion, source-privacy and Recall-off checks still pass. These
+recordings demonstrate transport and source handling; they do not measure semantic extraction or
+task benefit. They do not certify interactive TUI delivery or all provider configurations.
+
+The first full CLI run passed every test assertion but failed on an unrelated fixture exception:
+the devices-command test server sent HTTP 200 headers before attempting a 404. Its default content
+type is now set without prematurely sending headers. No product device behavior changed.
+
+This change prevents new duplicate capture; it does not rewrite previously saved evidence or
+memories. No live memory, installed app, global plugin, provider setting or release was changed.
+The real-session quality sample still requires explicit approval for its external model destination.

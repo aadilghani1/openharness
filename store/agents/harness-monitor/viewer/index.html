@@ -20,19 +20,18 @@
     <div class="segmented" role="group" aria-label="Column presets"><button data-preset="overview" aria-pressed="true">Overview</button><button data-preset="resources" aria-pressed="false">Resources</button><button data-preset="ai" aria-pressed="false">AI usage</button></div>
     <label class="sr-only" for="machine">Machine</label><select id="machine"><option value="all">All machines</option></select>
     <label class="sr-only" for="filter">Status</label><select id="filter">
-      <option value="active">All active</option><option value="working">Working</option><option value="needsInput">Needs you</option>
-      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option><option value="stopped">Stopped</option><option value="offline">Offline</option><option value="all">Including offline</option>
+      <option value="all">All open harnesses</option><option value="working">Working</option><option value="needsInput">Needs you</option>
+      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option>
     </select>
     <span class="spacer"></span>
-    <button id="open" disabled>Open</button>
-    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button><button id="stop" class="danger" disabled>× Stop…</button>
+    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button>
     <details id="columns"><summary>Columns</summary><div id="column-options" class="menu"></div></details>
     <button id="freeze" title="Hold the displayed readings; running work continues">Freeze updates</button><button id="refresh" title="Refresh all machines">Refresh</button>
   </nav>
   <div id="problems" role="status" hidden></div>
-  <main id="grid" tabindex="0" aria-label="Active harness sessions. Arrow keys select, Enter inspects, Delete reviews stopping.">
-    <table id="table" aria-label="Active harness sessions"><colgroup id="colgroup"></colgroup><thead id="head"></thead><tbody id="body"></tbody></table>
-    <div id="empty"><strong>Connecting to your machines…</strong><p>Active sessions will appear here.</p></div>
+  <main id="grid" tabindex="0" aria-label="Open harnesses. Arrow keys select, Enter inspects, Delete reviews closing.">
+    <table id="table" aria-label="Open harnesses"><colgroup id="colgroup"></colgroup><thead id="head"></thead><tbody id="body"></tbody></table>
+    <div id="empty"><strong>Connecting to your machines…</strong><p>Open harnesses will appear here.</p></div>
   </main>
   <section id="summary" aria-label="Resource totals for shown sessions"></section>
   <details id="shared" hidden><summary id="shared-title">Shared servers</summary><div id="shared-body"></div></details>
@@ -40,12 +39,12 @@
   <dialog id="inspector" aria-labelledby="inspect-title">
     <div class="dialog-heading"><h2 id="inspect-title">Harness details</h2><button id="inspect-close" aria-label="Close details">Close</button></div>
     <p id="inspect-context" class="muted"></p><div id="inspect-content"></div>
-    <div class="dialog-actions"><button id="inspect-open" disabled>Open</button><button id="inspect-stop" class="danger">Stop harness…</button></div>
+    <div class="dialog-actions"><button id="inspect-stop" class="danger">Close harness…</button></div>
   </dialog>
   <dialog id="stop-dialog" aria-labelledby="stop-title">
-    <h2 id="stop-title">Stop harness?</h2><p id="stop-context"></p><p>Its running work will end. Conversation history and workspace files are kept.</p>
+    <h2 id="stop-title">Close harness?</h2><p id="stop-context"></p><p>Its running work will end and its panes will close. Conversation history and workspace files are kept.</p>
     <p id="stop-result" role="status" aria-live="polite"></p>
-    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Stop harness</button></div>
+    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Close harness</button></div>
   </dialog>
   <script type="module" src="app.js"></script>
 </body>

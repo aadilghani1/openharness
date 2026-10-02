@@ -659,6 +659,7 @@ model ExperimentalSettings {
   userId           String
   focusBarCreature Boolean @default(false)
   shareButton      Boolean @default(false)
+  devicesTab       Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

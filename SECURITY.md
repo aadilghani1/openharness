@@ -32,7 +32,7 @@ stranger approving yours with their phone (a QR they photographed). The phone sh
 where from, and whether it is on the phone's network — another network takes a two-second hold, not a
 tap — and the computer asks its own person whose account approved it before any session exists.
 A computer signed in this way can add a phone of its own; that chain is intended. Its session is
-Harness's own, so billing and grid still need an SSO sign-in.
+Harness's own, so billing and grid still need a Google or Apple sign-in.
 
 ## For implementers
 

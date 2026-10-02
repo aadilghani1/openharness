@@ -92,6 +92,9 @@ import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
+import '../devices/devices_screen.dart';
+import '../widgets/harness_conversation_placeholder.dart';
+import '../devices/devices_harness_controller.dart';
 import '../widgets/harness_start_page.dart';
 import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
@@ -523,6 +526,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _shortcutsEnabled &&
       app.panes.isEmpty &&
       !app.activeSwarm.isStore &&
+      !app.activeSwarm.isDevices &&
       !app.activeSwarm.isOrchestrator &&
       _newHarness == null &&
       _search == null &&
@@ -778,6 +782,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _devicesHarness.dispose();
     _harnessMonitor.dispose();
     if (app.reviewSessionClose == _reviewSessionClose) {
       app.reviewSessionClose = null;
@@ -1757,6 +1762,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _syncNative() {
     _syncMachines();
+    final monitor = _harnessMonitor.summary;
     final focused = WorkspacePaneContext.focused(app);
     final prefs = appearancePrefsStore.value.prompt;
     final parts = focused?.format(prefs);
@@ -1777,6 +1783,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'activeId': app.activeSwarmId,
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
+      'devicesVisible': app.devicesEnabled,
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
@@ -1787,6 +1794,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'family': barStyle.fontFamily,
         'fallback': barStyle.fontFamilyFallback,
         'size': workspaceBarFontSize,
+        'valueGapCells': workspaceBarValueGapCells,
         'groupGapCells': workspaceBarGroupGapCells,
         'foreground': terminalTheme.foreground.toARGB32(),
         'selection': terminalTheme.selection.toARGB32(),
@@ -1805,30 +1813,30 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'interactive': _shortcutsEnabled,
       },
       'harnessMonitor': {
-        'text': _harnessMonitor.label,
-        'label': _harnessMonitor.detail,
-        'detail': _harnessMonitor.detail,
+        'text': monitor.label,
+        'label': monitor.detail,
+        'detail': monitor.detail,
         'segments': [
-          {'text': _harnessMonitor.label},
+          {'text': monitor.label},
         ],
         'interactive': _shortcutsEnabled,
       },
       'machineResources': {
-        'text': _harnessMonitor.metricsLabel(),
-        'label': _harnessMonitor.resourceDetail,
-        'detail': _harnessMonitor.resourceDetail,
+        'text': monitor.metricsLabel(),
+        'label': monitor.resourceDetail,
+        'detail': monitor.resourceDetail,
         'segments': [
-          {'text': _harnessMonitor.metricsLabel()},
+          {'text': monitor.metricsLabel()},
         ],
         'noStorageSegments': [
-          {'text': _harnessMonitor.metricsLabel(storage: false)},
+          {'text': monitor.metricsLabel(storage: false)},
         ],
         'compactSegments': [
-          {'text': _harnessMonitor.metricsLabel(gpu: false, storage: false)},
+          {'text': monitor.metricsLabel(gpu: false, storage: false)},
         ],
         'minimalSegments': [
           {
-            'text': _harnessMonitor.metricsLabel(
+            'text': monitor.metricsLabel(
               ram: false,
               gpu: false,
               storage: false,
@@ -2295,6 +2303,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         await _openFocusedPullRequest(args['url'] as String?);
       case 'store':
         _openStore();
+      case 'devices':
+        _openDevices();
       case 'new':
         _newTab();
       case 'reopen':
@@ -2923,6 +2933,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         requestedSplit == null &&
         app.panes.isEmpty &&
         !app.activeSwarm.isStore &&
+        !app.activeSwarm.isDevices &&
         !app.activeSwarm.isOrchestrator;
     final welcomeOrigin = embedded
         ? _newHarnessDrafts.keys
@@ -3643,6 +3654,70 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _syncToolbarNotices();
     if (_menuHost && mounted) _syncNative();
   }
+
+  late final _devicesHarness = DevicesHarnessController(app);
+  String? _devicesAttemptedKey;
+
+  Widget _devicesViewer(BuildContext context) {
+    final key = '${app.currentUser?.id}:${app.activeSwarmId}';
+    if (app.activeSwarm.isDevices &&
+        app.devicesEnabled &&
+        _devicesAttemptedKey != key) {
+      _devicesAttemptedKey = key;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            app.activeSwarm.isDevices &&
+            app.devicesEnabled &&
+            key == '${app.currentUser?.id}:${app.activeSwarmId}') {
+          unawaited(_devicesHarness.open());
+        }
+      });
+    }
+    return DevicesTab(
+      key: ValueKey('devices-tab:${app.currentUser?.id}'),
+      notifier: app,
+    );
+  }
+
+  Widget _devicesConversation(BuildContext context) => ListenableBuilder(
+    listenable: _devicesHarness,
+    builder: (context, _) => HarnessConversationPlaceholder(
+      key: const ValueKey('devices-conversation-setup'),
+      name: 'Devices',
+      opening: _devicesHarness.opening,
+      error: _devicesHarness.error,
+      onRetry: () => unawaited(_devicesHarness.open()),
+    ),
+  );
+
+  void _openDevices() {
+    if (!_routeIsCurrent ||
+        _dialogOpen ||
+        _spokenPaletteOpen ||
+        !app.devicesEnabled) {
+      return;
+    }
+    if (_newHarness case final box?) {
+      if (box.locked) {
+        box.warn('Check the pending creation before opening Devices.');
+        return;
+      }
+      _closeNewHarness(restoreFocus: false);
+    }
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    app.openDevices();
+    unawaited(_devicesHarness.open());
+  }
+
+  Widget _devicesButton(BuildContext context) => WorkspaceStoreButton(
+    key: const ValueKey('swarm-devices-button'),
+    width: WorkspaceStoreButton.widthOf(context, devices: true),
+    devices: true,
+    tooltip: 'Manage Harness devices',
+    onPressed: _shortcutsEnabled ? _openDevices : null,
+  );
 
   // ── the daemon (daemons/README.md) ─────────────────────────────────────────
 
@@ -6585,6 +6660,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _searchButton(theme),
         _notificationsButton(theme),
         const SizedBox(width: DesktopChrome.controlGap),
+        if (app.devicesEnabled) ...[
+          _devicesButton(context),
+          const SizedBox(width: DesktopChrome.controlGap),
+        ],
         WorkspaceStoreButton(
           key: const ValueKey('swarm-store-button'),
           width: WorkspaceStoreButton.widthOf(context),
@@ -6790,6 +6869,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                       paneId: paneId,
                                                     ),
                                                   ),
+                                              devicesViewer: app.devicesEnabled
+                                                  ? _devicesViewer
+                                                  : null,
+                                              devicesConversation:
+                                                  app.devicesEnabled
+                                                  ? _devicesConversation
+                                                  : null,
                                               companionViewer:
                                                   _creatureEnabled &&
                                                       _zoo.loaded
@@ -7052,6 +7138,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _harnessMonitor.live.isNotEmpty ||
       app.panes.isNotEmpty ||
       app.activeSwarm.isStore ||
+      app.activeSwarm.isDevices ||
       app.activeSwarm.isOrchestrator ||
       _footerPreviewCurrent;
 
@@ -7168,7 +7255,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
             resourceGap * 2,
       );
       final monitorWidth = math.min(
-        workspaceBarTextSizeOf(context, _harnessMonitor.label).width +
+        workspaceBarTextSizeOf(
+              context,
+              _harnessMonitor.label,
+              grouped: true,
+            ).width +
             cell.width * 2,
         resourceBudget * .4,
       );
@@ -7176,6 +7267,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final usageWidth = constraints.maxWidth < 1050
           ? 0.0
           : resourceBudget * .22;
+      final hasFooterDaemon = !kIsWeb && _slotShown;
       final paneContext = Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -7226,31 +7318,37 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   constraints: BoxConstraints(maxWidth: monitorWidth),
                   child: ListenableBuilder(
                     listenable: _harnessMonitor,
-                    builder: (context, _) => WorkspaceBarControl(
-                      key: const ValueKey('workspace-harness-monitor'),
-                      label: _harnessMonitor.detail,
-                      tooltip: _harnessMonitor.detail,
-                      onPressed: _shortcutsEnabled
-                          ? () => _toggleHarnessControls()
-                          : null,
-                      builder: (context, emphasized) => Padding(
-                        padding: EdgeInsets.symmetric(horizontal: cell.width),
-                        child: SizedBox(
-                          height: workspaceBarControlHeight(context),
-                          child: Center(
-                            widthFactor: 1,
-                            child: Text(
-                              _harnessMonitor.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: workspaceBarTextStyle(
-                                emphasized: emphasized,
+                    builder: (context, _) {
+                      final summary = _harnessMonitor.summary;
+                      return WorkspaceBarControl(
+                        key: const ValueKey('workspace-harness-monitor'),
+                        label: summary.detail,
+                        tooltip: summary.detail,
+                        onPressed: _shortcutsEnabled
+                            ? () => _toggleHarnessControls()
+                            : null,
+                        builder: (context, emphasized) => Padding(
+                          padding: EdgeInsets.symmetric(horizontal: cell.width),
+                          child: SizedBox(
+                            height: workspaceBarControlHeight(context),
+                            child: Center(
+                              widthFactor: 1,
+                              child: Text.rich(
+                                workspaceBarGroupTextSpan(
+                                  summary.label,
+                                  cellWidth: cell.width,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: workspaceBarTextStyle(
+                                  emphasized: emphasized,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ),
                 SizedBox(width: resourceGap),
@@ -7259,6 +7357,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   child: WorkspaceHarnessResources(
                     key: const ValueKey('workspace-machine-resources'),
                     monitor: _harnessMonitor,
+                    // The fixed companion slot supplies its own optical gutter.
+                    trailingPadding: hasFooterDaemon && usageWidth == 0
+                        ? 0
+                        : null,
                     onPressed: _shortcutsEnabled
                         ? _toggleHarnessControls
                         : null,
@@ -7278,7 +7380,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             )
                           : null,
                       builder: (context, emphasized) => Padding(
-                        padding: EdgeInsets.symmetric(horizontal: cell.width),
+                        padding: EdgeInsets.only(
+                          left: cell.width,
+                          right: hasFooterDaemon ? 0 : cell.width,
+                        ),
                         child: SizedBox(
                           height: workspaceBarControlHeight(context),
                           child: Center(
@@ -7309,8 +7414,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                 ],
-                SizedBox(width: cell.width * 2),
-                if (!kIsWeb && _slotShown) _daemonTabButton(),
+                if (hasFooterDaemon) ...[
+                  SizedBox(width: resourceGap),
+                  _daemonTabButton(),
+                ] else
+                  SizedBox(width: cell.width * 2),
                 if (download) ...[
                   SizedBox(width: cell.width),
                   ConstrainedBox(
@@ -7379,28 +7487,27 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // holds them.
       final actionsWidth = _titleBarActions
           ? 0.0
-          : storeWidth + cell.width * 8 + DesktopChrome.controlGap;
+          : storeWidth +
+                cell.width * 8 +
+                DesktopChrome.controlGap +
+                (app.devicesEnabled
+                    ? WorkspaceStoreButton.widthOf(context, devices: true) +
+                          DesktopChrome.controlGap
+                    : 0);
       final leadingWidth = chrome?.leadingWidth(context) ?? 0.0;
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -
-            cell.width * 6 -
+            cell.width * 5 -
+            grid.AppDesktop.tabBarTrailingInset -
             actionsWidth -
             (_slotShown ? 44 : 0) -
             leadingWidth,
       );
-      _tabWidths = [
-        for (var i = 0; i < labels.length; i++)
-          math.min(
-            DesktopWorkspaceTab.widthOf(
-              context,
-              labels[i],
-              shortcutHint: _keymap.hint('swarm.select_${i + 1}'),
-              hasActivity: activities[i] != null,
-            ),
-            tabBudget,
-          ),
-      ];
+      _tabWidths = List.filled(
+        labels.length,
+        DesktopWorkspaceTab.widthForStrip(tabBudget, labels.length),
+      );
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
       // Arrows come out of the tabs' own budget, so the bar never reflows.
       final arrows = chrome?.scrollsTabsByArrows == true && total > tabBudget;
@@ -7550,6 +7657,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 _searchButton(theme),
                 _notificationsButton(theme),
                 const SizedBox(width: DesktopChrome.controlGap),
+                if (app.devicesEnabled) ...[
+                  _devicesButton(context),
+                  const SizedBox(width: DesktopChrome.controlGap),
+                ],
                 WorkspaceStoreButton(
                   key: const ValueKey('swarm-store-button'),
                   width: storeWidth,
@@ -7561,7 +7672,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 ),
               ],
               if (kIsWeb && _slotShown) _daemonTabButton(),
-              SizedBox(width: cell.width),
+              const SizedBox(width: grid.AppDesktop.tabBarTrailingInset),
             ],
           ),
         ),

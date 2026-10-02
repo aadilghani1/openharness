@@ -21,7 +21,8 @@ const CODING_DSHS = new Set(['autonomous/web-studio', 'autonomous/firmware-studi
 /** A short grace period finishes native records after a process exits, without scanning archives. */
 export class MemorySessionRoster {
   private readonly recent = new Map<string, { session: MemoryHostSession; seenAt: number }>()
-  constructor(private readonly home: string, private readonly now: () => number = Date.now) {}
+  constructor(private readonly home: string, private readonly now: () => number = Date.now,
+    private readonly nativeSources: { opencode?: string } = {}) {}
 
   refresh(live: RegisteredMemorySession[], busy: (sessionId: string) => boolean, subagent: (sessionId: string) => boolean,
     collectionAgentId: string | null = null): MemoryHostSession[] {
@@ -29,15 +30,17 @@ export class MemorySessionRoster {
     const current = new Set<string>()
     for (const session of live) {
       const companion = session.dsh === 'autonomous/pair' && session.agentId === collectionAgentId
-      if (!['claude', 'codex'].includes(session.engine) || !session.sessionId || !session.cwd || !session.transcriptPath
-        || !isAbsolute(session.cwd) || !isAbsolute(session.transcriptPath) || subagent(session.sessionId)
+      // OpenCode keeps all conversations in a host-configured SQLite store. It has no JSONL path.
+      const transcriptPath = session.engine === 'opencode' ? this.nativeSources.opencode : session.transcriptPath
+      if (!['claude', 'codex', 'opencode'].includes(session.engine) || !session.sessionId || !session.cwd || !transcriptPath
+        || !isAbsolute(session.cwd) || !isAbsolute(transcriptPath) || subagent(session.sessionId)
         || (session.dsh && !companion && !CODING_DSHS.has(session.dsh)) || resolve(session.cwd) === resolve(this.home)
         || resolve(session.cwd) === parse(resolve(session.cwd)).root) continue
       current.add(session.agentId)
       this.recent.set(session.agentId, { seenAt: this.now(), session: { agentId: session.agentId,
         name: session.title || session.defaultName, present: true,
-        engine: session.engine as 'claude' | 'codex', sessionId: session.sessionId, workspace: session.cwd,
-        transcriptPath: session.transcriptPath, coding: true, busy: busy(session.sessionId), scope: companion ? 'profile' : 'project',
+        engine: session.engine as MemoryHostSession['engine'], sessionId: session.sessionId, workspace: session.cwd,
+        transcriptPath, coding: true, busy: busy(session.sessionId), scope: companion ? 'profile' : 'project',
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.forkedFrom ? { liveFrom: session.registeredAt } : {}) } })
     }

@@ -108,7 +108,7 @@ export async function handOffToGrid(
   // A computer a phone signed in by QR holds a session Harness issued itself; grid signs in with the
   // Autonomous account, which does not know it. Say what to do rather than let `grid` refuse it.
   if (token.startsWith('hna_')) {
-    return { code: 'GRID_NEEDS_SSO', exitCode: 1, message: 'Grid needs an SSO sign-in on this computer: harness login --force --sso', stdout: '', stderr: '' }
+    return { code: 'GRID_NEEDS_SSO', exitCode: 1, message: 'Grid needs a Google or Apple sign-in on this computer: harness login --force', stdout: '', stderr: '' }
   }
   const binary = gridBinaryPath()
   if (!binaryOnPath(binary)) {

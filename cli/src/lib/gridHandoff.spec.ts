@@ -90,7 +90,7 @@ describe('handOffToGrid — which grid it runs', () => {
     const result = await handOffToGrid('hna_' + 'x'.repeat(43), { json: true })
 
     expect(result).toMatchObject({ code: 'GRID_NEEDS_SSO', exitCode: 1 })
-    expect(result.message).toContain('harness login --force --sso')
+    expect(result.message).toContain('harness login --force')
   })
 
   it('prefers the managed runtime over a grid on PATH', async () => {

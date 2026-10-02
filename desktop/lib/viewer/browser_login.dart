@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../auth/cli_login.dart' show CliAuthStatus;
 import '../auth/phone_sign_in.dart';
 import '../auth/sign_in_client.dart';
+import '../auth/sign_in_provider.dart';
 import '../core/browser_label.dart';
 import 'direct_auth.dart';
 import 'qr_sign_in.dart';
@@ -129,6 +130,7 @@ class BrowserLogin implements SignInClient, PhoneSignInClient {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
   }) async {
     cancel();
     final revision = _revision;
@@ -139,8 +141,8 @@ class BrowserLogin implements SignInClient, PhoneSignInClient {
     // loopback listener. The hosted web endpoint only accepts configured
     // origins and otherwise returns the production site's callback.
     final start = await (_isLoopback(location)
-        ? auth.api.authorizeNative('$origin$callbackPath')
-        : auth.api.authorizeWeb(origin));
+        ? auth.api.authorizeNative('$origin$callbackPath', provider: provider)
+        : auth.api.authorizeWeb(origin, provider: provider));
     _requireCurrent(revision);
     final authorize = Uri.tryParse(start.authorizeUrl);
     final redirect = Uri.tryParse(

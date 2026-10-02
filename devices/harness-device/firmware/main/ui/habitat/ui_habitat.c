@@ -13,6 +13,7 @@
 #include "perf_bench.h"
 #include "command_face.h"
 #include "theme.h"
+#include "focus_faces.h"
 #ifdef DEVICE_CREATURE_GALLERY
 #include "creature_gallery.h"
 static ht_gallery_t gallery;
@@ -844,24 +845,24 @@ static void render_workspace_preview(ht_scene_t *f)
 }
 /*
  * THE BLUE BELL — the Focus skin's notification pill, as the LVGL firmware drew it: #006fff, fully
- * round, padded 13 x 4: the bell in montserrat_14 and, 6 px on, the count in montserrat_22, centred
- * on each other in a 32 px row. Three runs: box, bell, count. It sits at the bottom edge, where the
+ * round, padded 13 px, always 32 px tall: the bell in montserrat_14 and, 6 px on, the count in
+ * montserrat_22, each centred vertically in it. Three runs: box, bell, count. It sits at the bottom edge, where the
  * microphone was: the top belongs to the curved name.
  */
 static void focus_bell(ht_scene_t *f, unsigned count)
 {
-    enum { BELL_Y = 400, BELL_PAD_H = 13, BELL_PAD_V = 4, BELL_GAP = 6 };
+    enum { BELL_Y = 400, BELL_H = 32, BELL_PAD_H = 13, BELL_GAP = 6 };
     const ht_font_t *bf = &ht_lv_montserrat_14.base, *cf = &ht_lv_montserrat_22.base;
     char text[16];
     snprintf(text, sizeof text, "%u", count);
     int bw = ht_measure(bf, HT_LV_BELL), cw = ht_measure(cf, text);
-    int h = cf->height + 2 * BELL_PAD_V, box_w = 2 * BELL_PAD_H + bw + BELL_GAP + cw;
+    int h = BELL_H, box_w = 2 * BELL_PAD_H + bw + BELL_GAP + cw;
     int x = (HT_WIDTH - box_w) / 2;
     uint16_t blue = color(0x006fff), ink = color(0xeaeaf0);
     ht_box(f, x, BELL_Y, box_w, h, h / 2, blue, blue);
-    ht_text(f, x + BELL_PAD_H, BELL_Y + BELL_PAD_V + (cf->height - bf->height) / 2, bw, bf, ink, blue,
+    ht_text(f, x + BELL_PAD_H, BELL_Y + (h - bf->height) / 2, bw, bf, ink, blue,
             HT_LV_BELL);
-    ht_text(f, x + BELL_PAD_H + bw + BELL_GAP, BELL_Y + BELL_PAD_V, cw, cf, ink, blue, text);
+    ht_text(f, x + BELL_PAD_H + bw + BELL_GAP, BELL_Y + (h - cf->height) / 2, cw, cf, ink, blue, text);
 }
 static void render_home(ht_scene_t *f)
 {
@@ -977,7 +978,7 @@ static void render_home(ht_scene_t *f)
                                        : (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
 }
 /*
- * FOCUS'S LISTS SPEAK THE AGENT SCREEN'S TYPE (owner, 2026-09-30): Geist and Montserrat from the
+ * FOCUS'S LISTS SPEAK THE AGENT SCREEN'S TYPE (owner, 2026-09-30): Geist from the
  * LVGL build, not the terminal skin's mono. The title is a grey Geist Regular 20 straight across the
  * top, a list row Geist Medium, and the one button the tab pill's own shape and face.
  */
@@ -1074,8 +1075,10 @@ static void render_focus_panes(ht_scene_t *f)
 {
     enum { CARD_X = 53, CARD_W = 360, CARD_H = 58, CARD_GAP = 8, CARD_R = 16 };
     const ht_font_t *font = &ht_lv_geist_med_28.base;
-    uint16_t fg = color(0xeaeaf0), card = color(0x16161c), rest = color(0x0d0d11),
-             pressed_fill = color(0x23252f), rim = color(HT_THEME_VOICE);   // Focus green (owner, 2026-10-01)
+    // The cards wear the recap/inbox card's 0x23252f so they stand off the black (owner, 2026-10-02);
+    // the chosen one adds the green rim, a press lightens one step.
+    uint16_t fg = color(0xeaeaf0), card = color(0x23252f), rest = color(0x23252f),
+             pressed_fill = color(0x30333f), rim = color(HT_THEME_VOICE);   // Focus green (owner, 2026-10-01)
     focus_header(f, "PANES");
     if (!s.count) {
         focus_centred(f, 180, 348, font, FG, BG, s.loading ? "Loading..." : "No panes in this tab.");
@@ -1086,7 +1089,7 @@ static void render_focus_panes(ht_scene_t *f)
         s.hits[n] = (hit_t){{x - 20, y - 12, box + 40, 41 + 24}, A_TABS, 0, s.connected};
         uint16_t pill = n == s.pressed ? pressed_fill : color(0x141519);
         ht_box(f, x, y, box, 41, 20, pill, color(0x3a3f4b));
-        ht_text(f, x + 13, y + 7, w, pf, s.connected ? fg : DIM, pill, "Choose a tab");
+        ht_text(f, x + 13, y + (41 - pf->height) / 2, w, pf, s.connected ? fg : DIM, pill, "Choose a tab");
         return;
     }
     int last = s.count > PANE_ROWS ? s.count - PANE_ROWS : 0;

@@ -76,6 +76,8 @@ async function boundedPromptContext(read: () => PromptContext | Promise<PromptCo
 export interface HookServerHandlers {
   /** Context for a verified process-owned agent, only on its real user turn. */
   onPromptContext?: (agentId: string, prompt: string) => PromptContext | Promise<PromptContext>
+  /** Shared recall for a live, process-verified native adapter. Scope always comes from the host. */
+  onMemoryContext?: (agentId: string, prompt: string, adapter: { engine: AgentEngine; cliVersion: string }) => PromptContext | Promise<PromptContext>
   /** Called only for the same process-owned native session after its hook writes context to stdout. */
   onMemoryContextEmitted?: (agentId: string, receiptId: string) => Promise<boolean>
   /** Private, process-verified OpenCode request metadata. Never enters the session registry or clients. */
@@ -607,17 +609,35 @@ export function startHookServer(
         json(200, handlers.onOpenCodeMemoryRuntime?.(agent, body.input) ?? { observe: false }); return
       }
 
+      if (req.method === 'POST' && url === '/api/hook/memory-context') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: BoundHookBody
+        try {
+          const parsed: unknown = JSON.parse(await readBody(req))
+          if (!validHookBody(parsed) || !['claude', 'codex', 'opencode'].includes(parsed.engine ?? '')
+            || !parsed.callerPid || !parsed.cliVersion || typeof parsed.prompt !== 'string'
+            || !parsed.prompt.trim() || parsed.prompt.length > 4_000) { json(400, { error: 'invalid hook body' }); return }
+          body = parsed
+        } catch { json(400, { error: 'bad json' }); return }
+        const agent = handlers.resolveHookAgent ? await verifiedBoundMutation(body, handlers) : null
+        if (!agent?.processIdentity) { json(403, { error: 'UNBOUND_HOOK' }); return }
+        const context = handlers.onMemoryContext ? await boundedPromptContext(() => handlers.onMemoryContext!(
+          agent.agentId, body.prompt!, { engine: agent.engine, cliVersion: body.cliVersion! })) : null
+        json(200, { ok: true, ...context }); return
+      }
+
       if (req.method === 'POST' && url === '/api/hook/memory-emitted') {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
         let body: BoundHookBody
         try {
           const parsed: unknown = JSON.parse(await readBody(req))
           if (!validHookBody(parsed) || !/^[a-f0-9-]{36}$/.test(parsed.memoryReceiptId ?? '')
-            || !['claude', 'codex'].includes(parsed.engine ?? '')) { json(400, { error: 'invalid hook body' }); return }
+            || !['claude', 'codex', 'opencode'].includes(parsed.engine ?? '')
+            || (parsed.engine === 'opencode' && !parsed.callerPid)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
-        const agent = await verifiedBoundMutation(body, handlers)
-        if (!agent) { json(403, { error: 'UNBOUND_HOOK' }); return }
+        const agent = body.engine === 'opencode' && !handlers.resolveHookAgent ? null : await verifiedBoundMutation(body, handlers)
+        if (!agent || (body.engine === 'opencode' && !agent.processIdentity)) { json(403, { error: 'UNBOUND_HOOK' }); return }
         const recorded = await handlers.onMemoryContextEmitted?.(agent.agentId, body.memoryReceiptId!).catch(() => false) ?? false
         json(200, { ok: true, recorded, delivery: 'unverified' }); return
       }

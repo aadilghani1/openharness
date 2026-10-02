@@ -83,6 +83,31 @@ describe('AuthSessionManager', () => {
     await expect(readFile(AUTH_SESSION_FILE, 'utf8')).resolves.toContain('new-access')
   })
 
+  it('refreshes as the client the session was issued to, and names none for a session that kept none', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({
+      success: true,
+      data: { token: 'new-access', expiresIn: 3600 },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+    const manager = new AuthSessionManager('https://api.example.test')
+    const sent = (call: number) => JSON.parse(String(fetchMock.mock.calls[call]![1]?.body)) as Record<string, unknown>
+
+    writeAuthSession({ ...baseSession(), clientId: 'harness-desktop' })
+    await manager.accessToken()
+    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop' })
+    // The client outlives the refresh: the next one names it too.
+    expect(readAuthSession()).toMatchObject({ accessToken: 'new-access', clientId: 'harness-desktop' })
+
+    writeAuthSession(baseSession())
+    await manager.accessToken()
+    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod' })
+  })
+
+  it('reads back only a client that is ours', async () => {
+    await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), clientId: 'someone-else' }))
+    expect(readAuthSession()).not.toHaveProperty('clientId')
+  })
+
   // `process.exit` skips `finally`: a daemon that exited mid-refresh left the lock for the next
   // `harness auth status` to wait out (30s), which is how long the desktop app waits for it.
   it('drops the refresh lock when the process exits while holding it, and only then', async () => {

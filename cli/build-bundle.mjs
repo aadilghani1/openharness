@@ -12,11 +12,13 @@
 import * as esbuild from 'esbuild'
 import { readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
 import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
+const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
+const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 
 const version =
   process.env.ADAPTER_VERSION ||
@@ -44,6 +46,8 @@ await esbuild.build({
     __ADAPTER_VERSION__: JSON.stringify(version),
     __DSH_REGISTRY__: JSON.stringify(dshRegistry),
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
+    __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
+    __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
     __PLATE_WORKER__: JSON.stringify(plateWorker),
     __MEMORY_WORKER__: JSON.stringify(memoryWorker),
   },

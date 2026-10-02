@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -11,6 +12,7 @@ import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'support/harness_monitor.dart';
@@ -24,6 +26,7 @@ class SwitchConnection extends MonitorConnection {
   Completer<void>? holdClose;
   Map<String, dynamic> recent = {'asks': <String>[], 'events': <Object>[]};
   int recentReads = 0;
+  Map<String, dynamic>? launch;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -62,6 +65,7 @@ class SwitchConnection extends MonitorConnection {
         'agent': {
           ...agent,
           'engine': creations.last['engine'],
+          if (launch != null) 'launch': launch,
           'project': {'name': 'work', 'cwd': '/projects/work'},
           if (creations.last['dsh'] != null)
             'viewerUrl': 'http://127.0.0.1:4179/',
@@ -135,6 +139,66 @@ class SwitchDeskApi extends ApiClient {
 }
 
 void main() {
+  for (final state in ['starting', 'failed']) {
+    test(
+      'attaches a $state replacement immediately so startup prompts can be answered',
+      () async {
+        final connection = SwitchConnection()
+          ..launch = {
+            'state': state,
+            if (state == 'failed') 'error': 'LAUNCH_TIMEOUT',
+          };
+        final app = fixture(connection, sourceEngine: 'claude');
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        final pane = app.panes.single;
+        final tab = app.activeSwarm;
+        final sizes = Map.of(tab.paneSizes);
+        expect(
+          await app
+              .changeAgent('m', 'a0', 'opencode')
+              .timeout(const Duration(seconds: 1)),
+          isNull,
+        );
+        expect(app.panes.single, same(pane));
+        expect(pane.agentId, 'local-session');
+        expect(tab.paneSizes, sizes);
+        expect(connection.creations, hasLength(1));
+        expect(
+          app
+              .stateOf('m')!
+              .agents
+              .firstWhere((a) => a.id == pane.agentId)
+              .launchState,
+          state,
+        );
+        // Readiness arrives later; no second picker action or agent_create.
+        await app.handleEventForTest('m', {
+          'type': 'agent_synced',
+          'payload': {
+            'agent': {
+              'id': 'local-session',
+              'name': 'Work',
+              'engine': 'opencode',
+              'terminal': {'available': true},
+              'launch': {'state': 'ready'},
+            },
+          },
+        });
+        expect(pane.agentId, 'local-session');
+        expect(
+          app
+              .stateOf('m')!
+              .agents
+              .firstWhere((a) => a.id == pane.agentId)
+              .launchState,
+          'ready',
+        );
+        expect(connection.events, ['save/stop', 'start']);
+      },
+    );
+  }
+
   for (final (source, target) in [
     ('claude', 'opencode'),
     ('claude', 'codex'),
@@ -541,16 +605,26 @@ void main() {
     (tester) async {
       final app = createApp();
       app.stateOf('m')!.nodeOnline = true;
-      app.adoptSessionForTest(terminal('a0', []));
+      final frames = <TerminalBinaryFrame>[];
+      final pane = app.adoptSessionForTest(terminal('a0', frames));
       await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('pane-agent-control')));
-      await tester.pump();
-      final field = tester.widget<TextField>(
-        find.byKey(const ValueKey('swarm-search-input')),
-      );
-      expect(field.controller!.text.trim(), '&');
-      expect(find.text('OpenCode'), findsWidgets);
-      expect(tester.takeException(), isNull);
+      for (final width in [1280.0, 480.0]) {
+        tester.view.physicalSize = Size(width, 800);
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('pane-agent-control')));
+        await tester.pump();
+        final field = tester.widget<TextField>(
+          find.byKey(const ValueKey('swarm-search-input')),
+        );
+        expect(field.controller!.text.trim(), '&');
+        expect(find.text('OpenCode'), findsWidgets);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        expect(app.panes.single, same(pane));
+        expect(frames, isEmpty);
+        expect(tester.takeException(), isNull);
+      }
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

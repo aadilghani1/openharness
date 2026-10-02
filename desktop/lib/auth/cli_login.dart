@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../core/harness_cli_runner.dart';
 import 'phone_sign_in.dart';
 import 'sign_in_client.dart';
+import 'sign_in_provider.dart';
 
 class CliAuthStatus {
   final bool loggedIn;
@@ -81,9 +82,16 @@ class CliLogin implements SignInClient, PhoneSignInClient {
   /// flow. Calls [onAuthorizeUrl] as soon as the CLI reports the SSO page to show, then resolves once
   /// the CLI's own loopback callback server completes the flow (or throws on failure/cancellation).
   /// The process is killed if [cancel] is called while this is in flight.
+  ///
+  /// [provider] is `--google` or `--apple`. One token, so a CLI that predates the flags ignores it
+  /// like any unknown flag and opens the SSO page's own chooser.
   @override
-  Future<void> login({required void Function(String url) onAuthorizeUrl}) =>
-      _login(const [], onAuthorizeUrl: onAuthorizeUrl);
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
+  }) => _login([
+    if (provider != null) '--${provider.name}',
+  ], onAuthorizeUrl: onAuthorizeUrl);
 
   /// `harness login --qr`: the QR arrives as an event, and so does the question of whose account
   /// approved it — answered with a `yes` or `no` line on the process's standard input.
@@ -186,7 +194,7 @@ class CliLogin implements SignInClient, PhoneSignInClient {
       if (tooOld) {
         throw const PhoneSignInException(
           'CLI_TOO_OLD',
-          'This computer\'s Harness CLI is too old to sign in with a phone. Use Sign in, or update Harness.',
+          'This computer\'s Harness CLI is too old to sign in with a phone. Continue with Google or Apple, or update Harness.',
         );
       }
       if (!gotResult || !success) {

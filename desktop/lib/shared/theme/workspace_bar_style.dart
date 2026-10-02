@@ -8,11 +8,12 @@ import '../../terminal/terminal_typography.dart';
 /// SF Mono on macOS, with the platform's monospace stack elsewhere.
 const workspaceBarFontSize = 13.0;
 
-/// One space inside a label–value pair, 2.5 cells between complete components.
+/// Slightly tighter spaces within components, two cells between components.
 /// Neighboring controls already contribute one padded cell on either side.
-const workspaceBarGroupGapCells = 2.5;
+const workspaceBarValueGapCells = 0.75;
+const workspaceBarGroupGapCells = 2.0;
 
-/// Text retains ordinary spaces; rendering uses the measured group gap above.
+/// Text retains ordinary spaces; rendering measures gaps with the shared tokens.
 const workspaceBarGroupSeparator = '   ';
 
 TextSpan workspaceBarGroupTextSpan(
@@ -36,7 +37,16 @@ TextSpan workspaceBarGroupTextSpan(
                   workspaceBarGroupSeparator.length,
             ),
           ),
-        TextSpan(text: groups[i]),
+        for (final (index, word) in groups[i].split(' ').indexed) ...[
+          if (index > 0)
+            TextSpan(
+              text: ' ',
+              style: TextStyle(
+                letterSpacing: cellWidth * (workspaceBarValueGapCells - 1),
+              ),
+            ),
+          TextSpan(text: word),
+        ],
       ],
     ],
   );

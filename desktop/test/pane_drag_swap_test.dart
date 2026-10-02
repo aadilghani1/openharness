@@ -91,6 +91,12 @@ void main() {
     }
     // The drop target lights up while the pane is carried over it.
     expect(find.text('Swap with this pane'), findsOneWidget);
+    for (final direction in ['right', 'down']) {
+      expect(
+        find.byKey(ValueKey('pane-split-$direction')).hitTestable(),
+        findsNothing,
+      );
+    }
     await gesture.up();
     await tester.pumpAndSettle();
 

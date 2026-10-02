@@ -8,10 +8,12 @@ import 'package:harness/app_shell.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/auth/sign_in_client.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/screens/login_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/widgets/or_divider.dart';
 
 /// The login screen's second way in: a QR a signed-in phone approves, then a yes here to the
 /// account that approved it.
@@ -86,6 +88,14 @@ Widget _host(AppNotifier app) => MaterialApp(
   ),
 );
 
+/// [_host] says the window is 700 tall while the test surface is 600, so the last way in can sit
+/// under the fold: bring it up before pressing it.
+Future<void> _tapScanWithPhone(WidgetTester tester) async {
+  final scan = find.byKey(const Key('login-scan-with-phone'));
+  await tester.ensureVisible(scan);
+  await tester.tap(scan);
+}
+
 void main() {
   testWidgets('offers "Scan with your phone", shows the QR, then asks whose account', (tester) async {
     grid.AppTheme.brightness.value = Brightness.light;
@@ -95,8 +105,10 @@ void main() {
     addTearDown(app.dispose);
     await tester.pumpWidget(_host(app));
     expect(find.byKey(const Key('login-scan-with-phone')), findsOneWidget);
+    // A way in of its own, set apart from the two accounts above it.
+    expect(find.byType(OrDivider), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('login-scan-with-phone')));
+    await _tapScanWithPhone(tester);
     await tester.pump();
     expect(find.byKey(const Key('login-phone-qr')), findsOneWidget);
     expect(find.textContaining('Sign in a computer'), findsOneWidget);
@@ -160,7 +172,7 @@ void main() {
       ..status = AppStatus.unauthenticated;
     addTearDown(app.dispose);
     await tester.pumpWidget(_host(app));
-    await tester.tap(find.byKey(const Key('login-scan-with-phone')));
+    await _tapScanWithPhone(tester);
     await tester.pump();
     expect(find.text(_WaitingLogin.note), findsOneWidget);
     // Its turn comes: the note goes with the wait.
@@ -219,7 +231,10 @@ class _SsoOnly implements SignInClient {
   @override
   Future<CliAuthStatus> checkStatus() async => const CliAuthStatus(loggedIn: false);
   @override
-  Future<void> login({required void Function(String url) onAuthorizeUrl}) async {}
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   void cancel() {}
   @override

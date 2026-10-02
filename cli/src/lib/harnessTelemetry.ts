@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
+import { readMacProcessGpu, type MacProcessGpu } from './macosProcessGpu.js'
 
 const exec = promisify(execFile)
-export type ProcessTelemetry = { readBytes: number | null; writeBytes: number | null; gpuMemoryBytes: number | null; gpuPercent?: number | null }
+export type ProcessTelemetry = { readBytes: number | null; writeBytes: number | null; gpuMemoryBytes: number | null; gpuPercent?: number | null; macGpu?: MacProcessGpu }
 const count = (value: string | undefined) => value != null && /^\d+$/.test(value.trim()) && Number.isSafeInteger(Number(value)) ? Number(value) : null
 
 export function parseProcessIo(text: string): Pick<ProcessTelemetry, 'readBytes' | 'writeBytes'> {
@@ -60,9 +61,14 @@ async function processGpus(): Promise<{ memory: Map<number, number | null>; usag
   } catch { gpuRetryAfter = Date.now() + 60_000; return empty() }
 }
 
-/** Only owned processes are read. No privilege escalation or whole-machine fallback. */
+/** Only owned processes are returned. No privilege escalation or whole-machine fallback. */
 export async function readProcessTelemetry(pids: number[]): Promise<Map<number, ProcessTelemetry>> {
   if (!pids.length) return new Map()
+  if (process.platform === 'darwin') {
+    const gpu = await readMacProcessGpu(pids)
+    return new Map(pids.map(pid => [pid, { readBytes: null, writeBytes: null, gpuMemoryBytes: null,
+      macGpu: gpu.get(pid) ?? { sampledAt: performance.now(), contexts: null } }]))
+  }
   const gpu = await processGpus(), result = new Map<number, ProcessTelemetry>()
   let index = 0
   await Promise.all(Array.from({ length: Math.min(8, pids.length) }, async () => {

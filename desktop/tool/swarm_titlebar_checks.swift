@@ -611,9 +611,10 @@ private extension SwarmTabButton {
       "The close action stays inset inside the tab's curved body")
   }
 
-  func checkCompleteNameFits() throws {
-    try checkTitlebar(titleRect.width >= naturalTitleWidth,
-      "The eight-tab fixture keeps each ordinary name readable")
+  func checkNameFitsOrHasTooltip() throws {
+    try checkTitlebar(titleRect.width >= naturalTitleWidth ||
+      toolTip?.components(separatedBy: "\n").contains(displayLabel) == true,
+      "Equal-width tabs retain the full name in a tooltip when the title truncates")
   }
 
   func clickBothActions() {
@@ -1173,6 +1174,9 @@ private extension SwarmTabStrip {
         "Search and Store stay adjacent after the tabs at width \(width)")
       try checkTitlebar(!subviews.contains { $0.accessibilityLabel() == "Notifications" },
         "Notifications live in the macOS menu bar, with no duplicate titlebar bell")
+      try checkTitlebar(devicesButton.isHidden && !devicesButton.isEnabled &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === devicesButton }) == false,
+        "Devices stays hidden and outside accessibility navigation until opted in")
       try checkTitlebar(searchButton.toolTip == state["searchTooltip"] as? String &&
         searchButton.accessibilityHelp() == searchButton.toolTip &&
         storeButton.toolTip == state["storeTooltip"] as? String &&
@@ -1183,14 +1187,39 @@ private extension SwarmTabStrip {
     storeButton.performClick(nil)
     try checkTitlebar(calls == ["sessions", "store"],
       "Top actions open the existing search and Store surfaces")
+    state["devicesVisible"] = true
+    for width in [CGFloat(360), CGFloat(640), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!devicesButton.isHidden && devicesButton.isEnabled &&
+        searchButton.frame.maxX < devicesButton.frame.minX &&
+        devicesButton.frame.maxX < storeButton.frame.minX &&
+        newButton.frame.maxX < searchButton.frame.minX &&
+        devicesButton.font == storeButton.font &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === devicesButton }) == true,
+        "Opted-in navigation reads Search, Devices, Store at width \(width)")
+      try captureTabPresentation("native-tabs-tools-\(Int(width))")
+    }
+    devicesButton.performClick(nil)
+    try checkTitlebar(calls == ["sessions", "store", "devices"],
+      "Devices opens its workspace through the native action")
     state["enabled"] = false
     update(state)
     searchButton.performClick(nil)
     storeButton.performClick(nil)
-    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled && calls.count == 2,
+    devicesButton.performClick(nil)
+    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled &&
+      !devicesButton.isEnabled && calls.count == 3,
       "A modal prevents toolbar actions")
+    state["enabled"] = true
+    state["devicesVisible"] = false
+    update(state)
+    devicesButton.performClick(nil)
+    try checkTitlebar(devicesButton.isHidden && !devicesButton.isEnabled && calls.count == 3,
+      "Turning the experiment off removes and disables the native entry")
     update([:])
-    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled,
+    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled &&
+      devicesButton.isHidden && !devicesButton.isEnabled,
       "Teardown disables the toolbar")
   }
 
@@ -1286,20 +1315,14 @@ private extension SwarmTabStrip {
     }
     try checkTitlebar(tabs[0].frame.width == tabs[0].preferredWidth &&
       tabs[1].frame.width == tabs[1].preferredWidth &&
-      tabs[0].frame.width < tabs[1].frame.width,
-      "Tabs keep their label widths instead of expanding to fill the row")
+      tabs[0].frame.width == tabs[1].frame.width,
+      "Tabs share a capped width independent of their labels")
     try checkTitlebar(tabs[0].menu?.font == menuFont, "Native context menus retain the system menu font")
 
   }
 
   func checkTabPresentationAndCapture() throws {
     setFrameSize(NSSize(width: 900, height: 40))
-    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
-      let assets = URL(fileURLWithPath: root)
-      storeButton.image = SwarmHistoryIcons(assetURL: { asset in
-        assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
-      }).image(engine: "store", asset: "assets/store/polymath.png")
-    }
     let rows: [[String: Any]] = [
       ["id": "new", "name": "New Tab", "label": "New Tab", "shortcutHint": "⌘1"],
       ["id": "work", "name": "Desktop", "label": "Desktop", "shortcutHint": "⌘2",
@@ -1362,7 +1385,7 @@ private extension SwarmTabStrip {
         "Eight ordinary tab names with inset close targets fit a 1440pt strip: \(tabs.last!.frame.maxX) in \(scroll.bounds.width)")
       for tab in tabs {
         try tab.checkCenteredLabel()
-        try tab.checkCompleteNameFits()
+        try tab.checkNameFitsOrHasTooltip()
       }
       setShortcutHintsVisible(true)
       try captureTabPresentation("native-tabs-eight-\(name)-command")
@@ -1375,6 +1398,15 @@ private extension SwarmTabStrip {
 
   func captureTabPresentation(_ name: String) throws {
     guard let directory = ProcessInfo.processInfo.environment["HARNESS_TAB_CAPTURE_DIR"] else { return }
+    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
+      let assets = URL(fileURLWithPath: root)
+      let icons = SwarmHistoryIcons(assetURL: { asset in
+        assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
+      })
+      storeButton.image = icons.image(engine: "store", asset: "assets/store/polymath.png")
+      devicesButton.image = icons.image(engine: "devices",
+        asset: "assets/devices/harness-mark.png", pointSize: devicesButton.markSize)
+    }
     let height = Int(bounds.height) + 40
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width), pixelsHigh: height,
       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -1393,7 +1425,7 @@ private extension SwarmTabStrip {
       tab.drawWithHoverControl()
       NSGraphicsContext.restoreGraphicsState()
     }
-    for control in [newButton, searchButton, storeButton] {
+    for control in [newButton, searchButton, devicesButton, storeButton] where !control.isHidden {
       NSGraphicsContext.saveGraphicsState()
       let transform = NSAffineTransform()
       transform.translateX(by: control.frame.minX, yBy: control.frame.minY + 40)
@@ -1624,7 +1656,7 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
     try checkTitlebar(tabs[0].frame.width < 136 && tabs[0].displayLabel == "code",
       "Overflow tabs keep readable names without persistent number prefixes")
-    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 8 && machineResourcesLabel.isHidden && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && harnessMonitorButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(subviews.filter { !$0.isHidden }.count == 4 && devicesButton.isHidden && statusBar.subviews.count == 8 && machineResourcesLabel.isHidden && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && harnessMonitorButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for control in controls {

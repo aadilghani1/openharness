@@ -1,16 +1,44 @@
 import { emitKeypressEvents } from 'node:readline'
 
-export type SignInMethod = 'sso' | 'qr'
+/** The accounts a browser sign-in goes straight to (backend `SIGN_IN_PROVIDERS`). */
+export type SignInProvider = 'google' | 'apple'
+export type SignInMethod = SignInProvider | 'qr'
 
 const OPTIONS: Array<{ method: SignInMethod; label: string }> = [
-  { method: 'sso', label: 'SSO in your browser' },
+  { method: 'google', label: 'Google in your browser' },
+  { method: 'apple', label: 'Apple in your browser' },
   { method: 'qr', label: 'Scan a QR with Harness on your phone' },
 ]
 
+/** `harness login --google|--apple|--qr`: the method a flag names, so nothing is asked. */
+export const signInMethodFlag = (flags: readonly string[]): SignInMethod | undefined =>
+  OPTIONS.find((option) => flags.includes(`--${option.method}`))?.method
+
+/** How a provider is written for a person: `Google`, `Apple`. */
+export const signInProviderName = (provider: SignInProvider): string =>
+  provider === 'google' ? 'Google' : 'Apple'
+
+/**
+ * The sign-in page's address, opening on [provider]'s own sign-in.
+ *
+ * The backend writes `provider` into the page it hands back — but only one that knows the field
+ * does, and this CLI reaches people before the backend it talks to is redeployed. The parameter is
+ * the browser's to carry and changes nothing the backend holds (state, PKCE, client), so it is
+ * set here as well: the same value where the backend already wrote it, the missing one where not.
+ */
+export function withSignInProvider(authorizeUrl: string, provider: SignInProvider | undefined): string {
+  if (!provider) return authorizeUrl
+  let url: URL
+  try { url = new URL(authorizeUrl) } catch { return authorizeUrl }
+  url.searchParams.set('provider', provider)
+  return url.toString()
+}
+
 /**
  * `harness login` at a terminal with no flag: how to sign in. ↑/↓ (or k/j) move, Enter takes,
- * 1 or 2 take that row at once, Esc / q / Ctrl-C leave with null. Starts on SSO, as Enter always
- * did. Drawn in place like `harness remote`'s machine picker — the rows are rewritten on every move.
+ * a row's number takes it at once, Esc / q / Ctrl-C leave with null. Starts on Google, the first
+ * of the two accounts. Drawn in place like `harness remote`'s machine picker — the rows are
+ * rewritten on every move.
  */
 export function pickSignInMethod(io: {
   input: NodeJS.ReadStream & { isTTY?: boolean }

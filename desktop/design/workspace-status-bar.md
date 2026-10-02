@@ -22,24 +22,28 @@ The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab keeps the footer when
 there are live sessions to inspect.
 
-The left side shows running harnesses and their CPU, RAM, GPU and SSD consumption across connected
+The left side shows open harnesses (including idle and starting sessions) and their CPU, RAM, GPU and SSD consumption across connected
 owned machines, followed by subscription allowance used per account. The focused-pane context
 remains at the right. Count each live session even when no tab currently displays it.
 
 Clicking Harnesses or any resource metric selects the existing Harness Monitor tab across all tabs
 and machines. Create one only when absent. Clicking does not open a separate resource popover.
 Saved sessions and open/resume actions belong in Open Harness (Cmd-P). The monitor itself starts
-with active sessions, sortable resource and AI metrics, an inspector and a reviewed Stop action.
+with only open sessions, sortable resource and AI metrics, an inspector and a visible × close
+button on every row. Closing reviews one harness, ends its work and retains history and files.
 
-Use one space between title and value and 2.5 character cells between complete groups, including
-the count. Adjacent controls contribute one cell of horizontal padding plus half a cell between
-controls. The shared `workspaceBarGroupGapCells` keeps Flutter and native views aligned. Use neutral
+Use spaces of 0.75 character cells within components and two cells between complete groups,
+including the count. Adjacent controls contribute one cell of horizontal padding on each side;
+before the fixed companion slot, omit the preceding control's trailing cell because the artwork
+already has its own optical gutter. Do not add extra separation. The shared `workspaceBarValueGapCells`
+and `workspaceBarGroupGapCells` keep Flutter and native views aligned. Use neutral
 workspace ink at every usage level. Do not pad numbers or add dots, decimal figures or plus suffixes.
 
 CPU is the sum of attributable process-tree interval use; 100% is one core, so multicore and fleet
 totals can exceed 100%. RAM is process-tree resident memory. Nested harness roots are excluded from
 the parent and shared Codex servers count once; shared memory pages may still overlap. GPU uses
-summed reported process utilization; multiple processes/devices can exceed 100%. macOS and unsupported drivers show —;
+process GPU time per interval on supported macOS drivers and process utilization on Linux NVIDIA.
+Multiple contexts/devices can exceed 100%. First samples and unavailable counters show —;
 whole-host GPU activity is not a substitute for attribution. Cloud inference is not local GPU use.
 
 RAM and SSD use rounded whole MB/GB, such as `RAM 10 GB` and `SSD 1 GB` (10.4 rounds to 10).
@@ -47,9 +51,10 @@ SSD means allocated workspace disk space, including existing files. Shared and n
 folders count once per machine. It is not free space, capacity or a claim that every host uses an
 SSD. Stopping a process keeps its files. Directory sizes use bounded reads cached for one minute.
 
-Unknown readings show —, with valid zero preserved. A partial total is prefixed ≥. The tooltip
-explains scope, units and shared accounting. Samples expire after 45 seconds. The count and resource
-totals cover the same connected owned sessions and never substitute whole-machine utilization.
+Unknown readings show —, with valid zero preserved. Partial totals show the available number without
+a prefix. The tooltip explains partial coverage, scope, units and shared accounting. Samples expire
+after 45 seconds. The count and resource totals cover the same connected owned sessions and never
+substitute whole-machine utilization.
 
 Sample connected owners every fifteen seconds while the app is foregrounded. Clear readings and
 stop polling when hidden; refresh on return. Coalesce process samples in the owning daemon, verify
@@ -61,7 +66,9 @@ Native and Flutter footers share data, tooltips and button behavior. At narrow w
 then GPU, then RAM as complete groups, keeping CPU and the full tooltip. Subscription usage remains
 visible in wide windows and accessible through Models at every size. Preserve focused context.
 
-![Harness resource footer with synthetic readings](images/harness-monitor-footer.png)
+![Compact footer and companion with synthetic readings, dark](images/workspace-footer-compact-dark.png)
+
+![Compact footer and companion with synthetic readings, light](images/workspace-footer-compact-light.png)
 
 The previous capture below documents spacing; its whole-machine percentages have been superseded:
 
@@ -199,9 +206,15 @@ use the shared system-type scale.
 
 ## Pane controls
 
-Each pane header ends with model, split down, split right, zoom and × at the
-right edge. The 14-point split/zoom glyphs and 12-point close glyph each have a
-28-point target, with no resting fill or border. Tab and pane close marks share a small regular glyph (12-point
+Terminal pane headers end with agent, model and × at the right edge at every
+width. Splitting lives at the pane edges; zoom remains available through menus
+and shortcuts. Agent and model
+share plain 13-point workspace text with no pill or chevron, and an 8-point gap
+separates these selectors from close. The title truncates before the
+model; the agent retains readable identity. Remove repeated coding-agent logos
+on the left while retaining distinct domain-harness icons.
+The 12-point close glyph has a 28-point target, with no resting fill or border.
+Tab and pane close marks share a small regular glyph (12-point
 Lucide, optically matched 10-point SF Symbol) and quiet 45% resting ink, with
 full ink on hover/focus and the existing larger click
 targets. The close control removes that pane view while keeping its harness
@@ -225,24 +238,28 @@ a version from a family alias. Older daemons fall back to the provider name.
 Show only the model name in the header. The terminal presents its effort setting;
 never infer effort or append subscription effort to a local model name.
 Keep this label visible without requiring hover, including while disconnected;
-disable switching when the pane is read-only. Use a hand cursor, bold text on hover
-and keyboard focus, and a tooltip explaining subscription/local switching.
+disable switching when the pane is read-only. Agent and model use a hand cursor,
+brighter regular-weight text on hover and keyboard focus, and matching targets
+that never move. The model tooltip explains subscription/local switching.
 Do not repeat the model name in that tooltip unless it is truncated or replaced
 by `Switching…`. Preserve useful capability details and full truncated names
 while offline, but do not advertise switching when it is disabled.
 A model update must repaint the label without reopening or retargeting the pane.
 The observed subscription model does not select a Local row in the picker.
 
-Zoom is also available in the header and becomes Restore while enlarged.
-Stop remains a keyboard/menu action. Cmd-Shift-W closes the focused pane
+Zoom and Stop remain keyboard/menu actions. Cmd-Shift-W closes the focused pane
 view, Cmd-W closes the tab, and Cmd-Enter toggles pane zoom. Closing a view
 keeps its harness running; Stop Harness remains a separate command with its
 existing confirmation. Preserve explicit user keymap overrides.
 
-Pane edges have no floating split buttons. Split Right and Split Down use the
-header, keyboard commands (Cmd-R and Cmd-D by default), File menu, and command
-search. All open New Harness directly with the source pane's defaults, without
-an existing-harness search step. Keep the resize gaps available for resizing.
+Hovering the right or bottom edge reveals its split-right or split-down icon
+inside the pane. Use one 32-point target centered on that edge, inset 8 points,
+with the shared 16-point pane icon; do not use a plus. Hover leaves focus and
+terminal state untouched. Hide these controls while dragging or zoomed and
+leave the resize gaps clear. Split Right and Split Down also use keyboard
+commands (Cmd-R and Cmd-D by default), File menu and command search. All open
+New Harness directly with the source pane's defaults, without an existing-harness
+search step.
 
 Settings → Experimental → Share button is off by default on desktop and web.
 The choice persists locally and updates the bar immediately; when off, no button

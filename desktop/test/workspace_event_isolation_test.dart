@@ -191,6 +191,7 @@ void main() {
       final app = createApp();
       addTearDown(app.dispose);
       var workspaceChanges = 0;
+      app.machineStates['m']!.localOnly = true;
       var deviceChanges = 0;
       app.addListener(() => workspaceChanges++);
       app.dial.addListener(() => deviceChanges++);

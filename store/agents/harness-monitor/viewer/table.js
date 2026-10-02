@@ -6,15 +6,17 @@ export const ACTIVITY = {
 }
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 export const COLUMNS = [
-  { key: 'name', label: 'Harness', width: 250, required: true, group: 'Session' },
+  { key: 'name', label: 'Harness', width: 230, required: true, group: 'Session' },
   { key: 'activity', label: 'Status', width: 112, group: 'Session' },
+  { key: 'cpu', label: 'CPU %', width: 80, numeric: true, group: 'Resources', help: 'Interval CPU of this process tree. 100% is one core; multiple cores can exceed 100%.' },
+  { key: 'rssBytes', label: 'RAM', width: 88, numeric: true, group: 'Resources', help: 'Resident memory, including child processes. Shared memory pages can overlap. Shared servers appear separately.' },
+  { key: 'gpuPercent', label: 'GPU %', width: 80, numeric: true, group: 'Resources', help: 'GPU use of this process tree: GPU time per interval on supported macOS drivers, utilization on Linux NVIDIA. Can exceed 100% across processes or devices. First samples and unavailable counters show —. Cloud model GPU usage is not reported.' },
+  { key: 'workspaceBytes', label: 'SSD', width: 88, numeric: true, group: 'Resources', help: 'Workspace disk space, including existing files. Shared folders repeat per row but count once in totals. Updated at most once a minute; stopping keeps these files.' },
   { key: 'engine', label: 'Agent', width: 118, group: 'Session' },
-  { key: 'machine', label: 'Machine', width: 120, group: 'Session' },
-  { key: 'cpu', label: 'CPU %', width: 84, numeric: true, group: 'Resources', help: 'Interval CPU of this process tree. 100% is one core; multiple cores can exceed 100%.' },
-  { key: 'rssBytes', label: 'RAM', width: 94, numeric: true, group: 'Resources', help: 'Resident memory, including child processes. Shared memory pages can overlap. Shared servers appear separately.' },
-  { key: 'gpuPercent', label: 'GPU %', width: 84, numeric: true, group: 'Resources', help: 'Summed process GPU utilization; can exceed 100% across processes or devices. NVIDIA on Linux where supported; — means unavailable. Cloud model GPU usage is not local usage.' },
-  { key: 'workspaceBytes', label: 'Storage', width: 98, numeric: true, group: 'Resources', help: 'Workspace disk space, including existing files. Shared folders repeat per row but count once in totals. Updated at most once a minute; stopping keeps these files.' },
   { key: 'tokens', label: 'Tokens', width: 98, numeric: true, group: 'AI usage', help: 'Total conversation input and output, including cached input once. Reported by the owning agent; — means unreported.' },
+  { key: 'machine', label: 'Machine', width: 120, group: 'Session' },
+  { key: 'project', label: 'Project', width: 180, group: 'Session' },
+  { key: 'branch', label: 'Branch', width: 180, group: 'Session' },
   { key: 'tokensPerMinute', label: 'Tokens/min', width: 110, numeric: true, group: 'AI usage', help: 'Change in total conversation tokens per minute across recent ledger updates. Includes input and cache; not model output speed.' },
   { key: 'lastActivity', label: 'Last active', width: 110, numeric: true, group: 'Session', help: 'Last conversation activity reported by the daemon, not a file modification time.' },
   { key: 'model', label: 'Model', width: 190, group: 'AI usage', optional: true },
@@ -27,8 +29,6 @@ export const COLUMNS = [
   { key: 'transcriptBytes', label: 'Transcript', width: 108, numeric: true, group: 'Resources', optional: true, help: 'Size of the conversation file, where the agent uses an individual transcript. Shared databases show —.' },
   { key: 'processCount', label: 'Processes', width: 100, numeric: true, group: 'Resources', optional: true },
   { key: 'createdAt', label: 'Started', width: 110, numeric: true, group: 'Session', optional: true, help: 'When this harness was registered, including time before a resume.' },
-  { key: 'project', label: 'Project', width: 180, group: 'Session', optional: true },
-  { key: 'branch', label: 'Branch', width: 180, group: 'Session', optional: true },
   { key: 'enginePid', label: 'PID', width: 80, numeric: true, group: 'Session', optional: true },
   { key: 'agentId', label: 'Harness ID', width: 220, group: 'Session', optional: true },
   { key: 'sessionId', label: 'Conversation ID', width: 220, group: 'Session', optional: true },
@@ -36,14 +36,19 @@ export const COLUMNS = [
 ]
 export const PRESETS = {
   overview: COLUMNS.filter(c => !c.optional).map(c => c.key),
-  resources: ['name', 'activity', 'machine', 'cpu', 'rssBytes', 'gpuPercent', 'gpuMemoryBytes', 'workspaceBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'processCount'],
+  resources: ['name', 'activity', 'cpu', 'rssBytes', 'gpuPercent', 'workspaceBytes', 'gpuMemoryBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'processCount', 'machine'],
   ai: ['name', 'activity', 'engine', 'machine', 'model', 'tokens', 'tokensPerMinute', 'inputTokens', 'outputTokens', 'cachedTokens', 'lastActivity'],
 }
-export const isLive = row => row.live ?? (['running', 'terminal'].includes(row.state) || (!row.state && !['stopped', 'offline'].includes(row.activity)))
-export function visibleRows(rows, { query = '', filter = 'active', machine = 'all', sort = 'rssBytes', direction = -1 } = {}) {
+// Activity describes what an open harness is doing, not whether it is open.
+// Saved history and cached offline inventory never become process rows.
+export const isLive = row => row.online !== false
+  && !['stopped', 'offline', 'gone'].includes(row.state)
+  && !['stopped', 'offline'].includes(row.activity)
+  && (row.live ?? ['running', 'terminal', 'starting'].includes(row.state))
+export function visibleRows(rows, { query = '', filter = 'all', machine = 'all', sort = 'rssBytes', direction = -1 } = {}) {
   const q = query.trim().toLocaleLowerCase(), rank = Object.keys(ACTIVITY)
-  return rows.filter(row => (isLive(row) || (filter === 'stopped' && row.activity === 'stopped')) && (machine === 'all' || row.machineId === machine)
-    && (filter === 'all' || (filter === 'active' ? row.online !== false && row.activity !== 'offline' : row.activity === filter))
+  return rows.filter(row => isLive(row) && (machine === 'all' || row.machineId === machine)
+    && (filter === 'all' || row.activity === filter)
     && (!q || [row.name, row.title, row.engine, row.machine, row.project, row.branch, row.model, row.agentId, row.sessionId, row.home]
       .some(v => String(v ?? '').toLocaleLowerCase().includes(q))))
     .sort((a, b) => {

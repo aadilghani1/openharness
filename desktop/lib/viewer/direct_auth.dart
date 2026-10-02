@@ -49,6 +49,7 @@ class DirectAuth implements AccessTokenSource {
         refreshToken: tokens.refreshToken,
         autonomousEnv: tokens.autonomousEnv ?? api.config.autonomousEnv,
         expiresIn: tokens.expiresIn,
+        ssoClientId: tokens.clientId,
       );
       // Cancel can land during a disk write. These writes are serialized, so
       // clearing this incomplete login cannot erase a newer queued login.
@@ -130,6 +131,7 @@ class DirectAuth implements AccessTokenSource {
       final tokens = await api.refresh(
         refreshToken,
         autonomousEnv: autonomousEnv,
+        clientId: await session.ssoClientId(),
       );
       _requireCurrent(revision);
       await _write(

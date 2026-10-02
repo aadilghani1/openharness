@@ -14,10 +14,28 @@ export interface AuthSession {
   /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued session, which
    *  the Autonomous services behind billing and grid do not take); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
+  /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
+   *  A refresh has to name the same one. Absent is the backend's configured client. */
+  clientId?: SsoClientId
   updatedAt: number
   /** Opaque local knowledge owner, learned from authenticated /auth/me, bound to this sign-in. */
   memoryOwner?: { key: string; binding: string }
 }
+
+/**
+ * auth-service's clients a computer signs in as (backend `SSO_CLIENT_IDS`): a person at a terminal,
+ * or the desktop app running this CLI on their behalf.
+ */
+const SSO_CLIENT_IDS = { cli: 'harness-cli', desktop: 'harness-desktop' } as const
+export type SsoClientId = (typeof SSO_CLIENT_IDS)[keyof typeof SSO_CLIENT_IDS]
+
+/** The client for the surface that asked to sign in (`--entry-point`). */
+export const ssoClientIdFor = (entryPoint: string): SsoClientId =>
+  entryPoint === 'desktop' ? SSO_CLIENT_IDS.desktop : SSO_CLIENT_IDS.cli
+
+/** A client id read back from the backend or the session file: one of ours, or nothing. */
+export const knownSsoClientId = (raw: unknown): SsoClientId | undefined =>
+  Object.values(SSO_CLIENT_IDS).find((id) => id === raw)
 
 export class AuthSessionError extends Error {
   constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE') {
@@ -48,6 +66,7 @@ function parse(raw: string): AuthSession | null {
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
       ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
+      ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       ...(value.memoryOwner && /^[a-f0-9]{64}$/.test(value.memoryOwner.key)
         && value.memoryOwner.binding === memoryOwnerBinding(value.accessToken, value.autonomousEnv)
@@ -182,7 +201,11 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
     response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ refreshToken: current.refreshToken, autonomousEnv: current.autonomousEnv }),
+      body: JSON.stringify({
+        refreshToken: current.refreshToken,
+        autonomousEnv: current.autonomousEnv,
+        ...(current.clientId ? { clientId: current.clientId } : {}),
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch {

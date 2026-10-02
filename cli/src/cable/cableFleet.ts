@@ -220,7 +220,7 @@ export class CableFleet {
     if (!entry) return { ok: false, error: 'That device is not plugged into this computer.' }
     if (!entry.status.attached) return { ok: false, error: 'That device is unplugged.' }
     try {
-      await entry.session.setSettings(patch)
+      if (!await entry.session.setSettings(patch)) return { ok: false, error: 'The device did not take the change.' }
       return { ok: true }
     } catch (error) {
       this.host.log(`cable: ${entry.port.path} settings: ${String(error)}`)

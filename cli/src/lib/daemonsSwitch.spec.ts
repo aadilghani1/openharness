@@ -459,7 +459,9 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
     expect(onChanged).toMatch(/applyPair\(\)\s+pairBrain\?\.refresh\(\)\s+\}$/)
     const pairToggled = source.match(/onPairToggled = \(on\) => \{([\s\S]*?)\n  \}/)?.[1] ?? ''
     expect(pairToggled).toMatch(/if \(on\) questionWatcher\.reset\(\)[\s;]+pairBrain\?\.refresh\(\)/)
-    expect(source).toMatch(/pairSensor\.setPair\(pairing\.pair, [^\n]+\)\n(\s+\/\/[^\n]*\n)*\s+pairBrain\?\.refresh\(\)\n\s+\}/)
+    const applyPair = source.match(/const applyPair = \(\)(?:: void)? => \{([\s\S]*?)\n  \}/)?.[1] ?? ''
+    expect(applyPair).toMatch(/pairSensor\.setPair\(pairing\.pair, [^\n]+\)[\s\S]*pairBrain\?\.refresh\(\)/)
+    expect(applyPair).toContain('refreshPairPackage()')
   })
 
   it('gates the reporters, turns, lessons, the pair harness, the pair request and every daemon_* frame', () => {

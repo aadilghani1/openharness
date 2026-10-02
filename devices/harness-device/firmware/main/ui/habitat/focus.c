@@ -1,5 +1,6 @@
 #include "focus.h"
 #include "pets.h"
+#include "focus_faces.h"
 #include "theme.h"
 #include <stdio.h>
 #include <string.h>
@@ -9,11 +10,12 @@
  *
  * The session's name curves along the top edge in the octopus's own arc (ht_arc_title, GeistMono 24);
  * the engine's mark stands where the octopus does, 56 px (focus_marks.c) — for an engine with a pet
- * (Claude, Codex: pets.c) it is the animated pet instead, centred in the same box; under it the recap in a card
- * that always holds four lines of geist_med_28 — as many as the octopus reads — a shorter recap centred
- * in it. With no recap there is no card: the working line, or a resting line ("Let's build it", …),
- * is centred on the glass. In every state the mark stands halfway between the name and what is under
- * it, so the gap above it equals the gap below. There is no tab pill and no microphone: a tap anywhere
+ * (Claude, Codex: pets.c) it is the animated pet instead, centred in the same box. Under it the recap
+ * in a fixed card that always has room for four lines of geist_med_30 (focus_faces.c), 1 px apart — as
+ * many as the octopus reads — a shorter recap centred in it; the card and the mark never move with its
+ * length (owner, 2026-10-02). With no card, the working line or a resting line ("Let's build it", …)
+ * is centred on the glass. The mark stands
+ * halfway between the name and what is under it — the card's top, or the line. There is no tab pill and no microphone: a tap anywhere
  * on the face talks to the agent, a hold opens the tabs, a tap on the name opens the panes
  * (ui_habitat.c).
  *
@@ -24,15 +26,16 @@
  *
  * ht_damage() diffs run index against run index and repaints the whole 466x466 the moment the count
  * or the order changes (terminal.c). So the home face emits the SAME TEN RUNS IN THE SAME ORDER on
- * every frame — name, mark, card, recap ×4, status, resting line ×2 — each empty where it has
- * nothing to say. Do not make one conditional.
+ * every frame — name, mark, card, recap ×4, status, resting line ×2 — each empty where it has nothing
+ * to say. Do not make one conditional.
  */
-// The card is the old Focus card (radius 28, padded 18 x 19) grown to four lines: 384 x 192 at
-// (41, 179), ending at y 371, above the bell at 400; its rounded bottom corners stay inside r 230.
-// TITLE_BOTTOM is the foot of the arc's cells at the top of the curve, where the mark is measured from.
-enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, CARD_X = 41, CARD_Y = 179, CARD_W = 384, CARD_H = 192,
-       CARD_R = 28, CARD_PAD_H = 18, CARD_PAD_V = 19, BODY_W = CARD_W - 2 * CARD_PAD_H - 2,
-       RECAP_LINES = 4, EMPTY_W = 276 };
+// The text column: 384 px at x 41. The card is the old Focus card, 384 x 192 at (41, 179), radius 28,
+// its rounded bottom corners inside r 230 and above the bell at 400; its text is 346 px wide (18 px
+// padding and the rim), up to four lines of 39 + 1 px centred in it. TITLE_BOTTOM is the foot of
+// the arc's cells at the top of the curve, where the mark is measured from.
+enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41, COL_W = 384,
+       CARD_Y = 179, CARD_H = 192, CARD_R = 28, CARD_PAD_H = 18,
+       RECAP_W = COL_W - 2 * CARD_PAD_H - 2, RECAP_LINES = 4, RECAP_GAP = 1, EMPTY_W = 276 };
 #define FOCUS_CARD     0x23252fu
 #define FOCUS_CARD_RIM 0x3d3f47u   // #a6a6a6 at 20% over the card
 #define FOCUS_FG      0xeaeaf0u
@@ -41,19 +44,35 @@ enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, CARD_X = 41
 
 /*
  * WHAT AN AGENT WITH NOTHING YET SAYS, in place of "No activity yet" (owner, 2026-10-01): an
- * invitation rather than a report. One per agent, picked by its name, so the line does not change
- * every time the face is drawn but two agents side by side read differently. Each fits two lines of
+ * invitation rather than a report, picked at random each time the resting face appears — on arrival,
+ * after a turn, on another agent, back from voice — and never the same line twice running (owner,
+ * 2026-10-02). It holds while that face stays up, so a redraw never swaps it. Each fits two lines of
  * geist_reg_38 at EMPTY_W.
  */
 static const char *const RESTING[] = {
     "Let's build it", "Do anything", "What's next?", "Ready when you are",
     "Tap to talk", "Say the word", "Make it happen", "Start something",
 };
-static const char *resting_line(const char *name)
+static struct {
+    bool showing;           // the last home face drawn was a resting one
+    char who[64];           // ... for this recipient
+    const char *line;
+    uint32_t seed;
+} resting;
+static const char *resting_line(const ht_character_face_t *f)
 {
-    uint32_t h = 2166136261u;   // FNV-1a
-    for (const char *p = name ? name : ""; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
-    return RESTING[h % (sizeof RESTING / sizeof RESTING[0])];
+    const char *who = f->recipient ? f->recipient : "";
+    if (!resting.showing || !resting.line || strncmp(resting.who, who, sizeof resting.who - 1)) {
+        const unsigned n = sizeof RESTING / sizeof RESTING[0];
+        // An LCG stirred with the clock: no entropy source is needed to look random on a dial.
+        resting.seed = resting.seed * 1664525u + 1013904223u + f->clock_ms;
+        unsigned pick = (resting.seed >> 16) % n;
+        if (RESTING[pick] == resting.line) pick = (pick + 1) % n;
+        resting.line = RESTING[pick];
+        snprintf(resting.who, sizeof resting.who, "%s", who);
+    }
+    resting.showing = true;
+    return resting.line;
 }
 
 /*
@@ -355,38 +374,38 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                    const char *recap)
 {
     (void)ink;
-    if (f->voice) { voice_face(s, f, frame); return; }
+    if (f->voice) { resting.showing = false; voice_face(s, f, frame); return; }
     bool has_recap = recap && *recap;
     bool working = !has_recap && f->activity && *f->activity;
     bool retry = !has_recap && !working && f->status && *f->status;
 
     // The live line: listening meter, the working verb and its seconds, or a status of its own.
     const ht_font_t *sf = &ht_lv_geist_med_32.base, *ef = &ht_lv_geist_reg_38.base,
-                    *rf = &ht_lv_geist_med_28.base;
+                    *rf = &ht_lv_geist_med_30.base;
     char status[HT_TEXT_BYTES] = "";
     if (!has_recap && f->mood == HT_CHARACTER_LISTENING) snprintf(status, sizeof status, "%s", meter(f->pose.level));
     else if (working) status_text(status, sizeof status, f);
     else if (retry) snprintf(status, sizeof status, "%s", f->status);
     bool empty = !has_recap && !status[0];
+    if (!empty) resting.showing = false;
 
-    // The body, laid out first: a recap is centred in its card; without one the line is centred on
-    // the glass.
+    // The body, laid out first.
     ht_lv_label_t body;
-    int body_h = 0;
+    int recap_h = 0;
     if (has_recap) {
         char cut[HT_TEXT_BYTES];
-        recap_cut(cut, sizeof cut, recap, rf, BODY_W);
-        int n = ht_lv_label(&body, rf, cut, BODY_W, RECAP_LINES, false);
-        body_h = (n < RECAP_LINES ? n : RECAP_LINES) * rf->height;
+        recap_cut(cut, sizeof cut, recap, rf, RECAP_W);
+        int n = ht_lv_label(&body, rf, cut, RECAP_W, RECAP_LINES, false);
+        if (n > RECAP_LINES) n = RECAP_LINES;
+        recap_h = n * (rf->height + RECAP_GAP) - RECAP_GAP;
     } else if (status[0]) {
-        ht_lv_label(&body, sf, status, CARD_W, 1, true);   // no card around it: the full width
-        body_h = sf->height;
+        ht_lv_label(&body, sf, status, COL_W, 1, true);
     } else {
-        int n = ht_lv_label(&body, ef, resting_line(f->recipient), EMPTY_W, 2, false);
-        body_h = (n < 2 ? n : 2) * ef->height;
+        ht_lv_label(&body, ef, resting_line(f), EMPTY_W, 2, false);
     }
-    int body_y = has_recap ? CARD_Y + (CARD_H - body_h) / 2 : HT_HEIGHT / 2 - body_h / 2;
-    // The mark halfway between the name and the card, or the line: equal gaps above and below.
+    // A recap is centred in the fixed card; a line without a card is centred on the glass. The mark
+    // halfway between the name and the card or the line: the gap above it equals the gap below.
+    int body_y = has_recap ? CARD_Y + (CARD_H - recap_h) / 2 : HT_HEIGHT / 2 - sf->height / 2;
     int below = has_recap ? CARD_Y : body_y;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
@@ -410,15 +429,15 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
 
     // The card only holds a recap; its lines are drawn on its fill.
     uint16_t card = ht_rgb(FOCUS_CARD);
-    if (has_recap) ht_box(s, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, card, ht_rgb(FOCUS_CARD_RIM));
+    if (has_recap) ht_box(s, COL_X, CARD_Y, COL_W, CARD_H, CARD_R, card, ht_rgb(FOCUS_CARD_RIM));
     else no_box(s);
 
-    if (has_recap) label_runs(s, &body, RECAP_LINES, (HT_WIDTH - BODY_W) / 2, body_y, rf->height, rf,
+    if (has_recap) label_runs(s, &body, RECAP_LINES, (HT_WIDTH - RECAP_W) / 2, body_y, rf->height + RECAP_GAP, rf,
                               ht_rgb(FOCUS_FG), card);
     else for (int n = 0; n < RECAP_LINES; n++) no_text(s, rf);
 
     if (status[0])
-        label_runs(s, &body, 1, CARD_X, body_y, 0, sf,
+        label_runs(s, &body, 1, COL_X, body_y, 0, sf,
                    ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE), s->background);
     else no_text(s, sf);
 

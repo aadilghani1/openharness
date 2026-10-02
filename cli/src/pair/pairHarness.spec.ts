@@ -143,6 +143,36 @@ describe('talking to it', () => {
     expect(w.deps.create).toHaveBeenCalledTimes(1)
   })
 
+  it('refreshes an existing companion package on restart without sending, resuming, or rotating its token', async () => {
+    const w = world()
+    await w.harness.open()
+    const saved = readFileSync(w.deps.stateFile, 'utf8')
+    const token = readFileSync(w.token.file, 'utf8')
+    w.deps.install.mockClear(); w.deps.create.mockClear()
+    const restarted = new PairHarness(w.deps)
+    expect(restarted.refreshPackage()).toBe(true)
+    expect(w.deps.install).toHaveBeenCalledOnce()
+    expect(w.deps.create).not.toHaveBeenCalled()
+    expect(w.deps.resume).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    expect(readFileSync(w.deps.stateFile, 'utf8')).toBe(saved)
+    expect(readFileSync(w.token.file, 'utf8')).toBe(token)
+    expect(restarted.agentId()).toBe('pair-1')
+  })
+
+  it('refreshing release files never creates a companion when none was opened or pairing is off', async () => {
+    const fresh = world()
+    expect(fresh.harness.refreshPackage()).toBe(true)
+    expect(fresh.deps.install).not.toHaveBeenCalled()
+    expect(fresh.deps.create).not.toHaveBeenCalled()
+    await fresh.harness.open()
+    fresh.deps.install.mockClear()
+    fresh.setPair(null)
+    expect(fresh.harness.refreshPackage()).toBe(true)
+    expect(fresh.deps.install).not.toHaveBeenCalled()
+  })
+
   it('two quick talks start one harness', async () => {
     const w = world()
     const [a, b] = await Promise.all([w.harness.talk('one'), w.harness.talk('two')])

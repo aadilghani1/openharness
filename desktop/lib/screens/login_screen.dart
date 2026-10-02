@@ -5,11 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
+import '../auth/sign_in_provider.dart';
 import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
+import '../widgets/or_divider.dart';
+import '../widgets/sign_in_provider_button.dart';
 import '../widgets/web_download_button.dart';
 
 /// The sign-in screen.
@@ -24,6 +27,10 @@ import '../widgets/web_download_button.dart';
 /// `AwaitingBrowserLoginScreen`, at a different type scale — a hard cut in the
 /// middle of a flow, and the reason the button's own spinner was almost never
 /// seen. The wait is now a state of the button, so the frame never jumps.
+///
+/// The way in is two buttons, Continue with Google and Continue with Apple
+/// ([SignInProviderButton]), as on the Autonomous storefront — not one Sign in
+/// that left the choice to the browser (owner, 2026-10-01).
 ///
 /// ⚠️ **The SSO page cannot be embedded, and that is not a preference.**
 /// `auth.autonomous.ai`'s Google sign-in uses Google's popup-based Identity
@@ -150,13 +157,17 @@ class LoginScreen extends StatelessWidget {
                                     const LoginFleetMap(),
                                     SizedBox(height: gap),
                                   ],
-                                  _Action(notifier: notifier, waiting: waiting),
+                                  _Action(
+                                    notifier: notifier,
+                                    waiting: waiting,
+                                    compact: compact,
+                                  ),
                                   if (notifier.lastError != null &&
                                       !notifier.sessionExpired) ...[
                                     const SizedBox(height: 16),
                                     _ErrorTile(
                                       message: notifier.lastError!,
-                                      onRetry: notifier.login,
+                                      onRetry: notifier.retryLogin,
                                     ),
                                   ],
                                   SizedBox(height: gap),
@@ -261,6 +272,7 @@ class LoginScreen extends StatelessWidget {
                                 child: _Action(
                                   notifier: notifier,
                                   waiting: waiting,
+                                  compact: compact,
                                   prominent: true,
                                 ),
                               ),
@@ -273,7 +285,7 @@ class LoginScreen extends StatelessWidget {
                                   ),
                                   child: _ErrorTile(
                                     message: notifier.lastError!,
-                                    onRetry: notifier.login,
+                                    onRetry: notifier.retryLogin,
                                   ),
                                 ),
                               ],
@@ -295,21 +307,27 @@ class LoginScreen extends StatelessWidget {
   );
 }
 
-/// The button, and what it becomes while the browser is open.
+/// The two buttons, and what they become while the browser is open.
 ///
-/// One widget for both because they are one control in two states: the label
-/// changes, a spinner replaces the glyph, and Cancel appears beside it. Nothing
-/// moves position, so the wait reads as *this button is working* rather than as
-/// a new screen.
+/// One widget for both because they are one control in two states: the pressed
+/// button's label changes, a spinner replaces its mark, the other steps back,
+/// and Cancel appears below. Nothing moves position, so the wait reads as *this
+/// button is working* rather than as a new screen.
 class _Action extends StatefulWidget {
   const _Action({
     required this.notifier,
     required this.waiting,
+    required this.compact,
     this.prominent = false,
   });
 
   final AppNotifier notifier;
   final bool waiting;
+
+  /// A short window: the ways in close up, so the line under them — which is
+  /// where an expired session and a failed sign-out are explained — stays on
+  /// screen at the minimum window.
+  final bool compact;
   final bool prominent;
 
   @override
@@ -377,30 +395,39 @@ class _ActionState extends State<_Action> {
       final signingOutFailed = notifier.signOutError != null;
       return Column(
         children: [
-          FilledButton.icon(
-            style: buttonStyle,
-            focusNode: _signInFocus,
-            autofocus: true,
-            onPressed: signingOutFailed ? notifier.logout : notifier.login,
-            icon: Icon(
-              signingOutFailed ? AppIcons.logOut : AppIcons.logIn,
-              size: grid.AppControl.iconSize,
+          if (signingOutFailed)
+            FilledButton.icon(
+              style: buttonStyle,
+              focusNode: _signInFocus,
+              autofocus: true,
+              onPressed: notifier.logout,
+              icon: const Icon(AppIcons.logOut, size: grid.AppControl.iconSize),
+              label: const Text('Retry sign out'),
+            )
+          else
+            _waysIn(
+              otherWays: [
+                // The other way in: a QR a phone already signed in scans and approves. Not on a
+                // web page at phone width — that page IS the phone.
+                if (notifier.canSignInWithPhone &&
+                    !(kIsWeb && MediaQuery.sizeOf(context).width < 720)) ...[
+                  if (!widget.compact) const OrDivider(),
+                  OutlinedButton.icon(
+                    key: const Key('login-scan-with-phone'),
+                    style: widget.compact
+                        ? null
+                        : OutlinedButton.styleFrom(
+                            minimumSize: SignInProviderButton.minimumSize(
+                              prominent: widget.prominent,
+                            ),
+                          ),
+                    onPressed: notifier.loginWithPhone,
+                    icon: const Icon(AppIcons.smartphone, size: 16),
+                    label: const Text('Scan with your phone'),
+                  ),
+                ],
+              ],
             ),
-            label: Text(signingOutFailed ? 'Retry sign out' : 'Sign in'),
-          ),
-          // The other way in: a QR a phone already signed in scans and approves. Not on a web page
-          // at phone width — that page IS the phone.
-          if (notifier.canSignInWithPhone &&
-              !signingOutFailed &&
-              !(kIsWeb && MediaQuery.sizeOf(context).width < 720)) ...[
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              key: const Key('login-scan-with-phone'),
-              onPressed: notifier.loginWithPhone,
-              icon: const Icon(AppIcons.smartphone, size: 16),
-              label: const Text('Scan with your phone'),
-            ),
-          ],
           const SizedBox(height: 12),
           Semantics(
             liveRegion: signingOutFailed || notifier.sessionExpired,
@@ -485,13 +512,7 @@ class _ActionState extends State<_Action> {
               spacing: 8,
               alignment: WrapAlignment.center,
               children: [
-                OutlinedButton(
-                  onPressed: () {
-                    notifier.cancelLogin();
-                    unawaited(notifier.login());
-                  },
-                  child: const Text('Use browser instead'),
-                ),
+                // Back to the two buttons: that is where the browser's way in is chosen.
                 TextButton(
                   onPressed: notifier.cancelLogin,
                   style: TextButton.styleFrom(
@@ -514,24 +535,29 @@ class _ActionState extends State<_Action> {
         (url != null && _copyFailureUrl == url
             ? 'Couldn’t copy the link. Try opening your browser again.'
             : null);
+    final working = notifier.signingOut
+        ? 'Signing out…'
+        : (url == null ? 'Signing in…' : 'Waiting for your browser');
+    // The button the person pressed. A sign-out has none, and neither has a
+    // sign-in started away from these buttons.
+    final pressed = notifier.signingOut ? null : notifier.signInProvider;
     return Column(
       children: [
-        FilledButton.icon(
-          style: buttonStyle,
-          // Disabled, not hidden: the control the user just pressed has to stay
-          // where they left it, saying what it is doing.
-          onPressed: null,
-          icon: const SizedBox(
-            width: grid.AppControl.iconSize,
-            height: grid.AppControl.iconSize,
-            child: CircularProgressIndicator(strokeWidth: 2),
+        // Disabled, not hidden: the control the user just pressed has to stay
+        // where they left it, saying what it is doing.
+        if (pressed != null)
+          _waysIn(working: (provider: pressed, label: working))
+        else
+          FilledButton.icon(
+            style: buttonStyle,
+            onPressed: null,
+            icon: const SizedBox(
+              width: grid.AppControl.iconSize,
+              height: grid.AppControl.iconSize,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            label: Text(working),
           ),
-          label: Text(
-            notifier.signingOut
-                ? 'Signing out…'
-                : (url == null ? 'Signing in…' : 'Waiting for your browser'),
-          ),
-        ),
         const SizedBox(height: 12),
         Semantics(
           liveRegion: true,
@@ -594,6 +620,35 @@ class _ActionState extends State<_Action> {
       ],
     );
   }
+
+  /// Continue with Google, Continue with Apple, then [otherWays] — all one
+  /// column of rows the same width. [working] is the account whose sign-in is
+  /// in flight and what it says meanwhile; neither can be pressed then.
+  Widget _waysIn({
+    ({SignInProvider provider, String label})? working,
+    List<Widget> otherWays = const [],
+  }) => IntrinsicWidth(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      spacing: 10,
+      children: [
+        for (final provider in SignInProvider.values)
+          SignInProviderButton(
+            provider: provider,
+            prominent: widget.prominent,
+            focusNode: provider == SignInProvider.values.first
+                ? _signInFocus
+                : null,
+            autofocus: provider == SignInProvider.values.first,
+            onPressed: working == null
+                ? () => unawaited(notifier.login(provider))
+                : null,
+            busyLabel: provider == working?.provider ? working?.label : null,
+          ),
+        ...otherWays,
+      ],
+    ),
+  );
 }
 
 /// A failure the user can act on.

@@ -66,7 +66,7 @@ function requestAccessToken(authorization: string | undefined): string {
   // (lib/autonomousBff.ts). A session Harness issued itself — a phone, or a computer signed in by
   // scanning its QR — means nothing to that service: say what to do instead of a 502 from upstream.
   if (isHarnessAccessToken(token)) {
-    throw new AppError('Billing needs your Autonomous sign-in. Sign in with SSO on this device (harness login --sso).', 403, 'NEEDS_AUTONOMOUS_SIGN_IN')
+    throw new AppError('Billing needs your Autonomous sign-in. Sign in with Google or Apple on this device (harness login --force).', 403, 'NEEDS_AUTONOMOUS_SIGN_IN')
   }
   return token
 }

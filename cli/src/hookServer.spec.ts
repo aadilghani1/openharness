@@ -63,6 +63,61 @@ async function start(overrides: Partial<HookServerHandlers> = {}) {
 }
 
 describe('process-owned hook server', () => {
+  it.each(['claude', 'codex', 'opencode'] as const)('serves shared memory only to the live bound %s adapter', async engine => {
+    const entry = { engine, agentId: 'coding-agent', sessionId: 'native',
+      processIdentity: { pid: 42, executable: engine, startMarker: 'same-process' } } as RegisteredSession
+    const resolveHookAgent = vi.fn(async () => entry as RegisteredSession | null)
+    const onMemoryContext = vi.fn(() => ({ additionalContext: 'Historical coding context',
+      memoryReceiptId: '77777777-7777-4777-8777-777777777777' }))
+    const registration = vi.spyOn(registry, 'register')
+    try {
+      const { base, headers } = await start({ resolveHookAgent, onMemoryContext })
+      const body = { engine, sessionId: 'native', callerPid: 42, tmuxPane: '%41', cliVersion: 'test-version', prompt: 'Review parser\nchanges.' }
+      const submit = (value: unknown = body, authenticated = true) => fetch(`${base}/api/hook/memory-context`, {
+        method: 'POST', headers: authenticated ? headers : {}, body: JSON.stringify(value) })
+      expect((await submit(body, false)).status).toBe(401)
+      expect((await submit({ ...body, sessionId: 'other-session' })).status).toBe(403)
+      for (const changes of [{ callerPid: undefined }, { cliVersion: undefined }, { prompt: ' ' },
+        { prompt: 'x'.repeat(4001) }, { projectId: 'caller-selected' }, { engine: 'terminal' }]) {
+        expect((await submit({ ...body, ...changes })).status).toBe(400)
+      }
+      expect(onMemoryContext).not.toHaveBeenCalled()
+      expect(await (await submit()).json()).toEqual({ ok: true, additionalContext: 'Historical coding context',
+        memoryReceiptId: '77777777-7777-4777-8777-777777777777' })
+      expect(onMemoryContext).toHaveBeenCalledExactlyOnceWith('coding-agent', 'Review parser\nchanges.', { engine, cliVersion: 'test-version' })
+      expect(registration).not.toHaveBeenCalled()
+      resolveHookAgent.mockResolvedValue(null)
+      expect((await submit()).status).toBe(403)
+    } finally { registration.mockRestore() }
+  })
+
+  it('never falls back to pane-only ownership for memory reads or OpenCode acknowledgements', async () => {
+    const onMemoryContext = vi.fn(), onMemoryContextEmitted = vi.fn(async () => true)
+    const lookup = vi.spyOn(registry, 'byPaneEngine').mockReturnValue({ engine: 'opencode', sessionId: 'native' } as RegisteredSession)
+    try {
+      const { base, headers } = await start({ onMemoryContext, onMemoryContextEmitted })
+      const body = { engine: 'opencode', sessionId: 'native', callerPid: 42, tmuxPane: '%41', cliVersion: '1.18.34', prompt: 'Review parser.' }
+      for (const route of ['memory-context', 'memory-emitted']) {
+        const response = await fetch(`${base}/api/hook/${route}`, { method: 'POST', headers,
+          body: JSON.stringify({ ...body, memoryReceiptId: '77777777-7777-4777-8777-777777777777' }) })
+        expect(response.status).toBe(403)
+      }
+      expect(lookup).not.toHaveBeenCalled()
+      expect(onMemoryContext).not.toHaveBeenCalled()
+      expect(onMemoryContextEmitted).not.toHaveBeenCalled()
+    } finally { lookup.mockRestore() }
+  })
+
+  it('bounds a stalled adapter read without sending late context', async () => {
+    const entry = { engine: 'opencode', agentId: 'coding-agent', sessionId: 'native',
+      processIdentity: { pid: 42, executable: 'opencode', startMarker: 'same-process' } } as RegisteredSession
+    const { base, headers } = await start({ resolveHookAgent: async () => entry,
+      onMemoryContext: async () => new Promise(() => {}) })
+    const result = await fetch(`${base}/api/hook/memory-context`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'opencode', sessionId: 'native', callerPid: 42, tmuxPane: '%41', cliVersion: '1.18.34', prompt: 'Review parser.' }) })
+    expect(await result.json()).toEqual({ ok: true })
+  })
+
   it('accepts private OpenCode runtime observations only from the verified live session', async () => {
     const entry = { engine: 'opencode', agentId: 'companion', sessionId: 'native',
       processIdentity: { pid: 42, executable: 'opencode', startMarker: 'same-process' } } as RegisteredSession
@@ -153,12 +208,13 @@ describe('process-owned hook server', () => {
     } finally { registration.mockRestore() }
   })
 
-  it('accepts emitted receipts only from a hook bound to the same live native session', async () => {
-    const entry = { engine: 'codex', agentId: 'memory_agent', sessionId: 'memory_session' } as RegisteredSession
+  it.each(['codex', 'opencode'] as const)('accepts emitted receipts only from a %s hook bound to the same live native session', async engine => {
+    const entry = { engine, agentId: 'memory_agent', sessionId: 'memory_session',
+      processIdentity: { pid: 42, executable: engine, startMarker: 'same-process' } } as RegisteredSession
     const resolveHookAgent = vi.fn(async () => entry)
     const onMemoryContextEmitted = vi.fn(async () => true)
     const { base, headers } = await start({ resolveHookAgent, onMemoryContextEmitted })
-    const body = { engine: 'codex', sessionId: entry.sessionId, tmuxPane: '%41', memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }
+    const body = { engine, callerPid: 42, sessionId: entry.sessionId, tmuxPane: '%41', memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }
     const submit = (value = body, authenticated = true) => fetch(`${base}/api/hook/memory-emitted`, {
       method: 'POST', headers: authenticated ? headers : { 'content-type': 'application/json' }, body: JSON.stringify(value) })
     expect((await submit(body, false)).status).toBe(401)
