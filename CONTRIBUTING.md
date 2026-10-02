@@ -198,6 +198,11 @@ npm run test:tmux-real     # RUN_REAL_TMUX_DISCOVERY=1 — drives a real tmux se
 npm run test:cursor-e2e    # RUN_CURSOR_E2E=1 — needs a real cursor-agent CLI
 ```
 
+`test:tmux-real` owns its private tmux server and its cleanup. Run it directly; do not wrap it in
+a bare `tmux kill-server` trap. `TMUX_TMPDIR` alone does not isolate a test launched inside a tmux
+pane, because inherited `TMUX` takes precedence. New tmux fixtures must clear `TMUX` and
+`TMUX_PANE`, use a private socket, and explicitly target that socket with `-S` during cleanup.
+
 If your change touches how agents are discovered or driven, run the real multiplexer suite for the
 software available on your machine and say exactly which versions and engine rows ran. A missing
 binary, credential, or onboarding step is an unavailable row, not a passing one.
