@@ -8,6 +8,7 @@ import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
 import 'control_chord.dart';
+import 'keyframe_write.dart';
 import 'screen_snapshot.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
@@ -930,47 +931,7 @@ class TerminalSession extends ChangeNotifier {
             return;
           }
           if (frame.kind == TerminalBinaryKind.keyframe) {
-            final nextCols = frame.cols;
-            final nextRows = frame.rows;
-            if (nextCols == null || nextRows == null) {
-              await _requestResync('TERMINAL_KEYFRAME_INVALID');
-              return;
-            }
-            // Publish a complete screen atomically. A damaged snapshot must
-            // leave the retained screen available while resync recovers.
-            final decoded = decodeUtf8Chunk(_prepareKeyframeBytes(bytes));
-            final replacement = _newTerminal(bindCallbacks: false)
-              ..resize(_clampCols(nextCols), _clampRows(nextRows))
-              ..write(decoded.text);
-            _bindTerminal(replacement);
-            terminal = replacement;
-            _showingKeptScreen = false;
-            cols = _clampCols(nextCols);
-            rows = _clampRows(nextRows);
-            _utf8Tail = decoded.tail;
-            _remoteCursorVisible = terminal.cursorVisibleMode;
-            _cursorBlinkPhaseVisible = true;
-            _expectedSeq = frame.seq + 1;
-            _lastRenderedSeq = frame.seq;
-            _resyncRequested = false;
-            _resyncAttempts = 0;
-            _autoReopenAttempts = 0;
-            errorCode = null;
-            errorMessage = null;
-            takenOverBy = null;
-            _resyncTimer?.cancel();
-            _resyncTimer = null;
-            status = TerminalSessionStatus.controlling;
-            _markForAck(bytes.length);
-            notifyListeners();
-            final measured = _measuredViewport;
-            if (measured != null) {
-              _pendingCols = measured.cols;
-              _pendingRows = measured.rows;
-            }
-            if (_pendingCols != null && _pendingRows != null) {
-              unawaited(_flushResize());
-            }
+            await _applyKeyframe(frame, bytes, generation);
             return;
           }
           if (frame.kind == TerminalBinaryKind.sync) {
@@ -1116,6 +1077,66 @@ class TerminalSession extends ChangeNotifier {
     if (decoded.text.isNotEmpty) _writeTerminalText(decoded.text);
     _utf8Tail = decoded.tail;
     return true;
+  }
+
+  /// A keyframe: the stream's whole screen and its history, which replaces the emulator outright.
+  /// Published whole and at once — see [writeKeyframeInSlices] for how a large one is parsed.
+  Future<void> _applyKeyframe(
+    TerminalBinaryFrame frame,
+    Uint8List bytes,
+    int generation,
+  ) async {
+    final nextCols = frame.cols;
+    final nextRows = frame.rows;
+    if (nextCols == null || nextRows == null) {
+      await _requestResync('TERMINAL_KEYFRAME_INVALID');
+      return;
+    }
+    // Publish a complete screen atomically. A damaged snapshot must
+    // leave the retained screen available while resync recovers.
+    final decoded = decodeUtf8Chunk(_prepareKeyframeBytes(bytes));
+    final replacement = _newTerminal(bindCallbacks: false)
+      ..resize(_clampCols(nextCols), _clampRows(nextRows));
+    if (decoded.text.length <= keyframeSliceChars) {
+      replacement.write(decoded.text);
+    } else if (!await writeKeyframeInSlices(
+      replacement,
+      decoded.text,
+      stillWanted: () => _isCurrent(generation) && frame.streamId == streamId,
+    )) {
+      // Closed, reopened or taken over while it parsed: whoever moved
+      // the stream on owns what is shown now, and this screen is dropped.
+      return;
+    }
+    _bindTerminal(replacement);
+    terminal = replacement;
+    _showingKeptScreen = false;
+    cols = _clampCols(nextCols);
+    rows = _clampRows(nextRows);
+    _utf8Tail = decoded.tail;
+    _remoteCursorVisible = terminal.cursorVisibleMode;
+    _cursorBlinkPhaseVisible = true;
+    _expectedSeq = frame.seq + 1;
+    _lastRenderedSeq = frame.seq;
+    _resyncRequested = false;
+    _resyncAttempts = 0;
+    _autoReopenAttempts = 0;
+    errorCode = null;
+    errorMessage = null;
+    takenOverBy = null;
+    _resyncTimer?.cancel();
+    _resyncTimer = null;
+    status = TerminalSessionStatus.controlling;
+    _markForAck(bytes.length);
+    notifyListeners();
+    final measured = _measuredViewport;
+    if (measured != null) {
+      _pendingCols = measured.cols;
+      _pendingRows = measured.rows;
+    }
+    if (_pendingCols != null && _pendingRows != null) {
+      unawaited(_flushResize());
+    }
   }
 
   List<int> _prepareKeyframeBytes(Uint8List bytes) {

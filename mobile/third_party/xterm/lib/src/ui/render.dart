@@ -36,7 +36,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     EditableRectCallback? onEditableRect,
     String? composingText,
     int composingBacktrackCells = 0,
+    double devicePixelRatio = 1.0,
   })  : _terminal = terminal,
+        _devicePixelRatio = devicePixelRatio,
         _controller = controller,
         _offset = offset,
         _padding = padding,
@@ -63,6 +65,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     _terminal = terminal;
     _reportedViewportSize = null;
+    // The recorded lines are the old emulator's: none of them is drawn again.
+    _painter.clearLinePictures();
     if (attached && _renderingEnabled) _terminal.addListener(_onTerminalChange);
     _resizeTerminalIfNeeded();
     markNeedsLayout();
@@ -186,6 +190,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     markNeedsPaint();
   }
 
+  /// AUTONOMOUS PATCH: the screen's pixels per logical pixel — the grid each
+  /// line's top is placed on, see [_snapLineTop].
+  double _devicePixelRatio;
+  set devicePixelRatio(double value) {
+    if (value == _devicePixelRatio) return;
+    _devicePixelRatio = value;
+    markNeedsPaint();
+  }
+
   TerminalSize? _viewportSize;
   TerminalSize? _reportedViewportSize;
 
@@ -259,6 +272,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void systemFontsDidChange() {
     _painter.clearFontCache();
     super.systemFontsDidChange();
+  }
+
+  @override
+  void dispose() {
+    _painter.clearLinePictures();
+    super.dispose();
   }
 
   @override
@@ -539,9 +558,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      _painter.paintLine(
+      _painter.paintLineCached(
         canvas,
-        offset.translate(0, (i * charHeight + _lineOffset).truncateToDouble()),
+        offset.translate(0, _snapLineTop(i * charHeight + _lineOffset)),
         lines[i],
       );
     }
@@ -581,6 +600,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
 
     canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: a line's top, on the screen's own pixel grid.
+  ///
+  /// It was truncated to whole LOGICAL pixels, which on a 3× phone is three
+  /// device pixels: a slow scroll moved the text in visible three-pixel steps,
+  /// holding still for frames in between, while the finger moved smoothly. On
+  /// the device grid it moves a pixel at a time and stays as crisp.
+  double _snapLineTop(double y) {
+    final ratio = _devicePixelRatio;
+    if (ratio <= 0) return y.truncateToDouble();
+    return (y * ratio).roundToDouble() / ratio;
   }
 
   /// Paints the text that is currently being composed in IME to [canvas] at

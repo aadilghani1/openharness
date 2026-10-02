@@ -56,6 +56,7 @@ class TerminalView extends StatefulWidget {
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
     this.onAltBufferScroll,
+    this.altBufferScrollPhysics,
   });
 
   /// The underlying terminal that this widget renders.
@@ -178,6 +179,11 @@ class TerminalView extends StatefulWidget {
   /// a program that owns terminal mouse-tracking but doesn't correctly handle wheel reports needs a
   /// backend-native way to scroll instead of the emulator's own mouse/key simulation.
   final void Function(bool up)? onAltBufferScroll;
+
+  /// AUTONOMOUS PATCH: the physics of the alternate buffer's scroll — the one
+  /// that turns a drag into wheel events for the program — layered over the
+  /// platform's own. Null keeps the platform's.
+  final ScrollPhysics? altBufferScrollPhysics;
 
   @override
   State<TerminalView> createState() => TerminalViewState();
@@ -303,6 +309,7 @@ class TerminalViewState extends State<TerminalView> {
       terminal: widget.terminal,
       simulateScroll: widget.simulateScroll,
       onAltBufferScroll: widget.onAltBufferScroll,
+      physics: widget.altBufferScrollPhysics,
       getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
@@ -745,6 +752,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       onEditableRect: onEditableRect,
       composingText: composingText,
       composingBacktrackCells: composingBacktrackCells,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0,
     );
   }
 
@@ -767,6 +775,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
       ..composingText = composingText
-      ..composingBacktrackCells = composingBacktrackCells;
+      ..composingBacktrackCells = composingBacktrackCells
+      ..devicePixelRatio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
   }
 }

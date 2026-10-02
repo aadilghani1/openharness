@@ -17,6 +17,7 @@ import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
+import '../terminal/remote_scroll_physics.dart';
 import '../terminal/terminal_links.dart';
 import '../terminal/terminal_prompt_zone.dart';
 import '../phone/tty.dart';
@@ -1284,6 +1285,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                         onAltBufferScroll: session.scrollViaTmuxCopyMode
                             ? (up) => session.sendScrollCommand(up, 1)
                             : null,
+                        altBufferScrollPhysics: const RemoteScrollPhysics(),
                       ),
                     ),
                   ),

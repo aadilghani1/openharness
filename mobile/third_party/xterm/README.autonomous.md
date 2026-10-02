@@ -229,3 +229,30 @@ it if one is dropped.
     without the keyboard seeing them; left holding the old words, the keyboard
     would edit them again — Telex re-marks the word it believes is being typed
     and would rub out characters the prompt no longer holds.
+
+17. **A scroll replays lines instead of drawing them** (`lib/src/ui/painter.dart`,
+    `lib/src/ui/line_picture_cache.dart`, `lib/src/ui/glyph_run.dart`,
+    `lib/src/ui/render.dart`, `lib/src/core/buffer/line.dart`). A scroll moves
+    every line on screen each frame and changes none, yet every frame drew each
+    one again cell by cell. `TerminalPainter.paintLineCached` records a line
+    once into a `Picture` (`LinePictureCache`) and replays it while
+    `BufferLine.paintVersion` — a new counter, bumped by every mutation of the
+    line, colour included — is unchanged; at most 256 lines are kept, least
+    recently drawn out first, and all of them go when the font, scale, theme or
+    emulator changes. `paintLine` itself now fills a run of same-coloured cells
+    with one rectangle, and draws a run of printable ASCII in one style as one
+    paragraph (`GlyphRun`; ligatures, contextual alternates and kerning off, so
+    each character stays on its cell); wide, non-ASCII and underlined cells
+    keep a paragraph each.
+    A line's top is snapped to the device's pixel grid rather than truncated to
+    whole logical pixels, which moved a slow scroll in three-pixel steps on a
+    3× phone.
+
+18. **The alternate buffer's scroll takes the embedder's physics**
+    (`lib/src/terminal_view.dart`, `lib/src/ui/scroll_handler.dart`,
+    `lib/src/ui/infinite_scroll_view.dart`). `TerminalView.altBufferScrollPhysics`
+    reaches the `Scrollable` that turns a drag into wheel events, layered over
+    the platform's physics. Its extents are infinite, so a platform fling there
+    never meets an end and coasted for seconds, a wheel event per line; the
+    phone passes a short fling (`mobile/lib/terminal/remote_scroll_physics.dart`).
+    Null keeps the platform's physics, as upstream.

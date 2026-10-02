@@ -14,6 +14,7 @@ class TerminalScrollGestureHandler extends StatefulWidget {
     required this.getLineHeight,
     this.simulateScroll = true,
     this.onAltBufferScroll,
+    this.physics,
     required this.child,
   });
 
@@ -37,6 +38,10 @@ class TerminalScrollGestureHandler extends StatefulWidget {
   /// this hook is expected to know a backend-native way to scroll instead (tmux copy-mode) and not
   /// need the emulator's own mouse/key simulation at all.
   final void Function(bool up)? onAltBufferScroll;
+
+  /// AUTONOMOUS PATCH: the scroll's physics, layered over the platform's — see
+  /// `TerminalView.altBufferScrollPhysics`.
+  final ScrollPhysics? physics;
 
   final Widget child;
 
@@ -141,6 +146,7 @@ class _TerminalScrollGestureHandlerState
       },
       child: InfiniteScrollView(
         onScroll: _onScroll,
+        physics: widget.physics,
         child: widget.child,
       ),
     );
