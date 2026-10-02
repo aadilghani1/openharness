@@ -5,12 +5,20 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_select_field.dart';
+import '../shared/widgets/skeleton.dart';
+import '../shared/theme/app_icons.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'coding_memory_connection.dart';
 import 'coding_memory_library.dart';
+import 'coding_memory_activity.dart';
+import 'coding_memory_notebooks.dart';
 import 'coding_memory_project_picker.dart';
 import 'coding_memory_recall_history.dart';
+
+part 'coding_memory_notebook_view.dart';
+part 'coding_memory_activity_view.dart';
 
 /// The collection's owner library; it does not send chat or terminal input.
 class CodingMemoryView extends StatefulWidget {
@@ -64,6 +72,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
                 for (final name in [
                   'How you work',
                   'Project knowledge',
+                  'Helping now',
                   'Learning',
                 ])
                   ChoiceChip(
@@ -94,54 +103,28 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
             if (library.available == true && library.valid)
               if (section == 'Learning')
                 _learning()
+              else if (section == 'Helping now')
+                _CodingMemoryActivityView(
+                  library: library,
+                  onOpen: (id) => _open(id: id),
+                )
+              else if (section == 'Project knowledge')
+                _ProjectMemoryView(
+                  library: library,
+                  onOpen: (id) => _open(id: id),
+                )
               else ...[
                 if (library.items.isEmpty &&
                     !library.busy &&
                     library.error == null)
                   _text(
-                    section == 'How you work'
-                        ? 'A place for your coding preferences. Your companion can learn from new, included sessions while learning is on.'
-                        : 'Project decisions and findings stay with their project. No project memories are available yet.',
+                    'A place for your coding preferences. Your companion can learn from new, included sessions while learning is on.',
                   ),
-                for (final item in library.items)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppPalette.cardBg,
-                        border: Border.all(color: AppPalette.divider),
-                        borderRadius: BorderRadius.circular(
-                          AppDesktop.rowRadius,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _text(
-                            '${_stateLabel(item['state'])} · ${_scopeLabel(item)}',
-                            small: true,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            item['claim'] as String,
-                            style: AppType.body(
-                              color: AppPalette.textPrimary,
-                              height: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          TextButton(
-                            onPressed: library.busy
-                                ? null
-                                : () => _open(id: item['id'] as String),
-                            child: const Text('Read memory'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                ..._memoryRows(
+                  library.items,
+                  busy: library.busy,
+                  onOpen: (id) => _open(id: id),
+                ),
                 if (library.nextCursor != null)
                   TextButton(
                     onPressed: library.busy
@@ -151,12 +134,13 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
                   ),
               ],
             const SizedBox(height: 8),
-            TextButton(
-              onPressed: library.busy || !library.valid
-                  ? null
-                  : () => library.refresh(),
-              child: const Text('Refresh coding memory'),
-            ),
+            if (section != 'Helping now')
+              TextButton(
+                onPressed: library.busy || !library.valid
+                    ? null
+                    : () => library.refresh(),
+                child: const Text('Refresh coding memory'),
+              ),
             const SizedBox(height: 28),
           ],
         ),
@@ -196,6 +180,12 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
         ? 'Giving your latest request a moment before reviewing completed work.'
         : learning['state'] == 'budget_deferred'
         ? 'Waiting for the next learning allowance before reviewing more work.'
+        : learning['state'] == 'notebook_updated'
+        ? 'A project notebook was updated from saved memories. Its sources and conditions are available in Project knowledge.'
+        : learning['state'] == 'notebook_empty'
+        ? 'The latest notebook review found no supported explanation to add. Individual memories are still available.'
+        : learning['state'] == 'stale'
+        ? 'The source memories or learning settings changed during review. That result was not saved.'
         : 'Learning from completed coding work. Your companion and new requests take priority.';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

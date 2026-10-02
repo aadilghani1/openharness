@@ -12,6 +12,7 @@ import 'package:harness/companions/coding_memory_view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/theme/color_palette.dart';
+import 'package:harness/shared/widgets/skeleton.dart';
 
 import 'support/coding_memory_fixture.dart';
 import 'support/real_fonts.dart';
@@ -106,12 +107,372 @@ void main() {
   }
 
   testWidgets(
+    'Helping now explains a selection and preserves rating focus and source controls',
+    (tester) async {
+      transport.recalls.add(syntheticRecall());
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(
+        find.text('Sent by Harness · Delivery not confirmed'),
+        findsOneWidget,
+      );
+      expect(find.text('Applies when task: bug fix.'), findsOneWidget);
+      await tap(tester, 'Helpful');
+      final helpful = tester
+          .widgetList<DesktopPill>(find.byType(DesktopPill))
+          .singleWhere((p) => p.label == 'Helpful');
+      expect(helpful.selected, isTrue);
+      expect(helpful.focusNode!.hasFocus, isTrue);
+      expect(transport.previewed!['receiptId'], 'synthetic-receipt');
+      await tap(tester, 'Clear feedback');
+      expect(
+        transport.calls.where((p) => p['action'] == 'apply'),
+        hasLength(2),
+      );
+      await tap(tester, 'Read memory');
+      expect(find.text('Correct memory'), findsOneWidget);
+      expect(find.text('Forget…'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Helping now shows an empty latest recall without an earlier positive memory',
+    (tester) async {
+      transport.handle = (p) async => p['action'] == 'activity'
+          ? syntheticActivity(transport.record, empty: true)
+          : transport.respond(p);
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(
+        find.text('No memories were selected for the last recorded request.'),
+        findsOneWidget,
+      );
+      expect(find.text(transport.record['claim'] as String), findsNothing);
+      expect(find.text('Helpful'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Helping now distinguishes loading, empty activity and lost identity',
+    (tester) async {
+      final pending = Completer<Map<String, dynamic>>();
+      transport.handle = (p) => p['action'] == 'activity'
+          ? pending.future
+          : Future.value(transport.respond(p));
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      expect(find.byType(SkeletonText), findsNWidgets(2));
+      expect(find.textContaining('No recall activity'), findsNothing);
+      pending.complete({
+        'ok': true,
+        'sessions': [],
+        'items': [],
+        'selectedAgentId': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.textContaining('No recall activity'), findsOneWidget);
+      transport.invalidate();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('No recall activity'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Helping now session picker switches the inspected task without writing or sending input',
+    (tester) async {
+      transport.handle = (p) async {
+        if (p['action'] != 'activity') return transport.respond(p);
+        final selected =
+            (p['query'] as Map)['agentId'] as String? ?? 'synthetic-agent';
+        final result = syntheticActivity(
+          transport.record,
+          agentId: selected,
+          empty: selected == 'second',
+        );
+        final session = (result['sessions'] as List).single as Map;
+        return {
+          ...result,
+          'sessions': [
+            {
+              ...session,
+              'agentId': 'synthetic-agent',
+              'name': 'First coding task',
+              'selectedCount': 1,
+            },
+            {
+              ...session,
+              'agentId': 'second',
+              'name': 'Second coding task',
+              'selectedCount': 0,
+            },
+          ],
+        };
+      };
+      await mount(tester);
+      await tap(tester, 'Helping now');
+      await tester.tap(find.byKey(const ValueKey('memory-activity-session')));
+      await tester.pumpAndSettle();
+      await tap(tester, 'Second coding task');
+      expect(
+        find.text('No memories were selected for the last recorded request.'),
+        findsOneWidget,
+      );
+      expect(
+        transport.calls.where((p) => p['action'] == 'activity').last['query'],
+        {'agentId': 'second'},
+      );
+      expect(
+        transport.calls.any((p) => ['preview', 'apply'].contains(p['action'])),
+        isFalse,
+      );
+    },
+  );
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'Helping now fits ${brightness.name} at ${scale}x with a long session name',
+        (tester) async {
+          transport.recalls.add(syntheticRecall());
+          transport.handle = (p) async {
+            final result = transport.respond(p);
+            if (p['action'] == 'activity') {
+              ((result['sessions'] as List).first as Map)['name'] = 'Fix the editor regression while preserving keyboard navigation and project context';
+            }
+            return result;
+          };
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: Size(scale == 1 ? 760 : 480, 920),
+          );
+          await tap(tester, 'Helping now');
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'activity-${brightness.name}-${scale}x');
+          await tap(tester, 'Helpful');
+          expect(tester.takeException(), isNull);
+          await capture(
+            tester,
+            'activity-feedback-${brightness.name}-${scale}x',
+          );
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'project notebooks preserve source conditions, scope and source controls',
+    (tester) async {
+      transport.record = syntheticMemory(project: true);
+      transport.record['scope'] = {
+        ...transport.record['scope'] as Map,
+        'taskId': 'task-review',
+        'branchId': 'branch-tests',
+      };
+      transport.notebookPages.add(syntheticNotebook(transport.record));
+      await mount(tester);
+      await tap(tester, 'Project knowledge');
+      expect(find.text('Task reference: task-review'), findsOneWidget);
+      expect(find.text('Branch reference: branch-tests'), findsOneWidget);
+      await tap(tester, 'Open notebook');
+      expect(
+        find.textContaining('begin with a small failing test'),
+        findsOneWidget,
+      );
+      expect(find.text('Source 1 applies when task: bug_fix.'), findsOneWidget);
+      expect(
+        find.textContaining('Prose changes need a reading check.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Recheck source 1: The test framework changes.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('may cover only part'), findsOneWidget);
+      expect(find.textContaining('1 needing review'), findsOneWidget);
+      await tap(tester, 'Read source 1 · revision 1');
+      expect(
+        transport.calls.lastWhere((c) => c['action'] == 'show')['id'],
+        'synthetic-memory',
+      );
+      expect(find.text('Correct memory'), findsOneWidget);
+      await tap(tester, 'Close');
+      expect(
+        find.textContaining('begin with a small failing test'),
+        findsOneWidget,
+      );
+      await tap(tester, 'Back to notebooks');
+      expect(
+        find.textContaining('begin with a small failing test'),
+        findsNothing,
+      );
+      final open = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, 'Open notebook'),
+      );
+      expect(open.focusNode!.hasFocus, isTrue);
+      expect(
+        transport.calls.where(
+          (c) => ![
+            'status',
+            'list',
+            'notebooks',
+            'notebook',
+            'show',
+          ].contains(c['action']),
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets(
+    'a source revision removes the explanation before a new page arrives',
+    (tester) async {
+      transport.record = syntheticMemory(project: true);
+      final page = syntheticNotebook(transport.record);
+      transport.notebookPages.add(page);
+      await mount(tester);
+      await tap(tester, 'Project knowledge');
+      await tap(tester, 'Open notebook');
+      final pending = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async =>
+          p['action'] == 'notebook' ? pending.future : transport.respond(p);
+      transport.record = syntheticMemory(project: true, revision: 2);
+      await library.refresh();
+      await tester.pump();
+      expect(
+        find.textContaining('begin with a small failing test'),
+        findsNothing,
+      );
+      expect(find.text('Back to notebooks'), findsOneWidget);
+      transport.invalidate();
+      pending.complete(page);
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('begin with a small failing test'),
+        findsNothing,
+      );
+      expect(find.text('Read source 1 · revision 1'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Back restores index position and focus after a delayed changed-index read',
+    (tester) async {
+      transport.record = syntheticMemory(project: true);
+      for (var index = 0; index < 6; index++) {
+        final page = syntheticNotebook(transport.record);
+        (page['summary'] as Map)['id'] = 'notebook:testing_$index';
+        transport.notebookPages.add(page);
+      }
+      await mount(tester);
+      await tap(tester, 'Project knowledge');
+      await tester.ensureVisible(find.text('Open notebook').last);
+      await tester.pumpAndSettle();
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position;
+      final before = position.pixels;
+      expect(before, greaterThan(0));
+      await tap(tester, 'Open notebook');
+      transport.record = syntheticMemory(project: true, revision: 2);
+      await library.refresh();
+      await tester.pumpAndSettle();
+      final hold = Completer<Map<String, dynamic>>();
+      transport.handle = (p) async =>
+          p['action'] == 'notebooks' ? hold.future : transport.respond(p);
+      await tester.ensureVisible(find.text('Back to notebooks'));
+      await tester.tap(find.text('Back to notebooks'));
+      await tester.pump();
+      expect(find.text('Open notebook'), findsNothing);
+      hold.complete(transport.respond({'action': 'notebooks'}));
+      await tester.pumpAndSettle();
+      expect(position.pixels, closeTo(before, 1));
+      final open = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, 'Open notebook').last,
+      );
+      expect(open.focusNode!.hasFocus, isTrue);
+    },
+  );
+
+  testWidgets(
+    'queued and older-service notebooks retain individual memory browsing',
+    (tester) async {
+      transport.record = syntheticMemory(project: true);
+      transport.notebookPages.add(
+        syntheticNotebook(transport.record, ready: false),
+      );
+      await mount(tester);
+      await tap(tester, 'Project knowledge');
+      await tap(tester, 'Open notebook');
+      expect(find.textContaining('will be prepared'), findsOneWidget);
+      expect(find.text('Needs review · This project'), findsOneWidget);
+      await tap(tester, 'Individual memories');
+      await tap(tester, 'Read memory');
+      await tap(tester, 'Close');
+      transport.handle = (p) async =>
+          ['notebooks', 'notebook'].contains(p['action'])
+          ? {'ok': false, 'error': 'UNSUPPORTED'}
+          : transport.respond(p);
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Notebook explanations are not available'),
+        findsOneWidget,
+      );
+      expect(find.text('Read memory'), findsOneWidget);
+    },
+  );
+
+  for (final brightness in Brightness.values) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'notebook ${brightness.name} $scale text keeps conditions and controls readable',
+        (tester) async {
+          transport.record = syntheticMemory(project: true);
+          final page = syntheticNotebook(transport.record);
+          (page['summary'] as Map)['project'] = {
+            'name': 'A deliberately long project name for the desktop editor',
+            'location': '/synthetic/work/a-long-project-folder/desktop-editor',
+          };
+          transport.notebookPages.add(page);
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: Size(scale == 1 ? 850 : 480, 900),
+          );
+          await tap(tester, 'Project knowledge');
+          await capture(tester, 'notebooks-${brightness.name}-${scale}x');
+          await tap(tester, 'Open notebook');
+          expect(tester.takeException(), isNull);
+          await capture(tester, 'notebook-${brightness.name}-${scale}x');
+          await tester.ensureVisible(
+            find.text('Source 1 applies when task: bug_fix.'),
+          );
+          await tester.pumpAndSettle();
+          await capture(
+            tester,
+            'notebook-sources-${brightness.name}-${scale}x',
+          );
+          expect(tester.takeException(), isNull);
+          await tap(tester, 'Read source 1 · revision 1');
+          expect(find.text('Your coding memory'), findsNWidgets(2));
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets(
     'feedback rates the exact recall, preserves the open detail and can be changed or cleared',
     (tester) async {
       transport.recalls.add(syntheticRecall());
       await mount(tester);
       await tap(tester, 'Read memory');
       expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+      expect(find.textContaining('matching conditions'), findsOneWidget);
       expect(transport.calls.where((c) => c['action'] == 'apply'), isEmpty);
       final revision = transport.record['revision'];
       final evidence = transport.record['evidence'];
@@ -146,6 +507,25 @@ void main() {
       expect(library.items, hasLength(1));
     },
   );
+
+  testWidgets('legacy feedback stays visibly separate from recall guidance', (
+    tester,
+  ) async {
+    transport.recalls.add({
+      ...syntheticRecall(value: 'helpful'),
+      'canGuideRecall': false,
+    });
+    await mount(tester);
+    await tap(tester, 'Read memory');
+    expect(
+      find.textContaining('earlier rating does not affect'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('matching conditions'), findsNothing);
+    await tap(tester, 'Clear feedback');
+    expect(find.textContaining('earlier rating does not affect'), findsNothing);
+    expect(find.textContaining('Delivery not confirmed'), findsOneWidget);
+  });
 
   testWidgets(
     'pending feedback disables controls and a changed owner prevents apply',

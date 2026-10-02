@@ -56,8 +56,10 @@ One implementation, `pair/control.ts`, behind a local-only `pair` request. Expos
 Every write, local or remote, runs through the owning machine's `PairOwner` (`pair/owner.ts`), so the
 floor and the journal live where the harness does.
 
-The unshipped coding-memory service requires `HARNESS_CODING_MEMORY=1` in addition to the existing
-experimental and watching controls. `recall_memory { query, conditions? }` is an agent read, bound by
+The experimental coding-memory service is enabled in **Settings → Experimental → Coding memory**,
+in addition to the companion and watching controls. The choice is local to this computer and account,
+defaults off, and takes effect without restarting. `HARNESS_CODING_MEMORY=1` remains a migration default
+only until the owner saves a choice; an explicit off wins. `recall_memory { query, conditions? }` is an agent read, bound by
 the host to the current collection, with a byte-bounded historical-context packet and an unverified
 delivery receipt. Its token is required even at `watch`; it cannot select an owner, project, session,
 or avatar. It cannot inspect the owner's whole library, correct records, change privacy, or forget.
@@ -69,8 +71,11 @@ person. `harness pair memory list|status|show <id> --json` exposes the initial r
 The internal owner API also supplies paginated listing, retained evidence, and correction/forget/
 Learn/Recall previews. Applying a change needs a two-minute, one-use capability bound to owner,
 process, connection, exact command, and the unchanged library snapshot. `confirmed: true` never
-counts. The desktop viewer and its verified transport are still pending; do not enable this prototype
-as the production memory path. Like existing lesson approval, process checks do not defend against
+counts. The desktop viewer uses this transport in **Companions → Memories**. Two preference actions,
+`experiment` and `configure_experiment { enabled, expected }`, remain available while companions are off;
+the latter checks the saved revision. Neither can access memories or start learning with companions off.
+Turning Coding memory off cancels its background work and keeps saved records. Real-model quality and
+the rollout gates remain unverified. Like existing lesson approval, process checks do not defend against
 arbitrary malware running as the same OS user with access to the memory files.
 
 **Autonomy dial** (zoo op `zoo.autonomy`, default `watch`): `watch` (read tools only, facts; lines

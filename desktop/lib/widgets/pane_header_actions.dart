@@ -1,16 +1,17 @@
 import 'package:flutter/widgets.dart';
 
 /// Pane-local model selection and optional standalone terminal context.
-/// The pane keeps its fixed split, zoom and close targets outside this group.
+/// The pane keeps its close target outside this group.
 class PaneHeaderActions extends StatelessWidget {
   const PaneHeaderActions({
     super.key,
     this.details,
     this.trailing,
     this.modelPicker,
+    this.agentPicker,
   });
 
-  final Widget? details, trailing, modelPicker;
+  final Widget? details, trailing, modelPicker, agentPicker;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -30,6 +31,16 @@ class PaneHeaderActions extends StatelessWidget {
               ],
             ),
           ),
+        if (agentPicker != null)
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: constraints.maxWidth.isFinite
+                  ? constraints.maxWidth *
+                        (details != null || trailing != null ? .3 : .5)
+                  : 140,
+            ),
+            child: agentPicker!,
+          ),
         if (modelPicker != null) ...[
           if (details != null || trailing != null) const SizedBox(width: 8),
           // Let a short model use only its natural width, leaving the remaining
@@ -38,7 +49,11 @@ class PaneHeaderActions extends StatelessWidget {
             constraints: BoxConstraints(
               maxWidth: constraints.maxWidth.isFinite
                   ? constraints.maxWidth *
-                        (details != null || trailing != null ? .4 : 1)
+                        (details != null || trailing != null
+                            ? .4
+                            : agentPicker != null
+                            ? .5
+                            : 1)
                   : 232,
             ),
             child: modelPicker!,

@@ -6,7 +6,6 @@ import 'package:harness/core/harness_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/harness_monitor.dart';
 import 'package:harness/state/app_state.dart' show MachineState;
-import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -104,7 +103,7 @@ void main() {
       },
     ];
     await monitor.refresh();
-    expect(monitor.label, '1 live · 2.0 GB · 130% CPU');
+    expect(monitor.label, 'Harnesses 1');
     expect(monitor.sharedLabel, 'Shared Codex servers · 600 MB RAM');
     expect(monitor.detail, contains('included once'));
     ((connection.reply['harnesses'] as Map)['shared'] as List).first.remove(
@@ -112,10 +111,39 @@ void main() {
     );
     await monitor.refresh();
     expect(monitor.sharedLabel, 'Shared Codex servers · — RAM');
-    expect(monitor.label, '1 live · 1.4 GB+ · 130% CPU');
+    expect(monitor.label, 'Harnesses 1');
     app.machineStates['m']!.agents = [];
-    expect(monitor.label, '0 live');
+    expect(monitor.label, 'Harnesses 0');
     expect(monitor.sharedLabel, isNull);
+  });
+
+  test('footer totals round bytes, include shared servers once, and deduplicate storage', () async {
+    final connection = _Connection();
+    final app = createApp(connected: true, connectionForTest: (_) => connection);
+    final monitor = HarnessMonitor(app);
+    addTearDown(monitor.dispose);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'First', terminalAvailable: true),
+      const Agent(id: 'b', name: 'Second', terminalAvailable: true),
+    ];
+    final data = connection.reply['harnesses'] as Map;
+    data['agents'] = [
+      {'agentId': 'a0', 'memoryBytes': 10.4e9, 'cpuPercent': 125.5,
+       'gpuPercent': 24.4, 'workspaceBytes': 1.4e9, 'workspacePath': '/project'},
+      {'agentId': 'b', 'memoryBytes': 0.2e9, 'cpuPercent': 0,
+       'gpuPercent': 0, 'workspaceBytes': 0.4e9, 'workspacePath': '/project/child'},
+    ];
+    data['shared'] = [
+      {'kind': 'codex', 'agentIds': ['a0', 'b'], 'memoryBytes': 0.4e9,
+       'cpuPercent': 4.5, 'gpuPercent': 0},
+    ];
+    await monitor.refresh();
+    expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
+    app.machineStates['m']!.agents.add(
+      const Agent(id: 'unknown', name: 'Unknown', terminalAvailable: true));
+    expect(monitor.metricsLabel(), 'CPU ≥130%   RAM ≥11 GB   GPU ≥24%   SSD ≥1 GB');
+    expect(monitor.resourceDetail, contains('Files remain after stopping'));
   });
 
   testWidgets(
@@ -149,19 +177,19 @@ void main() {
       ); // Inventory appears without starting or opening anything.
       await monitor.refresh();
       expect(connection.calls, [
-        {'type': 'machine_resources', 'harnesses': true},
+        {'type': 'machine_resources', 'harnesses': true, 'storage': true},
       ]);
-      expect(monitor.label, '2 live · 1.4 GB+ · 126%+ CPU');
+      expect(monitor.label, 'Harnesses 2');
       expect(monitor.reading(monitor.live.first)!.processCount, 3);
       expect(app.allPanes, isEmpty);
       connection.reply = {};
       await monitor.refresh();
-      expect(monitor.label, '2 live · — · —% CPU');
+      expect(monitor.label, 'Harnesses 2');
     },
   );
 
   testWidgets(
-    'polls slowly in the footer, faster only while open, and never while hidden',
+    'samples harness resources for the visible footer and stops while the app is hidden',
     (tester) async {
       final connection = _Connection();
       final app = createApp(
@@ -175,23 +203,20 @@ void main() {
       monitor.start();
       await tester.pump();
       expect(connection.calls, hasLength(1));
-      await tester.pump(const Duration(seconds: 14));
-      expect(connection.calls, hasLength(1));
-      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 15));
       expect(connection.calls, hasLength(2));
-      monitor.setExpanded(true);
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 3));
-      expect(connection.calls, hasLength(4));
       app.appLifecycleChanged(AppLifecycleState.hidden);
+      expect(monitor.metricsLabel(), 'CPU —   RAM —   GPU —   SSD —');
       await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(4));
+      expect(connection.calls, hasLength(2));
       app.appLifecycleChanged(AppLifecycleState.resumed);
       await tester.pump();
-      expect(connection.calls, hasLength(5));
+      expect(connection.calls, hasLength(3));
+      await tester.pump(const Duration(seconds: 15));
+      expect(connection.calls, hasLength(4));
       monitor.dispose();
       await tester.pump(const Duration(minutes: 2));
-      expect(connection.calls, hasLength(5));
+      expect(connection.calls, hasLength(4));
       app.dispose();
     },
   );
@@ -219,63 +244,12 @@ void main() {
         ];
       connection.pending!.complete(connection.reply);
       await pending;
-      expect(monitor.label, '1 live · — · —% CPU');
+      expect(monitor.label, 'Harnesses 1');
       app.machineStates['m']!.connectionStatus = ConnectionStatus.disconnected;
       final before = connection.calls.length;
       await monitor.refresh();
       expect(connection.calls.length, before);
-      expect(monitor.label, '0 live');
-    },
-  );
-
-  testWidgets(
-    'compact monitor shows status, RAM, CPU and cached tokens at enlarged text',
-    (tester) async {
-      final connection = _Connection();
-      final app = createApp(
-        connected: true,
-        connectionForTest: (_) => connection,
-      );
-      final monitor = HarnessMonitor(app);
-      addTearDown(monitor.dispose);
-      addTearDown(app.dispose);
-      app.machineStates['m']!.agents = [
-        const Agent(
-          id: 'a0',
-          name: 'Review',
-          engine: 'codex',
-          terminalAvailable: true,
-          tokensUsed: 9200,
-        ),
-      ];
-      await monitor.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: MediaQuery(
-            data: const MediaQueryData(textScaler: TextScaler.linear(1.4)),
-            child: Scaffold(
-              body: SizedBox(
-                width: 500,
-                height: 600,
-                child: HarnessSessionManager(
-                  app: app,
-                  monitor: monitor,
-                  recent: const [],
-                  onClose: () {},
-                  onOpen: (_) async => true,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-      expect(find.text('Harness Monitor'), findsOneWidget);
-      expect(find.textContaining('1.4 GB RAM'), findsOneWidget);
-      expect(find.textContaining('125.5% CPU'), findsOneWidget);
-      expect(find.textContaining('tokens'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
+      expect(monitor.label, 'Harnesses 0');
     },
   );
 }

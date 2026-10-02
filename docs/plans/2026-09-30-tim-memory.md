@@ -1,8 +1,22 @@
 # Coding memory across agent frameworks
 
-Status: implementation in progress, 2026-09-30. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Development-gated host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes demonstrated one hook-delivery path in Claude 2.1.286 and trusted interactive Codex 0.159.0. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
+Status: experimental implementation available for review, 2026-10-01; quality validation remains incomplete. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Opt-in host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes cover next-user-prompt delivery after resume, manual compaction and a model change in Claude 2.1.286 and trusted interactive Codex 0.159.3. The older Codex 0.159.0 prompt certificate remains. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
 
-The executable [six-case extraction diagnostic](../research/2026-09-30-memory-extraction-cases.json) now exercises the actual learner, admission and recall. Its [first native attempt](../research/2026-09-30-memory-extraction-baseline.json) stopped with the selected Claude login unavailable: **zero completed extractions**, no quality score. This is separate from the 64 design scenarios and from the required held-out evaluation.
+Codex **0.159.3 prompt delivery and background extraction have separate status**. Its trusted prompt
+hook can receive existing memory, but its restricted extraction command remains uncertified. Local
+mock checks observed native startup error items for both an old model label with missing metadata and
+a current model with code-mode hosting disabled. The adapter continues to reject those error items;
+it does not switch models or enable execution to make the check pass. See the
+[native lifecycle and extraction evidence](../research/2026-10-01-memory-native-lifecycle.json).
+
+The executable [six-case extraction diagnostic](../research/2026-09-30-memory-extraction-cases.json) now exercises the actual learner, admission and recall. Its [first native attempt](../research/2026-09-30-memory-extraction-baseline.json) stopped with native login unavailable. That result was traced to missing OS login names in the restricted adapter environment and fixed. The [latest attempt](../research/2026-10-01-memory-native-quality-blocked.json) then stopped at the selected Claude account’s weekly usage limit: **zero completed extractions**, no quality score. This is separate from the 64 design scenarios and from the required held-out evaluation.
+
+The review build now exposes the local opt-in in **Settings → Experimental → Coding memory**.
+It defaults off per account on this computer; the existing environment flag supplies only an unsaved
+default. The companion and watching gates still apply. A saved off stops coding-memory capture,
+learning and recall without deleting records. The [later native diagnostic](../research/2026-10-01-memory-native-quality-blocked.json)
+corrected the login-environment defect but stopped on the selected provider's weekly usage limit,
+again with zero completed extractions. Neither the setting nor the UI review satisfies the model-quality gates.
 
 Companion experience: a coding agent understands how the developer works, the project's engineering decisions, and the state of the current task. Tim can explain what he remembers, where it came from, and when it may no longer apply. Switching Claude Code to Codex, or Tim to GNU, should preserve that knowledge.
 
@@ -67,6 +81,20 @@ Persist an ingestion cursor and normalized event before acknowledging capture. D
 
 Build episodes around a completed user request and its work, not arbitrary groups of eight truncated turns. An episode records intent, relevant correction/decision, attempted actions, verification, and unresolved questions. Retrieve only the evidence spans needed for a candidate. Long episodes can be chunked, but each extraction knows the missing boundaries and cannot claim an unseen outcome.
 
+The capture implementation now marks intact segments of long turns as **bounded context** instead
+of source-incomplete. Oversized or unreadable records remain in separate incomplete episodes.
+Extraction from bounded context is limited to self-contained explicit user preferences, constraints,
+decisions and learning goals; the publication transaction rejects inferred knowledge, outcome claims
+and non-user evidence from those segments. Context survives restart and is reset at the next native
+turn boundary. This is a structural limit, not proof that the model's paraphrase is faithful.
+
+The queue context requires store schema 2. Opening a schema-1 store adds the metadata and preserves
+records, evidence, controls and privacy settings in one transaction. Existing memory records keep
+their version-1 format. Older runtimes refuse the upgraded store rather than misreading bounded
+segments as complete work; rolling back the app therefore makes coding memory unavailable until a
+compatible runtime is used. The wider migration/rollback rollout gate remains open. No production
+store was upgraded during the private replay.
+
 When present, preserve the considered alternatives, explicit rationale, expected result, observed result, and reasons to revisit a choice. Do not invent missing alternatives or request private model reasoning traces. User-facing explanations, reviewable artifacts, and observable work are sufficient sources. Capture a benchmark's conditions and a test's coverage rather than promoting a success message into a universal technical conclusion.
 
 Use existing authorized transcript storage as the primary archive. The memory database holds locators, small redacted evidence spans, and hashes rather than a second complete history. Apply redaction before sending evidence to inference, before persistence, and before export. Retention gaps are explicit; a missing source cannot silently become confirmed evidence.
@@ -121,9 +149,9 @@ Separate `selected`, `delivered`, `read`, `agent_reported_applied`, `outcome_obs
 
 An agent's report of use can link to a diff/test result, but it is not independent proof of causation. Evaluate benefit using controlled tasks and explicit user feedback. Corrections reduce confidence or supersede a claim. Do not reward memory generation or encourage agents to announce every recollection.
 
-Implementation checkpoint: the owner can inspect recent recall in a memory's detail view and mark one memory revision helpful or unhelpful, change the rating, or clear it. The rating is bound to an actual retained receipt and receiving engine/session/project, explicit task/branch scope and known conditions. Repeated recall across transport routes in that same context shares one rating. It is owner-reported usefulness, not a new source supporting the claim, proof of model-context delivery, or a causal task-outcome measurement. Retrieval ranking does not yet reward these labels automatically.
+Implementation checkpoint: the owner can inspect recent recall in a memory's detail view and mark one memory revision helpful or unhelpful, change the rating, or clear it. The rating is bound to an actual retained receipt and receiving engine/session/project, explicit task/branch scope and known conditions. Repeated recall across transport routes in that same context shares one rating. It is owner-reported usefulness, not a new source supporting the claim, proof of model-context delivery, or a causal task-outcome measurement. For a matching receiving project, explicit task/branch scope and exact known conditions, these labels now make a small, reversible adjustment to lexical ordering across Claude and Codex. The adjustment applies only to already eligible candidates at the rated revision; it cannot admit a hidden, expired, unrelated or overridden memory. Sparse ratings are shrunk toward neutral and their maximum influence is below 12.5% of the lexical score. This is an experimental policy, not a calibrated confidence or proven task improvement.
 
-The owner history uses one-way session/context keys without copying native session IDs or prompt text into receipt metadata. It checks both source visibility and the receiving session/project before limiting results, including privacy changes written by an earlier daemon. Making a receiving session private removes its owner-visible activity and feedback; reinclusion starts new activity. Corrected memory revisions do not inherit old ratings, and forgotten memories lose their feedback through deletion dependencies. Feedback expires with its receipt under the existing thirty-day/5,000-receipt retention bound. Legacy receipts without captured receiver authority remain unavailable for owner feedback rather than having their context guessed.
+The owner history uses one-way session/context keys without copying native session IDs or prompt text into receipt metadata. It checks both source visibility and the receiving session/project before limiting results, including privacy changes written by an earlier daemon. Making a receiving session private or excluding its project removes its owner-visible activity and feedback; reinclusion starts new activity. Repeating an exclusion or reincluding a policy changed by an older writer also removes the old activity before returning. Corrected memory revisions do not inherit old ratings, and forgotten memories lose their feedback through deletion dependencies. Feedback expires with its receipt under the existing thirty-day/5,000-receipt retention bound. Legacy receipts without captured receiver authority remain unavailable for owner feedback rather than having their context guessed. Retained ratings from before the separate relevance key was captured stay inspectable but do not influence ranking. Missing or ambiguous multi-project relevance also stays neutral.
 
 ### Continuous learning and improvement
 
@@ -135,7 +163,7 @@ Separate three feedback loops:
 2. **Usefulness:** attach selection, verified delivery, reported use, outcomes, and direct user feedback to particular memory revisions and task contexts. An episode-wide success must not increase every recalled memory's standing. Irrelevant guidance can be correct yet unhelpful. A failed task can still contain a valid discovery. Keep truth support, contextual usefulness, and recency separate.
 3. **System quality:** collect failure cases, propose a versioned extraction/retrieval change, evaluate it against a frozen baseline and held-out cases, then promote or roll back the configuration. The candidate may not rewrite its acceptance tests or promote itself using its own success narrative. Improvements must preserve scope isolation, correction, forgetting, no-recall behavior, budget, and task correctness before optimizing utility.
 
-The initial reinforcement implementation keeps independent source/session counts as provenance, not a model-generated confidence percentage or an automatic ranking reward. Context-specific usefulness ranking should follow real delivery receipts and labeled outcomes. Shared skills or repository instructions remain explicit engineering changes within the existing authorization model; background learning is not a permanent permission to edit every workspace.
+The initial reinforcement implementation keeps independent source/session counts as provenance, not a model-generated confidence percentage or an automatic ranking reward. Context-specific ranking uses explicit owner ratings attached to actual retained preparation receipts; native model-context delivery remains unverified unless separately established. Repeated recall alone creates no utility reward. Controlled task outcomes are still required to evaluate the provisional ranking policy. Shared skills or repository instructions remain explicit engineering changes within the existing authorization model; background learning is not a permanent permission to edit every workspace.
 
 Research supports testing these distinctions, without proving this implementation. ACE studies incrementally curated context rather than repeated wholesale rewriting; our application is to retain granular claims and regenerate dependent views. [ACE, v3](https://arxiv.org/abs/2510.04618v3). RoMeRL identifies misleading credit assigned to irrelevant memories retrieved alongside useful ones; we therefore require feedback attribution rather than rewarding an entire packet. [RoMeRL, v3](https://arxiv.org/abs/2608.02508v3). EDV studies separating experience generation, distillation, and verification; our verification contract still requires native evidence or user confirmation, because agreement among models alone is not proof. [EDV, v1](https://arxiv.org/abs/2606.24428v1).
 
@@ -253,8 +281,8 @@ Scope and identity are bound by Harness to the authenticated local session; tool
 
 | Adapter | Capture | Automatic recall | Initial support commitment |
 | --- | --- | --- | --- |
-| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | UserPromptSubmit task recall is development-gated. Resume/compact refresh and optional tool-boundary refresh still need validation. | A synthetic 2.1.286 print-mode probe observed hook context in the outgoing request. It does not certify every TUI/lifecycle path. |
-| Codex | Existing normalized reader; supported hook events identify prompt/turn boundaries. | UserPromptSubmit recall is development-gated to tested 0.159.0. Native folder and hook trust remain required. | After explicit user approval, a trusted interactive probe observed developer-role hook context in the outgoing request. The earlier untrusted exec probe emitted none; resume/compaction and other requests remain unverified. |
+| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | Opt-in UserPromptSubmit task recall is certified for 2.1.286. | Synthetic print-mode probes observed fresh context on the next user prompt after resume, manual compaction and a model change. Automatic mid-turn compaction, profile changes and other TUI paths remain unverified. |
+| Codex | Existing normalized reader; supported hook events identify prompt/turn boundaries. | Opt-in UserPromptSubmit recall supports tested 0.159.0 and 0.159.3. Native folder and hook trust remain required. | Trusted interactive 0.159.3 probes observed developer-role context on the next user prompt after resume, manual compaction and a model change. Additional unidentified requests omitted the marker. Automatic mid-turn compaction and profile changes remain unverified; extraction is still certified only for 0.159.0. |
 | Other Harness engines | Existing readers where available. | CLI/MCP and the existing runtime context bootstrap; native hooks added individually. | Search/manual recall only until automatic delivery is demonstrated. No blanket compatibility claim. |
 
 These hook mechanisms are supported by the [Claude documentation](https://code.claude.com/docs/en/hooks) and [Codex documentation](https://learn.chatgpt.com/docs/hooks). Installing a hook does not establish that it is trusted or firing. Setup merges only Harness-owned entries, preserves other hooks, and exposes required native trust steps. Never bypass the agent's trust controls.
@@ -289,7 +317,27 @@ Keep the actual DSH terminal on the right. The left viewer's Memories area has t
 - **Helping now:** memories selected for the active task, why their conditions match, relevant conflicts/unknowns, and precise delivery status. “Provided to Codex” is distinct from “You confirmed this helped.” Accepted examples open at their reviewed revision with the approved attributes identified.
 - **Learning:** quiet status such as caught up, reviewing completed work, waiting for the selected model, or missing source history. Rejected generic candidates are diagnostic detail, not an inbox demanding attention.
 
-Implementation checkpoint: the viewer currently offers How you work, Project knowledge and Learning, with retained evidence, owner corrections, project scope narrowing, dependent-forget previews and separate Learn/Recall preferences. The project picker and detail view show persisted names and folder paths. Memory details include recent recall and explicit helpful/unhelpful feedback; ratings keep the detail open, support clearing, and offer a fresh read after an uncertain reply without automatically retrying the write. The agent terminal remains unchanged. Work-in-progress grouping, a collection-wide Helping now view, task/session navigation, automatic usefulness-based ranking and the maintained notebook view remain planned. The legacy approved-lesson list remains available; the 24-hour test action is hidden when the new memory service is available.
+Implementation checkpoint: the viewer offers How you work, Project knowledge, Helping now and Learning, with retained evidence, owner corrections, project scope narrowing, dependent-forget previews and separate Learn/Recall preferences. The project picker and detail view show persisted names and folder paths. Memory details include recent recall and explicit helpful/unhelpful feedback; ratings keep the detail open, support clearing, and offer a fresh read after an uncertain reply without automatically retrying the write. The agent terminal remains unchanged. Project knowledge includes a maintained notebook index and topic pages with source links, conditions, unresolved records and correction/forget controls. Individual memories remain available while notebook synthesis is queued or paused. Feedback-based ranking is an experimental bounded adjustment. Work-in-progress grouping and navigation from a memory to the working agent's task/session remain planned. The legacy approved-lesson list remains available; the 24-hour test action is hidden when the new memory service is available.
+
+Helping now lets the owner select an open coding session and inspect its last recorded recall,
+including an empty result. It shows the known session name, project, timestamp, current selected
+memory versions, applicability and exceptions, delivery uncertainty, and exact-version feedback.
+Read memory opens the existing evidence/correction/forget editor. The ordinary Memories refresh
+updates activity too; changing sessions never launches an agent or sends terminal input.
+
+An additive, content-free latest-attempt row per native session prevents an old positive recall
+from appearing current after a newer empty result. It retains a one-way session key, engine,
+receiving project, time, outcome, selected count and optional receipt pointer, bounded to 5,000
+sessions and 30 days. It keeps no prompt, claim, conditions or native session ID. Source/receiver
+privacy, current revisions and validity are checked again on reads. Receiver exclusion removes
+the row; reinclusion does not restore it. The owner endpoint binds at most 128 receivers from the
+host roster and rechecks immutable session identities after the worker reply. Exited sessions
+retained briefly for final transcript capture do not appear as open sessions.
+
+This is the last recorded store preparation, not an assertion about the latest user turn, every
+failed host request, actual model-context delivery or use. The time and uncertainty stay visible.
+Older positive-only histories are not backfilled as current activity. These inspection controls
+do not satisfy the real-model quality and coding-task benefit gates below.
 
 Tim can answer “Why did you remember that?” using the same evidence API the viewer uses. He must not invent shared experiences. A corrected memory updates its story rather than adding another repetitive lesson. A small optional recent-learning digest replaces repeated interruption, and no memory-count reward is attached to growth.
 
@@ -303,9 +351,44 @@ Include matched style cases: same task, code, requirements, model, and budget, w
 
 The modern practitioner cases additionally cover stale canonical guidance, host discovery, task-dependent interaction, working-example compatibility, failed experiment scores, changed evaluators/budgets, branch provenance, operational evidence, and notebook lineage/invalidation. The design fixture set now contains 64 synthetic scenarios; this count does not satisfy the separate held-out-history requirement or constitute a passing behavioral benchmark.
 
-The first executable development diagnostic contains six frozen synthetic episodes: a conditional debugging preference, a scoped database decision, routine assistant activity, a quoted third-party opinion, an unstated rationale, and a repository fact without a verified project binding. Run `node --import tsx scripts/memory-extraction-eval.ts` from `cli` to inspect the fixture hash without invoking a model. Adding `--run-native --output <new-report.json>` uses the current companion's supported native model/account, at most six calls and no retries or fallback, with a disposable store. The runner checks selection before each call, after the native version probe and after the result, preserves existing reports, records source/prompt hashes and native diagnostic counters, and leaves semantic review explicitly pending. Incomplete extraction makes recall and quality checks inconclusive; it is never scored as successful abstention. Native calls can consume the selected provider's allowance. A signed-in selected model is required to proceed; the first attempt found the configured Claude account signed out. No held-out user histories or completed model responses have been evaluated yet.
+The first executable development diagnostic contains six frozen synthetic episodes: a conditional debugging preference, a scoped database decision, routine assistant activity, a quoted third-party opinion, an unstated rationale, and a repository fact without a verified project binding. Run `node --import tsx scripts/memory-extraction-eval.ts` from `cli` to inspect the fixture hash without invoking a model. Adding `--run-native --output <new-report.json>` uses the current companion's supported native model/account, at most six calls and no retries or fallback, with a disposable store. The runner checks selection before each call, after the native version probe and after the result, preserves existing reports, records source/prompt hashes and native diagnostic counters, and leaves semantic review explicitly pending. Incomplete extraction makes recall and quality checks inconclusive; it is never scored as successful abstention. Native calls can consume the selected provider's allowance. A signed-in selected model with remaining allowance is required to proceed. The first apparent sign-out was traced to the adapter environment and fixed; the subsequent native attempt was rejected by the selected account’s weekly quota. No held-out user histories or completed model responses have been evaluated yet.
 
 Add `--batch` to select the separate [frozen multi-episode diagnostic](../research/2026-09-30-memory-batch-extraction-cases.json). Its two cases combine useful personal preferences with quoted/unbound material, and test whether an acknowledgement in a separate conversation is falsely attached to an assistant's experiment. Each captured episode retains its own session and evidence IDs. The grader requires every episode in the case to reach a successful terminal review state before scoring record counts, recall or abstention. If input limits leave part of the batch queued, quality checks stay inconclusive and semantic review is unavailable. These cases have not yet been executed against a real model; synthetic provider-output checks establish evaluation mechanics only.
+
+The diagnostic's original recall boolean measures **presence only**. It cannot establish that the
+right memory was returned. New reports also retain the exact recall text, byte budget and token
+estimate for review. The offline review command binds its packet and labels to the exact frozen
+suite and native report bytes, with scorer/runner hashes on its output:
+
+```bash
+cd cli
+node --import tsx scripts/memory-quality-review.ts --suite <frozen-suite.json> --report <native-report.json> --output <new-packet.json>
+node --import tsx scripts/memory-quality-review.ts --suite <frozen-suite.json> --report <native-report.json> --review <labels.json> --output <new-scores.json>
+```
+
+Make a separate copy of the packet's `review` object for labels. Attribute the reviewer as human or
+agent; judge each record's support, specificity and potential usefulness against its source and
+criteria. For each probe, identify relevant and required record IDs, any missing required memory,
+and whether the captured context faithfully preserves the claim and conditions. A relevant-looking
+but unsupported memory, an irrelevant extra, an unmet requirement or unfaithful context fails the
+reviewed recall check. Null labels remain pending. Older reports without captured context receive
+no recall-quality rate. Model/arm labels are omitted from packets, but content can reveal origin;
+reviewer identity and independence are declarations, not authenticated facts. No model is called,
+no production memory is changed, and existing output files are never overwritten.
+
+The [saved blocked-run review](../research/2026-10-01-memory-quality-review-blocked.json) has zero
+completed cases out of six and no quality percentages. Empty, unfinished and partially reviewed
+denominators do not count as success. Semantic review remains separate from actual native delivery,
+notebook faithfulness and paired coding-task outcomes; this tool does not satisfy those release gates.
+
+Recent evidence reinforces this distinction. A developer-history study reports limited and
+inconsistent gains from personalized skills compared with its controls; its replay uses a simulated
+developer and model-based grading. [Huang et al., August 2026](https://arxiv.org/abs/2608.10319).
+VibeMemBench instead grades executable repository outcomes and reports that most tested memory
+configurations did not improve on matched memory-off runs. [Fan et al., September 2026](https://arxiv.org/abs/2609.23570).
+Our inference is to include a generic-guidance control on the representative comparison subset and
+use direct injection of independently reviewed relevant knowledge to diagnose where extraction,
+retrieval or application fails. These controls are proposed comparisons, not results for Harness.
 
 Run both directions, Claude → Codex and Codex → Claude, with:
 

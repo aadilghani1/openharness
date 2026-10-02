@@ -11,9 +11,12 @@ import { admission, assertSafe, canonical, digest, proposalFingerprint } from '.
 import type { ProjectLocator } from './project.js'
 import type { Database } from './database.js'
 import { MemoryQueue, PENDING_RETENTION_MS, QUEUE_SCHEMA, TERMINAL_JOB_STATES } from './queue.js'
-import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt } from './receipts.js'
+import { MemoryReceipts, RECEIPT_SCHEMA, type MemoryDeliveryBinding, type PreparedRecall, type RecallReceipt, type ActivityReceiver } from './receipts.js'
+import { libraryActivityQuerySchema, type LibraryActivity, type LibraryActivityQuery } from './library.js'
+import { MemoryNotebook, NOTEBOOK_SCHEMA, type NotebookInput, type NotebookLease, type NotebookProposal } from './notebook.js'
+import type { InferenceTarget } from './queue.js'
 import { visibleEvidenceSql } from './visibility.js'
-import { correctionSchema, libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, summarize, type LibraryProjectQuery, type LibraryProject, type LibraryProjects, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
+import { correctionSchema, libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, notebookQuerySchema, summarize, type NotebookQuery, type NotebookIndex, type NotebookSummary, type NotebookDetail, type LibraryProjectQuery, type LibraryProject, type LibraryProjects, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
   type MemoryAccess, type MemoryDraft, type MemoryRecord, type MemoryScope, type MemoryState, type MemorySupport,
@@ -27,7 +30,10 @@ interface Controls { learn: boolean; recall: boolean; generation: number; captur
 export interface MemoryPreferences { learn: boolean; recall: boolean }
 interface Compaction { compactedSources: number; deletedSources: number; removedBytes: number }
 
-const SCHEMA = 1
+// v2 distinguishes intact bounded context from completed turns. A v1 reader must
+// refuse this store rather than review queued segments as complete conversations.
+// Memory records retain their v1 format; the upgrade only adds queue metadata.
+const SCHEMA = 2
 const EMPTY = (status: RecallPacket['status'] = 'ok'): RecallPacket => ({ status, items: [], text: '', estimatedTokens: 0 })
 const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'not', 'to', 'of', 'for', 'in', 'on', 'is', 'it', 'with', 'this', 'that', 'please', 'can', 'you', 'we', 'our', 'my'])
 
@@ -36,6 +42,7 @@ export class CodingMemoryStore {
   private transactionDepth = 0
   readonly learning: MemoryQueue
   private readonly receipts: MemoryReceipts
+  private readonly notebook: MemoryNotebook
   private constructor(private readonly db: Database, readonly profileId: string, private readonly now: () => number) {
     this.receipts = new MemoryReceipts({ db, profileId, now, transaction: run => this.transaction(run),
       recall: (request, access) => this.recall(request, access), read: (id, access) => this.read(id, access),
@@ -53,6 +60,10 @@ export class CodingMemoryStore {
       },
       propose: (draft, access, generation) => this.propose(draft, access, generation),
       compact: sourceIds => { this.compactSources(sourceIds) },
+    })
+    this.notebook = new MemoryNotebook({ db, profileId, now, transaction: operation => this.transaction(operation),
+      controls: () => this.controls(), inputs: (scope, facet) => this.notebookInputs(scope, facet),
+      putTopic: (draft, access, revision, generation) => this.putTopic(draft, access, revision, generation),
     })
   }
 
@@ -73,7 +84,7 @@ export class CodingMemoryStore {
         const owner = db.prepare("SELECT value FROM memory_meta WHERE key = 'profile'").get()?.value
         const version = db.prepare("SELECT value FROM memory_meta WHERE key = 'schema'").get()?.value
         if (owner !== options.profileId) throw new MemoryError('profile_mismatch')
-        if (version !== String(SCHEMA)) throw new MemoryError('schema_unsupported')
+        if (version !== '1' && version !== String(SCHEMA)) throw new MemoryError('schema_unsupported')
       }
       // No long-lived WAL containing deleted text. Both ordinary pages and FTS segments are scrubbed.
       db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;')
@@ -157,9 +168,10 @@ export class CodingMemoryStore {
           CREATE TABLE IF NOT EXISTS tombstones (id TEXT PRIMARY KEY, last_revision INTEGER NOT NULL, at INTEGER NOT NULL);
           ${QUEUE_SCHEMA}
           ${RECEIPT_SCHEMA}
+          ${NOTEBOOK_SCHEMA}
         `)
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('profile', ?)").run(options.profileId)
-        db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('schema', ?)").run(String(SCHEMA))
+        db!.prepare("INSERT INTO memory_meta(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(SCHEMA))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key, value) VALUES('controls', ?)").run(JSON.stringify({ learn: false, recall: false, generation: 0, captureEpoch: 0, learnSince: null }))
         db!.prepare("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('preferences',?)").run(JSON.stringify({ learn: true, recall: true }))
         db!.exec("INSERT OR IGNORE INTO memory_meta(key,value) VALUES('knowledge_epoch','0')")
@@ -254,11 +266,16 @@ export class CodingMemoryStore {
   setProjectIncluded(projectId: string, included: boolean): void {
     if (typeof included !== 'boolean' || !this.db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new MemoryError('unknown_project')
     this.transaction(() => {
-      if (this.included(projectId) === included) return
+      const previous = this.included(projectId)
+      // An older writer may have changed privacy without removing receiver activity.
+      // Reinclusion must not revive ratings from the excluded period.
+      if (!previous || !included) this.receipts.withholdProject(projectId)
+      if (previous === included) return
       this.db.prepare('UPDATE projects SET included = ? WHERE id = ?').run(included ? 1 : 0, projectId)
       this.db.prepare(`INSERT INTO memory_project_policy(project_id,epoch,live_from) VALUES(?,1,?)
         ON CONFLICT(project_id) DO UPDATE SET epoch=epoch+1,live_from=excluded.live_from`).run(projectId, this.now())
       this.db.exec('UPDATE topics SET data = NULL')
+      this.notebook.invalidate()
       const controls = this.controls()
       this.db.prepare("UPDATE memory_meta SET value = ? WHERE key = 'controls'").run(JSON.stringify({ ...controls, generation: controls.generation + 1 }))
       this.db.prepare(`UPDATE memory_jobs SET state='cancelled', lease_token=NULL, lease_until=0, source_digest=NULL,
@@ -289,6 +306,7 @@ export class CodingMemoryStore {
     if (typeof included !== 'boolean') throw new MemoryError('invalid_input')
     this.transaction(() => {
       const previous = this.sessionPolicy(engine, sessionId)
+      if (!previous.included || !included) this.receipts.withholdSession(engine, sessionId)
       if (previous.included === included) return
       this.db.prepare(`INSERT INTO memory_session_policy(engine,session_id,included,epoch,live_from) VALUES(?,?,?,?,?)
         ON CONFLICT(engine,session_id) DO UPDATE SET included=excluded.included, epoch=excluded.epoch, live_from=excluded.live_from`)
@@ -299,12 +317,12 @@ export class CodingMemoryStore {
         last_error='session_privacy_changed', updated_at=? WHERE stream_id IN
         (SELECT id FROM memory_streams WHERE engine=? AND session_id=?) AND state NOT IN ${TERMINAL_JOB_STATES}`)
         .run(this.now(), engine, sessionId)
-      if (!included) this.receipts.withholdSession(engine, sessionId)
       // Derived input can belong to a different stream while retaining this session's source roots.
       if (!included) this.cancelHiddenSources()
       else this.reconcileVisibleConflicts()
       // A derived page may combine several sessions. Rebuild it only from currently visible parents.
       this.db.exec('UPDATE topics SET data=NULL')
+      this.notebook.invalidate()
     })
   }
 
@@ -382,6 +400,7 @@ export class CodingMemoryStore {
       const result = this.compactSources(rows.map(row => String(row.source_id)))
       this.learning.pruneMetadata()
       this.receipts.prune()
+      this.notebook.pruneEmpty()
       return { ...result, expiredJobs }
     })
   }
@@ -548,6 +567,10 @@ export class CodingMemoryStore {
     if (query.scope === 'personal') where.push('m.project_id IS NULL')
     if (query.scope === 'project') where.push('m.project_id IS NOT NULL')
     if (query.projectId) { where.push('m.project_id=?'); params.push(query.projectId) }
+    if (query.topicId) {
+      where.push(`EXISTS (SELECT 1 FROM memory_notebook_jobs j WHERE j.id=? AND j.scope_key=m.scope_key AND j.facet=json_extract(m.data,'$.facet'))`)
+      params.push(query.topicId)
+    }
     if (query.state) { where.push('m.state=?'); params.push(query.state) }
     const rows = this.db.prepare(`SELECT m.rowid,m.data FROM memories m WHERE ${where.join(' AND ')} ORDER BY m.rowid DESC LIMIT ?`)
       .all(...params, limit + 1)
@@ -586,6 +609,31 @@ export class CodingMemoryStore {
       ORDER BY p.rowid DESC LIMIT ?`).all(query.before ?? Number.MAX_SAFE_INTEGER, query.search ?? '', limit + 1)
     return { items: rows.slice(0, limit).map(row => this.projectLabel(String(row.id))),
       nextBefore: rows.length > limit ? Number(rows[limit - 1].rowid) : null }
+  }
+
+  /** Host-supplied open sessions; only the verified owner may inspect their latest selections. */
+  libraryActivity(owner: string, receivers: ActivityReceiver[], input: LibraryActivityQuery = {}): LibraryActivity {
+    this.requireOwner(owner)
+    const query = parse(libraryActivityQuerySchema, input)
+    return this.transaction(() => {
+      const sessions = this.receipts.activity(receivers).map(({ projectId, ...row }) => ({ ...row,
+        project: projectId ? this.projectLabel(projectId) : null }))
+      const selectedAgentId = query.agentId ?? sessions[0]?.agentId ?? null
+      const selection = sessions.find(row => row.agentId === selectedAgentId)
+      const items: LibraryActivity['items'] = []
+      for (const item of selection?.receiptId ? this.receipts.activityItems(selection.receiptId) : []) {
+        const access = this.ownerRecordAccess(item.id)
+        const record = access && this.read(item.id, access)
+        if (!record || record.revision !== item.revision || record.state !== 'active' || !this.current(record)) continue
+        const recall = this.receipts.forMemory(item.id, item.revision, selection!.receiptId!)[0]
+        if (!recall) continue
+        const { projectId, ...use } = recall
+        items.push({ record: { ...summarize(record), applicability: record.applicability,
+          rationale: record.rationale, futureAction: record.futureAction, exceptions: record.exceptions },
+          recall: { ...use, canFeedback: true, project: projectId ? this.projectLabel(projectId) : null } })
+      }
+      return { sessions, selectedAgentId, items, version: this.libraryVersion() }
+    })
   }
 
   private projectLabel(id: string): LibraryProject {
@@ -726,7 +774,7 @@ export class CodingMemoryStore {
     // Drive the join from FTS once. A scope-index-first plan reruns MATCH for every project row
     // (measured at ~160 ms for 10k rows); the fixed join order still filters access before LIMIT.
     const rows = this.db.prepare(`WITH context(actual) AS (VALUES (?))
-      SELECT m.data FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
+      SELECT m.id,m.revision,m.data,bm25(memory_fts, 4, 1, 3) AS lexical_rank FROM memory_fts CROSS JOIN memories m ON m.rowid = memory_fts.rowid
       WHERE memory_fts MATCH ? AND m.state = 'active' AND ${filter.sql}
       AND ${visibleEvidenceSql()}
       AND ${applicabilitySql("json_extract(m.data, '$.applicability')")}
@@ -750,6 +798,11 @@ export class CodingMemoryStore {
       ${excluded.length ? `AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''}
       ORDER BY bm25(memory_fts, 4, 1, 3), m.rowid DESC LIMIT 120`)
       .all(JSON.stringify(actual), terms.map(term => `"${term}"`).join(' OR '), ...filter.params, now, now, ...specific.params, now, now, ...excluded)
+    const utility = this.receipts.usefulness(rows.map(row => ({ id: String(row.id), revision: Number(row.revision) })), access, actual)
+    if (utility.size) {
+      const score = (row: Record<string, unknown>) => Number(row.lexical_rank) * (1 + (utility.get(String(row.id)) ?? 0))
+      rows.sort((left, right) => score(left) - score(right))
+    }
     const packet = EMPTY()
     const maxBytes = bounded(request.maxBytes, 3_000, 0, 16_000)
     const maxItems = bounded(request.maxItems, 6, 0, 6)
@@ -793,6 +846,98 @@ export class CodingMemoryStore {
     return this.receipts.list(binding, access, limit)
   }
 
+  notebookPending(): ReturnType<MemoryNotebook['pending']> { return this.notebook.pending() }
+  notebookClaim(target: InferenceTarget): ReturnType<MemoryNotebook['claim']> { return this.notebook.claim(target) }
+  notebookFinish(lease: NotebookLease, proposal: NotebookProposal, target: InferenceTarget): ReturnType<MemoryNotebook['finish']> {
+    return this.notebook.finish(lease, proposal, target)
+  }
+  notebookDefer(lease: NotebookLease, reason: Parameters<MemoryNotebook['defer']>[1]): void { this.notebook.defer(lease, reason) }
+
+  /** Owner-only index. Apply source and project visibility before pagination, including labels. */
+  libraryNotebooks(owner: string, input: NotebookQuery = {}): NotebookIndex {
+    this.requireOwner(owner)
+    const query = parse(notebookQuerySchema, input), version = this.libraryVersion()
+    const { limit = 12, cursor, ...filters } = query
+    const filter = digest(['notebooks', filters])
+    let before = Number.MAX_SAFE_INTEGER
+    if (cursor) {
+      try {
+        const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Record<string, unknown>
+        if (value.owner !== owner || value.filter !== filter || !Number.isSafeInteger(value.before) || Number(value.before) <= 0) throw new MemoryError('invalid_cursor')
+        if (canonical(value.version) !== canonical(version)) throw new MemoryError('page_changed')
+        before = Number(value.before)
+      } catch (error) { throw error instanceof MemoryError ? error : new MemoryError('invalid_cursor') }
+    }
+    const rows = this.db.prepare(`SELECT j.rowid,j.* FROM memory_notebook_jobs j
+      JOIN projects p ON p.id=j.project_id AND p.included=1 WHERE j.rowid<?
+      ${query.projectId ? 'AND j.project_id=?' : ''}
+      AND EXISTS (SELECT 1 FROM memories m WHERE m.scope_key=j.scope_key AND json_extract(m.data,'$.facet')=j.facet
+        AND m.state IN ('active','tentative','needs_verification') AND ${visibleEvidenceSql()})
+      ORDER BY j.rowid DESC LIMIT ?`).all(before, ...(query.projectId ? [query.projectId] : []), limit + 1)
+    const page = rows.slice(0, limit)
+    return { items: page.map(row => this.notebookSummary(row)), version,
+      nextCursor: rows.length > limit ? Buffer.from(JSON.stringify({ owner, filter, version, before: Number(page.at(-1)!.rowid) })).toString('base64url') : null }
+  }
+
+  libraryNotebook(owner: string, id: string): NotebookDetail | null {
+    this.requireOwner(owner)
+    const row = this.db.prepare(`SELECT j.* FROM memory_notebook_jobs j JOIN projects p ON p.id=j.project_id AND p.included=1
+      WHERE j.id=? AND EXISTS (SELECT 1 FROM memories m WHERE m.scope_key=j.scope_key AND json_extract(m.data,'$.facet')=j.facet
+        AND m.state IN ('active','tentative','needs_verification') AND ${visibleEvidenceSql()})`).get(id)
+    if (!row) return null
+    const summary = this.notebookSummary(row), access = this.notebookAccess(summary.scope)
+    const explanation = this.topic(id, access)
+    const ids = new Set(explanation?.statements.flatMap(statement => statement.supports.map(support => support.memoryId)) ?? [])
+    return { summary, explanation, supporting: [...ids].map(id => summarize(this.read(id, access)!)),
+      memories: this.libraryPage(owner, { topicId: id, limit: 20 }) }
+  }
+
+  private notebookAccess(scope: MemoryScope): MemoryAccess {
+    return { profileId: this.profileId, projectIds: scope.projectId ? [scope.projectId] : [], includeProfile: false,
+      ...(scope.taskId ? { taskId: scope.taskId } : {}), ...(scope.branchId ? { branchId: scope.branchId } : {}) }
+  }
+
+  private notebookSummary(row: Record<string, unknown>): NotebookSummary {
+    const scope = JSON.parse(String(row.scope_key)) as MemoryScope
+    const input = this.notebookInputs(scope, String(row.facet))
+    const page = this.topic(String(row.id), this.notebookAccess(scope))
+    return { id: String(row.id), title: String(row.facet).replace(/[_.:-]+/g, ' ').replace(/^./, letter => letter.toUpperCase()).slice(0, 120),
+      scope, project: this.projectLabel(scope.projectId!),
+      state: row.state === 'ready' && !page ? 'queued' : row.state as NotebookSummary['state'], updatedAt: page?.updatedAt ?? null,
+      activeRecords: input.total, unresolvedRecords: input.unresolved,
+      supportingRecords: new Set(page?.statements.flatMap(statement => statement.supports.map(support => support.memoryId)) ?? []).size }
+  }
+
+  private notebookInputs(scope: MemoryScope, facet: string): NotebookInput {
+    const empty: NotebookInput = { records: [], total: 0, unresolved: 0, nextChangeAt: null }
+    if (scope.profileId !== this.profileId || !scope.projectId || !this.included(scope.projectId)) return empty
+    const now = this.now(), params = [canonical(scope), facet]
+    const common = `m.scope_key=? AND json_extract(m.data,'$.facet')=? AND ${visibleEvidenceSql()}`
+    const current = `(json_extract(m.data,'$.validity.validFrom') IS NULL OR json_extract(m.data,'$.validity.validFrom')<=?)
+      AND (json_extract(m.data,'$.validity.validUntil') IS NULL OR json_extract(m.data,'$.validity.validUntil')>?)`
+    const counts = this.db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN m.state='active' THEN 1 ELSE 0 END),0) AS total,
+      COALESCE(SUM(CASE WHEN m.state IN ('tentative','needs_verification') THEN 1 ELSE 0 END),0) AS unresolved
+      FROM memories m WHERE ${common} AND ${current}`).get(...params, now, now)!
+    const boundary = this.db.prepare(`SELECT MIN(at) AS at FROM (
+      SELECT json_extract(m.data,'$.validity.validFrom') AS at FROM memories m WHERE ${common}
+        AND m.state IN ('active','tentative','needs_verification') AND json_extract(m.data,'$.validity.validFrom')>?
+      UNION ALL SELECT json_extract(m.data,'$.validity.validUntil') AS at FROM memories m WHERE ${common}
+        AND m.state IN ('active','tentative','needs_verification') AND json_extract(m.data,'$.validity.validUntil')>?)`)
+      .get(...params, now, ...params, now)!.at
+    const rows = this.db.prepare(`SELECT m.data FROM memories m WHERE ${common} AND m.state='active' AND ${current}
+      ORDER BY json_extract(m.data,'$.updatedAt') DESC,m.rowid DESC LIMIT 24`).all(...params, now, now)
+    let bytes = 0
+    const records: MemoryRecord[] = []
+    for (const row of rows) {
+      const size = Buffer.byteLength(String(row.data))
+      if (bytes + size > 48_000) continue
+      records.push(this.record(row)); bytes += size
+    }
+    return { records, total: Number(counts.total), unresolved: Number(counts.unresolved),
+      nextChangeAt: boundary == null ? null : Number(boundary) }
+  }
+
   putTopic(input: TopicDraft, access: MemoryAccess, expectedRevision = 0, expectedGeneration = this.controls().generation): TopicPage {
     const draft = parse(topicSchema, input)
     assertSafe(draft)
@@ -828,6 +973,8 @@ export class CodingMemoryStore {
   }
 
   topic(id: string, access: MemoryAccess): TopicPage | null {
+    const notebook = this.db.prepare('SELECT state,available_at FROM memory_notebook_jobs WHERE id=?').get(id)
+    if (notebook && (notebook.state !== 'ready' || (Number(notebook.available_at) > 0 && Number(notebook.available_at) <= this.now()))) return null
     const row = this.db.prepare('SELECT data FROM topics WHERE id = ?').get(id)
     if (!row || row.data === null) return null
     const page = JSON.parse(String(row.data)) as TopicPage
@@ -858,10 +1005,12 @@ export class CodingMemoryStore {
       this.learning.invalidateSources(sourceIds)
       for (const record of affected) {
         this.invalidateTopics(record.id)
+        this.notebook.changed(record)
         this.db.prepare('DELETE FROM memory_fts WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)').run(record.id)
         this.db.prepare('DELETE FROM memories WHERE id = ?').run(record.id)
         this.db.prepare('INSERT INTO tombstones(id, last_revision, at) VALUES(?, ?, ?)').run(record.id, record.revision, this.now())
       }
+      this.notebook.pruneEmpty()
       this.bumpKnowledgeEpoch()
       for (const sourceId of sourceIds) {
         const quotes = this.db.prepare('SELECT quote FROM evidence WHERE source_id = ? UNION SELECT quote FROM memory_support WHERE source_id = ?')
@@ -993,6 +1142,8 @@ export class CodingMemoryStore {
   }
 
   private writeRecord(record: MemoryRecord, invalidateDescendants = true): void {
+    const old = this.db.prepare('SELECT data FROM memories WHERE id=?').get(record.id)
+    const previous = old ? this.record(old) : null
     this.bumpKnowledgeEpoch()
     this.invalidateTopics(record.id)
     this.db.prepare(`INSERT INTO memories(id, revision, project_id, task_id, branch_id, scope_key, conflict_key, state, fingerprint, data)
@@ -1008,6 +1159,8 @@ export class CodingMemoryStore {
     this.db.prepare('DELETE FROM memory_fts WHERE rowid = ?').run(rowid)
     if (record.state === 'active') this.db.prepare('INSERT INTO memory_fts(rowid, claim, rationale, cues) VALUES(?, ?, ?, ?)')
       .run(rowid, record.claim, record.rationale, record.retrievalCues.join(' '))
+    if (previous && (canonical(previous.scope) !== canonical(record.scope) || previous.facet !== record.facet)) this.notebook.changed(previous)
+    this.notebook.changed(record)
     if (invalidateDescendants) {
       // Follow only the evidence of each current record, not obsolete historical dependencies.
       // UNION terminates even when successive revisions form a cycle between record identities.

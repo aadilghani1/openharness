@@ -69,7 +69,7 @@ set(BOARD_SRCS
     "ui/habitat/lvgl_fonts.c"
     "ui/habitat/lvgl_icons.c"
     "ui/habitat/focus_marks.c"
-    "ui/habitat/claude_pet.c"
+    "ui/habitat/pets.c"
 )
 
 set(BOARD_REQUIRES

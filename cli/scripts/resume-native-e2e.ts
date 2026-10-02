@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
+import { cleanupFixtureGit } from './native-fixture-git.js'
 import assert from 'node:assert/strict'
 const exec = promisify(execCallback)
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'harness-resume-native-')))
@@ -47,6 +48,7 @@ const { buildEngineLaunchArgv } = await import('../src/lib/engineLaunch.js')
 const { createResumeAgentService } = await import('../src/lib/resumeAgentService.js')
 const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
 const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess, tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
+const { probeTerminalAgents } = await import('../src/lib/terminalAgentDiscovery.js')
 const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
 const { claudeProcessSession } = await import('../src/lib/sessionRepair.js')
 const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
@@ -79,6 +81,8 @@ const rpc = async (type: string, payload: Record<string, unknown>) => {
   const response = replies.get(requestId); assert(response, `missing ${type} reply`); return response
 }
 const log = (msg: string) => console.log(`[resume-native] ${msg}`)
+
+
 try {
   // Anchor keeps pane IDs monotonic even after Stop removes the last engine session.
   await tmux('new-session', '-d', '-s', 'fixture-anchor', '/bin/sh')
@@ -167,10 +171,10 @@ try {
           for (const line of raw) lineToEvents(line, state)
           if (raw.length) turnOpen = state.turnOpen
         }
-        return inspectCloseActivity(row.engine, screen, turnOpen, false)
+        return inspectCloseActivity(row, screen, turnOpen, false)
       },
-      checkpoint: async (row, explicitlyStopped, phase) => sessionCheckpoints.save(row, {
-        explicitlyStopped, screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
+      checkpoint: async (row, phase) => sessionCheckpoints.save(row, {
+        screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
       }),
       stop: stopAgent, changed: row => { void agentFrame(row, { selectedModel: null, terminalAvailable: true, dsh: null }).then(agent => socketBackend.send({ type: 'agent_synced', payload: { agent } })) },
     })
@@ -183,6 +187,17 @@ try {
     const inventory = await rpc('agents_list', { includeStopped: true })
     assert(inventory.agents.some((a: any) => a.id === old.agentId && a.status === 'stopped'))
     const openSaved = async (creationId: string) => {
+      // Warm the same catalog used by status updates before each real resume.
+      // The action must revalidate disk state, and the resumed row must stop
+      // appearing among saved sessions without waiting for a cache timeout.
+      for (let i = 0; i < 2; i++) {
+        const savedInventory = await rpc('agents_list', { includeStopped: true })
+        const rows = savedInventory.agents.filter((a: any) => a.id === old.agentId)
+        assert.equal(rows.length, 1, 'the catalog must not duplicate or lose the conversation')
+        // After an external engine exit, this fixture intentionally leaves the
+        // old registry route until resume repairs it and preserves its shell.
+        if (!registry.advertised().some(row => row.agentId === old.agentId)) assert.equal(rows[0].status, 'stopped')
+      }
       let settled = false, submitted = false, historyVisible = false
       const hookCount = hooks.length
       const nativeHookSeen = () => hooks.some(h => h.engine === engine && h.sessionId === sessionId)
@@ -217,6 +232,8 @@ try {
       assert(settled, `${engine} did not confirm: ${readFileSync(join(root, `${engine}-screen.txt`), 'utf8')}`)
       assert(historyVisible, `${engine} did not render the saved conversation`)
       assert(!needHook || nativeHookSeen(), `${engine} did not send its native SessionStart`)
+      assert(!stoppedAgents.available(registry.advertised()).some(row => row.agentId === old.agentId),
+        'a resumed conversation must immediately leave the saved catalog')
       return opening
     }
     const creationId = randomUUID()
@@ -224,6 +241,14 @@ try {
     assert.equal(result.state, 'created', JSON.stringify(result)); assert.equal(result.resumed, true)
     const live = registry.byAgent(old.agentId)!
     assert.equal(live.sessionId, sessionId); assert.equal(live.launch?.state, 'ready'); assert(live.processIdentity)
+    const discovery = await probeTerminalAgents([backend], ['tmux'])
+    assert(discovery.processTableAvailable, 'native process table must be readable')
+    const discovered = discovery.agents.filter(agent => agent.runtimes.some(runtime => runtime.paneId === live.tmuxPane))
+    assert.equal(discovered.length, 1, 'the live discovery coordinator must identify exactly one engine in the resumed pane')
+    assert.equal(discovered[0].engine, engine)
+    assert.equal(discovered[0].processIdentity.pid, live.processIdentity.pid)
+    assert.equal(discovered[0].processIdentity.startMarker, live.processIdentity.startMarker)
+    log(`${engine}: live coordinator identified the resumed process`)
     assert(hooks.some(h => h.engine === engine && h.sessionId === sessionId), 'native SessionStart must confirm saved id')
     const screen = await tmux('capture-pane', '-p', '-S', '-500', '-t', live.tmuxPane)
     assert(screen.includes(marker), 'restored conversation text must be visible')
@@ -331,7 +356,7 @@ try {
     const { TerminalStreamManager } = await import('../src/lib/terminalStreamManager.js')
     const { TerminalBackendCoordinator } = await import('../src/lib/terminalBackendCoordinator.js')
     const streams = new TerminalStreamManager({
-      terminals: new TerminalBackendCoordinator([backend], ['tmux'], []),
+      terminals: new TerminalBackendCoordinator([backend], ['tmux']),
       resolveAgent: id => registry.byAgent(id), streamingAvailable: true,
       sendTarget: (id, type, payload) => socketBackend.sendTerminalTo(id, type, payload),
       sendBinaryTarget: (id, frame) => socketBackend.sendTerminalBinaryTo(id, frame),
@@ -421,6 +446,7 @@ try {
   await tmux('kill-server').catch(() => {})
   server.server.closeAllConnections(); await new Promise<void>(r => server.server.close(() => r()))
   await socketBackend.stop()
+  log(`fixture Git cleanup verified (${await cleanupFixtureGit(root)} processes)`)
   // Keep fixture diagnostics when requested; contains only synthetic history, no credentials.
   if (process.env.KEEP_RESUME_FIXTURE === '1') log(`fixture: ${root}`)
   else {

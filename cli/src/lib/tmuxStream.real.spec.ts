@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -15,7 +15,7 @@ const run = process.env.RUN_REAL_TMUX_STREAM === '1' ? describe : describe.skip
 
 function tmux(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('tmux', args, { timeout: 3_000 }, (error, stdout) => error ? reject(error) : resolve(stdout.trim()))
+    execFile('tmux', ['-f', '/dev/null', ...args], { timeout: 3_000 }, (error, stdout) => error ? reject(error) : resolve(stdout.trim()))
   })
 }
 
@@ -126,6 +126,30 @@ run('TmuxControlStream real tmux', () => {
       }
     } finally {
       if (opened.state === 'succeeded') await opened.value.close()
+    }
+  })
+
+  it('streams large styled Unicode and control-byte output without losing or changing bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harness-stream-bytes-'))
+    const path = join(directory, 'payload.bin')
+    const payload = Buffer.from(`BEGIN_STREAM_BYTES\n${'\x1b[38;5;112m─世界🚀\\\0\x1b[0m\r\n'.repeat(4_000)}END_STREAM_BYTES\n`)
+    await writeFile(path, payload)
+    const chunks: Buffer[] = []
+    const opened = await TmuxControlStream.open(paneId, { cols: 96, rows: 28 }, {
+      onData: bytes => chunks.push(Buffer.from(bytes)), onClose: () => {},
+    })
+    try {
+      expect(opened.state).toBe('succeeded')
+      if (opened.state !== 'succeeded') return
+      // The payload is a file, so a shell echo cannot make the assertion pass.
+      // Disable tty newline rewriting before cat sends the exact binary bytes.
+      const quotedPath = `'${path.replace(/'/g, `'\\''`)}'`
+      expect((await opened.value.writeRaw(Buffer.from(`stty -echo -opost; cat ${quotedPath}\r`))).state).toBe('succeeded')
+      await eventually(() => Buffer.concat(chunks).includes(Buffer.from('END_STREAM_BYTES\n')))
+      expect(Buffer.concat(chunks).includes(payload)).toBe(true)
+    } finally {
+      if (opened.state === 'succeeded') await opened.value.close()
+      await rm(directory, { recursive: true, force: true })
     }
   })
 

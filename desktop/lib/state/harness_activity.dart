@@ -12,8 +12,9 @@ enum HarnessActivity {
   done('✓', 'Finished · unread'),
   working('⠋', 'Working'),
   starting('◌', 'Starting'),
+  unknown('◌', 'Status unavailable'),
   idle('', 'Idle'),
-  paused('||', 'Paused'),
+  paused('×', 'Stopped'),
   offline('⊘', 'Offline');
 
   const HarnessActivity(this.mark, this.label);
@@ -84,6 +85,9 @@ HarnessActivity? harnessActivity(
   if (machine.failedTurnAgents.contains(agentId)) return HarnessActivity.failed;
   if (app.agentUnread.kindFor(machineId, agentId) == AlertKind.done) {
     return HarnessActivity.done;
+  }
+  if (machine.unknownActivityAgentIds.contains(agentId)) {
+    return HarnessActivity.unknown;
   }
   return HarnessActivity.idle;
 }

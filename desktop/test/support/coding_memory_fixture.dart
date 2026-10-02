@@ -15,6 +15,7 @@ Map<String, dynamic> syntheticRecall({
   'preparedAt': 1790762400000,
   'emittedAt': 1790762401000,
   'canFeedback': true,
+  'canGuideRecall': true,
   'project': {
     'id': 'synthetic-project',
     'name': 'editor',
@@ -61,6 +62,114 @@ Map<String, dynamic> syntheticMemory({
   ],
 };
 
+Map<String, dynamic> syntheticActivity(
+  Map<String, dynamic> record, {
+  Map<String, dynamic>? recall,
+  String agentId = 'synthetic-agent',
+  bool empty = false,
+}) {
+  final use = recall ?? syntheticRecall();
+  return {
+    'ok': true,
+    'sessions': [
+      {
+        ...use,
+        'agentId': agentId,
+        'name': 'Fix the editor regression',
+        'selectedCount': empty ? 0 : 1,
+        'status': 'ok',
+        'receiptId': empty ? null : use['receiptId'],
+      },
+    ],
+    'selectedAgentId': agentId,
+    'items': empty
+        ? []
+        : [
+            {'record': record, 'recall': use},
+          ],
+    'version': {
+      'generation': 1,
+      'knowledge': record['revision'],
+      'preferences': 'true:true',
+    },
+  };
+}
+
+Map<String, dynamic> syntheticNotebook(
+  Map<String, dynamic> memory, {
+  bool ready = true,
+}) => {
+  'ok': true,
+  'summary': {
+    'id': 'notebook:testing',
+    'title': 'Testing',
+    'scope': memory['scope'],
+    'project': {
+      'id': 'synthetic-project',
+      'name': 'editor',
+      'location': '/synthetic/work/editor',
+    },
+    'state': ready ? 'ready' : 'queued',
+    'activeRecords': 1,
+    'unresolvedRecords': 1,
+    'supportingRecords': ready ? 1 : 0,
+    'updatedAt': ready ? 1790762400000 : null,
+  },
+  'explanation': ready
+      ? {
+          'updatedAt': 1790762400000,
+          'statements': [
+            {
+              'text': 'For regression fixes, begin with a small failing test so failures stay easy to review.',
+              'supports': [
+                {
+                  'memoryId': memory['id'],
+                  'revision': memory['revision'],
+                  'paths': ['/claim', '/rationale'],
+                },
+              ],
+              'constraints': [
+                {
+                  'memoryId': memory['id'],
+                  'applicability': memory['applicability'],
+                  'exceptions': [
+                    {
+                      'when': {'change': 'documentation_only'},
+                      'reason': 'Prose changes need a reading check.',
+                    },
+                  ],
+                  'validity': {
+                    'validFrom': null,
+                    'validUntil': null,
+                    'recheckWhen': ['The test framework changes.'],
+                  },
+                },
+              ],
+            },
+          ],
+        }
+      : null,
+  'supporting': ready ? [memory] : [],
+  'memories': {
+    'items': [
+      memory,
+      {
+        ...memory,
+        'id': 'synthetic-uncertain',
+        'state': 'needs_verification',
+        'claim':
+            'Investigate parallel test isolation before changing defaults.',
+      },
+    ],
+    'nextCursor': null,
+    'version': {
+      'generation': 1,
+      'knowledge': memory['revision'],
+      'preferences': 'true:true',
+    },
+  },
+};
+
 class MemoryFixture extends CodingMemoryConnection {
   @override
   bool valid = true;
@@ -87,6 +196,7 @@ class MemoryFixture extends CodingMemoryConnection {
   ];
   final scopeChanges = <Map<String, dynamic>>[];
   final recalls = <Map<String, dynamic>>[];
+  final notebookPages = <Map<String, dynamic>>[];
 
   Map<String, dynamic>? get project => projects
       .where((p) => p['id'] == (record['scope'] as Map)['projectId'])
@@ -108,6 +218,8 @@ class MemoryFixture extends CodingMemoryConnection {
 
   Map<String, dynamic> respond(Map<String, dynamic> payload) {
     switch (payload['action']) {
+      case 'activity':
+        return syntheticActivity(record, recall: recalls.firstOrNull);
       case 'status':
         return {
           'ok': true,
@@ -119,6 +231,13 @@ class MemoryFixture extends CodingMemoryConnection {
           },
         };
       case 'list':
+        final topicId = (payload['query'] as Map?)?['topicId'];
+        if (topicId != null) {
+          final page = notebookPages.singleWhere(
+            (p) => (p['summary'] as Map)['id'] == topicId,
+          );
+          return {'ok': true, ...page['memories'] as Map<String, dynamic>};
+        }
         return {
           'ok': true,
           'items': present ? [record] : [],
@@ -129,6 +248,17 @@ class MemoryFixture extends CodingMemoryConnection {
             'preferences': '$learn:$recall',
           },
         };
+      case 'notebooks':
+        return {
+          'ok': true,
+          'items': notebookPages.map((p) => p['summary']).toList(),
+          'nextCursor': null,
+        };
+      case 'notebook':
+        return notebookPages
+                .where((p) => (p['summary'] as Map)['id'] == payload['id'])
+                .firstOrNull ??
+            {'ok': false, 'error': 'NOT_FOUND'};
       case 'show':
         return present
             ? {

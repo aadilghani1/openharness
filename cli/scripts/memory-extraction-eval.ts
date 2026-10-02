@@ -99,6 +99,7 @@ async function run() {
     limits: { maxCalls: 6, timeoutPerCallMs: 90_000, retries: 0, corpus: 'synthetic_only', tools: 'restricted_native_adapter' },
     limitations: ['Development diagnostics, not held-out release evidence.',
       'Mechanical checks do not establish faithful meaning or downstream task usefulness.',
+      'Recall probe passes measure presence only; correct-memory recall requires a separately attributed semantic review.',
       'Semantic review remains pending until explicitly reviewed.',
       'A native init model label does not prove that the provider executed that model.',
       'Native-reported cost is diagnostic metadata, not a subscription invoice.',

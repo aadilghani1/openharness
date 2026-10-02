@@ -20,7 +20,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
 void ht_focus_portrait(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
                        ht_character_size_t size, int y);
 
-/* One frame, no motion. The home face's only motion is the Claude pet, which runs on clock_ms, not on
+/* One frame, no motion. The home face's only motion is the engine's pet, which runs on clock_ms, not on
  * these frames; the other thing that animates is the compositor's own shimmer. */
 bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_mood_t mood,
                           bool quiet, bool visible, bool down, int x, unsigned level,
@@ -36,7 +36,7 @@ bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink);
 int ht_focus_engine_index(const char *engine);
 
 /*
- * The clock_ms value (f->clock_ms's clock) at which the Claude pet's visible frame or hop next differs
+ * The clock_ms value (f->clock_ms's clock) at which the pet's visible frame or hop next differs
  * from what this face draws, or 0 when no pet is drawn, it holds still, or its loop never changes.
  * `recap` is the same text ht_focus_face() gets. The caller redraws then.
  */

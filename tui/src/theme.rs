@@ -1290,6 +1290,7 @@ fn state_mark_raw(state: State, tick: u64) -> (&'static str, &'static str, Color
         State::NeedsInput => ("?", "needs you", ATTENTION),
         State::Working => (spinner(tick), "working", ACCENT_SOFT),
         State::Done => ("✓", "done", ONLINE),
+        State::Unknown => ("◌", "status unavailable", MUTED),
         State::Ready => ("·", "idle", MUTED),
         State::Starting => (spinner(tick), "starting", WARN),
         State::Failed => ("✗", "failed", DANGER),
@@ -1301,7 +1302,7 @@ fn state_mark_raw(state: State, tick: u64) -> (&'static str, &'static str, Color
 /// The most urgent of several states (a window's panes): needs you, failed, done, working,
 /// starting, idle, paused, offline.
 pub fn most_urgent(states: impl Iterator<Item = State>) -> Option<State> {
-    let rank = |s: &State| match s { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Ready => 5, State::Paused => 6, State::Offline => 7 };
+    let rank = |s: &State| match s { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Unknown => 5, State::Ready => 6, State::Paused => 7, State::Offline => 8 };
     states.min_by_key(rank)
 }
 

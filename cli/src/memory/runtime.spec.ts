@@ -96,10 +96,35 @@ it('opens no store and invokes no model while experimental, watching consent or 
   expect(inference.run).not.toHaveBeenCalled()
 })
 
+it.each(['replace', 'mutate'] as const)('binds activity to open host sessions and rejects a native-session %s during the read', async mode => {
+  await learn()
+  sessions[0].name = 'Parser fixes'
+  const prepared = await runtime.preparePromptRecall('agent', { query: 'coding' })
+  expect(prepared.receipt).not.toBeNull()
+  const calls = vi.mocked(inference.run).mock.calls.length
+  expect(await runtime.libraryActivity('owner_a')).toMatchObject({
+    sessions: [{ agentId: 'agent', name: 'Parser fixes' }], items: [{ record: { claim: preference } }] })
+  expect(vi.mocked(inference.run).mock.calls.length).toBe(calls)
+  sessions[0].present = false
+  expect((await runtime.libraryActivity('owner_a')).sessions).toEqual([])
+  await expect(runtime.libraryActivity('owner_a', { agentId: 'agent' })).rejects.toThrow('session_unavailable')
+  sessions[0].present = true
+  intercept = async operation => {
+    if (operation !== 'libraryActivity') return
+    if (mode === 'replace') sessions[0] = { ...sessions[0], sessionId: 'replacement' }
+    else sessions[0].sessionId = 'replacement'
+  }
+  await expect(runtime.libraryActivity('owner_a')).rejects.toThrow('session_changed')
+  intercept = undefined
+  expect((await runtime.libraryActivity('owner_a')).items).toEqual([])
+})
+
 it('lets the explicit owner inspect and change saved preferences with watching off without starting capture', async () => {
   context.watching = false
   expect(runtime.ownerKey()).toBe('owner_a')
   expect((await runtime.libraryPage('owner_a')).items).toEqual([])
+  expect((await runtime.libraryNotebooks('owner_a')).items).toEqual([])
+  expect(await runtime.libraryNotebook('owner_a', 'missing')).toBeNull()
   const preview = await runtime.libraryPreview('owner_a', { kind: 'configure', preferences: { learn: false, recall: true }, expected: { learn: true, recall: true } })
   expect(await runtime.libraryApply('owner_a', preview)).toMatchObject({ preferences: { learn: false, recall: true } })
   const status = await runtime.libraryStatus('owner_a')
@@ -112,12 +137,14 @@ it('lets the explicit owner inspect and change saved preferences with watching o
   expect(check.learning.status().capturedStreams).toBe(0)
 })
 
-it('drops an owner-library read when the account changes during the worker request', async () => {
+it.each(['libraryPage', 'libraryNotebooks', 'libraryNotebook'])('drops an owner %s read when the account changes during the worker request', async action => {
   await learn()
-  intercept = async operation => { if (operation === 'libraryPage') context.profileId = 'replacement' }
-  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+  intercept = async operation => { if (operation === action) context.profileId = 'replacement' }
+  const read = () => action === 'libraryNotebook' ? runtime.libraryNotebook('owner_a', 'missing')
+    : action === 'libraryNotebooks' ? runtime.libraryNotebooks('owner_a') : runtime.libraryPage('owner_a')
+  await expect(read()).rejects.toThrow('owner_changed')
   expect(create).toHaveBeenCalledTimes(1)
-  await expect(runtime.libraryPage('owner_a')).rejects.toThrow('owner_changed')
+  await expect(read()).rejects.toThrow('owner_changed')
 })
 
 it('shares one inspection worker while watching is off and bounds concurrent owner requests', async () => {
@@ -194,9 +221,9 @@ it.each(['claude', 'codex'] as const)('keeps %s prompt delivery unavailable on a
   expect((await runtime.recall('agent', { query: 'coding changes' })).items).toHaveLength(1)
 })
 
-it('prepares Codex prompt memory only for its tested native release', async () => {
+it.each(['0.159.0', '0.159.3'])('prepares Codex prompt memory for tested native release %s', async cliVersion => {
   await learn()
-  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion: '0.159.0' }
+  sessions[0] = { ...sessions[0], engine: 'codex', cliVersion }
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
   expect(prepared.packet.items).toHaveLength(1)
   expect(prepared.receipt?.delivery).toBe('unverified')

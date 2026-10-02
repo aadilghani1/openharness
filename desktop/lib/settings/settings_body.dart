@@ -34,7 +34,9 @@ class SettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = switch (section) {
       SettingsSection.account => AccountSection(notifier: notifier),
-      SettingsSection.accountDevices => AccountDevicesSection(notifier: notifier),
+      SettingsSection.accountDevices => AccountDevicesSection(
+        notifier: notifier,
+      ),
       SettingsSection.profiles => ProfilesSection(notifier: notifier),
       SettingsSection.usage => const UsageSection(),
       SettingsSection.customize => throw StateError(
@@ -44,6 +46,7 @@ class SettingsBody extends StatelessWidget {
       SettingsSection.experimental => ExperimentalSection(
         store: experimentalFeatures ?? notifier.experimentalFeatures,
         controller: notifier.swarmSettings,
+        openCodingMemory: notifier.openCodingMemoryConnection,
       ),
       SettingsSection.devices => ListenableBuilder(
         listenable: experimentalFeatures ?? notifier.experimentalFeatures,

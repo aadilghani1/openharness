@@ -30,6 +30,7 @@ code = r'''
 #include "octopus.h"
 #include "character.h"
 #include "focus.h"
+#include "pets.h"
 #include "workspace.h"
 #include "command_face.h"
 #include "arc_geometry.inc"
@@ -1815,26 +1816,27 @@ int main(int argc, char **argv) {
         assert(bell && one);
         s.active=0; scene_take(); assert(!action_enabled(A_INBOX));
     }
-    // THE CLAUDE PET: the face publishes when the pet next changes (s.pet_next_ms); surface_tick asks
-    // for a redraw then and not before. Other things may ask on their own clocks, so the same ticks
-    // are replayed for a Codex agent and the pet's requests are the difference.
-    {
+    // THE PETS (claude, codex): the face publishes when the pet next changes (s.pet_next_ms);
+    // surface_tick asks for a redraw then and not before. Other things may ask on their own clocks,
+    // so the same ticks are replayed for a Cursor agent (no pet) and the pet's requests are the difference.
+    for (unsigned pe = 0; pe < ht_pet_count; pe++) {
+        const char *pet_engine = ht_pets[pe].engine;
         unsigned seen[2][2]; uint32_t due = 0;
         for (int pass = 0; pass < 2; pass++) {
             reset(); ht_character_select(&character, HT_CHARACTER_FOCUS);
-            strcpy(s.agents[0].engine, pass ? "claude" : "codex");
+            strcpy(s.agents[0].engine, pass ? pet_engine : "cursor");
             fake_ms = 1200; scene_take();
             if (!pass) assert(!s.pet_next_ms);
             else { due = s.pet_next_ms; assert(due > 1200); }
             if (pass) { for (int k = 0; k < 2; k++) {
                 s.pet_next_ms = due; changes = 0; surface_tick(k ? due : due - 1); seen[1][k] = changes; } }
         }
-        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "codex");
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "cursor");
         fake_ms = 1200; scene_take();
         for (int k = 0; k < 2; k++) { changes = 0; surface_tick(k ? due : due - 1); seen[0][k] = changes; }
         assert(seen[1][0] == seen[0][0] && seen[1][1] == seen[0][1] + 1);
         // A finger down pauses it, and so does the VOICE view.
-        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, pet_engine);
         fake_ms = 1200; scene_take(); assert(s.pet_next_ms == due);
         s.touch_down = true; changes = 0; surface_tick(due); assert(s.pet_next_ms == due);
         s.touch_down = false;
@@ -2095,7 +2097,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
-                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'claude_pet.c'),str(native/'terminal.c'),
+                    str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'pets.c'),str(native/'terminal.c'),
                     str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui')],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):

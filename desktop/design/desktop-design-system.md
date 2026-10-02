@@ -145,6 +145,15 @@ Avoid repeatedly drawing cards inside a dialog.
 - Primary text is nearly white or nearly black. Metadata remains readable.
 - Blue filled capsules identify the primary action. Blue rows identify the
   active keyboard/pointer choice; their labels and secondary text turn white.
+- Focused pane rims share one solid 1-point boundary: blue for this computer,
+  muted teal-gray (`AppPalette.remotePaneFocus`) for a known remote machine.
+  Location is a quiet cue, with less emphasis than the local focus blue; avoid
+  saturated teal, dashes, double rims or glow. The remote token is `#567C77` in
+  light appearance and `#6C9691` in dark, distinct from teal text and badge ink.
+  It retains at least 3:1 contrast against built-in pane grounds and workspace
+  gutters. Only the focused pane carries the cue; unfocused rims stay neutral
+  and waiting-question borders retain their amber priority. The footer's
+  machine name supplies explicit location context alongside the color.
 - A stored choice also has a checkmark. Focus and stored selection differ.
 - Ordinary controls use a faint neutral fill and one thin rim. Hover increases
   the fill. Press increases it again. Focus has a stable 1.5-point blue boundary.
@@ -326,38 +335,38 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the right-hand controls read model, split down, split right,
-zoom, close. Use the rounded 14-point `AppPaneIcon` split/zoom variants and the
-shared 12-point close glyph in 28-point targets. The close target sits 4 points
-inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
-brighten the glyph without a fill, border, or movement. Keep the controls on one
-line; model and title text truncate before icon targets shrink. Zoom becomes
-Restore while enlarged. Unavailable controls stay in place with disabled ink.
-Split opens New Harness directly, inheriting the clicked pane's agent, machine,
-and project; the pane is created only after submission. Clicking the model focuses that
-pane and opens the same Models picker as Cmd-:. Selection stays bound to that
+**Pane header** — the right-hand controls read agent, model, close. The shared
+12-point close glyph has a 28-point target, 4 points inside the trailing edge.
+Resting ink is 45%; hover and keyboard focus brighten the glyph without a fill,
+border, or movement. Keep the controls on one line; model and title text truncate
+before the close target shrinks. Split and zoom remain in commands, menus and
+keyboard shortcuts. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. The agent name and chevron open
+the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — remaining subscription usage at the left,
-with machine, project, branch and PR together at the right following the focused pane. Each
-context field keeps its existing action, including the branch/PR chooser.
-Titles stay quiet when several panes are visible; do not repeat branches in
-pane headers. Do not repeat model or effort in the footer. Context honors Customize Harness's selected
-status face, fields, colors and shell/Powerline treatment. Recent-harness
-context uses that same renderer's monochrome presentation to stay secondary.
-Use compact labels such as “Claude 0%  Codex 50%”, separated by whitespace only.
-Provider names stay neutral. Color only the remaining percentage: quiet amber
-from 0% through 20%, neutral above 20% or when unavailable. Use shared
-semantic ink adjusted to remain readable on the selected workspace surface;
-the number always conveys the state independently of color. These percentages are
-remaining, not used. Use the same deduplicated accounts, limiting window and
-freshness rules as Models. Separate subscriptions remain separate; unknown or
-expired values show “—”, never a fabricated zero. Hover explains reset windows
-and account identity; clicking opens Subscriptions without switching a model.
-Companion and sharing controls sit after usage without shifting the context.
+**Focused workspace footer** — running harness count and attributable CPU/RAM/GPU/SSD across
+connected owned machines, then subscription allowance used at the left; focused machine, project,
+branch and PR at the right. Each context field keeps its action. Harness count and every resource
+metric select the existing Harness Monitor tab or create it if absent. Process-tree CPU uses 100%
+per core; GPU sums reported process utilization, which can exceed 100%. Shared servers count once. Unsupported GPU
+attribution stays unknown. RAM/SSD are absolute, rounded whole MB/GB; shared/nested workspace
+folders count once per machine. See [workspace status bar](workspace-status-bar.md) for accounting.
+Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
+model/effort in the footer. Context honors the selected status face, fields, colors and shell/
+Powerline treatment. Recent-harness context uses its monochrome presentation.
+Use whole figures, one space between title and value, and 2.5 character cells between parts:
+`Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
+Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
+decimal figures. Harness metrics show — when unavailable and ≥ for partial totals. Subscription
+figures mean allowance used and preserve Models' deduplicated accounts, limiting window and
+freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
+without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
+
+Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,

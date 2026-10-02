@@ -68,7 +68,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       // Discovery or a hook may have updated this row while reading the native store.
       // A replacement process must never be stopped using an older snapshot.
       if (!sameTarget() || options.current?.() === false) {
-        throw new AgentStopError('Harness changed while saving its conversation. Try pausing again.')
+        throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
       const current = registry.resolve(sessionId)!
       const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
@@ -78,7 +78,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       await options.checkpoint?.(s, 'before')
       await options.beforeStop?.(s)
       if (!sameTarget() || options.current?.() === false) {
-        throw new AgentStopError('Harness changed while saving its conversation. Try pausing again.')
+        throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
       const routes = s.runtimes.map(terminalRouteKey)
       for (const route of routes) agentReconciler.holdRoute(route)
@@ -99,7 +99,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
             log: message => console.log(message),
           }, 0)).catch(() => 'failed' as const)
         if (termination === 'failed' || termination === 'not-ours') {
-          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try pausing again.')
+          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
         // Never close a replacement's pane, even when our old process exited.
         if (!sameTarget() || options.current?.() === false) {
@@ -114,7 +114,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
             .map(runtime => tmuxBackend.kill(runtime)) : [])
         if (panes.some(result => result.status !== 'fulfilled' || result.value.state !== 'succeeded')
           || (isTerminalEngine(s.engine) && !panes.length)) {
-          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try pausing again.')
+          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
         if (!sameTarget()) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')

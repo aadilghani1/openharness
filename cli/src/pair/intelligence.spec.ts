@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { CompanionIntelligence, type CompanionRuntime } from './intelligence.js'
 import { encodeRuntimeProfile } from '../lib/runtimeProfile.js'
 import type { OneShotOptions } from '../lib/oneshot.js'
+import { openCodeSnapshotIdentity, type OpenCodeMemorySnapshot, type OpenCodeMemoryInferenceOptions } from '../memory/opencodeInference.js'
 
 let directory: string
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'collection-model-')) })
@@ -146,5 +147,73 @@ describe('the collection DSH supplies its intelligence', () => {
     const options = { timeoutMs: 1000, signal: new AbortController().signal, contextKey }
     await expect(w.brain.extract('synthetic evidence from the original lease', options)).rejects.toThrow('inference_context_changed')
     expect(w.run).not.toHaveBeenCalled()
+  })
+})
+
+describe('OpenCode companion request binding', () => {
+  function openCodeWorld() {
+    const w = world()
+    w.set({ ...w.get(), engine: 'opencode', nativeProcessKey: 'native-process', accountKey: 'harness-owner-binding', profile: null, customProvider: true })
+    let snapshot: OpenCodeMemorySnapshot | null = { model: 'selected/model', variant: 'high',
+      auth: { type: 'api', key: 'synthetic-selected-account' }, provider: {
+        npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://selected.invalid/v1' },
+        models: { model: { name: 'Selected', limit: { context: 10000, output: 1000 } } },
+      } }
+    const run = vi.fn<(options: OpenCodeMemoryInferenceOptions) => Promise<{ text: string }>>(async options => {
+      await options.beforeRun?.(); options.assertAuthorized?.()
+      return { text: '{"proposals":[]}' }
+    })
+    const accountIdentity = vi.fn(async () => 'must-not-fall-back')
+    const brain = new CompanionIntelligence({ ...w.deps, openCodeSnapshot: () => snapshot, runOpenCode: run, accountIdentity })
+    return { ...w, brain, openCodeRun: run, accountIdentity, snapshot: () => snapshot!, setSnapshot: (value: OpenCodeMemorySnapshot | null) => { snapshot = value } }
+  }
+
+  it('uses the foreground model/account/variant for extraction and ordinary companion intelligence', async () => {
+    const w = openCodeWorld()
+    expect(w.brain.status()).toMatchObject({ state: 'ready', engine: 'opencode', model: 'selected/model', effort: 'high' })
+    const contextKey = (await w.brain.extractionStatus()).contextKey!
+    expect(await w.brain.extract('coding evidence', { contextKey, timeoutMs: 1000, signal: new AbortController().signal })).toBe('{"proposals":[]}')
+    expect(w.openCodeRun).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'selected/model', expectedSnapshot: openCodeSnapshotIdentity(w.snapshot()) }))
+    expect(await w.openCodeRun.mock.calls[0][0].readSnapshot()).toEqual(w.snapshot())
+    await w.brain.run('companion triage', { timeoutMs: 1000, signal: new AbortController().signal })
+    expect(w.openCodeRun).toHaveBeenCalledTimes(2)
+    expect(w.run).not.toHaveBeenCalled()
+    expect(w.accountIdentity).not.toHaveBeenCalled()
+    expect(readFileSync(w.deps.stateFile, 'utf8')).not.toContain('synthetic-selected-account')
+  })
+
+  it('waits for live observation, never falling back to another provider or saved OpenCode profile', async () => {
+    const w = openCodeWorld()
+    w.brain.status()
+    w.setSnapshot(null)
+    expect(w.brain.status().state).toBe('waiting')
+    expect(await w.brain.run('triage', { timeoutMs: 1000, signal: new AbortController().signal })).toBeNull()
+    w.set({ ...w.get(), stopped: true })
+    expect(w.brain.status().state).toBe('waiting')
+    expect(w.openCodeRun).not.toHaveBeenCalled()
+    expect(w.run).not.toHaveBeenCalled()
+  })
+
+  it('rejects a queued extraction after the observed account changes', async () => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    w.setSnapshot({ ...w.snapshot(), auth: { type: 'api', key: 'replacement-account' } })
+    await expect(w.brain.extract('leased evidence', { contextKey, timeoutMs: 1000, signal: new AbortController().signal })).rejects.toThrow('inference_context_changed')
+    expect(w.openCodeRun).not.toHaveBeenCalled()
+  })
+
+  it.each(['account', 'variant', 'process', 'owner', 'off'] as const)('discards a running extraction after %s changes', async change => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    let finish!: (value: { text: string }) => void
+    w.openCodeRun.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const result = w.brain.extract('evidence', { contextKey, timeoutMs: 1000, signal: new AbortController().signal })
+    await vi.waitFor(() => expect(w.openCodeRun).toHaveBeenCalledOnce())
+    if (change === 'account') w.setSnapshot({ ...w.snapshot(), auth: { type: 'api', key: 'replacement' } })
+    if (change === 'variant') w.setSnapshot({ ...w.snapshot(), variant: 'low' })
+    if (change === 'process') w.set({ ...w.get(), nativeProcessKey: 'new-native-process' })
+    if (change === 'owner') w.set({ ...w.get(), accountKey: 'replacement-harness-owner-binding' })
+    if (change === 'off') w.off()
+    await expect(w.openCodeRun.mock.calls[0][0].beforeRun!()).rejects.toThrow('inference_context_changed')
+    finish({ text: 'old-context-answer' })
+    expect(await result).toBeNull()
   })
 })

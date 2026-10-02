@@ -88,7 +88,7 @@ describe('bounded episode batches', () => {
     const first = captureEpisode('first'), second = captureEpisode('second')
     store.ingest(event('outside_batch'))
     const lease = claim()
-    lease.episodes.push({ jobId: 'forged_member', sourceIds: ['outside_batch'] })
+    lease.episodes.push({ jobId: 'forged_member', sourceIds: ['outside_batch'], context: 'complete' })
     lease.sources.push(event('outside_batch'))
     expect(store.learning.finish(lease, [proposal(first), proposal(event('outside_batch'), { conflictKey: 'other' })], target))
       .toEqual({ state: 'failed', reason: 'episode_evidence' })
@@ -164,20 +164,43 @@ describe('bounded episode batches', () => {
     store.close()
     const Database = builtinSqlite()!
     const legacy = new Database(join(directory, 'memory.sqlite'), { readOnly: false })
-    try { legacy.exec('DROP TABLE memory_inference_jobs') } finally { legacy.close() }
+    try { legacy.exec("DROP TABLE memory_inference_jobs; DROP TABLE memory_job_context; UPDATE memory_meta SET value='1' WHERE key='schema'") } finally { legacy.close() }
     store = open()
     expect(store.learning.claim(target).state).toBe('idle')
     expect(store.learning.finish(old, [], target).state).toBe('stale')
     expect(store.source('first', access)?.text).toBe(event().text)
     now = old.until + 1
     const recovered = claim()
-    expect(recovered.episodes).toEqual([{ jobId: 'episode_first', sourceIds: ['first'] }])
+    expect(recovered.episodes).toEqual([{ jobId: 'episode_first', sourceIds: ['first'], context: 'complete' }])
     expect(store.learning.status().callsLastHour).toBe(2)
     expect(store.learning.finish(recovered, [], target).state).toBe('no_useful_memory')
   })
 })
 
 describe('durable coding episode capture', () => {
+  it('retains bounded context after restart and admits a self-contained user preference', () => {
+    store.learning.capture(batch('first', { boundary: 'bounded' }))
+    store.close(); store = open()
+    const lease = claim()
+    expect(lease.episodes[0].context).toBe('bounded')
+    expect(store.learning.finish(lease, [proposal()], target).state).toBe('learned')
+    expect(store.list(access)[0].claim).toBe(proposal().claim)
+  })
+
+  it.each(['assistant_evidence', 'inferred', 'temporary_state', 'verified_finding'] as const)
+  ('rejects %s from bounded context even when the caller forges complete lease metadata', variant => {
+    const assistant = event('assistant', { role: 'assistant', text: 'Every test passed.' })
+    store.learning.capture(batch('first', { events: [event(), assistant], boundary: 'bounded' }))
+    const lease = claim()
+    lease.episodes[0].context = 'complete'
+    const draft = proposal()
+    if (variant === 'assistant_evidence') draft.evidence.push({ sourceEventId: assistant.id, quote: assistant.text, paths: ['/claim'] })
+    else if (variant === 'inferred') draft.evidenceClass = 'inferred'
+    else draft.assertionType = variant
+    expect(store.learning.finish(lease, [draft], target)).toEqual({ state: 'failed', reason: 'bounded_context_evidence' })
+    expect(store.list(access)).toEqual([])
+  })
+
   it('captures the first user turn before an assistant reply and resumes after reopen', () => {
     store.learning.capture(batch('first', { boundary: 'open' }))
     expect(store.learning.claim(target).state).toBe('idle')

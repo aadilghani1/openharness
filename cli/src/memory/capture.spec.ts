@@ -98,13 +98,78 @@ it('detects an in-place rewrite and establishes a new baseline without relearnin
   expect(claim().sources.map(source => source.text)).toEqual(['A new live preference.', 'Understood.'])
 })
 
-it('keeps oversized input explicitly incomplete while reading subsequent bounded records', async () => {
+it('keeps oversized input incomplete without discarding later intact instructions', async () => {
   await writeFile(session.transcriptPath, user('x'.repeat(600_000)) + user('A small preference.', 'small') + answer())
   const result = await capture.poll(session)
   expect(result.state).toBe('captured')
   expect(result.sources).toBe(2)
   expect(store.learning.status().jobs.source_incomplete).toBe(1)
-  expect(store.learning.claim(target).state).toBe('idle')
+  const lease = claim()
+  expect(lease.sources.map(source => source.text)).toEqual(['A small preference.', 'Understood.'])
+  expect(lease.episodes[0].context).toBe('bounded')
+})
+
+it.each(['bytes', 'count'] as const)('preserves intact instructions when a long turn reaches its %s limit', async limit => {
+  const records = Array.from({ length: limit === 'bytes' ? 4 : 130 }, (_, index) => JSON.stringify({
+    type: 'assistant', uuid: `progress-${index}`, timestamp: new Date(now + 2).toISOString(),
+    message: { content: [{ type: 'text', text: limit === 'bytes' ? 'x'.repeat(30_000) : `Progress ${index}.` }] },
+  }) + '\n')
+  await writeFile(session.transcriptPath, user() + records.join('') + answer())
+  await capture.poll(session)
+  capture = new NativeMemoryCapture(memory, () => now)
+  await capture.poll(session)
+  expect(store.learning.status().jobs.source_incomplete).toBeUndefined()
+  const captured = []
+  while (store.learning.status().jobs.queued) {
+    const lease = claim()
+    captured.push(...lease.sources)
+    expect(lease.episodes.every(episode => episode.context === 'bounded')).toBe(true)
+    expect(lease.sources.length).toBeLessThanOrEqual(128)
+    expect(Buffer.byteLength(JSON.stringify(lease.sources))).toBeLessThanOrEqual(96_000)
+    store.learning.finish(lease, [], target)
+  }
+  expect(captured).toHaveLength(records.length + 2)
+  expect(captured.filter(source => source.role === 'user').map(source => source.text)).toEqual(['I prefer small changes.'])
+})
+
+it('isolates a missing tool record, keeps both neighboring instructions, and resets at the next turn', async () => {
+  await writeFile(session.transcriptPath, user('Keep the viewer on the left.', 'before')
+    + JSON.stringify({ type: 'user', uuid: 'large-tool', timestamp: new Date(now + 2).toISOString(),
+      message: { content: [{ type: 'tool_result', tool_use_id: 'call', content: 'x'.repeat(40_000) }] } }) + '\n'
+    + user('Keep keyboard navigation.', 'after') + answer())
+  await capture.poll(session)
+  const bounded = claim()
+  expect(bounded.sources.filter(source => source.role === 'user').map(source => source.text).sort())
+    .toEqual(['Keep keyboard navigation.', 'Keep the viewer on the left.'])
+  expect(bounded.episodes).toHaveLength(2)
+  expect(bounded.episodes.every(episode => episode.context === 'bounded')).toBe(true)
+  expect(store.learning.status().jobs.source_incomplete).toBe(1)
+  store.learning.finish(bounded, [], target)
+  await appendFile(session.transcriptPath, user('A fresh turn.', 'fresh') + answer('Fresh reply.', 'fresh-reply'))
+  await capture.poll(session)
+  expect(claim().episodes[0].context).toBe('complete')
+})
+
+it('retains a gap across restart without treating an empty native completion as missing context in the next turn', async () => {
+  await writeFile(session.transcriptPath, user('x'.repeat(40_000)))
+  await capture.poll(session)
+  store.close()
+  const reopened = CodingMemoryStore.open({ directory: join(directory, 'memory'), profileId: 'owner', now: () => now })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  capture = new NativeMemoryCapture(memory, () => now)
+  await appendFile(session.transcriptPath, user('Preserve keyboard navigation.', 'bounded'))
+  await capture.poll(session)
+  await appendFile(session.transcriptPath, answer('', 'empty') + user('A new request.', 'fresh') + answer())
+  await capture.poll(session)
+  const lease = claim()
+  const contexts = lease.episodes.map(episode => ({ context: episode.context,
+    text: lease.sources.find(source => episode.sourceIds.includes(source.id) && source.role === 'user')?.text }))
+  expect(contexts).toEqual(expect.arrayContaining([
+    { context: 'bounded', text: 'Preserve keyboard navigation.' },
+    { context: 'complete', text: 'A new request.' },
+  ]))
+  expect(store.learning.status().jobs.source_incomplete).toBe(1)
 })
 
 it('closes a quiet, settled first message even without a native Stop record', async () => {

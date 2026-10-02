@@ -251,18 +251,35 @@ Window-only preview collections are test/render fixtures, not a user setting.
 Per-machine runtime state is `MachineState` (connection status, transport mode, agents, `nodeOnline`
 from `node_status` pushes — distinct from our own socket status, pending offline agent, turn activity).
 
-Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm`. Closing the last local view
-of an owned idle session saves its native conversation and terminal snapshot before releasing its
-process. Working, unknown, draft, or other-device sessions require a reviewed decision; Cancel is
-the default. Stop after finishing persists a daemon-owned plan, and reopening cancels it. Layout
-cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
+Explicit pane/tab Close uses `requestClosePane` / `requestCloseSwarm` and closes the session across
+the global workspace. Harness Monitor is the exception: closing its reusable dashboard dismisses
+the view immediately, even offline, and keeps its assistant available for the next open.
+An owned idle session saves its native conversation and terminal snapshot
+before releasing its process, regardless of other viewers. A ready, unused Claude/Codex chat with
+an empty composer also closes directly, saving its terminal snapshot without requiring a native
+conversation. Missing activity evidence for an existing chat remains unknown. Working,
+waiting-for-input, draft, or unknown sessions show one short sentence with Cancel and Close;
+there is no title or deferred-close button. Cancel is the default. Previously queued daemon close
+plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 
-`HarnessMonitor` drives the bottom-left resource summary and existing session manager. It samples
-connected owned sessions every 15 seconds, every 3 seconds while expanded, and never while the app
-is hidden. RAM is process-tree RSS; CPU is interval use, with 100% representing one core. Unknown
-readings remain unknown. Shared Codex servers are listed separately and included once in totals;
-token counts reuse existing agent data. The monitor never resumes sessions or scans transcripts.
+`HarnessMonitor` supplies the global running-harness count without process sampling
+in the footer. Clicking it opens the reusable `autonomous/harness-monitor` DSH tab
+through `HarnessMonitorController`, with its viewer on the left at 70% and the assistant
+terminal on the right at 30%. Only the pane zoom action expands either pane. The DSH table shares the daemon's resource sampler
+and adds opt-in activity metadata to `agents_list`. RAM is process-tree RSS; CPU is
+interval use, with 100% representing one core. Unknown readings remain unknown.
+Shared Codex servers are listed separately and included once; token counts reuse
+existing agent data. The monitor never resumes sessions or scans transcripts.
+
+`MachineResourceMonitor` always scopes CPU/RAM/GPU to this computer, even when the
+focused pane is remote. Hardware is passive text, with no filter or popover. It
+samples only the local host every 15 seconds while foreground. Readings expire in
+45 seconds and clear on disconnect, replacement or hide. CPU is normalized host
+utilization; RAM excludes reclaimable cache where available. GPU is the busiest
+reported device. Missing telemetry is `-`. Additive `machine_resources` RPC fields
+allow mixed old/new CLIs. See `design/workspace-status-bar.md` for the complete
+scope and format contract.
 
 ### Command dock
 
@@ -322,11 +339,11 @@ its headless debug timings do not establish native display or network latency.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
 - The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
-  with subscription usage remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
-  and quiet, with larger click targets. Each pane ends with model, split down,
-  split right, zoom, close. Split opens New Harness directly for the clicked pane.
+  and quiet, with larger click targets. Each terminal pane ends with agent, model,
+  close. Split and zoom remain in commands, menus and keyboard shortcuts.
   Usage has no dot separators and colors only low/exhausted
   percentages. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
@@ -366,7 +383,7 @@ its headless debug timings do not establish native display or network latency.
   have spent. Each account shows its `tightest` window, the limit that stops the work first.
   The shared controller reads ahead at startup and every five minutes; opening a menu requests
   a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
-  and freshness rules, displaying the remaining percentage rather than the amount spent.
+  and freshness rules, displaying whole allowance-used percentages (100 − remaining) in neutral ink.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read

@@ -9,7 +9,6 @@ use serde_json::Value;
 use crate::app::App;
 use crate::terminal_themes::TERMINAL_THEMES;
 use crate::fleet::{ago, Reach, State};
-use crate::layout::Preset;
 use crate::picker::{Picker, Row};
 use crate::theme::{self, engine_label, engine_mark, fg, state_mark};
 
@@ -273,7 +272,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             // request, and its state in words ('failed, 'done, 'waiting, 'working, 'idle).
             let words = match state {
                 State::NeedsInput => "waiting needs-you", State::Failed => "failed", State::Done => "done finished", State::Working => "working",
-                State::Starting => "starting", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
+                State::Starting => "starting", State::Unknown => "status unavailable", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
             };
             // Its pull request's state in words too: 'pr, 'open, 'merged.
             let pr_words = a.pr.as_ref().map(|p| format!("pr {}", p.state.to_lowercase())).unwrap_or_default();
@@ -669,8 +668,9 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
     }).collect()
 }
 
-pub fn layout_rows() -> Vec<Row> {
-    Preset::ALL.iter().enumerate().map(|(i, (_, name, detail))| Row::new(i.to_string(), *name).detail(vec![span(*detail, fg(theme::MUTED))])).collect()
+pub fn layout_rows(count: usize) -> Vec<Row> {
+    crate::desk_layout::choices(count).into_iter()
+        .map(|id| Row::new(id, crate::desk_layout::label(id))).collect()
 }
 
 /// `hn theme`: every choice in the config file's `[look]` table, one per row, the current value

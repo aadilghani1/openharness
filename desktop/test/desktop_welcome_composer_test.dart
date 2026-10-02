@@ -443,7 +443,7 @@ void main() {
     (tester) async {
       await setup(tester, mac: true);
       expect(updates.last['footerCovered'], isFalse);
-      expect(updates.last['harnessMonitor']['text'], startsWith('2 live'));
+      expect(updates.last['harnessMonitor']['text'], startsWith('Harnesses 2'));
       for (final machine in app.machineStates.values) {
         machine.agents = [];
       }

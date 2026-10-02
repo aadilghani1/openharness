@@ -67,8 +67,7 @@ export class SessionCheckpointStore {
     return createHash('sha256').update(JSON.stringify([s.agentId, s.engine, s.codexHome ?? null, s.sessionId])).digest('hex')
   }
 
-  async save(s: RegisteredSession, options: { explicitlyStopped?: boolean; screen?: string | null } = {}): Promise<void> {
-    if (!s.sessionId && !options.explicitlyStopped) throw new SessionCheckpointError('A saved conversation is not available yet. Keep this session open and try again after its first response.')
+  async save(s: RegisteredSession, options: { screen?: string | null } = {}): Promise<void> {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const key = this.key(s)
@@ -91,8 +90,8 @@ export class SessionCheckpointStore {
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
       if (!s.sessionId || s.engine === 'terminal') {
-        // A shell/fresh composer has no native conversation. Only an explicit Stop
-        // may retire it, with its terminal contents retained separately on disk.
+        // A shell or unused chat has no native conversation. Save its terminal
+        // instead; the close service owns the activity check and confirmation.
         if (options.screen == null) {
           if (previous?.version === 1 && previous.sessionId === s.sessionId && previousFileSafe(previous.file)
             && (await lstat(join(this.directory, previous.file)).catch(() => null))?.isFile()) return

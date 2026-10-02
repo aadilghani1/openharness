@@ -241,6 +241,11 @@ npm ci
 npm run test:tmux-real
 ```
 
+The tmux suite creates and cleans up its own private server, including when run from inside a
+Harness pane. No outer `tmux kill-server` cleanup is needed. Setting `TMUX_TMPDIR` alone does not
+isolate tmux: an inherited `TMUX` still selects the parent server. Any separate fixture must clear
+`TMUX`/`TMUX_PANE` and name its private socket explicitly with `tmux -S` for cleanup.
+
 The suite uses isolated, test-owned lifecycle fixtures. Its engine matrix explicitly skips commands that are not installed; authentication or
 first-run onboarding that prevents a proprietary CLI from running is unavailable evidence and must be
 reported as such, not described as exercised.

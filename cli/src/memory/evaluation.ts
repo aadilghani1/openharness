@@ -65,12 +65,15 @@ export async function evaluateExtractionCase(input: {
     const probes = fixture.probes.map(probe => {
       if (!completed) {
         checks.push({ name: `recall:${probe.id}`, passed: null })
-        return { ...probe, status: 'not_run', returnedIds: [], passed: null }
+        return { ...probe, status: 'not_run', returnedIds: [], passed: null, context: null }
       }
-      const result = store.recall({ query: probe.query, conditions: probe.conditions }, { profileId, projectIds: probe.projectIds, includeProfile: true })
+      const maxBytes = 3_000
+      const result = store.recall({ query: probe.query, conditions: probe.conditions, maxBytes }, { profileId, projectIds: probe.projectIds, includeProfile: true })
       const passed = result.status === 'ok' && (probe.expected === 'recall' ? result.items.length > 0 : result.items.length === 0)
       checks.push({ name: `recall:${probe.id}`, passed })
-      return { ...probe, status: result.status, returnedIds: result.items.map(item => item.id), passed }
+      return { ...probe, status: result.status, returnedIds: result.items.map(item => item.id), passed,
+        measurement: 'presence_only' as const,
+        context: { text: result.text, bytes: Buffer.byteLength(result.text, 'utf8'), maxBytes, estimatedTokens: result.estimatedTokens } }
     })
     return { id: fixture.id, durationMs: Date.now() - startedAt, outcome, checks, probes, records,
       episodes: { expected: episodes.length, reviewed, jobs },

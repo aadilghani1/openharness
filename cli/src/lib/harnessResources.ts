@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { promisify } from 'node:util'
 import type { ProcessIdentity } from './terminalTypes.js'
+import { readProcessTelemetry, type ProcessTelemetry } from './harnessTelemetry.js'
 
 const exec = promisify(execFile)
 type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null }
@@ -20,6 +21,11 @@ export interface HarnessResource {
   memoryBytes: number | null
   cpuPercent: number | null
   processCount: number | null
+  gpuMemoryBytes?: number | null
+  gpuPercent?: number | null
+  diskReadBytesPerSecond?: number | null
+  diskWriteBytesPerSecond?: number | null
+  processes?: Array<{ pid: number; parent: number; memoryBytes: number; cpuPercent: number | null }>
 }
 export interface HarnessResources {
   sampledAt: string
@@ -80,10 +86,14 @@ async function sharedCodexRoots(agents: readonly Agent[]): Promise<SharedResourc
 }
 
 /** No timer, no retained history and no work until an owning client asks. */
-export function createHarnessResourcesReader(agents: () => readonly Agent[], deps = {
-  sample: sampleProcesses, now: Date.now,
+export function createHarnessResourcesReader(agents: () => readonly Agent[], deps: {
+  sample: () => Promise<ResourceProcess[]>; now: () => number
+  telemetry?: (pids: number[]) => Promise<Map<number, ProcessTelemetry>>
+} = {
+  sample: sampleProcesses, now: Date.now, telemetry: readProcessTelemetry,
 }, sharedRoots: (agents: readonly Agent[]) => Promise<SharedResourceRoot[]> = sharedCodexRoots) {
   let previous: { at: number; rows: Map<number, ResourceProcess> } | undefined
+  let previousTelemetry = new Map<number, ProcessTelemetry>()
   let cached: { at: number; value: HarnessResources } | undefined
   let pending: Promise<HarnessResources> | undefined
   async function read(): Promise<HarnessResources> {
@@ -105,13 +115,14 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
     }
     const elapsed = previous ? at - previous.at : 0
     const counted = new Set<number>()
+    const trees = new Map<number, number[]>()
     const measure = (root: number) => {
       let memoryBytes = 0, cpuMs = 0, processCount = 0
       let cpuKnown = elapsed > 0 && elapsed <= 60_000
       const queue = [root], seen = new Set<number>()
       while (queue.length) {
         const pid = queue.pop()!
-        if (seen.has(pid) || (pid !== root && owners.has(pid))) continue
+        if (seen.has(pid) || counted.has(pid) || (pid !== root && owners.has(pid))) continue
         seen.add(pid); counted.add(pid)
         const row = byPid.get(pid)
         if (!row) continue
@@ -122,6 +133,7 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
         else cpuKnown = false
         queue.push(...children.get(pid) ?? [])
       }
+      trees.set(root, [...seen])
       return { memoryBytes, processCount, cpuPercent: cpuKnown ? Math.round(cpuMs / elapsed * 1000) / 10 : null }
     }
     const readings = current.map(agent => {
@@ -135,6 +147,42 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
     for (const root of await sharedRoots(current)) {
       if (counted.has(root.pid) || byPid.get(root.pid)?.start !== root.start) continue
       shared.push({ kind: 'codex', agentIds: root.agentIds, ...measure(root.pid) })
+    }
+    if (deps.telemetry) {
+      const telemetry = await deps.telemetry([...counted]).catch(() => new Map<number, ProcessTelemetry>())
+      const enrich = (value: HarnessResource | NonNullable<HarnessResources['shared']>[number], pids: number[]) => {
+        const gpu = pids.map(pid => telemetry.get(pid)?.gpuMemoryBytes).filter((n): n is number => n != null)
+        const gpuUsage = pids.map(pid => telemetry.get(pid)?.gpuPercent).filter((n): n is number => n != null)
+        const rate = (key: 'readBytes' | 'writeBytes') => {
+          if (!pids.length || elapsed <= 0 || elapsed > 60_000) return null
+          let delta = 0
+          for (const pid of pids) {
+            const before = previousTelemetry.get(pid)?.[key], next = telemetry.get(pid)?.[key]
+            if (before == null || next == null || next < before || previous?.rows.get(pid)?.start !== byPid.get(pid)?.start) return null
+            delta += next - before
+          }
+          return delta * 1000 / elapsed
+        }
+        value.gpuMemoryBytes = gpu.length ? gpu.reduce((sum, n) => sum + n, 0) : null
+        value.gpuPercent = gpuUsage.length ? gpuUsage.reduce((sum, n) => sum + n, 0) : null
+        value.diskReadBytesPerSecond = rate('readBytes')
+        value.diskWriteBytesPerSecond = rate('writeBytes')
+        value.processes = pids.flatMap(pid => {
+          const row = byPid.get(pid), before = previous?.rows.get(pid)
+          if (!row) return []
+          return [{ pid, parent: row.parent, memoryBytes: row.memoryBytes,
+            cpuPercent: before?.start === row.start && elapsed > 0 && elapsed <= 60_000 && row.cpuMs >= before.cpuMs
+              ? Math.round((row.cpuMs - before.cpuMs) / elapsed * 1000) / 10 : null }]
+        }).slice(0, 256)
+      }
+      for (const value of readings) {
+        const root = current.find(a => a.agentId === value.agentId)?.processIdentity?.pid
+        enrich(value, root && value.processCount != null ? trees.get(root) ?? [] : [])
+      }
+      // Shared roots were measured after agent trees, in the same insertion order.
+      const sharedTrees = [...trees].filter(([pid]) => !owners.has(pid)).map(([, pids]) => pids)
+      shared.forEach((value, i) => enrich(value, sharedTrees[i] ?? []))
+      previousTelemetry = telemetry
     }
     previous = { at, rows: byPid }
     const value = { sampledAt: new Date(at).toISOString(), agents: readings, ...(shared.length ? { shared } : {}) }

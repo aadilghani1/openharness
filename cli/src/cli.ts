@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { ensureBundledModelManager } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -80,7 +80,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess, setUpWithin } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable, managedGridPath } from './lib/gridExec.js'
@@ -97,9 +97,12 @@ import { PairControl, StartedHarnesses } from './pair/control.js'
 import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
+import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from './lib/harnessDefaults.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { CompanionIntelligence } from './pair/intelligence.js'
 import { CodingMemoryRuntime } from './memory/runtime.js'
+import { OpenCodeMemoryBinding } from './memory/opencodeBinding.js'
+import { MemoryExperimentSettings } from './memory/experiment.js'
 import { MemoryControl } from './memory/control.js'
 import { isOwnerProcess } from './memory/ownerProcess.js'
 import { hasMemoryForegroundActivity, MemorySessionRoster } from './memory/hostSessions.js'
@@ -143,7 +146,9 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { createSessionSync } from './lib/sessionSync.js'
 import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
+import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -190,12 +195,13 @@ import {
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
+import { processIdentityKey, terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
+import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
   terminalActionNotStarted,
@@ -257,6 +263,8 @@ import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
+import { TurnActivity, type ActivityFrame } from './lib/turnActivity.js'
+import { CodexActivityReader, RuntimeActivityReader, activityRuntimeKey } from './lib/runtimeActivity.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
 import { CursorTranscriptDiscovery, findCursorTranscript } from './engines/cursor/discovery.js'
@@ -400,6 +408,11 @@ const PROXY_BACKEND_TIMEOUT_MS = 20_000
  *  stalled control-plane connection cannot hold it open. */
 const GRID_MINT_TIMEOUT_MS = 10_000
 
+/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
+ *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
+ *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
+const MODEL_MANAGER_GRID_WAIT_MS = 8_000
+
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
@@ -460,6 +473,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                no second browser, no second approval
   harness grid login --force   sign the harness in as a different account first, then the grid
   harness grid login --json    emit the same machine-readable NDJSON \`harness login --json\` emits
+  harness grid setup           have grid ready here through the running daemon: installed, signed in
+                               with THIS computer's Harness account, and the account's grid made
   harness grid logout [flags]  sign out of your grid — the whole of \`grid logout\`, which stops what
                                this box is serving BEFORE deleting anything. Flags go straight to it:
                                --force signs out over a serve child it could not confirm stopped
@@ -1578,6 +1593,7 @@ function mergedLaunchEnv(
 }
 
 /** Set by runForeground once the DSH companions exist; a frame projected before that carries none. */
+let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
@@ -1586,6 +1602,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null): Promi
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
+    activity: () => activityFrameContextRef?.(s) ?? null,
   })
 }
 
@@ -1942,8 +1959,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   let companionPromptContext: (agentId: string) => string | null = () => null
   let companionProfileChanged: () => void = () => {}
-  // Development rollout only until the memory viewer, delivery receipts and migration are reviewed.
-  const codingMemoryPreview = process.env.HARNESS_CODING_MEMORY === '1'
+  let openCodeMemoryBinding: OpenCodeMemoryBinding | null = null
+  // Local account opt-in, exposed in Settings → Experimental. The old env flag is a migration default.
+  const memoryExperiment = new MemoryExperimentSettings(join(env.ADAPTER_DATA_DIR, 'coding-memory-settings'), process.env.HARNESS_CODING_MEMORY === '1')
+  const guestMemoryProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
+  const memoryProfile = (): string | null => {
+    const current = readAuthSession()
+    return current ? current.memoryOwner?.key ?? null : guestMemoryProfile
+  }
+  const codingMemoryPreview = () => memoryExperiment.enabled(memoryProfile())
+  let applyCodingMemorySetting: () => Promise<void> = async () => {}
   let codingMemory: CodingMemoryRuntime | null = null
   let memoryPause = Promise.resolve()
   let refreshMemoryIdentity: () => Promise<void> = async () => {}
@@ -1990,27 +2015,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!daemons.on()) return null
     try { return runtimeLessons(lessonStore, workspace) } catch { return null }
   }
-  const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
-    // A terminal is not the dial's business (see `deviceAgentRow`): it is never upserted there, and
-    // the one time it must be REMOVED from there — the engine it adopted has exited — the caller
-    // sends that `agent_deleted` itself, because this row is still very much alive for the app.
-    if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
-    if (!registry.terminalAvailable(s.agentId)) {
-      pairSensor.removed(s.agentId)
-      lessonSignals.forget(s.agentId)
-      backendRef?.send({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      return
-    }
-    if (s.launch?.state === 'failed') pairSensor.failed(s.agentId, s.launch.detail ?? s.launch.error)
-    void projectFrame(s, runtimeProfiles.selectedModel(s))
-      .then((project) => {
-        const frame = { type: 'agent_synced', payload: { agent: project } }
-        backendRef?.send(frame)
-        if (opts.device !== false) backendRef?.sendCommander(frame)
-      })
-      .catch((err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err))
-  }
+  const syncSession = createSessionSync({
+    terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
+    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s)),
+    send: (frame) => backendRef?.send(frame),
+    sendCommander: (frame) => backendRef?.sendCommander(frame),
+    onUnavailable: (agentId) => {
+      pairSensor.removed(agentId)
+      lessonSignals.forget(agentId)
+    },
+    onFailed: (agentId, detail) => pairSensor.failed(agentId, detail),
+    warn: (err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err),
+  })
   const announceRename = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
     const name = projectDisplayName(s)
@@ -2269,6 +2285,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // machine's at once, so this computer's tiles are on screen whichever machine the wheel last landed on
   // and skipping the recap here would leave them permanently blank.
   /** Agents with a tile open in the desktop window right now. Empty when no window is attached. */
+  const cleanupTabs = new OpenTabProtection({
+    machineId: () => backend.machineId,
+    sessions: () => registry.list(),
+    readDesk: () => proxyBackend('GET', '/api/desk'),
+  })
   let openPaneAgents = new Set<string>()
   /** Whether the window those tiles belong to is actually in front. See onAppPanes. */
   let appWindowForeground = true
@@ -2404,6 +2425,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? commandcodeNormalizers.get(sessionId)?.turnOpen
   const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
   const watcher = new Watcher()
+  const codexActivity = new CodexActivityReader()
+  const runtimeActivity = new RuntimeActivityReader({
+    codex: session => codexActivity.read(session),
+    capture: async session => {
+      const screen = await terminals.capture(session, { mode: 'visible', ansi: true })
+      return screen.state === 'succeeded' ? screen.value : null
+    },
+  })
+  const turnActivity = new TurnActivity({
+    runtime: sessionId => {
+      const session = registry.bySession(sessionId)
+      return session?.active ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId) } : undefined
+    },
+    drain: sessionId => watcher.pollSession(sessionId),
+    probe: async sessionId => {
+      const session = registry.bySession(sessionId)
+      return session?.active ? runtimeActivity.read(session) : 'unknown'
+    },
+  })
+  activityFrameContextRef = session => isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
+  backend.activityFrameProvider = activityFrameContextRef
+
   const queuedSessionEvents: Array<{
     sessionId: string
     events: ReturnType<CursorNormalizer['ingest']>
@@ -2894,6 +2937,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  backend.monitorActivityProvider = sessionId => openQuestions.has(sessionId)
+    ? 'needsInput' : sessionTurnOpen(sessionId) ? 'working' : 'idle'
   const agentNotifications = new AgentNotifications()
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
@@ -2997,6 +3042,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const mirror = new CommanderMirror({
     notifications: agentNotifications,
     notifyWithoutDevice: true,
+    verifiedWorking: sessionId => turnActivity.snapshot(sessionId)?.state === 'working',
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
     hasDevice: () => deviceIsWatching(),        // device-gate the LLM recap (mirror node)
@@ -3169,51 +3215,34 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     companionProfileChanged()
   }
 
-  // Turn heartbeat (5s): pushes `turn_heartbeat` to the web while the turn is open (keeps its 10s
-  // turn-watchdog armed through a quiet stretch — a long tool, thinking with no new JSONL line), AND fans a
-  // busy heartbeat to the device via mirror.heartbeat() so the device's busy tile stays fresh. Unlike the
-  // web send, the device fan-out spans the WHOLE busy window — the turn AND the trailing summarize (up to
-  // the 60s one-shot timeout) — because the device clears busy only on a live terminal and has a
-  // busy-timeout watchdog that would otherwise cut a long "Summarizing…". So the timer self-cancels only
-  // once BOTH the turn is closed and mirror.heartbeat() reports idle (turn done + summary done). Mirrors the
-  // the hosted runtime brain (TURN_HEARTBEAT_MS=5000), per-session, one timer per session.
+  // A timer is an opportunity to inspect work, not proof that work is happening.
+  // Keep polling unfinished transcripts even when their activity lease expires:
+  // a missed file notification or a later completion must still be discovered.
   const TURN_HEARTBEAT_MS = 5000
   const heartbeats = new Map<string, NodeJS.Timeout>()
-  const turnStartedAt = new Map<string, number>() // sessionId → turn_started wall clock, for [turn] duration
+  const turnStartedAt = new Map<string, number>()
   const stopHeartbeat = (sessionId: string): void => {
-    const t = heartbeats.get(sessionId)
-    if (t) { clearInterval(t); heartbeats.delete(sessionId) }
+    runtimeActivity.forget(sessionId)
+    const timer = heartbeats.get(sessionId)
+    if (timer) { clearInterval(timer); heartbeats.delete(sessionId) }
   }
   const startHeartbeat = (sessionId: string): void => {
-    stopHeartbeat(sessionId) // restart → guarantee a single timer per session
-    const timer = setInterval(() => {
-      if (!registry.has(sessionId)) { stopHeartbeat(sessionId); return }
-      const turnOpen = sessionTurnOpen(sessionId)
-      // A TURN THAT IS OPEN GETS ITS TRANSCRIPT RE-READ, every beat.
-      //
-      // The engines whose turn ends in a FILE — codex writes `task_complete`,
-      // and the other JSONL readers are the same shape — depend on chokidar
-      // delivering that last write. MEASURED twice, on two sessions an hour
-      // apart: it did not. Codex finished at 15:31:38 and the turn closed at
-      // 15:35:29, to the second, because the only thing that noticed was the
-      // five-minute reconciliation sweep. The web client never saw it because
-      // it renders the terminal stream; the device waits on `turn_ended` for
-      // its recap, so it sat spinning for 3m51s on a question answered in 18s.
-      //
-      // Reading to EOF here costs one stat and a short read of a file that is
-      // already open, and it bounds that failure at one heartbeat instead of
-      // at whatever is left of a five-minute window.
-      if (turnOpen) void watcher.pollSession(sessionId)
-      // Device: keep the busy tile alive through the turn AND the summarize window. Returns false when idle.
-      const deviceBusy = mirror.heartbeat(sessionId)
-      // Web: unchanged — heartbeat only while the turn itself is open (summarizing uses turn_summary_pending).
-      if (turnOpen) {
-        const agentId = agentIdFor(sessionId)
-        backend.send(turnHeartbeatFrame(sessionId, agentId))
+    stopHeartbeat(sessionId)
+    const beat = async () => {
+      if (!registry.bySession(sessionId)?.active) {
+        stopHeartbeat(sessionId); turnActivity.forget(sessionId); return
       }
-      // Self-cancel only once the turn is closed AND the summarize is done (no more device heartbeat needed).
-      if (!turnOpen && !deviceBusy) stopHeartbeat(sessionId)
-    }, TURN_HEARTBEAT_MS)
+      if (sessionTurnOpen(sessionId)) await turnActivity.check(sessionId)
+      if (!heartbeats.has(sessionId)) return
+      const activity = turnActivity.snapshot(sessionId)
+      if (activity) {
+        backend.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+        if (activity.state === 'working') backend.send(turnHeartbeatFrame(sessionId, agentIdFor(sessionId), activity))
+      }
+      const deviceBusy = mirror.heartbeat(sessionId)
+      if (!sessionTurnOpen(sessionId) && !deviceBusy) stopHeartbeat(sessionId)
+    }
+    const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', String(error))) }, TURN_HEARTBEAT_MS)
     heartbeats.set(sessionId, timer)
   }
 
@@ -3258,13 +3287,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
     for (const [eventIndex, event] of events.entries()) {
       const agentId = agentIdFor(sessionId)
-      const frame = correlateAgentEvent(event, sessionId, agentId)
+      const replay = !!(opts?.resumed || opts?.replay)
+      turnActivity.observe(sessionId, event.type, replay)
+      const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`
       // (the payload is E2EE; the backend can only read the envelope). The backend's daily turn count
       // skips these; every other consumer ignores an unknown field. Measured before this existed: one
       // agent credited with 42 turns in a single second, all re-reads.
-      if (event.type === 'turn_started' && (opts?.resumed || opts?.replay)) frame.replay = true
+      if (replay) { frame.replay = true; frame.payload.replay = true }
       // The end of a turn carries the two facts an app needs to decide whether it is NEWS, in the clear
       // beside `agentId` for the same reason `replay` is — the payload is E2EE and the apps read this
       // without opening it:
@@ -3334,7 +3365,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // pair chats, sub-agents and replay stay excluded. Tool-free background reviews
     // never register as agents, so they cannot feed their own results back in here.
     const learnFrom = registry.bySession(sessionId)
-    if (!codingMemoryPreview && learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
+    if (!codingMemoryPreview() && learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) &&
       (!isPairHarnessSession(sessionId) || isCollectionAgent(learnFrom.agentId))) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
@@ -3345,7 +3376,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
-    if (codingMemoryPreview && daemons.on() && !opts?.resumed && !opts?.replay) void codingMemory?.tick()
+    if (codingMemoryPreview() && daemons.on() && !opts?.resumed && !opts?.replay) void codingMemory?.tick()
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
@@ -3944,7 +3975,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const json = await res.json().catch(() => ({})) as Record<string, unknown>
     const result = { status: res.status, body: json }
     if (latest?.accessToken === accessToken && latest.memoryOwner) memoryZooOwners.set(result, latest.memoryOwner.key)
-    if (codingMemoryPreview && daemons.on() && method === 'GET' && path === '/api/auth/me' && res.status === 200 && json?.success === true) {
+    if (method === 'GET' && path === '/api/auth/me' && res.status === 200 && json?.success === true) {
       const userId = (json.data as { user?: { id?: unknown } } | undefined)?.user?.id
       if (typeof userId === 'string') {
         const binding = auth.bindMemoryOwner(userId, accessToken, latest?.autonomousEnv ?? env.AUTONOMOUS_ENV).catch(() => null)
@@ -4144,6 +4175,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(recalled?.receipt ? { memoryReceiptId: recalled.receipt.id } : {}) }
     },
     onMemoryContextEmitted: async (agentId, receiptId) => await codingMemory?.promptRecallEmitted(agentId, receiptId) ?? false,
+    onOpenCodeMemoryRuntime: (agent, input) => {
+      if (!agent.processIdentity) return { observe: false }
+      const result = openCodeMemoryBinding?.receive({ agentId: agent.agentId, sessionId: agent.sessionId,
+        processKey: processIdentityKey('opencode', agent.processIdentity) }, input) ?? { observe: false }
+      if (result.observe) codingMemory?.activity()
+      return result
+    },
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -4514,7 +4552,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           ...(tmuxBackend ? [{ backend: 'tmux', instance: 'default', state: 'configured' }] : []),
         ],
         dormantAgents: registry.list().filter((session) => !session.active).length,
-        ...(codingMemoryPreview ? { codingMemory: codingMemory?.status() ?? { state: 'off' } } : {}),
+        ...(codingMemoryPreview() ? { codingMemory: codingMemory?.status() ?? { state: 'off' } } : {}),
         dataDir: tildify(env.ADAPTER_DATA_DIR),
         port: daemonPort(),
       },
@@ -4803,7 +4841,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     processes: () => processRows(),
     harnessPanePids: async () => { const inventory = await listTmuxPanes(); return inventory.ok ? inventory.panes.map((pane) => pane.rootPid) : null },
   })
-  const memoryControl = new MemoryControl({ runtime: () => codingMemory, verify: async connId => {
+  const memoryControl = new MemoryControl({ runtime: () => codingMemoryPreview() ? codingMemory : null,
+    experiment: { owner: memoryProfile, read: owner => memoryExperiment.read(owner), write: async (owner, enabled, expected) => {
+      const choice = memoryExperiment.write(owner, enabled, expected)
+      await applyCodingMemorySetting()
+      return choice
+    } }, verify: async connId => {
     const verdict = await verifyLessonCaller(connId)
     if (!verdict.ok) return verdict
     if (!await isOwnerProcess(verdict.pid)) return { ok: false, error: 'UNVERIFIED', detail: 'The memory library requires a verified process belonging to this computer’s owner.' }
@@ -4840,14 +4883,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.pairControl = pairControl
   // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
-  // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
+  // to it, stopped when idle. Automatic approvals, scoped harnessd MCP, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
     pairedUid: () => zooPair.known ? companionZoo.identity?.uid ?? null : guestCompanion?.uid ?? null,
     collectionUids: () => zooPair.known ? companionZoo.uids : guestCompanion ? [guestCompanion.uid] : [],
     engine: async (preferred) => {
-      if (!preferred) return null // A new collection chooses its engine in the viewer.
+      preferred ??= 'opencode' // New collections share the product default.
       const found = await probeEngines([preferred]).catch(() => [])
       return found.some(e => e.engine === preferred && e.installed) ? preferred : null
     },
@@ -4864,14 +4907,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     find: () => {
       const live = registry.advertised()
       return [
-        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
-        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, hasConversation: !!s.sessionId })),
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const, engine: s.engine as PairEngine, cwd: s.cwd, hasConversation: !!s.sessionId })),
       ]
     },
     create: async ({ engine, cwd, prompt, name }) => {
       if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
       const created = await backend.onCreateAgent({
-        engine, cwd, bypassPermission: false, permissionMode: 'ask', grid: null, codexHome: null,
+        engine, cwd, bypassPermission: true, permissionMode: DEFAULT_HARNESS_PERMISSION, grid: null, codexHome: null,
         dsh: PAIR_HARNESS_DSH, prompt, name, agent: null,
       })
       return created.ok ? { ok: true, agentId: created.session.agentId } : created
@@ -4881,7 +4924,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const resumed = await backend.onResumeAgent(agentId)
       return resumed.ok ? { ok: true } : resumed
     },
-    stop: async (agentId) => { await backend.onDeleteAgent?.(agentId) },
+    stop: async (agentId) => {
+      const current = registry.byAgent(agentId)
+      if (!current) return
+      if (!backend.closeAgentService) throw new Error('Safe close is unavailable.')
+      const result = await backend.closeAgentService.request({ agentId, sessionId: current.sessionId,
+        createdAt: new Date(current.registeredAt).toISOString(), mode: 'now' })
+      if (!result.closed) throw new Error(result.detail ?? 'Could not save and stop the companion.')
+    },
     send: (agentId, text) => backend.onMessage?.(agentId, text, randomUUID()),
     working: (agentId) => {
       const sessionId = registry.resolve(agentId)?.sessionId
@@ -4909,24 +4959,41 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const live = registry.advertised().find(s => s.agentId === agentId)
       const session = live ?? stoppedAgents.get(agentId)
       if (!session || session.dsh !== PAIR_HARNESS_DSH) return null
+      const nativeProcessKey = live?.processIdentity ? processIdentityKey(session.engine, live.processIdentity) : null
       return { agentId, sessionId: session.sessionId, engine: session.engine,
         profile: runtimeProfiles.selectedModel(session), stopped: !live,
         startup: live ? companionStartupProfile.selected(session) : null,
+        nativeProcessKey,
+        accountKey: session.engine === 'opencode' && nativeProcessKey ? openCodeMemoryBinding?.identity({
+          agentId, sessionId: session.sessionId, processKey: nativeProcessKey,
+        }) ?? null : undefined,
         codexHome: session.codexHome, customProvider: !!(session.grid || session.gridLaunch || session.gateway) }
     },
+    openCodeSnapshot: runtime => runtime.sessionId && runtime.nativeProcessKey ? openCodeMemoryBinding?.read({
+      agentId: runtime.agentId, sessionId: runtime.sessionId, processKey: runtime.nativeProcessKey,
+    }) ?? null : null,
     directory: join(env.ADAPTER_DATA_DIR, 'pair', 'reasoning'),
     stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'intelligence.json'),
   })
+  openCodeMemoryBinding = new OpenCodeMemoryBinding({ current: () => {
+    const ownerKey = codingMemory?.ownerKey(), status = codingMemory?.status()
+    if (!daemons.on() || !codingMemoryPreview() || !ownerKey || status?.state !== 'ready' || !status.preferences?.learn) return null
+    const session = registry.advertised().find(s => s.agentId === pairHarness.agentId())
+    if (!session || !session.active || session.dsh !== PAIR_HARNESS_DSH || session.engine !== 'opencode'
+      || !session.sessionId || !session.processIdentity) return null
+    return { ownerKey, agentId: session.agentId, sessionId: session.sessionId,
+      processKey: processIdentityKey('opencode', session.processIdentity),
+      model: parseRuntimeProfile(runtimeProfiles.selectedModel(session))?.model ?? null }
+  } })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
-  if (codingMemoryPreview) {
+  {
     const roster = new MemorySessionRoster(homedir())
-    const guestProfile = createHash('sha256').update(JSON.stringify(['harness-memory-guest-v1', computerId()])).digest('hex')
     codingMemory = new CodingMemoryRuntime({
       directory: join(env.ADAPTER_DATA_DIR, 'coding-memory'),
       context: () => {
         const current = readAuthSession()
-        const profileId = current ? current.memoryOwner?.key ?? null : guestProfile
-        return { experimental: daemons.on(), profileId,
+        const profileId = current ? current.memoryOwner?.key ?? null : guestMemoryProfile
+        return { experimental: daemons.on() && codingMemoryPreview(), profileId,
           watching: !!pairSensor.pairedDaemon() && (current
             ? !!profileId && zooMemoryOwner === profileId && zooPair.consent : guestConsent) }
       },
@@ -5077,6 +5144,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // paused if it was live (its conversation kept).
   let learnTick: ReturnType<typeof setInterval> | null = null
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
+  applyCodingMemorySetting = async () => {
+    openCodeMemoryBinding?.clear()
+    pairLearner?.cancelReviews()
+    conversationReview.stop()
+    memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
+    await memoryPause
+    if (daemons.on() && codingMemoryPreview()) {
+      codingMemory?.start()
+      await refreshMemoryIdentity()
+    }
+  }
   onDaemonsChanged = (on) => {
     plates.setOn(on)
     if (on) {
@@ -5084,15 +5162,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // everything off within the tick (before the rest of the file is read), and any other change asks for
       // the person's yes soon.
       pairRulesConfig()
-      if (!codingMemoryPreview) {
-        learnTick ??= setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
+      {
+        learnTick ??= setInterval(() => { if (!codingMemoryPreview()) void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
         learnTick.unref?.()
       }
-      void memoryPause.then(() => { if (daemons.on()) codingMemory?.start() })
+      void memoryPause.then(() => { if (daemons.on() && codingMemoryPreview()) codingMemory?.start() })
       void refreshMemoryIdentity()
       pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) { pairRulesConfig(); void refreshMemoryIdentity() } }, 30_000)
       pairConfigTick.unref?.()
     } else {
+      openCodeMemoryBinding?.clear()
       memoryPause = memoryPause.then(() => codingMemory?.pause()).catch(() => {})
       if (learnTick) { clearInterval(learnTick); learnTick = null }
       if (pairConfigTick) { clearInterval(pairConfigTick); pairConfigTick = null }
@@ -5194,6 +5273,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void cableRef?.syncSwarms()
       void cableRef?.syncAgents()
     },
+    onAppTabAgents: (connection, ids) => cleanupTabs.updateWindow(connection, ids),
     onAppPanes: (agentIds, foreground) => {
       // ORDER matters here, not just membership. The dial's carousel is built
       // around these — tiles first, in tile order — so the thumb walks the same
@@ -5548,11 +5628,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.message : err)
     }
   })
-  // Lines that were on disk before the tail began (watcher.ts `HistoryEvent`). They still stream — the
-  // clients render them the way they always have — but every `turn_started` among them is a prompt
-  // already answered, except the last one if the batch ends inside a turn: that turn is running now,
-  // and it is the one an `unseen` re-attach exists to catch (its first prompt landed before the path
-  // was known). Everything else is marked `replay` so the backend does not count it as a turn today.
+  // A transcript catch-up is history, including an unfinished last turn.
+  // Its content still streams, but only fresh events or live inspection can
+  // establish Working; replay cannot create a new completion notification.
   watcher.on('history', (batch: HistoryEvent) => {
     try {
       type Events = ReturnType<CursorNormalizer['ingest']>
@@ -5562,18 +5640,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         if (events) all.push(...events)
       }
       if (!all.length) return
-      const liveTail = sessionTurnOpen(batch.sessionId)
-        ? all.map((e) => e.type).lastIndexOf('turn_started')
-        : -1
-      const starts = all.filter((e, i) => e.type === 'turn_started' && i !== liveTail).length
-      if (starts) console.log(`[watcher] ${sid(batch.sessionId)} re-read ${batch.lines.length} lines already on disk · ${starts} past turn_started marked replay${liveTail >= 0 ? ' · last turn still open, kept live' : ''}`)
-      // Order is preserved: the live tail (if any) is emitted in place, between what surrounds it.
-      if (liveTail < 0) { emitSessionEvents(batch.sessionId, all, { replay: true }); return }
-      const before = all.slice(0, liveTail)
-      const after = all.slice(liveTail + 1)
-      if (before.length) emitSessionEvents(batch.sessionId, before, { replay: true })
-      emitSessionEvents(batch.sessionId, [all[liveTail]])
-      if (after.length) emitSessionEvents(batch.sessionId, after, { replay: true })
+      // Every line in this batch was already on disk. An unclosed last turn
+      // is not a fresh prompt; live runtime inspection can establish activity.
+      emitSessionEvents(batch.sessionId, all, { replay: true })
     } catch (err) {
       console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.message : err)
     }
@@ -6205,6 +6274,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
+      // models picker): grid is set up before the workspace asks it which grid is this account's.
+      const ensureGrid = backend.ensureGrid
+      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
+        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
+      }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
         // Asked BEFORE the template goes in: afterwards every folder has content.
@@ -6330,7 +6406,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv), !!grid || !!resumeSessionId,
+        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       codexHome,
@@ -6798,18 +6875,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onDeleteAgent = stopAgent
   backend.closeAgentService = new CloseAgentService({
     registry,
+    openTabs: cleanupTabs,
     activity: async s => {
       if (s.sessionId) await watcher.pollSession(s.sessionId)
       const screen = await captureTerminal(s.agentId, 80)
-      return inspectCloseActivity(s.engine, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
+      return inspectCloseActivity(s, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
     },
-    checkpoint: async (s, explicitlyStopped, phase) => sessionCheckpoints.save(s, {
-      explicitlyStopped, screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
+    checkpoint: async (s, phase) => sessionCheckpoints.save(s, {
+      screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
     }),
     stop: stopAgent,
     changed: announceSession,
   })
   backend.closeAgentService.start()
+  backend.cleanupPreview = async () => {
+    await cleanupTabs.refresh()
+    const sessions = registry.advertised()
+    const agents = []
+    for (const s of sessions) {
+      if (!cleanupTabs.isHidden(s)) continue
+      const target = { agentId: s.agentId, sessionId: s.sessionId, createdAt: new Date(s.registeredAt).toISOString() }
+      const inspected = await backend.closeAgentService!.request({ ...target, mode: 'inspect' })
+      if (inspected.error) continue // A changing session is never added to a reviewed batch.
+      agents.push({ ...target, name: projectDisplayName(s), engine: s.engine, activity: inspected.activity ?? 'unknown' })
+    }
+    return { version: 1, agents, kept: sessions.length - agents.length }
+  }
 
   backend.onResumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
@@ -7029,6 +7120,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     await localSocket?.close()
+    codexActivity.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
@@ -7137,6 +7229,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     await localSocket?.close()
+    codexActivity.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     await dshViewers.stopAll()
@@ -8775,6 +8868,16 @@ switch (cmd) {
     break
   case 'grid':
     if (args[0] === 'login') gridLoginCommand(flags.includes('--force'), flags.includes('--json')).catch(onError)
+    else if (args[0] === 'setup') {
+      gridSetupCommand({
+        port: daemonPort(),
+        localMachineId: readAuthSession()?.machineId ?? null,
+        daemonRunning: isDaemonRunning,
+        connect: (url) => new NewCommandSocket(url),
+        output: (line) => console.log(line),
+        error: (line) => console.error(line),
+      }).then((code) => { process.exitCode = code }).catch(onError)
+    }
     // Everything but the verb, in the order it was typed — a passthrough that allow-listed flags
     // would be a second place that has to know what `grid logout` accepts. Only the FIRST `logout`
     // token goes: filtering by value instead would eat an option's *value* the day `grid logout`

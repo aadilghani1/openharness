@@ -272,3 +272,383 @@ Final targeted validation passed **272 tests across 22 memory and companion-inte
 Local full-suite runs did not produce one clean run on this host. The first used an incomplete PATH; its two failing files passed all 100 checks with the normal PATH restored. The next run had timing failures in twelve files; all 412 checks in those files passed alone with one worker. A final one-worker full run passed 7,748 tests with two failures (a hook registry missing at the assertion and an installer timeout), plus 38 skips; those two files then passed all 48 tests unchanged. These rechecks do not relabel the failed full runs as passing. The final native quota cases were verified in the 272-test focused run. The follow-up PR must also record the result of its manually dispatched CI at the exact commit.
 
 PR #521 merged the previous checkpoint into main as `3988b8bbf`. This follow-up preserves the development flag, experimental-companion toggle and watching-consent gates. Task/session navigation, a collection-wide Helping now view, learned retrieval improvements, maintained notebooks, legacy-lesson migration, full native lifecycle verification and the held-out release evidence remain unfinished. The installed app, daemon and firmware remain unchanged.
+
+## Round nineteen: make the coding-memory preview an explicit app setting
+
+The owner can now choose **Settings → Experimental → Coding memory** instead of setting an environment variable. The choice defaults off and persists separately for each account on this computer. An explicit saved off overrides the old environment default. Changing it stops the current learner before applying the new choice, keeps saved memories, and retains the companion/watching and selected-model requirements. Opening settings reads the choice without creating a memory database or launching inference.
+
+The local preference API uses the existing verified owner-process connection, rejects agent tokens and body-supplied owner authority, checks the expected revision, and rechecks identity after asynchronous work. The UI waits for acknowledgement, clears the old account's choice, ignores late replies, and offers a read after an uncertain save without automatically repeating the write. A saved opt-in remains manageable with companions off; only its two preference actions pass that gate, while memory browsing, recall and agent tools remain off. The setting explains that learning is paused in that state.
+
+Two regressions failed before their fixes: companion-off routing prevented clearing the saved choice, and an already open Memories viewer stopped checking after an unsupported response. The viewer now discovers an enabled local service during its ordinary read refresh. This neither sends terminal input nor replays conversation history. The new regression's first post-fix run exposed an unanswered legacy-lesson fixture request; answering that request removed its pending test timer. Strict type checking also required the new route fixture's caller verdict to retain its literal error type.
+
+Validation passed **108 desktop tests across eight files**, **27 local routing/settings tests across three files**, CLI type checking, scoped Flutter analysis, release bundling and the bundled version smoke check. The normal Apple Silicon macOS debug build passed with its local signature. Synthetic [light](../research/2026-10-01-memory-setting/setting-light-1.0x.png) and [enlarged dark](../research/2026-10-01-memory-setting/setting-dark-2.0x.png) renders cover the setting at 100% and 200% text, including a narrow window. These are widget renders, not physical VoiceOver/IME validation. The full CLI run initially hit installer timeouts; a separate loopback probe proved the sandbox denied listening with `EPERM`. That run was stopped and the suite restarted with the required local-server access; the PR records its final result and exact-commit CI.
+
+At the user's request, the earlier review build and matching local CLI were installed for review. The separate review app was opened at **Companions → Memories**, and the new setting's saved on state was observed through the native UI. The personal library was empty. The later regression fixes rebuilt successfully but did not replace or restart that open app. No public release or firmware was published, no synthetic personal memories were seeded, and no additional native model calls were made. The selected Claude account's last observed weekly limit still blocks semantic evaluation. The full product gates, maintained notebook, usefulness-based ranking and other outstanding evidence remain unfinished. The programmer council continues to mean our source-grounded review, not actual participation or endorsement.
+
+The first PR #539 CI run passed 8,001 CLI tests but failed the existing `cli.ts` source-wiring check: its timer regex only recognized a callback beginning directly with `void pairLearner`, and its startup assertion predated the dynamic preview guard. The check now locates the two owned timer registrations independently of callback formatting, still requires both inside the master-switch handler, and checks the new preview gates alongside the existing shutdown assertions. No runtime behavior or test was disabled for that correction. The PR records the subsequent checks on the updated commit.
+
+The permitted local full run completed with **8,043 passed, 6 failed and 38 skipped**. One failure was that timer assertion; all **61 checks across the switch, runtime, settings and local settings-route files** passed after its correction. The remaining five failures were the installed OpenCode TUI's missing `--auto`/`--agent` flags; the OpenCode implementation and flag tests are unchanged in this PR. The full local run is recorded as failed, not relabeled by focused rechecks. Native OpenCode compatibility and the memory model-quality gates are separate from the opt-in setting's validation.
+
+Later investigation for [PR #544](https://github.com/autonomous-ai/openharness/pull/544) corrected the
+missing-flag interpretation above: both flags appear in the installed binary's stderr help output.
+The unchanged test reads only stdout, which is empty. The recorded failures remain failures of that
+test; they are not evidence that the installed binary lacks those flags.
+
+PR #539 merged as `7be7ae16afca5ee44da03a8bc14c1effead6eebd` after all four jobs in
+[its final CI run](https://github.com/autonomous-ai/openharness/actions/runs/36857274078) passed on
+head `a20f41d86aa3d09a3c7f26f9f64f6cf2683b3b4e`. No release was published.
+
+## Round twenty: maintain inspectable project notebooks
+
+Applying the published-programmer council's workspace, evidence and feedback-loop criteria, this
+round adds a project notebook as a derived reading aid. This is our source-informed review; none of
+the practitioners participated in or endorsed it. Each topic stays inside its exact project, task
+and branch scope. Only current active records enter a generated explanation; possible or conflicted
+memories remain visible as unresolved records. Statements cite exact source revisions and material
+fields. Source conditions, exceptions and validity are inherited independently of the generated prose.
+These structural checks cannot establish whether an LLM paraphrase is faithful.
+
+The durable background job shares the existing six-call hourly allowance with extraction. Completed
+episodes normally go first; one existing slot can serve a waiting notebook so continuous intake cannot
+starve every explanation. Input is bounded to 24 records and 48 KB, while coverage counts include
+omitted records. Owner browsing paginates the originals independently. No new inference budget or model
+selection was added. Leases bind source snapshot, privacy generation and selected companion context;
+interruption, account/model changes and stale results cannot publish. Correction, forgetting,
+exclusion and validity boundaries clear or hide stale pages. Forgetting the last record removes its
+derived index entry. An older writer's invalidated page can be rebuilt before its next validity deadline.
+
+Older stores are indexed in batches of 50 records while learning is enabled. Migration does not copy
+source prose or make a model call. Individual memories remain available before indexing and while
+learning is off. Owner-only notebook routes retain verified caller and identity rechecks; agent tokens
+cannot browse them. Tests exercise a bundled worker from capture through extraction, notebook
+publication, owner reading and forgetting, plus owner changes during pending reads.
+
+**Project knowledge** now opens a [notebook index](../research/2026-10-01-memory-notebooks/notebooks-dark-1.0x.png).
+A [page](../research/2026-10-01-memory-notebooks/notebook-light-1.0x.png) names its project and scope,
+shows partial coverage, and links every statement to its source memory. Conditions and exceptions stay
+visible alongside the explanation. Source links reuse the existing evidence, correction and forget
+dialog. Read-only navigation cannot send terminal input or start inference. Late page/paging replies
+cannot reopen a dismissed page or restore another account's content. After an invalidated index is
+refetched, Back restores the list position and initiating control's keyboard focus.
+
+Validation so far passed **335 backend checks across 26 files**, then **22 notebook checks** including
+three new record/byte-limit and old-store migration cases. **67 desktop checks across six files** pass.
+The first viewer run failed two synthetic fixture assumptions (a missing query map and an overly narrow
+inferred map type); both fixtures were corrected. Navigation review found an early scroll restoration;
+the delayed-index regression now covers awaiting the read before restoring focus and position. Type
+checking passed. Scoped Flutter analysis found only missing braces on the new multiline guards; those
+were corrected. The final navigation change rebuilt successfully as a normal macOS debug app with the
+Apple Silicon renderer and local signature. The full local CLI run completed with **8,086 passed,
+5 failed and 38 skipped** in 642 seconds. All five failures were the unchanged installed OpenCode
+flag checks for `--auto` and `--agent`. The run remains failed; this does not establish native OpenCode
+compatibility. After rebasing onto `606cdf15a`, **338 backend checks across 26 files** and all **67 desktop checks**
+passed, along with CLI and benchmark-runner type checks. The PR records the normal rebased build and
+exact-commit CI before merge.
+
+Synthetic renders cover normal and 200% text in both appearances, including narrow windows and long
+project paths. The [enlarged page](../research/2026-10-01-memory-notebooks/notebook-light-2.0x.png) and
+[source conditions](../research/2026-10-01-memory-notebooks/notebook-sources-dark-2.0x.png) were visually
+inspected. These do not verify physical native IME or VoiceOver. The open review app was left alone;
+no synthetic memories were written into the user's store and no native model was called. At the last
+UI observation, the selected Claude account still had no weekly allowance. Real extraction and
+notebook quality, cross-framework task benefit, usefulness-based ranking, task/session navigation,
+legacy lesson migration and the held-out rollout gates remain unfinished. The feature stays opt-in.
+
+A [synthetic scale check](../research/2026-10-01-memory-notebooks/performance.json) used 10,000 records
+across 100 queued notebooks and 10 projects. Over 220 owner reads, warm p95 was 21.882 ms for the index
+and 10.910 ms for a page; fresh-worker index p95 was 66.106 ms, with zero request timeouts. The original
+`tsx` command could not open its local IPC socket in the sandbox; `node --import tsx` ran the same
+local-only diagnostic without that socket or elevated access. No actual user data or inference was
+used. This measures queued-page browsing, not generated-prose cost, model latency or semantic benefit.
+Reproduce with `cd cli && node --import tsx scripts/memory-benchmark.ts --notebooks`.
+
+## Round 21 — explicit usefulness without automatic self-reinforcement
+
+The published-practitioner review asks whether feedback changes a future decision without becoming
+evidence that a fact is true. The development implementation now uses the owner's Helpful / Not
+helpful rating to adjust ordering among already eligible lexical candidates. It shares that signal
+across Claude and Codex only for the exact receiving project, explicit task/branch scope and known
+conditions. A changed memory revision, different context, ambiguous multi-project request or legacy
+receipt without captured relevance stays neutral. Repeated recall and transport retries earn no
+additional vote. No actual practitioner participated in this review.
+
+The adjustment is `0.125 * (helpful - unhelpful) / (ratings + 4)`, applied to the lexical score.
+This shrinks sparse feedback toward neutral and bounds its influence below 12.5%; it is a provisional
+policy to evaluate, not a calibrated probability or evidence of improved coding outcomes. Existing
+scope, source visibility, applicability, exceptions, validity and more-specific project requirements
+are checked before ranking. The same byte/item limits remain. Clearing feedback removes its effect;
+correcting or forgetting the claim also removes the old revision's influence. A rated receipt still
+does not prove that a native model received or used its content.
+
+The new relevance metadata uses an additive table so an older writer's receipt inserts continue to
+work. One-way keys do not retain prompt text or native receiver session IDs. Existing ratings remain
+inspectable; the UI explicitly identifies earlier ratings that cannot guide future recall. The
+[normal light view](../research/2026-10-01-memory-usefulness/feedback-light-1.0x.png) and
+[200% dark view](../research/2026-10-01-memory-usefulness/feedback-dark-2.0x.png) were inspected.
+These synthetic renders establish layout behavior, not native VoiceOver or physical IME behavior.
+
+Regression review found two privacy bugs before the fix: a repeated session exclusion after an
+older writer's policy change skipped cleanup, and receiving-project reinclusion could revive its
+old ratings. Both regressions failed first. Exclusion, repeated exclusion and reinclusion now discard
+that receiver activity before an equality early return, preserving only the opaque withdrawal
+receipt. Later activity can begin afresh. Source visibility is checked independently.
+
+Validation passed 317 memory/intelligence checks, then all nine focused usefulness cases including
+the additional rated-personal-default versus project-requirement case. All 40 memory viewer checks,
+scoped Flutter analysis, CLI type checking and a separate strict benchmark-runner type check passed.
+Initial fixture errors (missing required legacy policy columns and an inferred optional condition)
+were corrected separately from the two actual privacy failures. The follow-up is restacked on
+`3d55daff9`; the final whole CLI run and exact-commit manual CI results are recorded in its PR.
+
+The [scale diagnostic](../research/2026-10-01-memory-usefulness/performance.json) used 10,000 synthetic
+memories and 5,000 explicitly rated receiving contexts. Across 310 requests, warm recall p95 was
+22.127 ms and fresh-worker p95 was 64.780 ms, with zero timeouts. Reproduce with
+`cd cli && node --import tsx scripts/memory-benchmark.ts --feedback`. This measures local performance,
+not retrieval quality or real hook latency. No personal store was seeded, native model called,
+running app replaced or release published. The held-out real-history and task-benefit requirements,
+real notebook faithfulness, native lifecycle coverage and fuller task/session navigation remain open.
+
+## Round 22 — distinguish recall presence from reviewed quality
+
+The next evidence question was whether the evaluation can distinguish an appropriate memory from
+any nonempty result. Its original recall probe could not: an unrelated returned record still passed
+the presence check. That mechanical result is now explicitly labelled as presence only. The learner
+diagnostic also records the exact bounded recall context so a review can examine the text an adapter
+would receive, including conditions and exceptions, rather than relying only on record IDs.
+
+An offline review tool binds source fixtures, native output and labels by exact file hashes. It
+provides source excerpts, frozen criteria, returned records and query context with blank judgements.
+It omits model/arm labels without claiming perfect blinding. Reviewers declare their identity, kind
+and independence; the tool does not authenticate those declarations. Unsupported or irrelevant
+content, missing required knowledge and unfaithful context cannot receive reviewed-recall credit.
+Incomplete annotations remain pending, and an empty or incomplete denominator never becomes 100%.
+Semantic judgements do not establish received native context, coding-task benefit or notebook quality.
+
+The latest primary-source research also argues for measuring outcomes and appropriate controls.
+The [developer-history study](https://arxiv.org/abs/2608.10319) compares personalization with generic
+and mismatched guidance, with limited personalization benefit in its setting. The
+[VibeMemBench paper](https://arxiv.org/abs/2609.23570) separates usable prior knowledge from what
+memory systems actually supply on executable coding tasks. Their findings inform our comparison
+design; neither evaluates Harness. No external dataset has been imported or counted toward our
+held-out requirement, and no actual programmer participated in this review.
+
+All **24 extraction/review tests** pass. They cover the old false-positive nonempty recall, irrelevant
+extras, missing needs, unsupported memories, unfaithful or missing context, modified files/probes,
+changed record versions, duplicate/invented IDs and incomplete extraction. A regression exposed a
+validator that rejected a partially filled annotation depending on field order; that case failed
+before the fix and now remains pending as intended. An initial missing brace in the test fixture was
+also corrected. CLI and standalone runner type checks are recorded with the final PR checks.
+
+The CLI was run against the actual saved quota-blocked diagnostic, using only its frozen synthetic
+sources. Its [review result](../research/2026-10-01-memory-quality-review-blocked.json) correctly has
+zero completed cases out of six and null memory, recall and abstention rates. A second write to the
+same path was refused and the original report hash remained unchanged. The scorer hash was checked
+against the source file. No native inference, private history scan, production memory write, app
+replacement, firmware change or release occurred. Real model quality and the full release evidence
+remain unproven; a reviewed synthetic diagnostic will not substitute for them.
+
+## Round 23 — inspect what was prepared for the current coding session
+
+Bret Victor's [Learnable Programming](https://worrydream.com/LearnableProgramming/) argues for
+making program state and behavior visible in context. Our application of that principle is to
+show the owner which memory versions Harness prepared for an open coding session, when that
+happened, and the conditions attached to them. This is our engineering interpretation of a
+published source; Victor did not participate in or endorse this review.
+
+Companions → Memories now includes Helping now. Its session picker uses the live host roster,
+including framework, project and known session name. Each selected memory offers Read memory
+for the existing evidence/correction/forget editor, plus exact-version Helpful / Not helpful
+feedback and clearing. A transport emission remains explicitly unverified delivery. The timestamp
+describes the last recorded store preparation, which may precede the current turn; failed host
+requests and actual model use are not inferred.
+
+Review found that positive-only receipt history could leave an earlier selection looking current
+after a newer empty recall. An additive, content-free latest-attempt row now records empty/off
+results too, without creating a full history receipt. The row keeps a one-way receiver key and
+bounded metadata, never prompt text, claims or native session IDs. Retention is 30 days and at
+most 5,000 receivers. Earlier histories are not backfilled. Reads recheck source and receiver
+privacy, current revisions and validity; closed capture-grace sessions are excluded. Receiver
+exclusion removes activity, and reinclusion does not resurrect it.
+
+The owner endpoint accepts an optional host agent ID, derives native identities itself and rejects
+an identity change during the worker request. A regression test exposed an in-place mutation of
+the supplied session object: the check incorrectly accepted the old result before the fix.
+The runtime now copies the session snapshot before awaiting. Desktop reads reject late replies,
+preserve an explicit session choice, clear invalidated content and never retry a feedback write
+after an uncertain response. A library change while previewing feedback prevents application.
+
+All **92 focused CLI tests** passed, as did CLI type checking, strict benchmark-runner checking,
+scoped Flutter analysis and the icon audit. The full local CLI run had **8,238 passed, 5 failed
+and 39 skipped** in 677 seconds. The five failures are the unchanged OpenCode help checks: the
+installed binary emits its help to stderr while those tests inspect stdout. The full desktop run
+had **5,232 passed, 4 failed and 15 skipped**. All four failures were reproduced in a disposable
+copy of the unchanged base `cf69f796d`: a pending activity timer in `bios_navigation_test`, two
+stale Search harnesses/Open Harness tooltip expectations in `search_workspace_test`, and the
+watchdog expectation in `workspace_event_isolation_test`. Neither full local run is recorded as
+passing. The PR records final rebased checks and the exact-commit manual CI result.
+
+Both native macOS fixture cases passed on Apple Silicon. They exercise keyboard feedback once,
+focus return and removal of a previous memory after an empty recall. The actual renderer's
+[dark](../research/2026-10-01-memory-activity/activity-native-dark.png) and
+[light](../research/2026-10-01-memory-activity/activity-native-light.png) captures were inspected.
+Headless widget fixtures also cover narrow windows and 200% text, loading, emptiness, errors and
+identity changes. Flutter logged a failure to foreground the native fixture, although both tests
+and captures completed; physical AppKit input, IME and VoiceOver remain unverified.
+
+The [synthetic performance diagnostic](../research/2026-10-01-memory-activity-performance.json)
+used 10,000 memories, 5,000 retained receivers and 128 open-session identities. Across 310 recalls
+and activity reads, warm recall p95 was **23.061 ms**, fresh-worker recall p95 **49.793 ms**, and
+the activity read p95 **3.682 ms**, with no recall timeouts. Reproduce with
+`cd cli && node --import tsx scripts/memory-benchmark.ts --activity`. These are local lexical
+performance measurements, not semantic quality, native delivery or coding-task benefit.
+
+No private history was scanned, native model called, production memory seeded, installed review
+app replaced or release published. Real extraction and notebook faithfulness, cross-framework
+task benefit, native lifecycle coverage, task/session navigation and the held-out rollout gates
+remain open. This change makes existing recall inspectable; it does not establish those outcomes.
+
+## Native compatibility and first consented capture check — October 1
+
+The next check stayed on native transport and real-data intake. Claude Code 2.1.286 print-mode
+and Codex 0.159.3 trusted interactive probes both carried fresh synthetic memory on the next
+user prompt after resume, manual compaction and a model change. The
+[native results](../research/2026-10-01-memory-native-lifecycle.json) preserve the outgoing-request
+observations and their limits. Codex also sent unidentified requests without the marker; this
+does not certify every request, automatic mid-turn compaction, account/profile changes or
+usefulness. No actual practitioner participated in this validation.
+
+The prompt-recall gate now includes Codex 0.159.3. Its background extraction gate remains
+unchanged: a separate restricted-command probe received startup error items for missing old-model
+metadata and for the disabled code-mode host on a current model. Explicitly disabling the two
+code-mode feature flags did not remove that error. The adapter still rejects error items and does
+not choose a different model or enable execution. The probe's initial classifier was too permissive
+about startup errors; it was corrected before any extraction compatibility change. The saved
+diagnostics report failure, including normal text output that followed an error.
+
+All **156 focused memory and hook checks** passed, and CLI type checking passed. The new
+0.159.3 prompt-recall case failed before the gate change. An initial sandboxed hook test run
+could not bind its loopback servers and was stopped; the socket-enabled rerun passed. Both
+checked-in lifecycle probes were run with disposable native configuration, fake credentials
+and local mock endpoints. Native Codex folder/hook trust was reviewed under the user's existing
+explicit authorization. No installed app or production configuration was replaced.
+
+The user then explicitly requested testing on their real sessions. A private, read-only audit of
+the live memory store found no learned memories and deferred/unavailable inference. The selected
+companion was Codex / gpt-6-astra / max; the corresponding native account reported exhausted usage.
+The original transcripts and selected excerpts were kept outside the repository.
+
+A private replay of two recent coding sessions through the actual capture implementation preserved
+all **26 user messages**, but **20 belonged to source_incomplete episodes** and only six to queued
+episodes. Twelve incomplete transitions were caused by the bounded-chunk limit; fourteen first
+record-incomplete transitions were also observed. These are capture-availability counts, not
+memory-quality percentages. An independently authored six-item expectation list and abstention
+checks are saved privately for later native extraction. No Tim response or extraction-quality
+score was fabricated, and no source text or expected personal memory was seeded into production.
+The next data-intake work must preserve useful instructions in long sessions while retaining
+explicit uncertainty about genuinely missing context.
+
+### Long-session capture repair
+
+Four structural regressions reproduced the loss before the fix: a byte limit, a source-count
+limit, oversized user input followed by intact instructions, and a missing tool result between
+two intact instructions. Capture now closes intact segments as bounded context, isolates
+unreadable records, and carries that distinction through restart until a native turn boundary.
+The v4 extraction prompt describes the gaps. The durable publication check permits only explicit
+user-stated preferences, constraints, decisions or learning goals from bounded context; editing
+lease metadata cannot authorize assistant evidence, inferred preferences or execution outcomes.
+
+A [fixed-window before/after replay](../research/2026-10-01-memory-consented-capture.json) used the
+same two consented sessions and the original cutoff. Before: 26 user events captured, six queued,
+20 source-incomplete. After: all 26 captured and queued, with 20 explicitly marked bounded and
+six in complete context. All six manually authored expected-memory source spans are now available
+for learning. This proves availability only: no native model response, paraphrase-quality score,
+task benefit or production backfill was produced. Raw transcripts, quotations and expected personal
+memories remain private and outside git. The first comparison script used the wrong sample ID field;
+that harness error was corrected before recording the fixed-window results.
+
+Store schema 2 prevents old readers from treating these queued segments as complete conversations.
+The additive upgrade preserves existing records, sources, controls and exclusions; the previous
+main revision was also run against a disposable upgraded store and returned `schema_unsupported`.
+An older app cannot use the upgraded coding-memory store; it is not an automatic downgrade path.
+The installed review app and production store were left untouched. Historical source-incomplete
+jobs are not silently reclassified or replayed.
+
+Validation: the final memory suite passed **346 checks** across 26 files, including upgrade
+preservation, unsupported-version refusal and restart across a gap. Type checking passed.
+A fresh host check at 16:21 UTC showed the user had switched the companion from Codex to
+**OpenCode**, which the current memory intelligence does not support. Both existing Claude and
+Codex accounts still reported exhausted weekly limits; neither was substituted for the selected
+companion. OpenCode integration is now the immediate requirement for the requested end-to-end
+test. Actual Tim extraction and the held-out quality/rollout gates remain open.
+
+### OpenCode extraction transport, isolated and not enabled
+
+The capture repair merged in [PR 557](https://github.com/autonomous-ai/openharness/pull/557)
+as `a6f2bd0ebcfebfdfa594460609942a99c62ee204` after all four CI jobs passed for the
+exact submitted head. A fresh read of the running app still returned `DAEMONS_OFF`.
+No setting, selected model, installed app or production memory was changed to bypass that state.
+
+The new OpenCode adapter requires an explicit snapshot of the selected API account, provider,
+model definition and variant. It checks the binding before launch and after output, isolates
+native session storage, denies tools, and removes disposable state. Unknown versions, OAuth,
+unresolved configuration placeholders, non-bundled provider modules and system managed policy
+are unsupported. System policy is refused rather than overridden; native 1.18.34 loads it after
+inline configuration. This is a version-specific native transport, not a process sandbox.
+
+The [installed 1.18.34 probe](../research/2026-10-01-memory-opencode-inference.json) invoked the
+actual adapter with fake credentials and localhost responses. Normal text passed; forced shell
+and question tools were denied and rejected by the adapter, even though the native CLI retried
+the model after the denied attempt. Every request exposed zero tools and the selected synthetic
+credential/model. No forbidden file was created, and temporary session storage was removed.
+Twenty-two focused tests, the full 378-check memory/companion suite and TypeScript checking passed.
+
+This module is intentionally not connected to the companion yet. An authoritative observer for
+the foreground OpenCode account/configuration and the host runtime binding still need to be
+implemented. OpenCode capture and recall are separate remaining work. No real model evaluated
+the user's private sample, and no model-quality, useful-memory or task-benefit claim follows
+from the transport checks.
+
+### OpenCode foreground binding and companion integration
+
+The 1.x Harness plugin now observes the selected companion's native request. It asks the host
+before inspecting credentials; the host grants a five-second, one-use challenge only for the
+process-owned companion session while Coding memory, watching consent and Learn are enabled.
+The observed provider, model alias, API credential and native variant stay in volatile memory.
+No credential enters the session registry, saved profile, browser/device frames or research logs.
+The binding expires after fifteen minutes and is withdrawn on an owner, process, session, selected
+model or authorization change. Identical model credentials cannot carry a result across Harness
+owners. Only the latest submitted `chat.message` and its selected agent may observe request settings.
+Internal title, summary and compaction requests do not replace the user's selection.
+
+`CompanionIntelligence` now uses this binding for OpenCode extraction and companion reasoning,
+with checks before launch and after completion. It never guesses a provider from the machine's
+default configuration or falls back to Claude/Codex. This requires a fresh foreground request
+from the updated plugin; already-running OpenCode processes must restart to load it. The native
+version remains pinned to 1.18.34. OAuth/function-based credential wrappers, managed system
+configuration, other SDKs and OpenCode 2.x remain unsupported.
+
+The [native binding probe](../research/2026-10-01-memory-opencode-binding.json) kept a disposable
+OpenCode process alive, observed a real foreground request through the generated hook, and then
+ran the actual companion extraction against a localhost model. Both a native API login and an
+explicit provider-key override used the expected account, provider model ID and `high` variant.
+Off sent no credential snapshot and launched no extraction; scratch storage was removed. The
+first probe exposed the 1.x SDK's missing health wrapper, so the hook now uses that pinned SDK's
+in-process HTTP client for `/global/health`; the corrected path was exercised natively.
+
+A further native manual-compaction check caught an internal request replacing the user's `high`
+variant with the compaction default. Matching the request to its submitted message and agent fixed
+that regression. Both native account cases now compact and then extract with the original selected
+variant, while compaction itself requests no observation grant. Synthetic continuations are also
+excluded by the message binding; automatic compaction remains uncertified. The hook boundaries are
+defined in the [pinned plugin interface](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/plugin/src/index.ts).
+
+Validation: **516 tests across 34 affected suites**, TypeScript checking and the CLI bundle passed.
+The first unprivileged hook-server run could not bind localhost (`EPERM`); the permitted run passed.
+The required real multiplexer suite ran in a separate temporary tmux 3.7c server: nine checks
+passed, including discovery for Claude 2.1.287, Codex 0.159.3, OpenCode 1.18.34, Pi 0.85.1,
+Hermes 0.18.0 (2026.7.1), Grok 1.0.44 and its `agent` alias. Nine unavailable engine rows were
+skipped. This verifies discovery/lifecycle behavior, not those engines' memory-inference support.
+These are synthetic integration results. The host's ownership/consent inputs are supplied by the
+fixture and tested separately through the real hook server. The installed review app, its settings,
+and personal memories remain unchanged. OpenCode source capture and prompt recall, real-user
+extraction quality and the broader task-benefit/rollout requirements are still open.

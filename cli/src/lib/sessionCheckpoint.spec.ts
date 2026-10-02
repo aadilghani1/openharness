@@ -41,13 +41,12 @@ it('preserves a newly typed draft even when native history has not changed', asy
   expect(JSON.parse(await readFile(join(directory, screen), 'utf8')).screen).toBe('new unsent draft')
 })
 
-it.each(['terminal', 'codex'] as const)('requires explicit consent and a durable screen for unbound %s', async engine => {
+it.each(['terminal', 'claude', 'codex'] as const)('requires a durable screen for unbound %s', async engine => {
   row.engine = engine; row.sessionId = ''; row.transcriptPath = null
-  await expect(store.save(row, { screen: 'unsent work' })).rejects.toThrow()
-  await expect(store.save(row, { explicitlyStopped: true })).rejects.toThrow()
-  await store.save(row, { explicitlyStopped: true, screen: 'unsent work' })
+  await expect(store.save(row)).rejects.toThrow('Could not save this terminal')
+  await store.save(row, { screen: 'unsent work' })
   const before = await manifest()
-  await store.save(row, { explicitlyStopped: true })
+  await store.save(row)
   expect(await manifest()).toEqual(before)
   expect(JSON.parse(await readFile(join(directory, before.file), 'utf8')).screen).toBe('unsent work')
 })
@@ -119,9 +118,9 @@ it('rebuilds a missing backup and refuses a missing terminal snapshot', async ()
   await store.save(row)
   expect(await readFile(join(directory, (await manifest()).file), 'utf8')).toContain('retained conversation')
   row.engine = 'terminal'; row.sessionId = ''
-  await store.save(row, { explicitlyStopped: true, screen: 'draft' })
+  await store.save(row, { screen: 'draft' })
   for (const file of await readdir(directory)) if (file.endsWith('.history')) await rm(join(directory, file))
-  await expect(store.save(row, { explicitlyStopped: true })).rejects.toThrow('Could not save this terminal')
+  await expect(store.save(row)).rejects.toThrow('Could not save this terminal')
 })
 it('refuses an unset conversation path instead of inventing an empty checkpoint', async () => {
   row.transcriptPath = null

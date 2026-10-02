@@ -66,9 +66,18 @@ it('extracts scoped knowledge through one selected target and retains its exact 
   expect(record.evidence).toEqual(proposal.evidence)
   expect(record.state).toBe('active')
   expect(store.learning.status().jobs.learned).toBe(1)
+  provider.run = vi.fn(async () => JSON.stringify({ statements: [{ text: record.claim,
+    supports: [{ memoryId: record.id, revision: record.revision, paths: ['/claim', '/applicability'] }] }] }))
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'notebook_updated' })
+  expect(vi.mocked(provider.run).mock.calls[0][1].contextKey).toBe('collection:selected-account:model:high')
+  const notebookPrompt = vi.mocked(provider.run).mock.calls[0][0]
+  expect(notebookPrompt).toContain('Supporting memory records:')
+  expect(notebookPrompt).toContain('unfinished hypotheses as unproven')
+  expect(notebookPrompt).toContain(record.id)
   expect((await new MemoryLearner(memory, provider).tick()).state).toBe('idle')
   expect(provider.run).toHaveBeenCalledOnce()
-  expect(provider.target).toHaveBeenCalledTimes(2)
+  expect(provider.target).toHaveBeenCalledTimes(4)
+  expect(store.learning.status().callsLastHour).toBe(2)
 })
 
 it('shows separate episode boundaries and original roles while using a single provider call', async () => {
@@ -82,10 +91,25 @@ it('shows separate episode boundaries and original roles while using a single pr
   const prompt = vi.mocked(provider.run).mock.calls[0][0]
   const boundaries = JSON.parse(prompt.split('Episode boundaries: ')[1].split('\n')[0])
   const sources = JSON.parse(prompt.split('Captured source events: ')[1])
-  expect(boundaries).toEqual([{ episodeId: 'episode', sourceIndexes: [0] }, { episodeId: 'other_episode', sourceIndexes: [1] }])
+  expect(boundaries).toEqual([{ episodeId: 'episode', sourceIndexes: [0], context: 'complete' },
+    { episodeId: 'other_episode', sourceIndexes: [1], context: 'complete' }])
   expect(sources).toEqual([event, reply])
   expect(prompt).toContain('Never treat a reply in one episode as acceptance of a statement in another')
   expect(store.learning.status().jobs).toEqual({ learned: 1, no_useful_memory: 1 })
+})
+
+it('labels bounded context for extraction and rejects unsupported outcomes from it', async () => {
+  const partial = { ...event, id: 'partial', nativeEventId: 'partial', rootIds: ['partial'] }
+  store.learning.capture({ streamId: 'stream', engine: 'codex', sessionId: 'session', projectId: 'project', episodeId: 'partial',
+    from: '1', to: '2', events: [partial], boundary: 'bounded' })
+  const draft = { ...proposal, assertionType: 'temporary_state',
+    evidence: [{ ...proposal.evidence[0], sourceEventId: partial.id }] }
+  const provider = inference(JSON.stringify({ proposals: [draft] }))
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'failed', reason: 'bounded_context_evidence' })
+  const prompt = vi.mocked(provider.run).mock.calls[0][0]
+  expect(prompt).toContain('"context":"bounded"')
+  expect(prompt).toContain('A user request establishes requested behavior, not implemented behavior')
+  expect(store.list(access)).toEqual([])
 })
 
 it('records a no-useful-memory result separately from unavailable intelligence', async () => {
@@ -195,4 +219,55 @@ it('bounds a hung inference call and keeps the source for a later retry', async 
   resolve('{"proposals":[]}')
   expect(store.source(event.id, access)).not.toBeNull()
   expect(store.learning.status().jobs.failed).toBe(1)
+})
+
+async function seedNotebook(): Promise<void> {
+  expect((await new MemoryLearner(memory, inference()).tick()).state).toBe('learned')
+}
+
+it('cancels notebook work promptly and does not publish a late answer after foreground activity', async () => {
+  await seedNotebook()
+  const { provider, entered, resolve } = pendingInference()
+  const learner = new MemoryLearner(memory, provider)
+  const running = learner.tick()
+  expect(learner.tick()).toBe(running)
+  await entered
+  learner.cancel('foreground_activity')
+  expect(await running).toEqual({ state: 'waiting_for_quiet', reason: 'inference_interrupted' })
+  resolve('{"statements":[]}')
+  await Promise.resolve()
+  expect(store.notebookPending().state).toBe('ready')
+  expect(await new MemoryLearner(memory, inference('{"statements":[]}')).tick()).toEqual({ state: 'notebook_empty' })
+  expect(store.learning.status().callsLastHour).toBe(3)
+})
+
+it.each(['model', 'privacy', 'learn_off'] as const)('rejects notebook output when %s changes during synthesis', async change => {
+  await seedNotebook()
+  const { provider, entered, resolve } = pendingInference()
+  const running = new MemoryLearner(memory, provider).tick()
+  await entered
+  if (change === 'model') provider.target = async () => ({ state: 'ready', key: 'another-account' })
+  if (change === 'privacy') store.setSessionIncluded('codex', 'session', false)
+  if (change === 'learn_off') store.setControls({ learn: false, recall: true })
+  resolve('{"statements":[]}')
+  expect(await running).toEqual({ state: 'stale' })
+})
+
+it('keeps notebook quota failures pending and does not probe the selected account again during backoff', async () => {
+  await seedNotebook()
+  const provider = inference()
+  provider.run = vi.fn(async () => { throw new MemoryError('inference_usage_limit') })
+  const learner = new MemoryLearner(memory, provider)
+  expect(await learner.tick()).toEqual({ state: 'budget_deferred', reason: 'inference_usage_limit' })
+  expect(await learner.tick()).toEqual({ state: 'idle' })
+  expect(provider.target).toHaveBeenCalledOnce()
+  expect(provider.run).toHaveBeenCalledOnce()
+})
+
+it.each([null, 'not JSON', '{"statements":[],"decisions":[]}'])('distinguishes unavailable and malformed notebook output from empty synthesis: %s', async answer => {
+  await seedNotebook()
+  expect((await new MemoryLearner(memory, inference(answer)).tick()).state).toBe(answer === null ? 'waiting_for_model' : 'failed')
+  now += 60_001
+  expect(store.notebookPending().state).toBe('ready')
+  expect(store.list(access)).toHaveLength(1)
 })

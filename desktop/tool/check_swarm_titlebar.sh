@@ -24,6 +24,10 @@ fi
 if [[ "${2:-}" == "--history-performance" ]]; then
   optimization=(-O)
 fi
+if [[ "${2:-}" == "--tab-performance" ]]; then
+  check_source="$desktop_dir/tool/tab_activity_benchmark.swift"
+  optimization=(-O)
+fi
 if [[ "${2:-}" == "--window-zoom" ]]; then
   check_source="$desktop_dir/tool/window_zoom_checks.swift"
 fi

@@ -237,7 +237,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t coast_until;
     uint32_t character_activity;
     uint8_t status_phase;
-    uint32_t pet_next_ms;   // when the Claude pet's drawn frame next changes (clock_ms), 0 = never
+    uint32_t pet_next_ms;   // when the engine pet's drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
     uint32_t touch_started;
 } s;
@@ -921,7 +921,7 @@ static void render_home(ht_scene_t *f)
         .detail = "",
         .mood = companion_celebrating ? HT_CHARACTER_DONE : character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
-        .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,   // the Claude pet's loop
+        .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,   // the pet's loop
         .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
         .ink = FG, .foreground = FG, .dim = DIM,

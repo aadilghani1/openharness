@@ -1217,7 +1217,8 @@ class _PaneCell extends StatelessWidget {
   final WidgetBuilder? companionViewer;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
-  /// dimming or focus ring, and no zoom, since it already fills the screen.
+  /// dimming or zoom, since it already fills the screen. The focused rim still
+  /// identifies whether its machine is local or remote.
   final bool solo;
 
   bool get _single => solo || notifier.panes.length == 1;
@@ -1238,6 +1239,7 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
+    final remote = notifier.stateOf(pane.machineId)?.isLocalMachine == false;
     // Keep the selected harness's terminal and viewers clear, including while
     // a menu owns input. This changes paint, never the keyboard's destination.
     final dimmed = !_single && !notifier.isPaneEmphasized(pane);
@@ -1268,9 +1270,8 @@ class _PaneCell extends StatelessWidget {
           // edge, now that no shared line does. It only CHANGES COLOUR on
           // focus, so nothing resizes as focus moves.
           border: Border.fromBorderSide(
-            // A lone pane needs no focus distinction. Dialogs use this same
-            // rim in its focused state while they own the keyboard.
-            terminalPaneBorder(focused: !_single && focused),
+            // Keep the location cue when a pane is alone or zoomed, too.
+            terminalPaneBorder(focused: focused, remote: remote),
           ),
         ),
         // A neutral gray veil lifts inactive backgrounds and softens their text

@@ -2,6 +2,7 @@
 //! uses: every harness on every machine (relay + P2P live in the daemon), in tabs and panes that
 //! are the account's desk, driven with tmux's keys.
 
+mod activity;
 mod app;
 mod capture;
 mod tree;
@@ -32,6 +33,7 @@ mod fzf;
 mod terminal_themes;
 mod input;
 mod layout;
+mod desk_layout;
 mod local;
 mod modal;
 mod new_harness;

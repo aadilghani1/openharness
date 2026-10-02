@@ -85,6 +85,13 @@ whole file checked first, so a bad line is `file:line: why` and none of that fil
 tmux. `run-shell` lines run too: a plugin's `tmux …` reaches hn (the `tmux` on its PATH is hn),
 never a tmux server you have running.
 
+Shared tabs use the same ordered pane rectangles as desktop, including custom divider
+proportions. The layout picker offers desktop's shapes for the current pane count;
+`C-b Space` still cycles tmux's seven layouts and shares their exact geometry.
+Window resizing scales the saved arrangement without rearranging panes or publishing
+an edit. Selected tab, focus and zoom remain local to each client. Standalone tmux
+sessions retain tmux's resize behavior.
+
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
 pane numbers and the same active pane after each. hn draws these layouts as pane surfaces

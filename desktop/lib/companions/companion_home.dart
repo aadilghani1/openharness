@@ -125,8 +125,7 @@ class _CompanionHomeState extends State<CompanionHome> {
     _memoryRefresh?.cancel();
     _memoryRefresh = value == 'Memories'
         ? Timer.periodic(const Duration(seconds: 30), (_) {
-            if (_codingMemory?.valid == true &&
-                _codingMemory?.available != false) {
+            if (_codingMemory?.valid == true) {
               unawaited(_codingMemory!.refresh());
             }
             if (widget.brain.active && !_lessons.busy) {

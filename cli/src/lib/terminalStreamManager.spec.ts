@@ -113,18 +113,6 @@ describe('TerminalStreamManager', () => {
     vi.useRealTimers()
   })
 
-  it('reports other windows until their views actually close, including watchers', async () => {
-    const payload = { agentId: 'agent-1', viewId: 'v', requestId: 'r', protocolVersion: 3, cols: 120, rows: 40 }
-    await manager.handleFrame('web-1', 'terminal_open', payload)
-    expect(manager.hasOtherViews('agent-1', 'web-1')).toBe(false)
-    expect(manager.hasOtherViews('agent-1', 'web-2')).toBe(true)
-    await manager.handleFrame('web-2', 'terminal_open', { ...payload, requestId: 'r2' })
-    expect(manager.hasOtherViews('agent-1', 'web-1')).toBe(true)
-    expect(manager.hasOtherViews('unrelated', 'web-1')).toBe(false)
-    await manager.closeConnection('web-2')
-    expect(manager.hasOtherViews('agent-1', 'web-1')).toBe(false)
-  })
-
   it('publishes the complete engine catalog without a client whitelist', async () => {
     await manager.handleFrame('web-1', 'terminal_capabilities', { requestId: 'r1' })
     const result = sent.at(-1)!

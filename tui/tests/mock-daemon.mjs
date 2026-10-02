@@ -54,6 +54,9 @@ if (process.env.MOCK_PROJECT_SEARCH === '1') {
       `autonomous-harness-2026-${String(i).padStart(3, '0')}`, 'main'))
   }
 }
+if (process.env.MOCK_SHARED_LAYOUT === '1') {
+  for (let i = 1; i <= 9; i++) agents[LOCAL].push(agent(`shared-layout-${i}`, `Shared pane ${i}`, 'terminal'))
+}
 
 // Opt-in viewer fixtures, so the normal terminal roster and its tests keep their identities.
 if (process.env.MOCK_VIEWER === '1') {

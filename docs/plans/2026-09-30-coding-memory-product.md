@@ -4,7 +4,7 @@ Build memory that helps any supported coding agent work like a colleague who und
 
 This document defines the coding-specific product model. The [architecture](2026-09-30-tim-memory.md) defines storage, learning, recall, adapters, and controls. The examples below are illustrative, not a profile inferred about the current user. A development-gated runtime prototype now exists; the [review log](2026-09-30-coding-memory-review-log.md) tracks what has been implemented and tested. An initial owner library is integrated into the companion viewer; native production integration, richer project/receipt views and behavioral evaluation remain incomplete.
 
-The owner library now connects a memory to its recent recall history and accepts helpful/unhelpful feedback for a specific version and receiving context. That feedback is reversible and separate from the remembered fact. Real-model usefulness, automatic ranking from feedback, and direct navigation back to the receiving task remain unverified or unfinished.
+The owner library now connects a memory to its recent recall history and accepts helpful/unhelpful feedback for a specific version and receiving context. That feedback is reversible and separate from the remembered fact. In the development implementation it makes a bounded adjustment to recall ordering for the same project and matching task/branch scope and conditions, across Claude and Codex. It cannot override eligibility or project requirements, and repeated recall earns no reward. Real-model usefulness and direct navigation back to the receiving task remain unverified or unfinished.
 
 The [historical design council](2026-09-30-coding-memory-council.md) applies ten complementary engineering perspectives to this model. Its central addition is memory of engineering judgment: how someone approaches a problem, why a decision made sense, what evidence supports it, and what would warrant changing it. These perspectives inform our design; they are not preset personalities assigned to developers.
 
@@ -169,7 +169,26 @@ Experiments preserve the question, evaluator, baseline, candidate, conditions, s
 
 Add a maintained coding notebook to Project knowledge. It synthesizes supported records into short explanations of how the project works and why, with evidence and open questions available on demand. Pages are derived from versioned records, not an independent biography or editable policy file. Corrections, forgetting, and exclusions invalidate affected pages before recall; stale synthesis must not survive a corrected source. Saving an agent's answer never creates independent confirmation of that answer.
 
+The current notebook prototype groups each topic within its exact project/task/branch scope. The owner
+can open a page, read its source memories and their conditions, and use the existing correction or
+forget controls. **Individual memories** remains available while explanations are queued, learning is
+paused, an older service is connected, or an older store has not yet been indexed. Pages show their
+coverage and unresolved-record count; a generated explanation is not a complete account of a project.
+The companion's selected model prepares explanations inside the existing six-call hourly allowance,
+with at most 24 records and 48 KB of input per page. Browsing does not invoke a model. Mechanical
+provenance and lifecycle checks pass; faithful synthesis and improved coding outcomes still require
+real-model evaluation.
+
 ## Experience in the coding companion
+
+In the review build, enable **Settings → Experimental → Coding memory**, then open **Companions → Memories**.
+The setting is off by default, belongs to the current account on this computer, and needs no environment
+variable or restart. It uses the model selected in Companions and retains the existing watching consent.
+The viewer separates **How you work**, **Project knowledge**, and **Learning**. Turning the experiment
+off stops its background work and keeps saved memories; Learn and Recall have their own controls inside
+Memories. Companions must be enabled for learning or recall to run, but the local opt-in can still be
+cleared while companions are off. This is an opt-in preview, not evidence that the real-model rollout
+gates have passed.
 
 The memory viewer should answer four practical questions: “How do you understand my way of working?”, “What do you know about this project?”, “Why did you choose that?”, and “Where were we?” Keep the existing terminal as the place where coding work happens.
 
@@ -191,6 +210,6 @@ Extend the existing evaluation set with usage-versus-preference, team-versus-per
 
 Use matched tasks to test different reasoning and feedback preferences with the same requirements, repository, engine/model, and budget. Require the expected change in approach and a correct result. Include a preference that should be challenged, a failed approach whose conditions have changed, and a user who has not stated a style. Grade observable actions and artifacts; do not infer success from an agent saying that it remembered.
 
-Within those first workflows, include current workspace guidance and evidence attached to the actual revision. The next slice adds maintained notebook pages with correction/forget controls. Richer experiment automation remains optional follow-up; the research does not require expanding the initial product beyond coding on one machine in Claude and Codex.
+Within those first workflows, include current workspace guidance and evidence attached to the actual revision. Maintained notebook pages now have a development implementation with source correction/forget controls; task/session navigation and comparative usefulness remain unfinished. Richer experiment automation remains optional follow-up; the research does not require expanding the initial product beyond coding on one machine in Claude and Codex.
 
 The quality question is whether the agent makes a better engineering decision and the developer has to repeat less context. A richer-looking profile is not sufficient evidence.

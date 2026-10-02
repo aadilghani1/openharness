@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { createHash } from 'node:crypto'
-import { parseRuntimeProfile, type RuntimeProfile } from '../lib/runtimeProfile.js'
+import { encodeRuntimeProfile, parseRuntimeProfile, type RuntimeProfile } from '../lib/runtimeProfile.js'
 import { runClaudeOneShot, runCodexOneShot, type OneShotOptions } from '../lib/oneshot.js'
 import type { PairOneShot } from './triage.js'
 import type { StartupProfile } from './startupProfile.js'
@@ -12,6 +12,8 @@ import { memoryAccountIdentity } from '../memory/account.js'
 import type { MemoryInference, MemoryInferenceRunOptions } from '../memory/learner.js'
 import type { MemoryInferenceOptions } from '../memory/inferenceProcess.js'
 import { MemoryError } from '../memory/types.js'
+import { openCodeSnapshotIdentity, runOpenCodeMemoryInference,
+  type OpenCodeMemorySnapshot, type OpenCodeMemoryInferenceOptions } from '../memory/opencodeInference.js'
 
 export interface CompanionRuntime {
   agentId: string
@@ -21,6 +23,7 @@ export interface CompanionRuntime {
   stopped: boolean
   codexHome?: string | null
   customProvider?: boolean
+  nativeProcessKey?: string | null
   /** Opaque observed account identity, when supplied by the native host. */
   accountKey?: string | null
   startup?: StartupProfile | null
@@ -42,6 +45,9 @@ interface IntelligenceDeps {
   stateFile: string
   run?: (engine: 'claude' | 'codex', options: MemoryInferenceOptions) => Promise<{ text: string }>
   accountIdentity?: (runtime: CompanionRuntime) => Promise<string | null>
+  /** Volatile observation from the selected foreground process, with host consent checked on each read. */
+  openCodeSnapshot?: (runtime: CompanionRuntime) => OpenCodeMemorySnapshot | null
+  runOpenCode?: (options: OpenCodeMemoryInferenceOptions) => Promise<{ text: string }>
 }
 
 export class CompanionIntelligence {
@@ -68,32 +74,38 @@ export class CompanionIntelligence {
     if (opts.signal?.aborted) controller.abort()
     this.calls.add(controller)
     try {
-      const target = extraction ? await this.extractionTarget() : this.target()
+      const bound = extraction || this.deps.current()?.engine === 'opencode'
+      const target = bound ? await this.extractionTarget() : this.target()
       if (controller.signal.aborted || !target.profile || !target.runtime || target.status.state !== 'ready') return null
       if (extraction && (!('contextKey' in opts) || opts.contextKey !== target.status.contextKey)) throw new MemoryError('inference_context_changed')
       const { runtime, profile } = target
-      const engine = runtime.engine as 'claude' | 'codex'
+      const engine = runtime.engine as 'claude' | 'codex' | 'opencode'
       const assertAuthorized = (): void => {
         if (controller.signal.aborted) throw new MemoryError('inference_cancelled')
         if ('assertAuthorized' in opts) opts.assertAuthorized?.()
         if (this.target().status.contextKey !== target.runtimeContextKey) throw new MemoryError('inference_context_changed')
       }
-      if (extraction) assertAuthorized()
+      if (bound) assertAuthorized()
       mkdirSync(this.deps.directory, { recursive: true, mode: 0o700 })
       const options: MemoryInferenceOptions = {
         prompt, cwd: this.deps.directory, model: profile.model,
         ...(profile.effort !== 'auto' ? { effort: profile.effort as OneShotOptions['effort'] } : {}),
         ...(engine === 'codex' && runtime.codexHome ? { codexHome: runtime.codexHome } : {}),
         timeoutMs: opts.timeoutMs, signal: controller.signal,
-        ...(extraction ? { assertAuthorized, beforeRun: async () => {
+        ...(bound ? { assertAuthorized, beforeRun: async () => {
           const current = await this.extractionTarget()
           if (current.status.state !== 'ready' || current.status.contextKey !== target.status.contextKey) throw new MemoryError('inference_context_changed')
         } } : {}),
       }
       const run = this.deps.run ?? ((engine, options) => engine === 'claude' ? extraction ? runClaudeMemoryInference(options) : runClaudeOneShot(options)
         : extraction ? runCodexMemoryInference(options) : runCodexOneShot(options))
-      const result = await run(engine, options)
-      const current = extraction ? await this.extractionTarget() : this.target()
+      const result = engine === 'opencode'
+        ? await (this.deps.runOpenCode ?? runOpenCodeMemoryInference)({ ...options,
+          expectedSnapshot: openCodeSnapshotIdentity(target.openCodeSnapshot!),
+          readSnapshot: async () => this.target().openCodeSnapshot ?? null,
+        })
+        : await run(engine, options)
+      const current = bound ? await this.extractionTarget() : this.target()
       // A result from an old model, account, or conversation is never accepted under the new one.
       if (controller.signal.aborted || current.status.state !== 'ready' ||
         current.runtime?.sessionId !== runtime.sessionId || current.profile?.id !== profile.id ||
@@ -109,6 +121,7 @@ export class CompanionIntelligence {
   private async extractionTarget(): Promise<ReturnType<CompanionIntelligence['target']>> {
     const target = this.target()
     if (target.status.state !== 'ready' || !target.runtime) return target
+    if (target.runtime.engine === 'opencode') return target
     const identity = target.runtime.accountKey ?? await (this.deps.accountIdentity ?? memoryAccountIdentity)(target.runtime)
     const current = this.target()
     if (current.status.contextKey !== target.status.contextKey || !identity) return { status: { ...current.status, state: 'waiting' } }
@@ -116,24 +129,30 @@ export class CompanionIntelligence {
       contextKey: createHash('sha256').update(JSON.stringify([target.status.contextKey, identity])).digest('hex') } }
   }
 
-  private target(): { status: IntelligenceStatus; runtimeContextKey?: string; runtime?: CompanionRuntime; profile?: RuntimeProfile } {
+  private target(): { status: IntelligenceStatus; runtimeContextKey?: string; runtime?: CompanionRuntime; profile?: RuntimeProfile;
+    openCodeSnapshot?: OpenCodeMemorySnapshot } {
     if (!this.deps.enabled()) return { status: { state: 'off' } }
     const runtime = this.deps.current()
     if (!runtime) return { status: { state: 'unopened' } }
     const status: IntelligenceStatus = { state: 'waiting', agentId: runtime.agentId, engine: runtime.engine }
     // Custom provider credentials must not silently fall back to the local subscription.
-    if (!['claude', 'codex'].includes(runtime.engine) || runtime.customProvider) return { status: { ...status, state: 'unsupported' } }
+    if (!['claude', 'codex', 'opencode'].includes(runtime.engine) || (runtime.customProvider && runtime.engine !== 'opencode')) return { status: { ...status, state: 'unsupported' } }
+    const openCodeSnapshot = runtime.engine === 'opencode' ? this.deps.openCodeSnapshot?.(runtime) ?? undefined : undefined
+    if (runtime.engine === 'opencode' && (!runtime.sessionId || runtime.stopped || !runtime.nativeProcessKey
+      || !runtime.accountKey || !openCodeSnapshot)) return { status }
     if (!runtime.sessionId && (runtime.stopped || !runtime.startup)) return { status }
     this.load()
     const cached = this.saved![runtime.agentId]
     const value = runtime.sessionId
-      ? runtime.profile ?? (runtime.stopped && cached?.sessionId === runtime.sessionId ? cached.profile : null)
+      ? runtime.profile ?? (openCodeSnapshot ? encodeRuntimeProfile({ sessionId: runtime.agentId, engine: 'opencode', model: openCodeSnapshot.model, effort: 'auto' })
+        : runtime.stopped && cached?.sessionId === runtime.sessionId ? cached.profile : null)
       : runtime.startup?.profile
     const profile = parseRuntimeProfile(value)
     const efforts = runtime.engine === 'claude'
       ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
-      : ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+      : runtime.engine === 'opencode' ? ['auto'] : ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
     if (!profile || profile.sessionId !== runtime.agentId || profile.engine !== runtime.engine || !efforts.includes(profile.effort)) return { status }
+    if (openCodeSnapshot && openCodeSnapshot.model !== profile.model) return { status }
     // Pre-conversation readiness is live evidence, never a durable substitute for a conversation ID.
     if (runtime.sessionId && (cached?.profile !== profile.id || cached.sessionId !== runtime.sessionId)) {
       this.saved![runtime.agentId] = { sessionId: runtime.sessionId, profile: profile.id }
@@ -143,8 +162,10 @@ export class CompanionIntelligence {
       renameSync(tmp, this.deps.stateFile)
     }
     const contextKey = createHash('sha256').update(JSON.stringify([runtime.agentId, runtime.sessionId,
-      runtime.sessionId ? null : runtime.startup?.processKey, runtime.engine, profile.id, runtime.codexHome ?? null, runtime.accountKey ?? null])).digest('hex')
-    return { runtime, profile, runtimeContextKey: contextKey, status: { ...status, state: 'ready', model: profile.model, effort: profile.effort, contextKey } }
+      runtime.sessionId ? null : runtime.startup?.processKey, runtime.engine, profile.id, runtime.codexHome ?? null, runtime.accountKey ?? null,
+      runtime.nativeProcessKey ?? null, openCodeSnapshot ? openCodeSnapshotIdentity(openCodeSnapshot) : null])).digest('hex')
+    return { runtime, profile, openCodeSnapshot, runtimeContextKey: contextKey,
+      status: { ...status, state: 'ready', model: profile.model, effort: openCodeSnapshot?.variant ?? profile.effort, contextKey } }
   }
 
   private load(): void {
