@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
+import '../core/test_run.dart';
 import '../logging/http_log.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_log_sync.dart' show DeviceLogAppendAnswer, DeviceLogFetched;
@@ -57,6 +58,37 @@ class ApiClient {
         ),
       ),
     );
+    if (kUnderTest) {
+      // Plain Dart tests do not install Flutter's HTTP override. A partial API
+      // fake can otherwise inherit desk()/deskOps() and seed fixture tabs into
+      // the signed-in user's real account through the local daemon.
+      dio.interceptors.insert(
+        0,
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            final uri = options.uri;
+            final fixture =
+                (uri.scheme == 'http' || uri.scheme == 'https') &&
+                const {'127.0.0.1', 'localhost', '::1'}.contains(uri.host) &&
+                uri.hasPort &&
+                uri.port != Uri.parse(AppConfig.dev.localCliBaseUrl).port;
+            if (fixture) {
+              handler.next(options);
+            } else {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  error: StateError(
+                    'Tests must use a fake API or an isolated local server; '
+                    'access to live services is disabled.',
+                  ),
+                ),
+              );
+            }
+          },
+        ),
+      );
+    }
     final transport = localTransport;
     if (auth == null && transport != null) {
       dio.httpClientAdapter = LocalDaemonHttpAdapter(
