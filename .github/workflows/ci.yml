@@ -202,9 +202,9 @@ jobs:
       # existing worker cap/isolation: subprocess fixtures still need spare CPUs.
       # Opt-in real-engine suites retain their existing explicit skips.
       - name: Discover the complete default-suite inventory
-        run: npx vitest list --filesOnly --exclude src/pair/learn/guard.fuzz.spec.ts --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
+        run: npx vitest list --config vitest.ci.config.ts --filesOnly --exclude src/pair/learn/guard.fuzz.spec.ts --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
       - name: Run default-suite shard
-        run: npx vitest run --exclude src/pair/learn/guard.fuzz.spec.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-${{ matrix.shard }}.json"
+        run: npx vitest run --config vitest.ci.config.ts --exclude src/pair/learn/guard.fuzz.spec.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-${{ matrix.shard }}.json"
       - name: Preserve inventory and test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

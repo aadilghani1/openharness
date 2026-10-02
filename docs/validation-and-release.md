@@ -41,6 +41,17 @@ unfinished results fail it. Review the complete workflow result, including the
 serial/login-shell matrix, rather than one early finishing job. Shard reports,
 inventories and the combined summary are retained as artifacts for seven days.
 
+CI's `vitest.ci.config.ts` uses the slow-file timing hints in `cli/ci-test-durations.json`
+to distribute estimated work across the same four runners. The complete discovered
+file list remains authoritative: new files receive a default cost, and obsolete
+timing entries cannot select removed files. Hints are recorded from a passing CI
+run and can be refreshed from its per-file JSON durations if later runs become
+uneven; stale estimates affect scheduling, never coverage. Vitest keeps its normal
+ordering within each shard; the normal local configuration, including file
+shuffling, is unchanged. Use `--config vitest.ci.config.ts --shard=N/4` to reproduce
+the CI assignment locally. The aggregate still requires every discovered file
+exactly once, independent of these estimates.
+
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate
 application changes. Workflow edits also need `actionlint` and a run exercising
