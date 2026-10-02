@@ -22,14 +22,15 @@ The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab keeps the footer when
 there are live sessions to inspect.
 
-The left side shows running harnesses and their CPU, RAM, GPU and SSD consumption across connected
+The left side shows open harnesses (including idle and starting sessions) and their CPU, RAM, GPU and SSD consumption across connected
 owned machines, followed by subscription allowance used per account. The focused-pane context
 remains at the right. Count each live session even when no tab currently displays it.
 
 Clicking Harnesses or any resource metric selects the existing Harness Monitor tab across all tabs
 and machines. Create one only when absent. Clicking does not open a separate resource popover.
 Saved sessions and open/resume actions belong in Open Harness (Cmd-P). The monitor itself starts
-with active sessions, sortable resource and AI metrics, an inspector and a reviewed Stop action.
+with only open sessions, sortable resource and AI metrics, an inspector and a visible × close
+button on every row. Closing reviews one harness, ends its work and retains history and files.
 
 Use spaces of 0.75 character cells within components and two cells between complete groups,
 including the count. Adjacent controls contribute one cell of horizontal padding on each side;

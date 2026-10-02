@@ -48,7 +48,7 @@ export function mergeRows(agents, { state = {}, machine = null, local = true, no
       id, agentId: agent.id, sessionId: agent.sessionId || null,
       name: agent.name || agent.title || 'Untitled harness', title: agent.title || null,
       engine: agent.engine, ...parseModel(agent.selectedModel),
-      state: !online ? 'offline' : stopped ? 'stopped' : terminalAvailable ? (agent.engine === 'terminal' ? 'terminal' : 'running') : 'gone',
+      state: !online ? 'offline' : stopped ? 'stopped' : terminalAvailable ? (agent.engine === 'terminal' ? 'terminal' : 'running') : agent.launch?.state === 'starting' ? 'starting' : 'gone',
       activity, activityKnown: monitor?.activityKnown === true,
       stateSince: lastActivity, stoppedAt: stopped ? lastActivity : null,
       pane: agent.tmuxPane || null, paneTarget: null,

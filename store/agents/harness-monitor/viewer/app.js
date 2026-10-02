@@ -4,10 +4,10 @@ const dom = {
   search: el('search'), filter: el('filter'), machine: el('machine'), columns: el('columns'), columnOptions: el('column-options'),
   grid: el('grid'), table: el('table'), colgroup: el('colgroup'), head: el('head'), body: el('body'),
   empty: el('empty'), count: el('count'), message: el('message'), updated: el('updated'), problems: el('problems'),
-  refresh: el('refresh'), freeze: el('freeze'), live: el('live-status'), inspect: el('inspect'), stop: el('stop'), open: el('open'),
+  refresh: el('refresh'), freeze: el('freeze'), live: el('live-status'), inspect: el('inspect'),
   summary: el('summary'), shared: el('shared'), sharedTitle: el('shared-title'), sharedBody: el('shared-body'),
   inspector: el('inspector'), inspectTitle: el('inspect-title'), inspectContext: el('inspect-context'),
-  inspectContent: el('inspect-content'), inspectClose: el('inspect-close'), inspectStop: el('inspect-stop'), inspectOpen: el('inspect-open'),
+  inspectContent: el('inspect-content'), inspectClose: el('inspect-close'), inspectStop: el('inspect-stop'),
   stopDialog: el('stop-dialog'), stopTitle: el('stop-title'), stopContext: el('stop-context'), stopResult: el('stop-result'),
   stopCancel: el('stop-cancel'), stopConfirm: el('stop-confirm'),
 }
@@ -16,7 +16,7 @@ const STORAGE_KEY = 'harness-monitor.process-table.v3'
 let saved = {}
 try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') || {} } catch { /* optional preference storage */ }
 const state = {
-  rows: [], snapshot: null, query: '', filter: 'active', machine: 'all', // Every visit starts with active work.
+  rows: [], snapshot: null, query: '', filter: 'all', machine: 'all', // Only currently open harnesses, in every view.
   sort: COLUMNS.some(c => c.key === saved.sort) ? saved.sort : 'rssBytes', direction: saved.direction === 1 ? 1 : -1,
   preset: Object.hasOwn(PRESETS, saved.preset) ? saved.preset : 'overview',
   visible: new Set(Array.isArray(saved.visible) ? saved.visible : PRESETS.overview), widths: {},
@@ -41,26 +41,16 @@ async function post(path, payload) {
   if (!response.ok || result.error) throw new Error(result.error || 'Request failed. Refresh and try again.')
   return result
 }
-// Native and remote viewers share a bounded navigation-only host bridge.
-window.harnessHostQueue = []
-function openRow(id) {
-  const row = state.rows.find(r => r.id === id)
-  if (!canOpen(row)) return
-  const action = { action: 'open', machineId: row.machineId, agentId: row.agentId }
-  if (window.HarnessHost?.postMessage) window.HarnessHost.postMessage(JSON.stringify(action))
-  else if (window.harnessEmbedded) {
-    if (window.harnessHostQueue.length < 8) window.harnessHostQueue.push(action)
-  } else message('Open this viewer inside Harness to use this action.')
-}
+const CLOSE_WIDTH = 56
 const activeColumns = () => {
   const ordered = PRESETS[state.preset]
   return ordered ? ordered.map(key => COLUMNS.find(c => c.key === key))
     : COLUMNS.filter(c => c.required || state.visible.has(c.key))
 }
 function resizeColumns() {
-  for (const col of dom.colgroup.children) col.style.width = state.widths[col.dataset.key] + 'px'
+  for (const col of dom.colgroup.children) col.style.width = (col.dataset.key === 'close' ? CLOSE_WIDTH : state.widths[col.dataset.key]) + 'px'
   for (const header of dom.head.querySelectorAll('th')) header.querySelector('.resize')?.setAttribute('aria-valuenow', String(state.widths[header.dataset.key]))
-  dom.table.style.width = activeColumns().reduce((sum, c) => sum + state.widths[c.key], 0) + 'px'
+  dom.table.style.width = activeColumns().reduce((sum, c) => sum + state.widths[c.key], CLOSE_WIDTH) + 'px'
 }
 function buildColumns() {
   dom.colgroup.replaceChildren(); dom.head.replaceChildren(); state.nodes.clear(); dom.body.replaceChildren()
@@ -83,6 +73,9 @@ function buildColumns() {
     grip.onkeydown = event => { if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); change(state.widths[col.key] + (event.key === 'ArrowLeft' ? -16 : 16)); persist() } }
     th.append(sort, grip); tr.append(th)
   }
+  const closeWidth = element('col'); closeWidth.dataset.key = 'close'; dom.colgroup.append(closeWidth)
+  const closeHeader = element('th', null, 'row-actions'); closeHeader.scope = 'col'
+  closeHeader.append(element('span', 'Close harness', 'sr-only')); tr.append(closeHeader)
   dom.head.append(tr); resizeColumns(); render()
 }
 function columnMenu() {
@@ -123,7 +116,7 @@ const engineNames = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', cu
 function createRow(row) {
   const tr = element('tr'); tr.dataset.id = row.id
   tr.onclick = () => { state.selected = row.id; select(); dom.grid.focus({ preventScroll: true }) }
-  tr.ondblclick = () => inspect(row.id)
+  tr.ondblclick = event => { if (!event.target.closest('button')) inspect(row.id) }
   for (const col of activeColumns()) {
     const td = element('td', null, col.numeric ? 'numeric' : ''); td.dataset.key = col.key
     if (col.key === 'name') td.append(element('strong'), element('small'))
@@ -134,12 +127,25 @@ function createRow(row) {
     }
     tr.append(td)
   }
+  const actions = element('td', null, 'row-actions'), close = element('button', null, 'close-harness')
+  close.type = 'button'
+  const mark = element('span', '×'); mark.setAttribute('aria-hidden', 'true'); close.append(mark)
+  close.onclick = event => { event.stopPropagation(); state.selected = row.id; select(); reviewStop(row.id) }
+  actions.append(close); tr.append(actions)
   return tr
 }
 function updateRow(tr, row) {
   for (const td of tr.children) {
     const key = td.dataset.key, col = COLUMNS.find(c => c.key === key)
-    if (key === 'name') {
+    if (td.classList.contains('row-actions')) {
+      const close = td.firstChild
+      close.disabled = !canStop(row)
+      close.setAttribute('aria-label', 'Close ' + row.name)
+      close.title = state.busy.has(row.id) ? 'Closing…' : state.frozen ? 'Turn on live updates before closing.'
+        : !state.connected || !currentSnapshot() ? 'Reconnect before closing.'
+        : row.unavailable || (row.canStop ? 'Close ' + row.name : 'This harness is not ready to close.')
+      close.setAttribute('aria-busy', String(state.busy.has(row.id)))
+    } else if (key === 'name') {
       text(td.children[0], row.name); text(td.children[1], [row.project === '—' ? null : row.project, row.branch].filter(Boolean).join(' · ') || row.engine || 'Harness')
       td.title = [row.name, row.home, row.model].filter(Boolean).join('\n')
     } else if (key === 'activity') {
@@ -162,12 +168,10 @@ function updateRow(tr, row) {
 }
 const currentSelection = () => state.shown.find(r => r.id === state.selected)
 const currentSnapshot = () => ['ok', 'degraded'].includes(state.snapshot?.status)
-const canOpen = row => row?.canOpen && state.connected && currentSnapshot() && !state.frozen && !state.busy.has(row.id)
-const canStop = row => row?.canStop && state.connected && currentSnapshot() && !state.frozen && !state.busy.has(row.id)
+const canStop = row => row?.canStop && isLive(row) && state.connected && currentSnapshot() && !state.frozen && !state.busy.has(row.id)
 function select() {
   for (const [id, node] of state.nodes) node.setAttribute('aria-selected', String(id === state.selected))
-  const row = currentSelection(); dom.inspect.disabled = !row; dom.stop.disabled = !canStop(row); dom.open.disabled = !canOpen(row)
-  dom.stop.title = row ? row.unavailable || (state.frozen ? 'Turn on live updates before stopping.' : 'Stop ' + row.name + '; keep history and files') : 'Select a harness to stop'
+  dom.inspect.disabled = !currentSelection()
 }
 const totalText = (total, formatter) => total.value == null ? '—' : (total.partial ? '≥' : '') + formatter(total.value)
 function summary() {
@@ -178,14 +182,14 @@ function summary() {
   for (const [label, total, format, hint] of [
     ['CPU', sumReading(resources, 'cpu'), n => Math.round(n) + '%', '100% is one core. Shared servers count once.'],
     ['RAM', sumReading(resources, 'rssBytes'), memory, 'Resident memory including child processes and shared servers once. Shared memory pages can overlap.'],
-    ['GPU', sumReading(resources, 'gpuPercent'), n => Math.round(n) + '%', 'Reported process utilization. Unsupported counters stay unknown.'],
+    ['GPU', sumReading(resources, 'gpuPercent'), n => Math.round(n) + '%', 'Per-process GPU utilization on supported Linux NVIDIA drivers. macOS readings are unavailable (—). Cloud model GPU usage is not reported.'],
     ['Storage', storageTotal(rows.map(r => r.online === false ? { ...r, workspaceBytes: null } : r)), bytes, 'Workspace disk space. Shared and nested folders count once per machine. Stopping does not delete files.'],
     ['Tokens', sumReading(rows, 'tokens'), number, 'Conversation totals for shown sessions. Cached input is included once.'],
   ]) {
     const item = element('div', null, 'total'); item.title = hint + ' ≥ means a partial total.'
     item.append(element('span', label), element('strong', totalText(total, format))); dom.summary.append(item)
   }
-  const scope = element('p', `${(!state.connected || !currentSnapshot()) && !state.frozen ? 'Last readings' : 'Shown sessions'} · ≥ partial · — unavailable`, 'summary-scope'); dom.summary.append(scope)
+  const scope = element('p', `${(!state.connected || !currentSnapshot()) && !state.frozen ? 'Last harness readings' : 'Shown harnesses only'} · ≥ partial · — unavailable`, 'summary-scope'); dom.summary.append(scope)
   dom.shared.hidden = !shared.length; text(dom.sharedTitle, shared.length + ' shared ' + (shared.length === 1 ? 'server' : 'servers') + ' included once')
   dom.sharedBody.replaceChildren()
   for (const server of shared) {
@@ -210,16 +214,18 @@ function render() {
   select(); dom.grid.scrollTop = scrollTop; dom.grid.scrollLeft = scrollLeft
   for (const th of dom.head.querySelectorAll('th')) {
     const col = COLUMNS.find(c => c.key === th.dataset.key)
+    if (!col) continue
     th.setAttribute('aria-sort', state.sort === col.key ? (state.direction === 1 ? 'ascending' : 'descending') : 'none')
     text(th.firstChild, col.label + (state.sort === col.key ? (state.direction === 1 ? ' ↑' : ' ↓') : ''))
   }
   for (const button of document.querySelectorAll('[data-preset]')) button.setAttribute('aria-pressed', String(button.dataset.preset === state.preset))
   const ready = state.snapshot && state.snapshot.status !== 'starting'
   dom.empty.hidden = state.shown.length > 0
-  text(dom.empty.firstElementChild, !ready ? 'Connecting to your machines…' : state.query ? 'No matching harnesses' : state.filter === 'offline' ? 'No offline sessions' : state.filter === 'stopped' ? 'No stopped sessions' : 'No active harnesses')
-  text(dom.empty.lastElementChild, !ready ? 'Active sessions will appear here.' : state.query || state.machine !== 'all' || state.filter !== 'active' ? 'Try another search, machine, or status.' : 'Running sessions appear automatically. Use the Stopped filter or Open Harness to find saved sessions.')
-  const active = state.rows.filter(r => isLive(r) && r.online !== false).length
-  text(dom.count, `${state.shown.length} shown · ${active} active`)
+  const filtered = state.query || state.machine !== 'all' || state.filter !== 'all'
+  text(dom.empty.firstElementChild, !ready ? 'Connecting to your machines…' : filtered ? 'No matching harnesses' : 'No open harnesses')
+  text(dom.empty.lastElementChild, !ready ? 'Open harnesses will appear here.' : filtered ? 'Try another search, machine, or status.' : 'Harnesses appear here while they are open, including when idle.')
+  const active = state.rows.filter(isLive).length
+  text(dom.count, `${filtered ? state.shown.length + ' of ' : ''}${active} open ${active === 1 ? 'harness' : 'harnesses'}`)
   text(dom.updated, state.frozen ? 'Updates frozen' : state.receivedAt ? 'Updated ' + age(state.receivedAt) : 'Connecting…')
   text(dom.live, state.frozen ? 'Frozen' : !state.connected ? 'Reconnecting' : state.snapshot?.status === 'starting' ? 'Connecting' : !currentSnapshot() ? 'Unavailable' : 'Live')
   dom.live.classList.toggle('inactive', state.frozen || !state.connected || !currentSnapshot())
@@ -232,8 +238,8 @@ function inspect(id) {
 }
 function renderInspector() {
   const row = state.rows.find(r => r.id === state.inspecting)
-  dom.inspectStop.disabled = !canStop(row); dom.inspectOpen.disabled = !canOpen(row)
-  if (!row) { text(dom.inspectContext, 'This harness is no longer active.'); return }
+  dom.inspectStop.disabled = !canStop(row)
+  if (!row) { text(dom.inspectContext, 'This harness is no longer open.'); return }
   text(dom.inspectTitle, row.name)
   text(dom.inspectContext, [engineNames[row.engine] || row.engine, row.machine, ACTIVITY[row.activity]?.[1]].filter(Boolean).join(' · '))
   dom.inspectContent.replaceChildren()
@@ -267,14 +273,11 @@ function renderInspector() {
 function reviewStop(id) {
   const row = state.rows.find(r => r.id === id); if (!canStop(row)) return
   state.review = { id: row.id, sessionId: row.sessionId, lastActivity: row.lastActivity, name: row.name }
-  text(dom.stopTitle, 'Stop “' + row.name + '”?')
+  text(dom.stopTitle, 'Close “' + row.name + '”?')
   text(dom.stopContext, `${row.machine} · ${ACTIVITY[row.activity]?.[1] || 'Unknown'} · ${memory(row.rssBytes)} RAM · ${number(row.tokens)} tokens`)
   text(dom.stopResult, ''); dom.stopConfirm.disabled = false; dom.stopCancel.disabled = false
   dom.stopDialog.showModal()
 }
-dom.open.onclick = () => openRow(state.selected)
-dom.inspectOpen.onclick = () => openRow(state.inspecting)
-dom.stop.onclick = () => reviewStop(state.selected)
 dom.inspect.onclick = () => inspect(state.selected)
 dom.inspectStop.onclick = () => reviewStop(state.inspecting)
 dom.inspectClose.onclick = () => dom.inspector.close()
@@ -289,12 +292,15 @@ dom.stopConfirm.onclick = async () => {
     dom.stopConfirm.disabled = true
     return
   }
-  state.busy.add(review.id); dom.stopConfirm.disabled = true; dom.stopCancel.disabled = true; text(dom.stopResult, 'Stopping…'); select()
+  state.busy.add(review.id); dom.stopConfirm.disabled = true; dom.stopCancel.disabled = true; text(dom.stopResult, 'Closing…'); render()
   try {
     const reply = await post('/api/act', { verb: 'stop', ids: [review.id], manual: true, expected: [review] })
     const result = reply.results?.find(r => r.id === review.id)
-    if (!result?.ok) { text(dom.stopResult, result?.detail || 'Stop was not confirmed. Refresh to check.'); return }
-    message('Stopped ' + review.name + '. History and files kept.'); dom.stopDialog.close()
+    if (!result?.ok) { text(dom.stopResult, result?.detail || 'Close was not confirmed. Refresh to check.'); return }
+    state.rows = state.rows.filter(r => r.id !== review.id || r.sessionId !== review.sessionId)
+    message('Closed ' + review.name + '. History and files kept.'); dom.stopDialog.close()
+    if (dom.inspector.open && state.inspecting === review.id) dom.inspector.close()
+    dom.grid.focus({ preventScroll: true })
   } catch (error) { text(dom.stopResult, error.message + ' Refresh to check before trying again.') }
   finally { state.busy.delete(review.id); dom.stopCancel.disabled = false; render() }
 }
@@ -326,7 +332,7 @@ dom.freeze.onclick = () => {
   render()
 }
 function applySnapshot(snapshot) {
-  state.snapshot = snapshot; state.rows = snapshot.rows ?? []; state.receivedAt = Date.now()
+  state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(isLive); state.receivedAt = Date.now()
   const machines = new Map((snapshot.machines ?? []).map(m => [m.machineId, m.name]))
   for (const row of state.rows) machines.set(row.machineId, row.machine)
   const signature = JSON.stringify([...machines])
@@ -337,7 +343,7 @@ function applySnapshot(snapshot) {
     dom.machine.value = state.machine
   }
   dom.problems.hidden = !snapshot.problems?.length
-  text(dom.problems, (snapshot.problems ?? []).map(p => p.machine + ': ' + p.error).join(' · '))
+  text(dom.problems, (snapshot.problems ?? []).map(p => p.machine + ': ' + String(p.error ?? 'Unavailable').replace('Offline — showing the last known sessions.', 'Offline — reconnect to view open harnesses.')).join(' · '))
   render()
 }
 let stream

@@ -146,6 +146,111 @@ void main() {
     expect(monitor.resourceDetail, contains('Files remain after stopping'));
   });
 
+  test('footer counts only open owned harnesses and never uses whole-machine totals', () async {
+    final connection = _Connection();
+    final app = createApp(
+      connected: true,
+      connectionForTest: (_) => connection,
+    );
+    final monitor = HarnessMonitor(app);
+    addTearDown(monitor.dispose);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'Idle', terminalAvailable: true),
+      const Agent(id: 'starting', name: 'Starting', launchState: 'starting'),
+      const Agent(
+        id: 'saved',
+        name: 'Saved',
+        status: 'stopped',
+        terminalAvailable: true,
+      ),
+      const Agent(id: 'gone', name: 'Exited'),
+    ];
+    for (final id in ['offline', 'shared']) {
+      app.machineStates[id] =
+          MachineState(
+              Machine(
+                machineId: id,
+                authMode: MachineAuthMode.remote,
+                isShared: id == 'shared',
+              ),
+            )
+            ..nodeOnline = id != 'offline'
+            ..connectionStatus = ConnectionStatus.connected
+            ..agents = [
+              const Agent(id: 'a0', name: 'Elsewhere', terminalAvailable: true),
+            ];
+    }
+    connection.reply = {
+      'cpuPercent': 99,
+      'memoryBytes': 64e9,
+      'gpuPercent': 98,
+      'workspaceBytes': 900e9,
+      'harnesses': {
+        'sampledAt': '2026-10-02T12:00:00Z',
+        'agents': [
+          {
+            'agentId': 'a0',
+            'cpuPercent': 5,
+            'memoryBytes': 1e9,
+            'workspaceBytes': 2e9,
+            'workspacePath': '/work',
+          },
+          for (final id in ['saved', 'gone', 'unregistered'])
+            {
+              'agentId': id,
+              'cpuPercent': 900,
+              'memoryBytes': 80e9,
+              'gpuPercent': 95,
+              'workspaceBytes': 700e9,
+              'workspacePath': '/other',
+            },
+        ],
+        'shared': [
+          {
+            'kind': 'codex',
+            'agentIds': ['a0'],
+            'cpuPercent': 2,
+            'memoryBytes': 0.4e9,
+          },
+          {
+            'kind': 'codex',
+            'agentIds': ['saved'],
+            'cpuPercent': 900,
+            'memoryBytes': 80e9,
+            'gpuPercent': 95,
+          },
+        ],
+      },
+    };
+    await monitor.refresh();
+    expect(monitor.live.map((r) => r.agent.id), ['a0', 'starting']);
+    expect(monitor.label, 'Harnesses 2');
+    expect(monitor.metricsLabel(), 'CPU ≥7%   RAM ≥1 GB   GPU —   SSD ≥2 GB');
+    expect(
+      monitor.resourceDetail,
+      contains('Totals cover these harnesses only'),
+    );
+    expect(monitor.resourceDetail, contains('macOS readings are unavailable'));
+    expect(connection.calls, [
+      {'type': 'machine_resources', 'harnesses': true, 'storage': true},
+    ]);
+
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'Closed', status: 'stopped'),
+    ];
+    expect(monitor.label, 'Harnesses 0');
+    expect(monitor.metricsLabel(), 'CPU 0%   RAM 0 MB   GPU 0%   SSD 0 MB');
+    expect(monitor.sharedReadings, isEmpty);
+
+    app.machineStates['m']!.agents = [
+      const Agent(id: 'a0', name: 'Reopened', terminalAvailable: true),
+    ];
+    connection.reply.remove('harnesses');
+    await monitor.refresh();
+    expect(monitor.metricsLabel(), 'CPU —   RAM —   GPU —   SSD —');
+  });
+
   testWidgets(
     'uses one machine request for every session; tokens are existing data',
     (tester) async {

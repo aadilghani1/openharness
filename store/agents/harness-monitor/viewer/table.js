@@ -12,7 +12,7 @@ export const COLUMNS = [
   { key: 'machine', label: 'Machine', width: 120, group: 'Session' },
   { key: 'cpu', label: 'CPU %', width: 84, numeric: true, group: 'Resources', help: 'Interval CPU of this process tree. 100% is one core; multiple cores can exceed 100%.' },
   { key: 'rssBytes', label: 'RAM', width: 94, numeric: true, group: 'Resources', help: 'Resident memory, including child processes. Shared memory pages can overlap. Shared servers appear separately.' },
-  { key: 'gpuPercent', label: 'GPU %', width: 84, numeric: true, group: 'Resources', help: 'Summed process GPU utilization; can exceed 100% across processes or devices. NVIDIA on Linux where supported; — means unavailable. Cloud model GPU usage is not local usage.' },
+  { key: 'gpuPercent', label: 'GPU %', width: 84, numeric: true, group: 'Resources', help: 'Summed process GPU utilization; can exceed 100% across processes or devices. Supported Linux NVIDIA drivers only; macOS readings are unavailable (—). Cloud model GPU usage is not reported.' },
   { key: 'workspaceBytes', label: 'Storage', width: 98, numeric: true, group: 'Resources', help: 'Workspace disk space, including existing files. Shared folders repeat per row but count once in totals. Updated at most once a minute; stopping keeps these files.' },
   { key: 'tokens', label: 'Tokens', width: 98, numeric: true, group: 'AI usage', help: 'Total conversation input and output, including cached input once. Reported by the owning agent; — means unreported.' },
   { key: 'tokensPerMinute', label: 'Tokens/min', width: 110, numeric: true, group: 'AI usage', help: 'Change in total conversation tokens per minute across recent ledger updates. Includes input and cache; not model output speed.' },
@@ -39,11 +39,16 @@ export const PRESETS = {
   resources: ['name', 'activity', 'machine', 'cpu', 'rssBytes', 'gpuPercent', 'gpuMemoryBytes', 'workspaceBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'processCount'],
   ai: ['name', 'activity', 'engine', 'machine', 'model', 'tokens', 'tokensPerMinute', 'inputTokens', 'outputTokens', 'cachedTokens', 'lastActivity'],
 }
-export const isLive = row => row.live ?? (['running', 'terminal'].includes(row.state) || (!row.state && !['stopped', 'offline'].includes(row.activity)))
-export function visibleRows(rows, { query = '', filter = 'active', machine = 'all', sort = 'rssBytes', direction = -1 } = {}) {
+// Activity describes what an open harness is doing, not whether it is open.
+// Saved history and cached offline inventory never become process rows.
+export const isLive = row => row.online !== false
+  && !['stopped', 'offline', 'gone'].includes(row.state)
+  && !['stopped', 'offline'].includes(row.activity)
+  && (row.live ?? ['running', 'terminal', 'starting'].includes(row.state))
+export function visibleRows(rows, { query = '', filter = 'all', machine = 'all', sort = 'rssBytes', direction = -1 } = {}) {
   const q = query.trim().toLocaleLowerCase(), rank = Object.keys(ACTIVITY)
-  return rows.filter(row => (isLive(row) || (filter === 'stopped' && row.activity === 'stopped')) && (machine === 'all' || row.machineId === machine)
-    && (filter === 'all' || (filter === 'active' ? row.online !== false && row.activity !== 'offline' : row.activity === filter))
+  return rows.filter(row => isLive(row) && (machine === 'all' || row.machineId === machine)
+    && (filter === 'all' || row.activity === filter)
     && (!q || [row.name, row.title, row.engine, row.machine, row.project, row.branch, row.model, row.agentId, row.sessionId, row.home]
       .some(v => String(v ?? '').toLocaleLowerCase().includes(q))))
     .sort((a, b) => {

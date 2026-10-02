@@ -4,18 +4,21 @@ Inspect active harnesses across connected machines and decide what to stop. The 
 Harnesses, CPU, RAM, GPU and SSD controls select the existing Harness Monitor tab, creating one when
 needed. The tab uses the standard 70% viewer / 30% assistant split. Use the pane Zoom icon for a full-width table. Opening the table submits no model prompt.
 
-Every visit starts with active sessions; RAM is the initial default sort. Filter by machine or activity, search session
+The table lists only currently open harnesses on connected machines, including idle, working,
+waiting and starting sessions. Closed sessions and offline history never appear in this table.
+RAM is the initial default sort. Filter by machine or activity, search session
 metadata, and choose Overview, Resources or AI usage. Click a header to sort; unknown readings sort
 last in either direction. Drag a separator or use its arrow keys to resize a column. Columns and
 widths persist; search and status reset on entry. The harness name stays visible during horizontal
 scrolling. Arrow keys select; Enter or double-click opens the inspector. It includes process IDs,
-parent IDs and resource readings. Open focuses one existing pane for the selected session, or starts stopped work in one new tab when no pane remains. The Stopped filter shows saved sessions.
+parent IDs and resource readings. Each row has a visible × close button that stays available during
+horizontal scrolling. Saved sessions remain available in Open Harness (Cmd-P).
 
-Stop… reviews one selected session before asking its owning daemon to stop the validated process.
+The × button reviews that harness before asking its owning daemon to stop the validated process
+and close its panes. A confirmed close removes the row and updates the totals.
 Conversation history, launch settings and files remain. The daemon checks conversation identity again
 before stopping. Offline or disconnected sessions cannot be stopped. Freeze updates holds the displayed readings
-without affecting work, and disables Stop/Open until live updates return. Offline sessions are an explicit filter;
-saved history is also available in Open Harness (Cmd-P).
+without affecting work, and disables closing until live updates return.
 
 ## Metric definitions
 
@@ -36,8 +39,8 @@ Model, framework, machine, project, branch, folder, process count, start time an
 provide context. There is no invented dollar cost: subscription plans, caching and provider prices
 cannot be inferred reliably from total tokens.
 
-Totals describe the shown sessions and their shared servers. ≥ marks partial totals; — means
-unavailable, never measured zero. Footer totals cover the running harnesses in its count across
+Totals describe the shown open harnesses and their shared servers. ≥ marks partial totals; — means
+unavailable, never measured zero. Footer totals cover the open harnesses in its count across
 connected owned machines. CPU/GPU use whole percentages; RAM/SSD use whole MB/GB (10.4 GB → 10 GB).
 They do not include unrelated applications or whole-machine utilization.
 

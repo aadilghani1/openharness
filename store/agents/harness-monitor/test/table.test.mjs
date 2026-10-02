@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { visibleRows, memory, number, age, storageTotal, sumReading, formatValue } from '../viewer/table.js'
 const rows = [
-  { id: 'm1/a', name: 'Agent 10', cpu: 5, activity: 'working', branch: 'fix/hello', machine: 'office' },
-  { id: 'm2/a', name: 'Agent 2', cpu: 0, activity: 'idle', branch: 'main', machine: 'studio' },
-  { id: 'm1/b', name: 'Unknown', cpu: null, activity: 'offline', live: true, online: false, branch: 'main', machine: 'office' },
+  { id: 'm1/a', name: 'Agent 10', cpu: 5, activity: 'working', live: true, branch: 'fix/hello', machine: 'office' },
+  { id: 'm2/a', name: 'Agent 2', cpu: 0, activity: 'idle', live: true, branch: 'main', machine: 'studio' },
+  { id: 'm1/b', name: 'Unknown', cpu: null, activity: 'unknown', live: true, branch: 'main', machine: 'office' },
 ]
 test('sort is stable, numeric and keeps unknown measurements last in either direction', () => {
   assert.deepEqual(visibleRows(rows, { filter: 'all', sort: 'cpu', direction: -1 }).map(r => r.cpu), [5, 0, null])
@@ -14,7 +14,7 @@ test('sort is stable, numeric and keeps unknown measurements last in either dire
 })
 test('search matches metadata and combines with plain status filters', () => {
   assert.equal(visibleRows(rows, { query: 'HELLO' })[0].id, 'm1/a')
-  assert.equal(visibleRows(rows, { query: 'office', filter: 'offline' })[0].id, 'm1/b')
+  assert.equal(visibleRows(rows, { query: 'office', filter: 'unknown' })[0].id, 'm1/b')
   assert.equal(visibleRows(rows, { query: 'office', filter: 'idle' }).length, 0)
 })
 test('formatters distinguish zero from unknown and handle future timestamps', () => {
@@ -23,12 +23,27 @@ test('formatters distinguish zero from unknown and handle future timestamps', ()
   assert.equal(age(null), '—'); assert.equal(age(1100, 1000), 'now')
 })
 
-test('opens with active sessions only and never treats saved history as processes', () => {
+test('every filter excludes saved history, exited processes and cached offline sessions', () => {
   const history = { id: 'saved', name: 'Old', state: 'stopped', activity: 'stopped', live: false }
-  assert.deepEqual(visibleRows([...rows, history]).map(r => r.id).sort(), ['m1/a', 'm2/a'])
-  assert.equal(visibleRows([...rows, history], { filter: 'all' }).length, 3)
-  assert.deepEqual(visibleRows([...rows, history], { filter: 'stopped' }).map(r => r.id), ['saved'])
+  const closed = [history, { ...rows[0], id: 'offline', online: false },
+    { ...rows[1], id: 'exited', state: 'gone', live: false },
+    { ...history, id: 'stale-live-flag', live: true },
+    { ...rows[0], id: 'offline-state', state: 'offline' }]
+  assert.deepEqual(visibleRows([...rows, ...closed]).map(r => r.id).sort(), ['m1/a', 'm1/b', 'm2/a'])
+  for (const filter of ['all', 'working', 'idle', 'stopped', 'offline']) {
+    assert.equal(visibleRows(closed, { filter }).length, 0)
+  }
+  assert.equal(visibleRows([...rows, ...closed], { query: 'Old' }).length, 0)
   assert.equal(visibleRows(rows, { machine: 'missing' }).length, 0)
+})
+test('idle, completed, waiting, failed and starting harnesses remain until they close', () => {
+  const open = ['working', 'idle', 'done', 'needsInput', 'failed', 'starting', 'unknown'].map(activity => ({
+    id: activity, live: true, state: activity === 'starting' ? 'starting' : 'running', activity, cpu: 0,
+  }))
+  assert.equal(visibleRows(open).length, open.length)
+  for (const row of open) assert.deepEqual(visibleRows(open, { filter: row.activity }), [row])
+  open[1] = { ...open[1], state: 'stopped', activity: 'stopped', live: false }
+  assert.equal(visibleRows(open).length, open.length - 1)
 })
 test('shared and nested workspace paths count once on each owning machine', () => {
   const row = (machineId, workspacePath, workspaceBytes) => ({ machineId, workspacePath, workspaceBytes })
