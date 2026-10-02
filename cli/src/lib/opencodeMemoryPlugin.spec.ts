@@ -90,3 +90,15 @@ it('requires the latest submitted message in that session and accepts its actual
   await f.hook({ ...f.input, message: next })
   expect(f.posts[1].input.snapshot.variant).toBe('low')
 })
+
+it('stamps only submitted native parts, retaining existing metadata and leaving generated parts alone', async () => {
+  const f = fixture(), message = f.input.message
+  const parts = [{ id: 'part-user', sessionID: message.sessionID, messageID: message.id, type: 'text', text: 'Real request', metadata: { fixture: true } },
+    { id: 'part-synthetic', sessionID: message.sessionID, messageID: message.id, type: 'text', text: 'Generated', synthetic: true }]
+  await f.submitted({ sessionID: 'native' }, { message, parts })
+  expect(parts[0].metadata).toEqual({ fixture: true, harness_submission: { v: 1, sessionID: 'native', messageID: 'user-one' } })
+  expect(parts[1]).not.toHaveProperty('metadata')
+  expect(f.fetch).not.toHaveBeenCalled()
+  expect(f.health).not.toHaveBeenCalled()
+  await expect(f.submitted({ sessionID: 'native' }, { message, parts: [Object.freeze(parts[0])] })).resolves.toBeUndefined()
+})

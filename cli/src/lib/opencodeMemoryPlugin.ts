@@ -6,6 +6,15 @@ export function opencodeMemoryPluginSource(port: number): string {
     const message = output.message
     if (!input.sessionID || message?.sessionID !== input.sessionID || message.role !== "user"
       || typeof message.id !== "string" || typeof message.agent !== "string") return
+    // Native overflow recovery copies user parts with new message IDs and timestamps, retaining
+    // metadata. This small origin stamp distinguishes that copy from an actual new submission.
+    // It records no text, preference or credential and does not enable learning or recall.
+    try {
+      for (const part of output.parts || []) {
+        if (part.sessionID !== input.sessionID || part.messageID !== message.id || part.synthetic || part.ignored) continue
+        part.metadata = { ...part.metadata, harness_submission: { v: 1, sessionID: input.sessionID, messageID: message.id } }
+      }
+    } catch { /* An immutable third-party part must not break the submitted request. */ }
     // Only chat.message observes an actual submitted request. Compaction and its synthetic
     // auto-continue messages are written internally and must not replace the user's selection.
     memoryMessages.delete(input.sessionID)

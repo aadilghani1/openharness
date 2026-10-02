@@ -19,6 +19,7 @@ const owner = 'synthetic-owner', access = { profileId: owner, projectIds: [], in
 let native, nativeUrl, stdout = '', stderr = '', allowedSession, phase = 'on', runtime, store, requestAgent
 let report
 let overflowSent = false
+let errorSent = false
 const server = createServer(async (request, response) => {
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
@@ -50,6 +51,13 @@ const server = createServer(async (request, response) => {
     markers: JSON.stringify(body).split(marker).length - 1,
     correctedMarkers: JSON.stringify(body).split(correctedMarker).length - 1,
     hasCurrentRequest: JSON.stringify(body).includes('Synthetic parser review') })
+  if (phase === 'overflow-replay' && !errorSent) {
+    errorSent = true
+    response.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      message: "This model's maximum context length is 128000 tokens. However, you requested 129000 tokens.",
+      type: 'invalid_request_error', param: 'messages', code: 'context_length_exceeded',
+    } })); return
+  }
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   const overflow = phase === 'auto-prime' && !overflowSent
   if (overflow) overflowSent = true
@@ -69,12 +77,13 @@ try {
   const cli = dirname(dirname(fileURLToPath(import.meta.url))), bundle = join(directory, 'probe.mjs')
   await build({ stdin: { contents: [
     `export { opencodeRecallPluginSource } from ${JSON.stringify(join(cli, 'src/lib/opencodeRecallPlugin.ts'))};`,
+    `export { opencodeMemoryPluginSource } from ${JSON.stringify(join(cli, 'src/lib/opencodeMemoryPlugin.ts'))};`,
     `export { CodingMemoryStore } from ${JSON.stringify(join(cli, 'src/memory/store.ts'))};`,
     `export { CodingMemoryRuntime } from ${JSON.stringify(join(cli, 'src/memory/runtime.ts'))};`,
     `export { QUEUE_OPERATIONS } from ${JSON.stringify(join(cli, 'src/memory/operations.ts'))};`,
   ].join('\n'), resolveDir: cli }, outfile: bundle, bundle: true, platform: 'node', format: 'esm', target: 'node22',
     banner: { js: "import { createRequire as createFixtureRequire } from 'node:module'; const require = createFixtureRequire(import.meta.url);" } })
-  const { opencodeRecallPluginSource, CodingMemoryStore, CodingMemoryRuntime, QUEUE_OPERATIONS } = await import(pathToFileURL(bundle).href)
+  const { opencodeRecallPluginSource, opencodeMemoryPluginSource, CodingMemoryStore, CodingMemoryRuntime, QUEUE_OPERATIONS } = await import(pathToFileURL(bundle).href)
   runtime = new CodingMemoryRuntime({ directory: join(directory, 'memory'),
     context: () => ({ experimental: true, watching: true, profileId: owner }),
     sessions: () => allowedSession ? [{ agentId: 'fixture-agent', engine: 'opencode', sessionId: allowedSession,
@@ -90,6 +99,7 @@ try {
   const plugin = join(directory, 'recall.mjs')
   await writeFile(plugin, `const hookToken = () => 'synthetic-hook-token';
   export const Fixture = async ({client}) => {
+    ${opencodeMemoryPluginSource(server.address().port)}
     ${opencodeRecallPluginSource(server.address().port)}
     const post = async (route, body) => {
       const response = await fetch(${JSON.stringify(url)} + route, { method: 'POST', signal: AbortSignal.timeout(400),
@@ -98,6 +108,7 @@ try {
     }
     return {
       'chat.message': async (input, output) => {
+        await memoryMessage(input, output)
         await recallMessage(input, output)
         await post('/fixture/observe', { hook: 'chat.message', input, message: output.message,
           parts: output.parts.map(part => ({ ...part, text: part.text ? '[synthetic prompt]' : undefined })) })
@@ -190,6 +201,11 @@ try {
     assert.equal(automatic.filter(request => request.agent === 'compaction').length, 1)
     assert.ok(automatic.filter(request => request.agent === 'compaction').every(request => request.markers === 0))
     assert.equal(automatic.filter(request => request.agent === 'memory_fixture' && request.markers === 1).length, 2)
+    phase = 'overflow-replay'; await send(allowedSession)
+    const replay = requests.filter(request => request.phase === 'overflow-replay')
+    assert.equal(replay.filter(request => request.agent === 'compaction').length, 1)
+    assert.ok(replay.filter(request => request.agent === 'compaction').every(request => request.markers === 0))
+    assert.equal(replay.filter(request => request.agent === 'memory_fixture' && request.markers === 1 && request.hasCurrentRequest).length, 2)
     const { evidence: _evidence, evidenceClass: _class, ...correction } = draft
     const corrected = store.correctFromUser(record.id, record.revision, { ...correction,
       claim: `For parser reviews, first confirm the failing example. ${correctedMarker}`,
@@ -205,10 +221,11 @@ try {
       persistedMemoryParts: persisted, offReceivedContext: false, unavailableBlockedPrompt: false,
       otherSessionReceivedContext: false, compactionReceivedContext: false, automaticContinuationReceivedContext: true,
       correctedReceivedLatestRevision: true, forgottenReceivedContext: false, sourcePrivacyRespected: true,
+      overflowReplayReceivedContext: true,
       sourceEngine: 'claude', receivingEngine: 'opencode', learnOffRecallOn: true },
       limitations: ['Synthetic seeded Claude evidence/proposal; no real model extraction or semantic usefulness measurement.',
         'Production plugin and shared runtime/store; fixture HTTP/process binding, not production ancestry resolution.',
-        'No interactive TUI, overflow replay or provider matrix certification.'] }
+        'No interactive TUI or provider matrix certification.'] }
     console.log(JSON.stringify(report, null, 2))
   } finally { db.close() }
 } finally {

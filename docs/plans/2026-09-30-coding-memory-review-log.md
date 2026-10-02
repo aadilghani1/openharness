@@ -731,3 +731,47 @@ authorization is tested separately. Interactive TUI delivery, overflow replay an
 matrix are not certified by this recording. Cross-framework runtime tests additionally verify that
 Codex and OpenCode see the same corrected record ID/revision and the same deletion. No installed app,
 global plugin, live memory, provider setting, firmware or release was changed by this increment.
+
+### One user submission stays one source after native overflow recovery
+
+The real OpenCode 1.18.34 binary exposed a capture bug when a localhost mock provider returned a
+context-length error. Native recovery compacted the history and copied the pending user request with
+new IDs and timestamps, without marking it synthetic. Capture counted that single submission twice.
+That would let a framework retry look like independent support for a lesson.
+
+The existing plugin now stamps submitted parts with Harness-owned origin metadata containing only
+the native session/message IDs and a schema version. Native recovery preserves that stamp. Capture
+excludes the copy; a genuine later submission remains eligible, even when its text repeats an earlier
+request. Only a valid origin in the bound session can establish a fresh submission. The native model
+request contained no origin metadata. Stamping does not turn on learning, recall or model binding.
+
+For existing sessions without stamps, the read-only reader recognizes the first user record after a
+successful automatic overflow compaction from native causal metadata. The previous-user lookup uses
+the recorded `(session_id,time_created,id)` index. In a 10,000-message synthetic query comparison,
+median reads at the beginning, middle and end stayed approximately 1.3 ms, similar to the pre-change
+reader. This is an in-memory SQLite query measurement, not live capture latency. Manual compaction,
+non-overflow compaction and failed summaries do not trigger this fallback. An unmarked new request
+after a process crash between compaction and replay is ambiguous and is conservatively withheld;
+newly stamped submissions resolve that ambiguity.
+
+The native source probe now exercises overflow, forks, new fork instructions, manual compaction and
+undo. Both stamped and unmarked recordings yielded one source for the replayed user statement;
+restarting capture yielded no duplicate. Regression cases also cover enabling learning between the
+original and copied request, genuine repetitions, foreign origins and missing compaction records.
+The raw synthetic records and exact source hashes are in
+[`opencode-1.18.34-overflow.json`](../../cli/src/memory/__fixtures__/opencode-1.18.34-overflow.json).
+
+Recall follows the verified original submission through overflow recovery and retrieves fresh
+context. The updated native recall recording shows the same shared Claude-sourced memory in the
+original and retried OpenCode requests, none in the compaction request, and zero injected parts in
+native storage. Its correction, deletion, source-privacy and Recall-off checks still pass. These
+recordings demonstrate transport and source handling; they do not measure semantic extraction or
+task benefit. They do not certify interactive TUI delivery or all provider configurations.
+
+The first full CLI run passed every test assertion but failed on an unrelated fixture exception:
+the devices-command test server sent HTTP 200 headers before attempting a 404. Its default content
+type is now set without prematurely sending headers. No product device behavior changed.
+
+This change prevents new duplicate capture; it does not rewrite previously saved evidence or
+memories. No live memory, installed app, global plugin, provider setting or release was changed.
+The real-session quality sample still requires explicit approval for its external model destination.

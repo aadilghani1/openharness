@@ -15,12 +15,22 @@ const database = join(directory, 'native.db'), workspace = join(directory, 'work
 const cli = dirname(dirname(fileURLToPath(import.meta.url)))
 const consentAt = Date.now()
 let native, nativeUrl, stderr = '', stdout = '', phase = 'turn', requestedTool = false
+let sentOverflow = false, originMetadataForwarded = false
+const markOrigins = process.env.MEMORY_SOURCE_ORIGINS !== '0'
 let store
 let closeSources = () => {}
 const model = createServer(async (request, response) => {
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks))
+  originMetadataForwarded ||= JSON.stringify(body).includes('harness_submission')
+  if (phase === 'overflow' && !sentOverflow) {
+    sentOverflow = true
+    response.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      message: "This model's maximum context length is 128000 tokens. However, you requested 129000 tokens.",
+      type: 'invalid_request_error', param: 'messages', code: 'context_length_exceeded',
+    } })); return
+  }
   const tools = (body.tools ?? []).map(tool => tool.function?.name)
   const read = phase === 'turn' && tools.includes('read') && !requestedTool
   if (read) requestedTool = true
@@ -45,9 +55,10 @@ try {
     `export { CodingMemoryStore } from ${JSON.stringify(join(cli, 'src/memory/store.ts'))};`,
     `export { QUEUE_OPERATIONS } from ${JSON.stringify(join(cli, 'src/memory/operations.ts'))};`,
     `export { closeSqliteHandles } from ${JSON.stringify(join(cli, 'src/lib/sqliteRead.ts'))};`,
+    `export { opencodeMemoryPluginSource } from ${JSON.stringify(join(cli, 'src/lib/opencodeMemoryPlugin.ts'))};`,
   ].join('\n'), resolveDir: cli }, outfile: bundle, bundle: true, platform: 'node', format: 'esm', target: 'node22',
     banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } })
-  const { NativeMemoryCapture, CodingMemoryStore, QUEUE_OPERATIONS, closeSqliteHandles } = await import(pathToFileURL(bundle).href)
+  const { NativeMemoryCapture, CodingMemoryStore, QUEUE_OPERATIONS, closeSqliteHandles, opencodeMemoryPluginSource } = await import(pathToFileURL(bundle).href)
   closeSources = closeSqliteHandles
   const opened = CodingMemoryStore.open({ directory: join(directory, 'memory'), profileId: 'fixture', now: () => consentAt })
   assert.ok(opened.ok); store = opened.store
@@ -64,7 +75,12 @@ try {
     store.learning.finish(claim.lease, [], target)
     return claim.lease
   }
-  const config = { autoupdate: false, share: 'disabled', snapshot: false, plugin: [], mcp: {}, instructions: [],
+  const plugin = join(directory, 'origin.mjs')
+  await writeFile(plugin, `const hookToken = () => ''; export const Fixture = async ({client}) => {
+    ${opencodeMemoryPluginSource(1)}; return { 'chat.message': memoryMessage } }`, { mode: 0o600 })
+  const config = { autoupdate: false, share: 'disabled', snapshot: false,
+    plugin: markOrigins ? [pathToFileURL(plugin).href] : [], mcp: {}, instructions: [],
+    compaction: { auto: true, prune: false },
     permission: { '*': 'deny', read: { '*': 'deny', 'fixture.txt': 'allow', [join(workspace, 'fixture.txt')]: 'allow' } },
     enabled_providers: ['fixture'], model: 'fixture/model', small_model: 'fixture/model',
     agent: { source_fixture: { mode: 'primary', description: 'Native source fixture',
@@ -78,7 +94,7 @@ try {
       XDG_DATA_HOME: join(directory, 'data'), XDG_CACHE_HOME: join(directory, 'cache'), XDG_STATE_HOME: join(directory, 'state'),
       OPENCODE_DB: database, OPENCODE_CONFIG_CONTENT: JSON.stringify(config), OPENCODE_AUTH_CONTENT: '{}',
       OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_DISABLE_AUTOCOMPACT: '1', TERM: 'dumb' },
+      TERM: 'dumb' },
   })
   native.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-5000); nativeUrl = stdout.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] })
   native.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-5000) })
@@ -111,6 +127,19 @@ try {
     assert.equal((await captureSession(session.id)).sources, 6)
     assert.deepEqual(drain().sources.map(row => row.role), ['user', 'reference', 'user', 'assistant', 'tool', 'assistant'])
     assert.equal((await captureSession(session.id)).sources, 0)
+    phase = 'overflow'
+    const retriedPrompt = 'When changing parser code, keep a regression test for the original failure.'
+    await send(session.id, retriedPrompt)
+    const overflow = snapshot(session.id)
+    const overflowCapture = await captureSession(session.id), overflowSources = []
+    for (;;) {
+      const target = { state: 'ready', key: 'synthetic' }, claimed = store.learning.claim(target)
+      if (claimed.state !== 'claimed') break
+      overflowSources.push(...claimed.lease.sources)
+      store.learning.finish(claimed.lease, [], target)
+    }
+    const replayedUserEvidence = overflowSources.filter(source => source.role === 'user' && source.text === retriedPrompt).length
+    phase = 'after-overflow'
     const fork = await call(`/session/${session.id}/fork`, {})
     const copied = snapshot(fork.id)
     assert.ok(copied.messages.length > 0)
@@ -131,9 +160,9 @@ try {
     const reverted = snapshot(fork.id)
     assert.equal(JSON.parse(reverted.sessions[0].revert).messageID, user.id)
     assert.equal((await captureSession(fork.id)).reason, 'native_session_reverted')
-    const recording = { version: '1.18.34', synthetic: true,
-      schema: db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name IN ('session','message','part') ORDER BY name").all(),
-      turn, copied, forkWithNewTurn, compaction, reverted }
+    const recording = { version: '1.18.34', synthetic: true, markOrigins, originMetadataForwarded,
+      schema: db.prepare("SELECT name,sql FROM sqlite_master WHERE tbl_name IN ('session','message','part') AND sql IS NOT NULL ORDER BY name").all(),
+      turn, overflow, overflowCapture, overflowSources, replayedUserEvidence, copied, forkWithNewTurn, compaction, reverted }
     // Recording contains only fixture text; replace the disposable absolute path before storing it.
     const sanitized = JSON.stringify(recording, null, 2).replaceAll(directory, '/fixture') + '\n'
     const destination = process.env.MEMORY_SOURCE_RECORDING
@@ -141,7 +170,10 @@ try {
     console.log(JSON.stringify({ version: '1.18.34', nativeTool: tool.tool, nativeToolStatus: tool.state.status,
       copiedForkKeepsOriginalTimestamps: true, compactionRecorded: true, revertRecorded: true,
       nativeCaptureVerified: true, repeatedPollDuplicateSources: 0, copiedForkSources: 0, compactionSources: 0,
+      replayedUserEvidence, markOrigins, originMetadataForwarded,
       recording: destination ?? null, limitations: ['Synthetic model responses; no personal memory-quality measurement.'] }, null, 2))
+    assert.equal(replayedUserEvidence, 1, 'Native replay is not an independent statement by the user')
+    assert.equal(originMetadataForwarded, false, 'Source bookkeeping is not model context')
   } finally { db.close() }
 } finally {
   if (native?.exitCode === null && native?.signalCode === null) {

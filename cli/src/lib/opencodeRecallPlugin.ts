@@ -58,8 +58,13 @@ export function opencodeRecallPluginSource(port: number): string {
       const sessionID = row.info.sessionID, turn = recallTurns.get(sessionID)
       if (!turn?.query || turn.agent !== row.info.agent) return
       const sameTurn = row.info.id === turn.id
-      const seed = row.parts.find(part => part.type === "text" && !part.ignored && (sameTurn
-        ? !part.synthetic : turn.continuation && part.synthetic && part.metadata?.compaction_continue === true))
+      const seed = row.parts.find(part => {
+        if (part.type !== "text" || part.ignored) return false
+        if (sameTurn) return !part.synthetic
+        const origin = part.metadata?.harness_submission
+        const replay = !part.synthetic && origin?.v === 1 && origin.sessionID === sessionID && origin.messageID === turn.id
+        return replay || (turn.continuation && part.synthetic && part.metadata?.compaction_continue === true)
+      })
       if (!seed || !process.env.TMUX_PANE || !hookToken()) return
       const result = await Promise.race([
         (async () => {

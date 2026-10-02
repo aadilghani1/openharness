@@ -38,7 +38,7 @@ function fakeDaemon(lastSeen: Record<string, number> = { 'pub-old': now - 3 * DA
       let raw = ''
       req.on('data', (c) => { raw += c })
       req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json' })
+        res.setHeader('content-type', 'application/json')
         if (req.method === 'GET' && req.url === '/api/devices') {
           res.end(JSON.stringify({ head: null, frozen: null, self: 'pub-self', members, frozenPeers: [], lastSeen }))
         } else if (req.method === 'POST' && req.url === '/api/devices/remove') {

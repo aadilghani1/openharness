@@ -23,6 +23,9 @@ interface Snapshot {
 const recorded = JSON.parse(readFileSync(new URL('./__fixtures__/opencode-1.18.34-source.json', import.meta.url), 'utf8')) as {
   turn: Snapshot; copied: Snapshot; forkWithNewTurn: Snapshot; compaction: Snapshot; reverted: Snapshot
 }
+const overflowRecording = JSON.parse(readFileSync(new URL('./__fixtures__/opencode-1.18.34-overflow.json', import.meta.url), 'utf8')) as {
+  unmarked: Snapshot; stamped: Snapshot
+}
 const target = { state: 'ready' as const, key: 'selected' }
 let directory: string, workspace: string, db: Database, store: CodingMemoryStore, memory: MemoryPort
 let capture: NativeMemoryCapture, session: CaptureSession, now: number, serial: number
@@ -33,9 +36,10 @@ function createDatabase() {
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE session(id TEXT PRIMARY KEY,parent_id TEXT,directory TEXT,version TEXT,revert TEXT,time_created INTEGER,time_updated INTEGER);
     CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);
-    CREATE INDEX messages_session ON message(session_id);
+    CREATE INDEX message_session_time_created_id_idx ON message(session_id,time_created,id);
     CREATE TABLE part(id TEXT PRIMARY KEY,session_id TEXT,message_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);
-    CREATE INDEX parts_message ON part(message_id);`)
+    CREATE INDEX part_message_id_id_idx ON part(message_id,id);
+    CREATE INDEX part_session_idx ON part(session_id);`)
 }
 function insert(snapshot: Snapshot) {
   for (const row of snapshot.sessions) db.prepare('INSERT OR REPLACE INTO session VALUES(?,?,?,?,?,?,?)')
@@ -143,6 +147,80 @@ it('does not learn generated compaction summaries or count them as user statemen
   const lease = sources()
   expect(lease.sources).toHaveLength(6)
   expect(lease.sources.some(row => row.text.includes('Synthetic context summary'))).toBe(false)
+})
+
+const replayText = 'When changing parser code, keep a regression test for the original failure.'
+for (const source of ['unmarked', 'stamped'] as const) it(`does not count a recorded ${source} native overflow replay as new user evidence`, async () => {
+  const snapshot = overflowRecording[source]
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  await capture.poll(session)
+  const captured = sources().sources
+  expect(captured.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(1)
+  expect(captured).toHaveLength(8)
+  capture = new NativeMemoryCapture(memory, () => now)
+  expect((await capture.poll(session)).sources).toBe(0)
+  now = Math.max(...snapshot.messages.map(row => row.time_updated)) + 100
+  append(replayText)
+  await capture.poll(session)
+  expect(sources().sources.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(1)
+})
+
+it.skipIf(!hasSqliteCli)('retains overflow replay detection through the SQLite CLI fallback', async () => {
+  overrideBuiltinSqlite(null)
+  const snapshot = overflowRecording.unmarked
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  await capture.poll(session)
+  expect(sources().sources.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(1)
+})
+
+it('does not backfill an earlier request whose native replay appears after learning was enabled', async () => {
+  const snapshot = overflowRecording.unmarked
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  const replay = snapshot.messages.filter(row => JSON.parse(row.data).role === 'user').at(-1)!
+  now = replay.time_created - 1
+  store.setControls({ learn: false, recall: true }); store.setControls({ learn: true, recall: true })
+  await capture.poll(session)
+  expect(sources().sources.every(event => event.role !== 'user' && !event.text.includes(replayText))).toBe(true)
+})
+
+it.each(['manual', 'no-overflow', 'failed-summary'])('preserves a real request following %s compaction', async mode => {
+  const snapshot = structuredClone(overflowRecording.unmarked)
+  const boundary = snapshot.parts.find(row => JSON.parse(row.data).type === 'compaction')!
+  const summary = snapshot.messages.find(row => JSON.parse(row.data).summary === true)!
+  if (mode === 'failed-summary') {
+    summary.data = JSON.stringify({ ...JSON.parse(summary.data), finish: 'error' })
+  } else {
+    boundary.data = JSON.stringify({ ...JSON.parse(boundary.data), [mode === 'manual' ? 'auto' : 'overflow']: false })
+  }
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  await capture.poll(session)
+  expect(sources().sources.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(2)
+})
+
+it.each(['current', 'foreign', 'invalid-id'])('checks a %s origin for a submission after compaction but before replay', async origin => {
+  const snapshot = structuredClone(overflowRecording.stamped)
+  const replay = snapshot.messages.filter(row => JSON.parse(row.data).role === 'user').at(-1)!
+  const replayPart = snapshot.parts.find(row => row.message_id === replay.id && JSON.parse(row.data).type === 'text')!
+  const data = JSON.parse(replayPart.data)
+  // Same metadata shape as the recorded real chat.message hook, but a new submitted ID.
+  data.metadata.harness_submission.messageID = replay.id
+  if (origin === 'foreign') data.metadata.harness_submission.sessionID = 'another_session'
+  if (origin === 'invalid-id') data.metadata.harness_submission.messageID = ''
+  replayPart.data = JSON.stringify(data)
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  await capture.poll(session)
+  expect(sources().sources.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(origin === 'current' ? 2 : 1)
+})
+
+it('recognizes stamped copies even when their preceding compaction records are missing', async () => {
+  const snapshot = structuredClone(overflowRecording.stamped)
+  const summary = snapshot.messages.find(row => JSON.parse(row.data).summary === true)!
+  snapshot.messages = snapshot.messages.filter(row => row.id !== summary.id && row.id !== JSON.parse(summary.data).parentID)
+  const ids = new Set(snapshot.messages.map(row => row.id))
+  snapshot.parts = snapshot.parts.filter(row => ids.has(row.message_id))
+  insert(snapshot); session.sessionId = snapshot.sessions[0].id
+  await capture.poll(session)
+  expect(sources().sources.filter(event => event.role === 'user' && event.text === replayText)).toHaveLength(1)
 })
 
 it('ignores source text explicitly marked synthetic or ignored while preserving real user prose', async () => {

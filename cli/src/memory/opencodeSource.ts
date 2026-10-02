@@ -4,9 +4,11 @@ import { memoryUserParts, type NativeRecord } from './native.js'
 import type { SourceEvent } from './types.js'
 
 export interface OpenCodeSourceMessage {
-  id: string; created: number; updated: number; data: string | null
+  id: string; sessionId: string; created: number; updated: number; data: string | null
   parts: Array<{ id: string; created: number; updated: number; data: string | null }>
   hasReply: boolean; hasLaterUser: boolean
+  /** Reader-derived native overflow boundary, not an authored field on the message. */
+  afterOverflow?: boolean
 }
 export interface OpenCodeSourceRecord extends NativeRecord {
   started: boolean
@@ -38,12 +40,22 @@ export function decodeOpenCodeMemoryMessage(message: OpenCodeSourceMessage): Ope
   const data = json(message.data), at = object(data?.time).created
   if (!data || !timestamp(at) || !['user', 'assistant'].includes(String(data.role))) return { ...result, incomplete: true }
   result.observedAt = at
+  const decoded = message.parts.map(part => ({ part, data: json(part.data) }))
+  const origins = decoded.filter(({ data }) => data && !data.synthetic && !data.ignored)
+    .map(({ data }) => object(object(data!.metadata).harness_submission))
+    .filter(origin => origin.v === 1 && origin.sessionID === message.sessionId
+      && typeof origin.messageID === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(origin.messageID))
+  const copied = origins.some(origin => origin.messageID !== message.id)
+  const submitted = origins.some(origin => origin.messageID === message.id)
   // Forking copies this native timestamp while minting new SQL row IDs/timestamps.
   // The capture boundary compares this timestamp with the new session's creation time.
-  if (data.summary === true || data.agent === 'compaction' || data.mode === 'compaction') {
+  // A new submission stamped by the plugin remains learnable even if the previous process died
+  // after compacting but before replaying. Legacy unmarked records at that boundary are ambiguous;
+  // withholding them is safer than promoting a framework-generated copy into fresh user evidence.
+  if ((data.role === 'user' && (copied || (message.afterOverflow && !submitted)))
+    || data.summary === true || data.agent === 'compaction' || data.mode === 'compaction') {
     return { ...result, compacted: true, ended: true }
   }
-  const decoded = message.parts.map(part => ({ part, data: json(part.data) }))
   if (decoded.some(part => part.data?.type === 'compaction')) return { ...result, compacted: true, ended: true }
   let ordinal = 0
   const add = (partId: string, role: SourceEvent['role'], text: string): void => {

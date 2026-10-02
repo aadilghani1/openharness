@@ -73,6 +73,23 @@ it('does not infer continuation from synthetic text, another agent or an unknown
   expect(f.fetch).not.toHaveBeenCalled()
 })
 
+it('recalls for a native overflow replay only when its origin matches the last submitted request in this session', async () => {
+  const f = fixture()
+  const row = { info: { ...f.row.info, id: 'native-replay' }, parts: [{ ...f.row.parts[0], id: 'replayed-part',
+    metadata: { harness_submission: { v: 1, sessionID: 'foreign', messageID: 'user-one' } } }] }
+  await f.transform({}, { messages: [row] })
+  expect(f.fetch).not.toHaveBeenCalled()
+  row.parts[0].metadata.harness_submission.sessionID = 'native'
+  await f.transform({}, { messages: [row] })
+  expect(row.parts[0].text).toBe(f.context)
+  const replay = row.parts[1]
+  replay.metadata.harness_submission.messageID = 'an-earlier-user'
+  f.fetch.mockClear()
+  await f.transform({}, { messages: [row] })
+  expect(row.parts).toHaveLength(1)
+  expect(f.fetch).not.toHaveBeenCalled()
+})
+
 it('keeps simultaneous sessions separate and ignores a late reply for a replaced user turn', async () => {
   const f = fixture()
   let resolve!: (response: Response) => void
