@@ -382,11 +382,15 @@ void main() {
           expect(connection.creations, hasLength(1));
           final viewer = app.panes.singleWhere((p) => p.isWeb);
           expect(find.text('Hide assistant'), findsNothing);
-          tester.widget<WebPanePanel>(find.byType(WebPanePanel)).onToggleZoom!();
+          tester
+              .widget<WebPanePanel>(find.byType(WebPanePanel))
+              .onToggleZoom!();
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 350));
           expect(app.zoomedPaneId, viewer.id);
-          tester.widget<WebPanePanel>(find.byType(WebPanePanel)).onToggleZoom!();
+          tester
+              .widget<WebPanePanel>(find.byType(WebPanePanel))
+              .onToggleZoom!();
           await tester.pump(const Duration(milliseconds: 350));
           expect(app.zoomedPaneId, isNull);
           expect(app.activeSwarm.paneSizes['2:manual']!.tiles.first.width, .7);

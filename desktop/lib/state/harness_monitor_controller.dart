@@ -51,7 +51,7 @@ class HarnessMonitorController {
             await app.toggleViewerPane(machineId, agent.id);
             if (!_current(owner)) return null;
           }
-          app.showHarnessMonitorTable(machineId, agent.id);
+          app.showHarnessMonitor(machineId, agent.id);
         } catch (_) {
           return _current(owner)
               ? 'Could not open Harness Monitor. Try again.'
