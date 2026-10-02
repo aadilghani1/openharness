@@ -35,6 +35,8 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
+import 'attention_glow.dart';
+import '../fleet/spend_ring.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -2120,7 +2122,13 @@ class _TerminalPanelState extends State<TerminalPanel>
     // underneath them all would stack with theirs.
     final paneOpacity = PaneOpacity.of(context);
     final chromeFill = PaneOpacity.fill(context, grid.AppPalette.windowBg);
-    return KeymapRegion(
+    // The pane frame follows what its agent needs from a person (the daemon's attention frame);
+    // the focused pane keeps only its own focus border.
+    return AttentionGlow(
+      attention: widget.notifier.attention,
+      agentId: session.agentId,
+      focused: widget.focused,
+      child: KeymapRegion(
       contextKind: KeymapContext.terminal,
       composing: () =>
           _focusNode.hasFocus &&
@@ -2397,6 +2405,7 @@ class _TerminalPanelState extends State<TerminalPanel>
               ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -2820,10 +2829,15 @@ class _TerminalHeader extends StatelessWidget {
               children: [
                 if (leadingStatus)
                   statusButton()
-                else if (agent != null && showIdentityMark)
-                  EngineMark.forAgent(agent, size: 17)
                 else if (showIdentityMark)
-                  EngineMark(engine: session.engineId, size: 17),
+                  // The spend arc rings the engine mark when a per-agent cap is set.
+                  SpendRing(
+                    attention: notifier.attention,
+                    agentId: session.agentId,
+                    child: agent != null
+                        ? EngineMark.forAgent(agent, size: 17)
+                        : EngineMark(engine: session.engineId, size: 17),
+                  ),
                 if (leadingStatus || showIdentityMark)
                   SizedBox(width: leadingStatus ? 6 : 10),
                 Expanded(
