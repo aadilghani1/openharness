@@ -157,6 +157,37 @@ before merge and then again on the merged commit. Check the merged source identi
 and rerun only validation invalidated by the merge. Native checks absent from CI
 still need their own evidence.
 
+Prepare the PR description and review the diff while CI is running. Once it passes,
+collect its record with one read-only command:
+
+```sh
+python3 scripts/record-ci-validation.py RUN_ID --scope cli --pr PR_NUMBER
+```
+
+Use the required CI scope (`cli`, `tui`, `backend`, `process`, or `full`). The command
+writes a short `validation.md` and machine-readable `receipt.json` under ignored
+`.harness/validation/`; use the paragraph/table in the PR's verification section.
+It checks the exact run/repository/workflow, required jobs, completed steps, source
+trees, and an optional PR's head/base stability. For CLI it also downloads the
+coverage summary by immutable artifact ID and verifies its archive checksum and
+file/case totals. Network calls are bounded; the default collection budget is 90s.
+
+Exit 0 means the requested CI scope passed and its committed source tree matches
+the selected target (`HEAD` by default). Exit 3 still saves the record but flags
+different source, a dirty working tree or a PR head mismatch for review. It lists
+changed paths without deciding that they are harmless. Review their impact and
+reuse only applicable evidence; a different SHA with the same tree is accepted.
+`--target COMMIT` supports historical audits and labels them as covering that
+commit rather than the current working copy. Missing objects need a fetch before
+comparison; failed/pending runs, missing/skipped required jobs, corrupt/expired
+artifacts, and changing run/PR state cannot become a successful record.
+
+Keep routine validation evidence in these receipts, CI artifacts and the PR body.
+Do not add a documentation commit or recreate all raw logs just to record another
+ordinary check. Commit a performance report when the comparison itself is useful
+repository documentation. The collector records CI time separately; request,
+implementation, review/merge and publication timestamps still need their own record.
+
 For deterministic local checks, the runner can do that comparison and reuse the
 original logs. Add an explicit `reuse` contract to each eligible check:
 

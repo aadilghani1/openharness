@@ -1,0 +1,205 @@
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+import zipfile
+
+SCRIPT = Path(__file__).resolve().parents[1] / "record-ci-validation.py"
+spec = importlib.util.spec_from_file_location("record_ci", SCRIPT)
+recorder = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(recorder)
+
+
+class EvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "source"
+        self.root.mkdir()
+        self.output = Path(self.tmp.name) / "evidence"
+        self.output.mkdir()
+        (self.root / "source.txt").write_text("tested\n")
+        self.git("init", "-q")
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "tested")
+        self.sha = self.git("rev-parse", "HEAD")
+        self.run = {"id": 123, "repository": {"full_name": "owner/repo"}, "path": ".github/workflows/ci.yml",
+                    "head_sha": self.sha, "run_attempt": 1, "status": "completed", "conclusion": "success",
+                    "html_url": "https://github.com/owner/repo/actions/runs/123",
+                    "created_at": "2026-10-03T00:00:00Z", "updated_at": "2026-10-03T00:03:00Z"}
+        self.jobs = [{"id": i, "name": name, "run_id": 123, "run_attempt": 1, "head_sha": self.sha,
+                      "status": "completed", "conclusion": "success", "started_at": "2026-10-03T00:00:10Z",
+                      "completed_at": "2026-10-03T00:02:59Z", "steps": []}
+                     for i, name in enumerate(sorted(recorder.CLI_JOBS | {"process-checks"}), 1)]
+        self.summary = {"schema": 1, "status": "passed", "files": 4, "passed": 4, "skipped": 0, "todo": 0,
+                        "verified_files": [f"src/file-{i}.spec.ts" for i in range(4)],
+                        "shards": [{"shard": i, "files": 1, "passed": 1, "skipped": 0, "todo": 0} for i in range(1, 5)]}
+        self.archive = self.zip_summary(self.summary)
+        self.artifact = {"id": 987, "name": "cli-test-summary", "expired": False, "size_in_bytes": len(self.archive),
+                         "digest": "sha256:" + hashlib.sha256(self.archive).hexdigest(),
+                         "workflow_run": {"id": 123, "head_sha": self.sha}}
+        self.pr = {"html_url": "https://github.com/owner/repo/pull/5", "head": {"sha": self.sha}, "base": {"sha": self.sha}}
+        self.after = None
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.root, stderr=subprocess.PIPE, text=True).strip()
+
+    def zip_summary(self, summary, name="cli-test-summary.json"):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr(name, json.dumps(summary))
+        return stream.getvalue()
+
+    def collect(self, scope="cli", target="HEAD", with_pr=False, pr_after=None):
+        fixture = self
+
+        class FakeClient:
+            repository = "owner/repo"
+            run_reads = 0
+            pr_reads = 0
+
+            def api(self, path):
+                if path == "actions/runs/123":
+                    self.run_reads += 1
+                    return copy.deepcopy(fixture.after if self.run_reads > 1 and fixture.after else fixture.run)
+                if path == "pulls/5":
+                    self.pr_reads += 1
+                    return copy.deepcopy(pr_after if self.pr_reads > 1 and pr_after else fixture.pr)
+                raise AssertionError(path)
+
+            def pages(self, path, key):
+                return copy.deepcopy(fixture.jobs if key == "jobs" else [fixture.artifact])
+
+            def command(self, *args, binary=False):
+                fixture.command_args = args
+                return fixture.archive
+
+        return recorder.collect(FakeClient(), self.root, 123, scope, target, self.output, 5 if with_pr else None)
+
+    def test_complete_record_checks_identity_digest_coverage_and_pr(self):
+        result = self.collect(with_pr=True)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["workflow_seconds"], 180)
+        self.assertEqual(result["cli_summary"]["passed"], 4)
+        self.assertEqual(result["pr"]["head"], self.sha)
+        self.assertEqual(self.command_args[-1], "repos/owner/repo/actions/artifacts/987/zip")
+        self.assertIn("4 files verified exactly once", recorder.markdown(result))
+        self.assertEqual((self.output / "cli-test-summary.zip").read_bytes(), self.archive)
+
+    def test_process_scope_needs_no_cli_artifact(self):
+        self.jobs = [job for job in self.jobs if job["name"] == "process-checks"]
+        result = self.collect(scope="process")
+        self.assertEqual(result["status"], "passed")
+        self.assertNotIn("cli_summary", result)
+        self.assertFalse((self.output / "cli-test-summary.zip").exists())
+
+    def test_partial_scope_cannot_be_called_full_ci(self):
+        with self.assertRaisesRegex(ValueError, "missing jobs"):
+            self.collect(scope="full")
+
+    def test_missing_skipped_failed_or_wrong_source_job_is_rejected(self):
+        original = copy.deepcopy(self.jobs)
+        for change in [lambda: self.jobs.pop(), lambda: self.jobs[0].update(conclusion="skipped"),
+                       lambda: self.jobs[0].update(conclusion="failure"), lambda: self.jobs[0].update(head_sha="b" * 40),
+                       lambda: self.jobs.append(self.jobs[0])]:
+            self.jobs = copy.deepcopy(original)
+            change()
+            with self.assertRaises(ValueError):
+                self.collect()
+
+    def test_pending_failed_or_wrong_workflow_run_is_not_success(self):
+        original = dict(self.run)
+        for change in [dict(status="in_progress"), dict(conclusion="failure"), dict(path=".github/workflows/other.yml"),
+                       dict(repository={"full_name": "another/repo"}), dict(id=456)]:
+            self.run = dict(original, **change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.collect()
+
+    def test_continued_step_failure_cannot_hide_behind_a_green_job(self):
+        self.jobs[0]["steps"] = [{"name": "tests", "conclusion": "failure"}]
+        with self.assertRaisesRegex(ValueError, "failed or unfinished step"):
+            self.collect()
+
+    def test_corrupt_expired_or_mismatched_artifact_is_rejected(self):
+        original = copy.deepcopy(self.artifact)
+        for change in [dict(expired=True), dict(digest="sha256:" + "0" * 64), dict(workflow_run={"id": 456, "head_sha": self.sha})]:
+            self.artifact = dict(original, **change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.collect()
+
+    def test_archive_paths_are_never_extracted(self):
+        self.archive = self.zip_summary(self.summary, "../escaped.json")
+        self.artifact.update(digest="sha256:" + hashlib.sha256(self.archive).hexdigest())
+        with self.assertRaisesRegex(ValueError, "contents"):
+            self.collect()
+        self.assertFalse((self.output.parent / "escaped.json").exists())
+
+    def test_duplicate_or_inconsistent_coverage_is_rejected(self):
+        for bad in [dict(self.summary, files=5), dict(self.summary, passed=True),
+                    dict(self.summary, verified_files=["same"] * 4), dict(self.summary, shards=self.summary["shards"][:3])]:
+            archive = self.zip_summary(bad)
+            artifact = dict(self.artifact, digest="sha256:" + hashlib.sha256(archive).hexdigest())
+            with self.assertRaises(ValueError):
+                recorder.read_cli_summary(artifact, archive, self.run)
+
+    def test_source_changes_and_dirty_working_copy_require_review(self):
+        (self.root / "source.txt").write_text("different\n")
+        result = self.collect()
+        self.assertEqual(result["status"], "source_review_required")
+        self.assertTrue(result["source"]["working_tree_dirty"])
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "changed")
+        result = self.collect()
+        self.assertEqual(result["status"], "source_review_required")
+        self.assertEqual(result["source"]["changed_files"], ["source.txt"])
+        historical = self.collect(target=self.sha)
+        self.assertEqual(historical["status"], "passed")
+        self.assertIn("historical commit", recorder.markdown(historical))
+
+    def test_same_tree_with_different_commit_keeps_valid_evidence(self):
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "same tree")
+        result = self.collect()
+        self.assertEqual(result["status"], "passed")
+        self.assertNotEqual(result["source"]["tested_sha"], result["source"]["target_sha"])
+        self.assertTrue(result["source"]["same_tree"])
+
+    def test_rerun_or_pr_movement_during_collection_is_rejected(self):
+        self.after = dict(self.run, run_attempt=2)
+        with self.assertRaisesRegex(ValueError, "run changed"):
+            self.collect()
+        self.after = None
+        for part in ["head", "base"]:
+            after = copy.deepcopy(self.pr)
+            after[part]["sha"] = "b" * 40
+            with self.assertRaisesRegex(ValueError, "PR head/base changed"):
+                self.collect(with_pr=True, pr_after=after)
+
+    def test_stable_pr_pointing_elsewhere_needs_source_review(self):
+        self.pr["head"]["sha"] = "b" * 40
+        result = self.collect(with_pr=True)
+        self.assertEqual(result["status"], "source_review_required")
+        self.assertIn("PR head", recorder.markdown(result))
+
+    def test_pagination_keeps_all_jobs_and_rejects_truncation(self):
+        client = recorder.Client("owner/repo", 0)
+        calls = []
+
+        def api(path):
+            calls.append(path)
+            return {"total_count": 101, "jobs": list(range(100)) if path.endswith("&page=1") else [100]}
+
+        client.api = api
+        self.assertEqual(client.pages("jobs?filter=latest", "jobs"), list(range(101)))
+        self.assertEqual(len(calls), 2)
+        client.api = lambda _: {"total_count": 1, "jobs": []}
+        with self.assertRaisesRegex(ValueError, "incomplete pagination"):
+            client.pages("jobs", "jobs")
+
+
+if __name__ == "__main__":
+    unittest.main()
