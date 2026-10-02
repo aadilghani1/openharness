@@ -123,9 +123,10 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.0 (50)` | 2026-09-30 | TestFlight. Light mode, with Dark and Light terminal schemes (#248); an agent's question is answered by tapping its lines; Find gets a tab filter, recaps for the rows on screen, and machine status drawn like harness rows; a new project and its agent are named after the first task (#94). Terminals open over the relay without waiting for p2p, picking an agent redials a machine that had backed off, and the home agent stays while its machine is briefly offline. Camera access that is off links to Settings; analytics are gone. Built from `feat/mobile-ios-android` |
 | `1.0.1 (51)` | 2026-10-01 | TestFlight. First build on the 1.0.1 train — 1.0.0 was approved and its train closed, so ASC refused 1.0.0 (51). Faster launch to the first session; tabs named as on the desktop; Find recaps fold behind a chevron; device key log (#518). First upload from an unsigned archive signed on export (`release-ios.sh`, Xcode account). Built from `feat/mobile-ios-android` |
 | `1.0.1 (52)` | 2026-10-01 | TestFlight. The launch terminal opens before the agent list; the desktop app, web and CLI sign in by scanning a QR with the phone (#519). Built from `feat/mobile-ios-android` after merging `main` |
+| `1.0.1 (55)` | 2026-10-02 | TestFlight. Sign in with Google or Apple (an in-app SFSafariViewController over the loopback, so no Sign in with Apple entitlement); faster launch for large accounts and a full skeleton while it loads; back button on the Computers and device pages; device key codes to compare. ASC refused 54 as already uploaded — someone uploaded a 54 that is not recorded here. Built from `feat/mobile-ios-android` at `f95db4a2` |
 
-`pubspec.yaml` is now at `1.0.1+54`, the next build number. Build 52 is the last iOS upload and 53
-went to Play only; do not upload either again. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.1+56`, the next build number. Build 55 is the last iOS upload (54 went
+up outside this record) and 53 went to Play only; do not upload any of them again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
