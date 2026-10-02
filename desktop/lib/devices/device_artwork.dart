@@ -1,5 +1,29 @@
 import 'package:flutter/material.dart';
 
+/// The same product identity artwork is used by the native titlebar.
+const kDeviceMarkAsset = 'assets/devices/harness-mark.png';
+
+class DeviceMark extends StatelessWidget {
+  const DeviceMark({super.key, this.size = 20, this.enabled = true});
+
+  final double size;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) => Opacity(
+    opacity: enabled ? 1 : .45,
+    child: Image.asset(
+      kDeviceMarkAsset,
+      width: size,
+      height: size,
+      cacheWidth: (size * MediaQuery.devicePixelRatioOf(context)).ceil(),
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
+      excludeFromSemantics: true,
+    ),
+  );
+}
+
 /// Product photography from autonomous.ai/harness-device. Bundled so the
 /// library remains useful when the computer is offline.
 class DeviceArtwork extends StatelessWidget {

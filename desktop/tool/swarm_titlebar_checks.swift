@@ -1400,9 +1400,12 @@ private extension SwarmTabStrip {
     guard let directory = ProcessInfo.processInfo.environment["HARNESS_TAB_CAPTURE_DIR"] else { return }
     if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
       let assets = URL(fileURLWithPath: root)
-      storeButton.image = SwarmHistoryIcons(assetURL: { asset in
+      let icons = SwarmHistoryIcons(assetURL: { asset in
         assets.appendingPathComponent(String(asset.dropFirst("assets/".count)))
-      }).image(engine: "store", asset: "assets/store/polymath.png")
+      })
+      storeButton.image = icons.image(engine: "store", asset: "assets/store/polymath.png")
+      devicesButton.image = icons.image(engine: "devices",
+        asset: "assets/devices/harness-mark.png", pointSize: devicesButton.markSize)
     }
     let height = Int(bounds.height) + 40
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width), pixelsHigh: height,

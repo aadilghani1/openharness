@@ -548,6 +548,15 @@ unmerged.
 
 ### Experimental Devices DSH, 2026-10-01
 
+- Devices navigation now uses a transparent miniature of the orange Harness
+  hardware in both Flutter and AppKit. The shared 20 pt identity artwork keeps
+  its color across themes; labels, focus, disabled opacity and experimental
+  gating stay with the existing controls. Native button renders were reviewed
+  in [dark](../../docs/research/2026-10-01-devices/devices-icon-dark.png) and
+  [light](../../docs/research/2026-10-01-devices/devices-icon-light.png) appearances.
+  Ten existing navigation/typography tests, 4,352 native titlebar checks,
+  scoped analysis and the icon audit pass. The asset notes retain its imagegen
+  prompt and reference-photo provenance.
 - Devices is an account-scoped experiment, off by default. After the server
   acknowledges opt-in, navigation reads Search → Devices → Harness Store in
   AppKit and Flutter. Clicking Devices opens the bundled `autonomous/devices`

@@ -769,6 +769,7 @@ private final class SwarmHistoryIcons {
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
     !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/machines.svg" || asset == "assets/models.svg" || asset == "assets/harnesses.svg" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
+      || asset == "assets/devices/harness-mark.png"
       || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png")
       || pullRequestAssets.contains(asset))
   }
@@ -1008,7 +1009,7 @@ private class SwarmPlainIconButton: SwarmIconButton {
 /// A quiet filled pill, with the Store's colorful mark as its focal point.
 /// Drawing the content keeps the same spacing across AppKit button styles.
 private final class SwarmStoreButton: SwarmIconButton {
-  var monochrome = false
+  var markSize: CGFloat = 16
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil(workspaceBarTextWidth(title,
@@ -1026,16 +1027,10 @@ private final class SwarmStoreButton: SwarmIconButton {
     palette.accent.withAlphaComponent(hasKeyboardFocus && isEnabled ? 0.85 : 0.12).setStroke()
     shape.lineWidth = hasKeyboardFocus && isEnabled ? 1.5 : 1
     shape.stroke()
-    let iconRect = NSRect(x: 12, y: (bounds.height - 16) / 2, width: 16, height: 16)
-    NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+    let iconRect = NSRect(x: 12, y: (bounds.height - markSize) / 2, width: markSize, height: markSize)
     image?.draw(in: iconRect,
       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-    if monochrome {
-      palette.accent.setFill()
-      iconRect.fill(using: .sourceIn)
-    }
-    NSGraphicsContext.current?.cgContext.endTransparencyLayer()
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     let attributes: [NSAttributedString.Key: Any] = [
@@ -1045,8 +1040,9 @@ private final class SwarmStoreButton: SwarmIconButton {
     ]
     let text = title as NSString
     let height = text.size(withAttributes: attributes).height
-    text.draw(in: NSRect(x: 36, y: (bounds.height - height) / 2,
-      width: max(0, bounds.width - 48), height: height), withAttributes: attributes)
+    let textX = 20 + markSize
+    text.draw(in: NSRect(x: textX, y: (bounds.height - height) / 2,
+      width: max(0, bounds.width - textX - 12), height: height), withAttributes: attributes)
   }
 }
 
@@ -1915,8 +1911,9 @@ private final class SwarmTabStrip: NSView {
     devicesButton.title = "Devices"
     devicesButton.font = navigationFont
     devicesButton.palette = palette
-    devicesButton.image = HarnessControlSymbols.image("circle")
-    devicesButton.monochrome = true
+    devicesButton.markSize = 20
+    devicesButton.image = SwarmHistoryIcons().image(engine: "devices",
+      asset: "assets/devices/harness-mark.png", pointSize: devicesButton.markSize)
     devicesButton.isEnabled = false
     devicesButton.isHidden = true
     devicesButton.focusRingType = .none

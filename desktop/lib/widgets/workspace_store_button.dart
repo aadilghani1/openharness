@@ -3,8 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../devices/device_artwork.dart';
 import '../store/store_mark.dart';
-import '../shared/theme/app_icons.dart';
 import 'desktop_chrome.dart';
 import 'workspace_bar_control.dart';
 
@@ -78,11 +78,7 @@ class WorkspaceStoreButton extends StatelessWidget {
         child: Row(
           children: [
             if (devices)
-              Icon(
-                AppIcons.circle,
-                size: 16,
-                color: accent.withValues(alpha: enabled ? 1 : .45),
-              )
+              DeviceMark(enabled: enabled)
             else
               StoreMark(enabled: enabled),
             const SizedBox(width: 8),
