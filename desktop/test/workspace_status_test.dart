@@ -567,7 +567,11 @@ void main() {
           );
           expect(
             updates.last['machineResources']['detail'],
-            contains('running harnesses across connected machines'),
+            contains('open harnesses across connected machines'),
+          );
+          expect(
+            updates.last['machineResources']['detail'],
+            contains('Totals cover these harnesses only.'),
           );
           expect(updates.last['machineResources']['interactive'], isTrue);
         } else {
