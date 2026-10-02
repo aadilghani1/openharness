@@ -15,7 +15,7 @@ describe('explicit worktree deletion', { timeout: 30_000 }, () => {
   const exists = (path: string) => stat(path).then(() => true, () => false)
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'harness-worktree-delete-')))
-    repo = join(root, 'project'); tree = join(root, 'temporary')
+    repo = join(root, 'project'); tree = join(root, 'temporary worktree ')
     await mkdir(repo)
     await git(repo, 'init', '--quiet', '-b', 'main')
     await writeFile(join(repo, 'source'), 'keep main')

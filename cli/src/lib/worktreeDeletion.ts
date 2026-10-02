@@ -13,7 +13,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[key]
   return (await exec('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', cwd, ...args],
-    { env, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 })).stdout.trimEnd()
+    { env, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 })).stdout.replace(/\r?\n$/, '')
 }
 export type WorktreeReview = {
   path: string; main: string; branch: string | null; head: string; bytes: number | null
