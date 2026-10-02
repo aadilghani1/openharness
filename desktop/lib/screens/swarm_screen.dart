@@ -4027,8 +4027,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_openCompanionTerminal(key));
   }
 
-  Future<void> _openCompanionTerminal(String key, {String? engine}) async {
-    final result = await _brain.openConversation(engine: engine);
+  Future<void> _openCompanionTerminal(String key) async {
+    final result = await _brain.openConversation();
     if (!mounted || _companionOpeningKey != key) return;
     _companionOpeningKey = null;
     if (key != '${_zoo.scope}:${_zoo.paired?.uid}' || !_creatureEnabled) return;
@@ -4083,26 +4083,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return result;
   }
 
-  void _selectCompanionEngine(String engine) {
-    final uid = _zoo.paired?.uid;
-    if (uid == null || _companionOpeningKey != null || _zoo.isPreview) return;
-    if (_pairHarness case final pair?) {
-      unawaited(
-        app.changeAgent(pair.machineId, pair.agentId, engine).then((error) {
-          if (mounted && error != null) _showPaneActionHint(error);
-        }),
-      );
-      return;
-    }
-    final key = '${_zoo.scope}:$uid';
-    setState(() {
-      _companionAttemptedKey = key;
-      _companionOpeningKey = key;
-      _companionTerminalError = null;
-    });
-    unawaited(_openCompanionTerminal(key, engine: engine));
-  }
-
   Widget _companionViewer(BuildContext context) => CompanionHome(
     key: ValueKey('companion-home:${_zoo.scope}'),
     face: _face,
@@ -4112,10 +4092,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         : app.openCodingMemoryConnection,
     onHatch: _hatch,
     onOpenControls: _openCompanionControls,
-    onSelectEngine: _zoo.isPreview || !_brain.active || _zoo.paired == null
-        ? null
-        : _selectCompanionEngine,
-    openingTerminal: _companionOpeningKey != null,
     terminalStatus:
         _companionTerminalError ??
         (_companionOpeningKey != null
