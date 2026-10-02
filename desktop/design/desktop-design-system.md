@@ -329,16 +329,14 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
-**Pane header** — the right-hand controls read agent, model, split down, split right,
-zoom, close. Use the rounded 14-point `AppPaneIcon` split/zoom variants and the
-shared 12-point close glyph in 28-point targets. The close target sits 4 points
-inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
-brighten the glyph without a fill, border, or movement. Keep the controls on one
-line; model and title text truncate before icon targets shrink. Zoom becomes
-Restore while enlarged. Unavailable controls stay in place with disabled ink.
-Split opens New Harness directly, inheriting the clicked pane's agent, machine,
-and project; the pane is created only after submission. Clicking the model focuses that
-pane and opens the same Models picker as Cmd-:. The agent name and chevron open the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
+**Pane header** — the right-hand controls read agent, model, close. The shared
+12-point close glyph has a 28-point target, 4 points inside the trailing edge.
+Resting ink is 45%; hover and keyboard focus brighten the glyph without a fill,
+border, or movement. Keep the controls on one line; model and title text truncate
+before the close target shrinks. Split and zoom remain in commands, menus and
+keyboard shortcuts. Clicking the model focuses that
+pane and opens the same Models picker as Cmd-:. The agent name and chevron open
+the shared Agents picker (`&` in Cmd-P). Selection stays bound to that
 harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is

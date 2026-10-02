@@ -229,12 +229,6 @@ void main() {
           final cell = find.byKey(pane.cellKey);
           final controls = [
             find.byKey(ValueKey(('pane-model', 'm', pane.agentId!))),
-            for (final key in [
-              'pane-split-down',
-              'pane-split-right',
-              'pane-zoom',
-            ])
-              find.descendant(of: cell, matching: find.byKey(ValueKey(key))),
             find.descendant(of: cell, matching: find.byType(PaneCloseButton)),
           ];
           for (var i = 1; i < controls.length; i++) {

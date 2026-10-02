@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
 import 'harness_monitor_controller.dart';
+import 'agent_switch_handoff.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
@@ -223,6 +224,8 @@ class _AgentChange {
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
   bool preservingViews = false;
+  bool contextLoaded = false;
+  String? handoff;
   String? companionTarget;
   bool launchFailed = false;
 }
@@ -10819,6 +10822,31 @@ class AppNotifier extends ChangeNotifier {
     if (folder == null) {
       return 'This harness has no project folder to open with another agent.';
     }
+    if (source.dsh != 'autonomous/pair' &&
+        supportsAgentHandoff(change.engine) &&
+        !change.contextLoaded) {
+      try {
+        final recent = await _conn(machineId).request(
+          'agent_recent',
+          payload: {'agentId': source.id, 'n': 5},
+          timeout: const Duration(seconds: 4),
+        );
+        if (recent['error'] != null ||
+            (recent['agentId'] != null && recent['agentId'] != source.id)) {
+          return 'Could not read the conversation for the handoff. Try switching again.';
+        }
+        change.handoff = agentSwitchHandoff(
+          source.engine ?? 'the previous agent',
+          recent,
+        );
+        change.contextLoaded = true;
+      } catch (_) {
+        return 'Could not read the conversation for the handoff. Try switching again.';
+      }
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
+    }
     final close = prepareSessionClose(machineId, source);
     change.preservingViews = true;
     if (!current.isStopped) {
@@ -10863,6 +10891,7 @@ class AppNotifier extends ChangeNotifier {
         name: source.displayName,
         permissionMode: mode,
         bypassPermission: mode == 'auto' || mode == 'full',
+        prompt: change.handoff,
         attempt: change.creation,
       );
       if (error != null) return error;
@@ -10895,6 +10924,22 @@ class AppNotifier extends ChangeNotifier {
     if (terminals.isEmpty) {
       return 'The original pane was closed. Open the new agent from Harness Monitor.';
     }
+    // A peer can still have a queued tab.close for a tab whose only agent
+    // was the stopped source. Give that replacement a fresh desk identity:
+    // the Swarm/pane objects, active selection and geometry stay unchanged,
+    // but an old close can no longer address the new conversation.
+    final replacedTabs = _desk.enabled
+        ? swarms.where((swarm) {
+            final agents = swarm.panes.where((pane) => pane.agentId != null);
+            return _deskTracks(swarm) &&
+                isDeskId(swarm.id) &&
+                agents.isNotEmpty &&
+                agents.every(
+                  (pane) =>
+                      pane.machineId == machineId && pane.agentId == source.id,
+                );
+          }).toList()
+        : <Swarm>[];
     // The old process has stopped and its panes were retained through the
     // acknowledgement. Replace their references without changing geometry.
     for (final pane in terminals) {
@@ -10908,6 +10953,21 @@ class AppNotifier extends ChangeNotifier {
     }
     for (final pane in viewers) {
       if (allPanes.contains(pane)) pane.ownerAgentId = nextId;
+    }
+    for (final swarm in swarms) {
+      if (swarm.titleMachineId == machineId &&
+          swarm.titleAgentId == source.id) {
+        swarm.titleAgentId = nextId;
+      }
+    }
+    for (final swarm in replacedTabs) {
+      if (!swarms.contains(swarm)) continue;
+      final previousId = swarm.id;
+      swarm.id = newDeskId();
+      if (_activeSwarmId == previousId) _activeSwarmId = swarm.id;
+      for (final entry in _draftSwarmReturns.entries.toList()) {
+        if (entry.value == previousId) _draftSwarmReturns[entry.key] = swarm.id;
+      }
     }
     _agentChanges.remove((machineId, source.id));
     _syncViewerPane(machine, target);

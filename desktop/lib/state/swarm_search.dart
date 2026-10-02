@@ -15,6 +15,7 @@ import '../core/models.dart'
     show Agent, ConnectionStatus, GridModels, GridModel;
 
 import 'app_state.dart';
+import 'agent_switch_handoff.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
@@ -1555,7 +1556,9 @@ class SwarmSearchController extends ChangeNotifier {
                   : agentSelection?.engine == engine.id
                   ? 'Current agent'
                   : engine.id == 'opencode'
-                  ? 'Muse Spark 1.3 · new conversation'
+                  ? 'Muse Spark 1.3 · continue with recent context'
+                  : supportsAgentHandoff(engine.id)
+                  ? 'Continue this project with recent context'
                   : 'New conversation in the same project',
               swarmId: null,
               current: agentSelection?.engine == engine.id,
