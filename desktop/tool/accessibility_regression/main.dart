@@ -66,6 +66,9 @@ Future<void> _run() async {
     _selected.value = step % 2;
     await _host.invokeMethod<void>('resize', step);
     await Future<void>.delayed(const Duration(milliseconds: 35));
+    // A rejected stock-engine tree has no actionable controls. Let resizing
+    // reach the native reparenting crash instead of stopping on that symptom.
+    if (const bool.fromEnvironment('AX_REGRESSION_UNGUARDED')) continue;
     // The native fixture requires one visible slider, then presses a button
     // through AppKit and the real Flutter AX bridge. This engine advertises
     // slider increment but does not implement dispatching it; tap is supported.

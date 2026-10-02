@@ -107,14 +107,13 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
   _ConnectedSemanticsUpdateBuilder(
     this._delegate, {
     required this.connected,
-    required Map<int, _NodeUpdate> updates,
-    required Set<int> previousConnected,
+    required this.updates,
+    required this.previousConnected,
     this.onDiscard,
-  }) : _updates = updates,
-       _previousConnected = previousConnected;
+  });
 
-  final Map<int, _NodeUpdate> _updates;
-  final Set<int> _previousConnected;
+  final Map<int, _NodeUpdate> updates;
+  final Set<int> previousConnected;
   final _changed = <int>{};
   final ui.SemanticsUpdateBuilder _delegate;
   final Set<int> connected;
@@ -192,7 +191,7 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
     hintAttributes = List.of(hintAttributes);
     controlsNodes = controlsNodes == null ? null : List.of(controlsNodes);
     _changed.add(id);
-    _updates[id] = (delegate, currentConnected) => delegate.updateNode(
+    updates[id] = (delegate, currentConnected) => delegate.updateNode(
       id: id,
       flags: flags,
       actions: actions,
@@ -264,12 +263,12 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
     // snapshot even when Flutter considers it clean and omits it from this batch.
     final pending = <int>{
       ..._changed,
-      ...connected.difference(_previousConnected),
+      ...connected.difference(previousConnected),
     };
     for (final id in pending) {
-      if (connected.contains(id)) _updates[id]?.call(_delegate, connected);
+      if (connected.contains(id)) updates[id]?.call(_delegate, connected);
     }
-    _previousConnected
+    previousConnected
       ..clear()
       ..addAll(connected);
     return _delegate.build();
