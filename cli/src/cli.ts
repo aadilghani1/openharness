@@ -4940,7 +4940,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.pairControl = pairControl
   // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
-  // to it, stopped when idle. Automatic approvals, scoped harnessd MCP, a fresh token every launch.
+  // to it, stopped when idle unless coding memory still uses it. Automatic approvals, scoped harnessd
+  // MCP, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
@@ -4994,6 +4995,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const sessionId = registry.resolve(agentId)?.sessionId
       return !!sessionId && mirror.isBusy(sessionId)
     },
+    backgroundInUse: (agentId): boolean => agentId === pairHarness.agentId() && !!codingMemory?.needsCompanion(),
     now: Date.now,
   })
   pairTalk = (text, uid) => pairHarness.talk(text, uid)
