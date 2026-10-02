@@ -521,6 +521,13 @@ unmerged.
   The review entrypoint requires both `HARNESS_TEST=true` and
   `DEVICES_REVIEW=true` in a debug build. No installed CLI, daemon or production
   service is changed by the review.
+- After integrating current main for the PR, **212 desktop regression tests**,
+  **4,352 native titlebar checks**, backend settings tests, scoped Dart analysis,
+  TypeScript checks, the regular signed macOS build, release CLI bundle, package
+  conformance and Store catalog validation pass. The native checks exercise the
+  hidden default, opted-in ordering and action, modal blocking and disabling.
+  Added the package README and refreshed the protocol checksum with explicit
+  encrypted-device request/event coverage after the full CLI suite found them.
 
 ### Harness Monitor and resource footer, 2026-10-01
 
