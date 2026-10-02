@@ -29,8 +29,8 @@ typedef struct {
     int8_t ox, oy;     // ink box from the pen's x, and from the top of the line
 } ht_glyph_t;
 /*
- * A PROPORTIONAL FACE — the Focus skin's Geist and Montserrat, the LVGL firmware's own fonts copied
- * glyph for glyph (scripts/gen_lvgl_assets.py). It IS an ht_font_t, as its first member, so a run
+ * A PROPORTIONAL FACE — the Focus skin's Literata (scripts/gen_focus_faces.py) and the two Montserrat icon
+ * glyphs copied from the LVGL firmware (scripts/gen_lvgl_assets.py). It IS an ht_font_t, as its first member, so a run
  * carries it like any other font; `first > last` is what marks it, a range no fixed-cell atlas can
  * have. A separate type rather than fields appended to ht_font_t so every fixed-cell atlas keeps its
  * positional initializer. `base.width` is the space's advance and `base.height` the line; pass
@@ -52,10 +52,10 @@ static inline const ht_pfont_t *ht_pfont(const ht_font_t *f)
     return f && f->first > f->last ? (const ht_pfont_t *)f : NULL;
 }
 extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_40;
-// The Focus skin's faces: the LVGL firmware's own (lvgl_fonts.c; see assets/lvgl/SPEC.md).
-extern const ht_pfont_t ht_lv_geist_med_38, ht_lv_geist_med_32, ht_lv_geist_med_28, ht_lv_geist_reg_38,
-    ht_lv_geist_reg_25, ht_lv_geist_reg_20, ht_lv_montserrat_24, ht_lv_montserrat_22, ht_lv_montserrat_14;
-// FontAwesome in LVGL's Montserrat: the bell and the close cross.
+// The Focus skin's icon faces (lvgl_fonts.c; see assets/lvgl/SPEC.md): Montserrat cut down to a space and one
+// FontAwesome symbol each. Every word and number on Focus is Literata (focus_faces.h).
+extern const ht_pfont_t ht_lv_montserrat_22, ht_lv_montserrat_14;
+// FontAwesome in LVGL's Montserrat: the bell (montserrat_14) and the close cross (montserrat_22).
 #define HT_LV_BELL  "\xef\x83\xb3"
 #define HT_LV_CROSS "\xef\x80\x8d"
 // A full-colour icon from the LVGL firmware (lvgl_icons.c): RGB565 in panel order plus alpha.
@@ -102,10 +102,6 @@ extern const ht_font_t ht_lock_dot;
 // the letters that live outside it (A-breve, D-stroke, O-horn, U-horn and their lowercase).
 // Same fixed cell as the mono face they stand in for; terminal.c routes them in glyph_font().
 extern const ht_font_t ht_viet_16, ht_viet_20, ht_viet_24, ht_viet_28;
-// Roboto Mono for the Focus skin's curved name: 24 px in the same 15 x 32 cell, Vietnamese from the
-// same face (ht_rviet_24, the 0x1EA0 block + tail like ht_viet_24 — one atlas cannot span both ranges).
-extern const ht_font_t ht_rmono_24, ht_rviet_24;
-extern const uint8_t ht_rmono_24_ink[224][4];
 typedef struct {
     int16_t x, y, w, h;
 } ht_rect_t;
@@ -146,6 +142,7 @@ typedef struct {
     // the text is drawn at gain[i] / 255 of its coverage, a glyph past HT_ARC_GAINS at full.
     uint8_t gained;
     uint8_t gain[16];
+    uint8_t arc_mid;   // a proportional arc label's face's `mid`, copied by ht_arc_*_face (0 = the default)
 } ht_run_t;
 typedef struct {
     uint16_t background;
@@ -202,19 +199,27 @@ typedef struct {
     // out by advance and kerning in 1/16 px and each glyph stands upright at its own place on the curve.
     // The curved run's font is this face's base, as it is the mono atlas for the other faces.
     const ht_pfont_t *prop;
+    // A proportional face's mid-caps offset above the baseline on the curve, px; 0 = terminal.c's
+    // ARC_PROP_MID. Literata's taller stacked marks need it larger (focus_faces.c).
+    uint8_t mid;
+    // A proportional label too long for the span ends at a word with no "…" (the Focus name: owner,
+    // 2026-10-03); false keeps the "…".
+    bool bare;
 } ht_arc_face_t;
-extern const ht_arc_face_t ht_arc_geist, ht_arc_roboto;
-// Geist Medium 26 on the same arcs (focus_faces.c, which holds the face): the Focus name and status.
-extern const ht_arc_face_t ht_arc_geist_prop;
+extern const ht_arc_face_t ht_arc_geist;
+// Literata Medium 26 on the same arcs (focus_faces.c, which holds the face): ht_arc_literata_prop is the Focus
+// name on the upper arc; ht_arc_literata_lower the lower-arc status and the Listening sweep.
+extern const ht_arc_face_t ht_arc_literata_prop, ht_arc_literata_lower;
 // The arc length a proportional label may span, in px: the 26 cells the mono arcs allow.
 enum { HT_ARC_SPAN = HT_ARC_COLS * HT_ARC_CELL_WIDTH };
 void ht_arc_title(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_title_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
-// The lower arc, in GeistMono; ht_arc_status_face takes any face, like ht_arc_title_face.
+// The lower arc, in GeistMono (the non-Focus skins); ht_arc_status_face takes any face, like ht_arc_title_face.
 void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_status_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
 // What `text` takes of the arc in `face`, in px of arc length (a proportional face rounds up; fits when
-// <= HT_ARC_SPAN). A proportional title or status longer than that ends at a word and "…".
+// <= HT_ARC_SPAN). A proportional title or status longer than that ends at a word and "…" (no "…"
+// for a `bare` face).
 int ht_arc_measure(const ht_arc_face_t *face, const char *text);
 // The lower arc with a brightness per glyph (the voice screen's "Listening" sweep): `gain` is
 // HT_ARC_GAINS entries, 0..255 for each glyph of `text` in order (the glyph's coverage scales by it; the

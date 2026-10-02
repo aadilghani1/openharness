@@ -36,6 +36,7 @@ code = r'''
 #include "command_face.h"
 #include "arc_geometry.inc"
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -201,7 +202,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -350,17 +351,32 @@ static bool title_is(const char *text) {
         if((scene.runs[i].arc==1 || (s.straight_title && scene.runs[i].y==41)) && !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
-// A Focus scene draws in Geist: no Roboto face, no GeistMono, and a curved run is Geist Medium 26; then the portrait.
+// A Focus page draws in ONE font (owner, 2026-10-02): every visible text run is one of the five Literata faces, except an
+// icon run (the bell and the close cross, FontAwesome in Montserrat, alone in their run) and the voice bars / sparkles
+// (drawn art in ht_wave / ht_spark). No GeistMono, no Geist, no Roboto; a curved run (the name on the upper arc, the
+// status and the Listening word on the lower) is Literata Medium 26. An empty run is an invisible placeholder: its font
+// pointer does not count. Then the portrait.
 static void portrait(const char *dir, const char *name);
-static void portrait_focus(const char *dir, const char *name) {
-    const ht_pfont_t *roboto[] = {&ht_lv_roboto_med_38, &ht_lv_roboto_med_32, &ht_lv_roboto_med_30,
-        &ht_lv_roboto_med_28, &ht_lv_roboto_med_24, &ht_lv_roboto_med_22, &ht_lv_roboto_reg_38,
-        &ht_lv_roboto_reg_25, &ht_lv_roboto_reg_20};
+static bool focus_literata(const ht_font_t *f) {
+    return f==&ht_lv_literata_20.base || f==&ht_lv_literata_25.base || f==&ht_lv_literata_med_26.base ||
+           f==&ht_lv_literata_30.base || f==&ht_lv_literata_36.base;
+}
+static void focus_only_literata(void) {
     for (int i = 0; i < scene.count; i++) {
-        for (unsigned g = 0; g < sizeof roboto / sizeof roboto[0]; g++) assert(scene.runs[i].font != &roboto[g]->base);
-        assert(scene.runs[i].font != &ht_mono_24 && scene.runs[i].font != &ht_viet_24);
-        if (scene.runs[i].arc) assert(scene.runs[i].font == &ht_lv_geist_med_26.base);
+        const ht_run_t *r = &scene.runs[i];
+        if (!r->text[0]) continue;
+        bool icon = (r->font == &ht_lv_montserrat_14.base && !strcmp(r->text, HT_LV_BELL)) ||
+                    (r->font == &ht_lv_montserrat_22.base && !strcmp(r->text, HT_LV_CROSS));
+        bool art = r->font == &ht_wave || r->font == &ht_spark;
+        assert(focus_literata(r->font) || icon || art);
+        if (r->arc) assert(r->font == &ht_lv_literata_med_26.base);
     }
+}
+// Every straight text run of a Focus page sits inside the glass (r 230 on its four corners) and a bracket
+// control's label sits inside a rect that is tapped (the hit rects did not move with the font).
+static void focus_inside(void);
+static void portrait_focus(const char *dir, const char *name) {
+    focus_only_literata();
     portrait(dir, name);
 }
 static void portrait(const char *dir, const char *name) {
@@ -381,6 +397,28 @@ static void portrait(const char *dir, const char *name) {
     }
     fclose(fp);
 }
+static void focus_inside(void) {
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (!r->text[0] || r->arc || r->box.h || r->sprite.width || r->font == &ht_wave || r->font == &ht_spark) continue;
+        int w = ht_measure(r->font, r->text), h = r->font->height;
+        assert(w <= r->w);
+        for (int k = 0; k < 4; k++) {
+            int x = r->x + (k & 1 ? w : 0) - 233, y = r->y + (k & 2 ? h : 0) - 233;
+            assert(x * x + y * y <= 230 * 230);
+        }
+        if (r->text[0] == '[') {
+            bool tapped = false;
+            for (int k = 0; k < s.hit_count; k++) {
+                ht_rect_t q = s.hits[k].rect;
+                tapped |= r->x >= q.x && r->x + w <= q.x + q.w && r->y >= q.y && r->y + h <= q.y + q.h;
+            }
+            assert(tapped);
+        }
+    }
+}
+// One Focus page: Literata only, inside the glass, then its picture.
+#define FOCUS_PAGE(name) do { scene_take(); focus_only_literata(); focus_inside(); portrait(dir, name); } while (0)
 static void carry_return_setup(bool with_text) {
     reset();
     assert(ht_visit_latest(&visit,"reading-return","a",100,visit_emit,NULL));
@@ -1827,7 +1865,7 @@ int main(int argc, char **argv) {
         bool bell = false, one = false;   // the blue pill: the bell, and its count beside it
         for (int i = 0; i < scene.count; i++) {
             if (scene.runs[i].font == &ht_lv_montserrat_14.base && !strcmp(scene.runs[i].text, HT_LV_BELL)) bell = true;
-            if (scene.runs[i].font == &ht_lv_montserrat_22.base && !strcmp(scene.runs[i].text, "1")) one = true;
+            if (scene.runs[i].font == &ht_lv_literata_20.base && !strcmp(scene.runs[i].text, "1")) one = true;
         }
         assert(bell && one);
         s.active=0; scene_take(); assert(!action_enabled(A_INBOX));
@@ -1907,6 +1945,7 @@ int main(int argc, char **argv) {
         strcpy(s.agents[0].engine, "claude"); strcpy(s.agents[1].engine, "codex");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "b"}); scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "codex") && XRUN(ls) && !XBARS());
+        focus_only_literata();
         // Level 0 (no mic yet), at the rest of the "Listening" sweep: the word's first step of the next period (1365),
         // or the scene's own next frame, whichever is first. The word is on the lower arc, the bars are not drawn.
         due = s.pet_next_ms; assert(due > 1200 && due <= 1365);
@@ -1945,7 +1984,7 @@ int main(int argc, char **argv) {
             scene_run |= scene.runs[i].sprite.width == ws->w;
             if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) { raised_arc = true; assert(scene.runs[i].fg == ht_rgb(0x00ff2f)); }
             if (scene.runs[i].box.h == 32) { box = true; assert(scene.runs[i].y == 376); }
-            assert(scene.runs[i].font != &ht_lv_geist_med_28.base || !scene.runs[i].text[0]);
+            assert(scene.runs[i].font != &ht_lv_literata_30.base || !scene.runs[i].text[0]);
         }
         assert(bell && scene_run && raised_arc && box);
         // Ink: the pill is rows 376..407; the arc's green text, under the pill's columns, starts below it
@@ -1979,7 +2018,7 @@ int main(int argc, char **argv) {
         scene_run = false; bool line = false;
         for (int i = 0; i < scene.count; i++) {
             scene_run |= scene.runs[i].sprite.width == ws->w; assert(scene.runs[i].arc != 2);
-            if (scene.runs[i].font == &ht_lv_geist_med_28.base && !strncmp(scene.runs[i].text, "Running firm", 12)) { line = true; assert(scene.runs[i].y == 334); }
+            if (scene.runs[i].font == &ht_lv_literata_30.base && !strncmp(scene.runs[i].text, "Running firm", 12)) { line = true; assert(scene.runs[i].y == 334); }
         }
         assert(scene_run && line);
         carry.active = false;
@@ -1989,9 +2028,10 @@ int main(int argc, char **argv) {
         bool arc = false;
         for (int i = 0; i < scene.count; i++) {
             if (scene.runs[i].arc == 2) { arc = true; assert(strlen(scene.runs[i].text) <= 26); }
-            assert(scene.runs[i].font != &ht_lv_geist_med_28.base || !scene.runs[i].text[0]);
+            assert(scene.runs[i].font != &ht_lv_literata_30.base || !scene.runs[i].text[0]);
         }
         assert(arc);
+        portrait_focus(dir,"focus-working");   // the Claude scene, its status on the lower arc
     }
     // THE LISTENING SCENE follows the recipient's engine, not the pane on the face, and has its own
     // schedule: the next 140 ms step, honoured on VOICE with the finger down (hold-to-talk); quiet holds it.
@@ -2005,6 +2045,7 @@ int main(int argc, char **argv) {
         // Pane on the face is Codex, the voice goes to Claude: the scene.
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "b"}); scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && VOICE_SCENE() && !VOICE_BARS());
+        portrait_focus(dir,"focus-voice-listening");   // the Listening word on the lower arc, the scene in the middle
         uint32_t due = (1201 / ls->step_ms + 1) * ls->step_ms;
         assert(s.pet_next_ms == due);
         s.touch_down = true; changes = 0;
@@ -2024,6 +2065,7 @@ int main(int argc, char **argv) {
         strcpy(s.agents[0].engine, "claude"); strcpy(s.agents[1].engine, "cursor");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "b"}); scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "cursor") && !VOICE_SCENE() && VOICE_BARS() == 7 && !s.pet_next_ms);
+        portrait_focus(dir,"focus-voice-bars");
         // Find in output (no agent): the bars even though the pane is Claude.
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a", .value = 7}); scene_take();
@@ -2036,6 +2078,7 @@ int main(int argc, char **argv) {
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && !VOICE_BARS());
         bool rocket = false; for (int i = 0; i < scene.count; i++) rocket |= scene.runs[i].sprite.width == ss->w && scene.runs[i].sprite.cells;
         assert(rocket && s.pet_next_ms);
+        portrait_focus(dir,"focus-voice-sending");
         due = s.pet_next_ms; assert(due > 1200 && due <= 1201 + ss->step_ms * ss->steps);
         changes = 0; surface_tick(due - 1); assert(s.pet_next_ms == due);
         surface_tick(due); assert(!s.pet_next_ms && changes >= 1);
@@ -2070,7 +2113,7 @@ int main(int argc, char **argv) {
         int last_text = 0, bell_top = HT_HEIGHT;
         for (int i = 0; i < scene.count; i++) {
             const ht_run_t *r = &scene.runs[i];
-            if (r->font == &ht_lv_geist_med_30.base && r->text[0]) last_text = r->y + r->font->height;
+            if (r->font == &ht_lv_literata_30.base && r->text[0]) last_text = r->y + r->font->height;
             if (r->box.h && r->box.fill == color(0x006fff) && r->y < bell_top) bell_top = r->y;
         }
         assert(last_text && bell_top < HT_HEIGHT && last_text <= bell_top);
@@ -2223,14 +2266,52 @@ int main(int argc, char **argv) {
             }
             for(int k=0;k<3;k++) if(!strcmp(scene.runs[i].text,names[k])) {
                 rows++;
-                assert(scene.runs[i].font == &ht_lv_geist_med_28.base && scene.runs[i].fg == color(0xeaeaf0));
+                assert(scene.runs[i].font == &ht_lv_literata_30.base && scene.runs[i].fg == color(0xeaeaf0));
+                assert(scene.runs[i].w <= 360 - 2 - 32);   // the card's room: centred, never cut by the card
+                assert(scene.runs[i].x + scene.runs[i].w / 2 >= 232 && scene.runs[i].x + scene.runs[i].w / 2 <= 234);   // on the card's middle
             }
         }
         assert(rows==3 && rims==1);
+        // The header: "PANES" a letter to a run in Literata 20, grey, spaced 2 at y 62.
+        {
+            const char *letters = "PANES"; int at = -1, found = 0;
+            for(int i=0;i<scene.count;i++) if (scene.runs[i].y == 62 && scene.runs[i].text[0] && !scene.runs[i].text[1]) {
+                assert(scene.runs[i].font == &ht_lv_literata_20.base && scene.runs[i].fg == color(0x4c4c4c));
+                assert(scene.runs[i].text[0] == letters[found]);
+                if (found) assert(scene.runs[i].x == at);
+                at = scene.runs[i].x + scene.runs[i].w + 2; found++;
+            }
+            assert(found == 5);
+        }
         habitat_touch(true,233,300,1000); habitat_touch(true,233,200,1100); habitat_touch(false,233,200,1200);
         assert(s.offset==0 && !switches);   // four or fewer: nothing moves
         tap(2000,233,233); assert(switches==1 && s.view==AGENT);
         view(AGENTS); scene_take(); tap(3000,233,30); assert(s.view==HOME);   // the cross goes back
+    }
+    // The names are cut by focus_centred's rules with Literata too: a long and a Vietnamese one end in "..." inside the card.
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=2; s.active=0;
+    {
+        COPY(s.agents[0].id,"p0"); COPY(s.agents[0].name,"Tri\xe1\xbb\x83n khai firmware m\xe1\xbb\x9bi nh\xe1\xba\xa5t cho m\xe1\xbb\x8di thi\xe1\xba\xbft b\xe1\xbb\x8b");
+        COPY(s.agents[1].id,"p1"); COPY(s.agents[1].name,"Nguy\xe1\xbb\x85n V\xc4\x83n \xe1\xba\xbe");
+        view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes-vietnamese");
+        int seen=0;
+        for(int i=0;i<scene.count;i++) if (scene.runs[i].font == &ht_lv_literata_30.base && scene.runs[i].text[0]) {
+            seen++; assert(scene.runs[i].w <= 360 - 2 - 32 && ht_measure(scene.runs[i].font, scene.runs[i].text) == scene.runs[i].w);
+            if(!strncmp(scene.runs[i].text,"Tri",3)) { size_t n=strlen(scene.runs[i].text); assert(n>3 && !strcmp(scene.runs[i].text+n-3,"...")); }
+        }
+        assert(seen==2);
+    }
+    // The empty page: the message in Literata 30 on the middle, the header as ever, "Choose a tab" still Montserrat.
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=0; s.connected=true;
+    {
+        view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes-empty");
+        bool message=false, pill=false, header=false;
+        for(int i=0;i<scene.count;i++) {
+            if(!strcmp(scene.runs[i].text,"No panes in this tab.")) { message = scene.runs[i].font == &ht_lv_literata_30.base && scene.runs[i].y == 180; }
+            if(!strcmp(scene.runs[i].text,"Choose a tab")) pill = scene.runs[i].font == &ht_lv_literata_25.base;
+            if(!strcmp(scene.runs[i].text,"P") && scene.runs[i].y == 62) header = scene.runs[i].font == &ht_lv_literata_20.base;
+        }
+        assert(message && pill && header);
     }
     // Past four the list scrolls a card per pitch, and a long name ends in "...".
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=9; s.active=0;
@@ -2256,13 +2337,118 @@ int main(int argc, char **argv) {
     {
         bool green=false;
         for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Harness") && scene.runs[i].fg==color(HT_THEME_VOICE) &&
-                                          scene.runs[i].font==&ht_lv_geist_med_32.base) green=true;
+                                          scene.runs[i].font==&ht_lv_literata_30.base) green=true;
         assert(green);
         bool title=false, arrow=false;   // the close pill and "TABS" on top; no ← at the bottom
         for(int i=0;i<scene.count;i++) { title |= !strcmp(scene.runs[i].text,"T") && scene.runs[i].y==62;
                                          arrow |= !strcmp(scene.runs[i].text,"\xe2\x86\x90"); }
         assert(title && !arrow);
         tap(3000,233,30); assert(s.view==HOME);   // the cross goes back
+    }
+    // The Focus states that say something plain: connecting (the wordmark) and a tab list with no tabs.
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.connected = false; scene_take();
+    {
+        bool brand = false;
+        for (int i = 0; i < scene.count; i++) brand |= !strcmp(scene.runs[i].text, "Harness") && scene.runs[i].font == &ht_lv_literata_36.base;
+        assert(brand);
+    }
+    portrait_focus(dir,"focus-connecting");
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.tab_count = 0; s.selected_tab[0] = 0;
+    dispatch((action_t){.kind=A_TABS}); scene_take();
+    {
+        bool none = false;
+        for (int i = 0; i < scene.count; i++) none |= !strcmp(scene.runs[i].text, "No tabs yet.") && scene.runs[i].font == &ht_lv_literata_30.base;
+        assert(none);
+    }
+    portrait_focus(dir,"focus-empty-tabs");
+    // EVERY PAGE THE FOCUS SKIN CAN SHOW IS LITERATA (owner, 2026-10-02: "all pages, one font"): the question, its
+    // choices and the answer review, the controls list, the empty inbox, the machines list, the workspace preview,
+    // the form, the selection pages and the draft. Each is scanned for a face that is not Literata, for ink outside
+    // r 230, and for a bracket control drawn outside its own hit rect; the mono skins' pages are byte-for-byte the
+    // goldens above.
+    {
+        // Wrapping: whole words at the width, a word wider than the line cut at a letter, every line within it.
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS);
+        {
+            const ht_font_t *body = &ht_lv_literata_25.base;
+            const char *words = "The quick brown fox jumps over the lazy dog and keeps running through the whole afternoon without stopping";
+            const char *p = words; int lines = 0;
+            while (*p) { const char *e = focus_take(&p, body, 200); assert(ht_measure(body, "x") > 0 && e > p - strlen(p) - 200); lines++; }
+            assert(lines == focus_rows(words, body, 200) && lines >= 5);
+            const char *wide = "Supercalifragilisticexpialidocious_and_longer_still_than_any_line_could_hold";
+            assert(focus_rows(wide, body, 120) >= 4);
+            ht_scene_clear(&scene, BG);
+            assert(ui_wrap(&scene, 59, 146, 348, 3, 0, UI_FONT, FG, words) == focus_rows(words, body, 348));
+            assert(scene.count == 3);
+            for (int i = 0; i < scene.count; i++) assert(scene.runs[i].font == body && ht_measure(body, scene.runs[i].text) <= 348);
+            ht_scene_clear(&scene, BG); ui_wrap(&scene, 59, 146, 348, 3, 0, UI_FONT, FG, "short"); assert(scene.count == 3);   // run count is constant
+            assert(ui_can_display("Thêm phần kiểm tra \xe2\x80\xa6 \xe2\x9c\x93", UI_FONT, 348, 8));
+            assert(!ui_can_display("emoji \xf0\x9f\x90\x88", UI_FONT, 348, 8) && !ui_can_display("arrow \xe2\x86\x92", UI_FONT, 348, 8));
+            assert(!ui_can_display(words, UI_FONT, 200, 2) && ui_can_display(words, UI_FONT, 200, 9));
+        }
+        // The question: the long prompt that scrolls, a short one, loading, the error, and a second option page.
+        #define FOCUS_QUESTION() do { reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); \
+            s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1; strcpy(s.q.agent,"a"); \
+            strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper"); \
+            strcpy(s.q.item[0].prompt,"Which database should the retry queue use? It must survive a restart, stay quick under load, and be easy to back up on a laptop."); \
+            s.q.item[0].count=3; strcpy(s.q.item[0].options[0],"This file only"); \
+            strcpy(s.q.item[0].options[1],"Thêm phần kiểm tra cho toàn bộ dự án"); strcpy(s.q.item[0].options[2],"Leave it as it is"); } while (0)
+        FOCUS_QUESTION(); s.q.item[0].can_text = true; FOCUS_PAGE("lit-question");
+        assert(action_enabled(A_QUESTION_SAY) && action_enabled(A_QUESTION_CHOICES));
+        FOCUS_QUESTION(); strcpy(s.q.item[0].prompt, "Ship it?"); FOCUS_PAGE("lit-question-short");
+        FOCUS_QUESTION(); s.q.item[0].can_text = true; snprintf(s.q.speech_error,sizeof s.q.speech_error,"%s","Cannot show that answer. Say it again."); FOCUS_PAGE("lit-question-error");
+        FOCUS_QUESTION(); s.q.loading = true; FOCUS_PAGE("lit-question-loading");
+        FOCUS_QUESTION(); s.q.error[0]='N'; s.q.error[1]=0; snprintf(s.q.error,sizeof s.q.error,"%s","The desktop could not read this question."); FOCUS_PAGE("lit-question-failed");
+        FOCUS_QUESTION(); s.q.supported = false; FOCUS_PAGE("lit-question-unsupported");
+        FOCUS_QUESTION(); s.view = CHOICE; s.q.choice = 1; FOCUS_PAGE("lit-choices");
+        FOCUS_QUESTION(); s.view = CHOICE; s.q.choice = 1; s.q.item[0].selected = 2; FOCUS_PAGE("lit-choices-selected");
+        FOCUS_QUESTION(); s.view = ANSWER_REVIEW; strcpy(s.q.item[0].answer, "Keep the public API. Only change the parser, and preserve the existing tests."); s.q.item[0].selected = 1;
+        FOCUS_PAGE("lit-answer-review");
+        FOCUS_QUESTION(); s.view = ANSWER_REVIEW; s.q.item[0].can_text = true; strcpy(s.q.item[0].draft, "d"); strcpy(s.q.item[0].answer, "Yes, ship it today."); FOCUS_PAGE("lit-answer-draft");
+        FOCUS_QUESTION(); s.view = ANSWER_REVIEW; strcpy(s.q.item[0].answer, "Yes."); s.q.pending = true; FOCUS_PAGE("lit-answer-waiting");
+        FOCUS_QUESTION(); s.view = ANSWER_REVIEW; s.q.error[0] = 0; snprintf(s.q.error,sizeof s.q.error,"%s","That answer could not be sent."); FOCUS_PAGE("lit-answer-error");
+        #undef FOCUS_QUESTION
+        // The controls list, at the top and scrolled, and the pressed row.
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(SETTINGS); FOCUS_PAGE("lit-controls");
+        assert(action_enabled(A_INBOX));
+        s.offset = 3; FOCUS_PAGE("lit-controls-scrolled");
+        s.offset = 0; s.pressed = 1; FOCUS_PAGE("lit-controls-pressed");
+        // The empty inbox ("All caught up.") and the machines list.
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(INBOX); s.notice_count = 0; FOCUS_PAGE("lit-inbox-empty");
+        {
+            bool caught = false;
+            for (int i = 0; i < scene.count; i++) caught |= !strcmp(scene.runs[i].text, "All caught up.") && focus_literata(scene.runs[i].font);
+            assert(caught);
+        }
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(MACHINES); s.machine_count = 2;
+        strcpy(s.machines[0].id, "m1"); strcpy(s.machines[0].name, "MacBook Pro of the studio"); strcpy(s.machines[0].state, "ready"); s.machines[0].local = true;
+        strcpy(s.machines[1].id, "m2"); strcpy(s.machines[1].name, "Mini"); strcpy(s.machines[1].state, "offline");
+        FOCUS_PAGE("lit-machines");
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(MACHINES); s.machine_count = 0; FOCUS_PAGE("lit-machines-empty");
+        // The workspace preview held while dragging across the tabs.
+        workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS);
+        workspace.touching = workspace.moved = true; workspace.choice = 3; workspace.origin = 1; FOCUS_PAGE("lit-workspace-preview");
+        assert(s.hit_count == 4);
+        workspace.choice = 1; strcpy(s.tabs[1].name, "Quarterly planning and roadmap review"); FOCUS_PAGE("lit-workspace-preview-long");
+        // The form (find and new), the selection pages, the draft and its options.
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); ht_form_open(&form,"form-test",100,form_emit,NULL);
+        {
+            ht_form_page_t fp={.active=true,.enabled=true,.revision=1,.position=2,.total=4,.title="New Harness",
+                .label="Claude Code in the monorepo",.action="start",.previous="Options",.detail="Claude Code\nM2:~/code/harness",.can_query=true};
+            ht_form_reply(&form,"form-test",form.request,true,&fp,101); s.view=FORM; FOCUS_PAGE("lit-form");
+            fp.error[0]=0; strcpy(fp.error,"That folder is not there."); fp.revision++; ht_form_reply(&form,"form-test",form.request,true,&fp,102); FOCUS_PAGE("lit-form-error");
+        }
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(SELECTION); ht_selection_open(&selection,"pick-test","a",1000,select_emit,NULL);
+        FOCUS_PAGE("lit-selection-pending");
+        assert(ht_selection_reply(&selection,selection.request,"pick-test",true,1,"A highlighted paragraph from the desktop, long enough to wrap onto a second and a third line of the page.",3,true,NULL,1010));
+        FOCUS_PAGE("lit-selection");
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.view=DRAFT;
+        {
+            ht_draft_page_t dp={.active=true,.revision=1,.can_send=true,.id="draft-one",.agent="a",.name="Parser helper",
+                .text="Keep the public API.\n\nOnly change the parser.\nPreserve existing tests.\nAdd Unicode coverage.",.position=1,.total=2};
+            ht_draft_open(&draft,&dp,draft_emit,NULL); FOCUS_PAGE("lit-draft");
+            s.view=DRAFT_OPTIONS; FOCUS_PAGE("lit-draft-options");
+        }
     }
     // Every advertised optional control is present, none appear for a legacy host.
     reset(); host_features=0; view(SETTINGS); scene_take();

@@ -51,15 +51,12 @@ static uint32_t cell_alias(uint32_t cp)
 }
 const ht_arc_face_t ht_arc_geist = {
     &ht_mono_24, &ht_viet_24, &ht_open_24, &ht_right_24, &ht_bell_24,
-    ht_mono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink, NULL};
-const ht_arc_face_t ht_arc_roboto = {
-    &ht_rmono_24, &ht_rviet_24, &ht_open_24, &ht_right_24, &ht_bell_24,
-    ht_rmono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink, NULL};
+    ht_mono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink, NULL, 0, false};
 // The arc face whose mono atlas is `font`, or NULL. A curved run carries its face as that atlas
 // (run.font), so every font comparison in the damage code already tells two faces apart.
 static const ht_arc_face_t *arc_face_of(const ht_font_t *font)
 {
-    static const ht_arc_face_t *const faces[] = {&ht_arc_geist, &ht_arc_roboto};
+    static const ht_arc_face_t *const faces[] = {&ht_arc_geist};
     for (unsigned i = 0; i < sizeof faces / sizeof faces[0]; i++) if (faces[i]->mono == font) return faces[i];
     return NULL;
 }
@@ -558,13 +555,15 @@ bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill
 }
 
 /*
- * A PROPORTIONAL ARC LABEL (Focus: Geist Medium 26). Each glyph keeps its own advance and kerning, in
+ * A PROPORTIONAL ARC LABEL (Focus: Literata Medium 26 for the name and the lower status). Each glyph keeps its own advance and kerning, in
  * 1/16 px like the straight text, and stands upright at its own place on the 205 px curve: the arc
  * length from the label's centre to the glyph's advance centre, divided by 205, is its angle (the Q14
  * table in arc_geometry.inc steps 1 px of arc; the 1/16 between entries is interpolated). The curve
- * carries the middle of the caps, ARC_PROP_MID above the baseline, at 205 (the baseline on 194, as in
+ * carries the middle of the caps, ARC_PROP_MID above the baseline (a face's own `mid`, when it has one), at 205 (the baseline on 194, as in
  * mockup/focus-v2.html) so the tallest stacked Vietnamese letter ends inside the 128 px canvas at
  * 12 o'clock; the lower arc sits 3 px nearer the centre, so its descenders end inside it as well.
+ * Literata's stacked marks stand tall, so its upper-arc face carries mid 16; its lower-arc face keeps
+ * mid 11 (its descenders would leave the canvas at 16).
  * The three walks over a label — bounds, mask geometry, mask paint — share one placement, so the
  * bounds can never be smaller than the ink.
  */
@@ -622,7 +621,7 @@ static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
         pl.cy = (233 - r->y) * 256 + (lower ? 1 : -1) * (radius * pl.cs * 256 >> 14);
         if (lower) pl.sn = -pl.sn;   // the lower arc reads left to right with upright letters
         pl.left = gl->ox * 256 - gl->adv * 8;
-        pl.top = (ARC_PROP_MID + gl->oy - g.face->ascent) * 256;
+        pl.top = ((r->arc_mid ? r->arc_mid : ARC_PROP_MID) + gl->oy - g.face->ascent) * 256;
         // The ink box and one pixel of bilinear halo, rotated about the pivot.
         int u0 = pl.left - 256, u1 = pl.left + gl->w * 256 + 256;
         int v0 = pl.top - 256, v1 = pl.top + gl->h * 256 + 256;
@@ -643,8 +642,9 @@ static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
     }
 }
 // `text` cut to what fits the span: whole, else at the last word when that keeps at least half the span
-// (as the mono rule keeps half the columns), else per character, before "…". Newlines are spaces.
-static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char *text)
+// (as the mono rule keeps half the columns), else per character, before "…" (none when `bare`).
+// Newlines are spaces.
+static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char *text, bool bare)
 {
     char flat[HT_TEXT_BYTES];
     size_t len = strlen(text), n = len < sizeof flat - 4 ? len : sizeof flat - 4;
@@ -657,7 +657,7 @@ static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char 
     for (;;) {
         memcpy(dst, flat, n);
         dst[n] = 0;
-        if (cut) strcpy(dst + n, "\xe2\x80\xa6");
+        if (cut && !bare) strcpy(dst + n, "\xe2\x80\xa6");
         if (arc_prop_width16(f, dst) <= ARC_PROP_SPAN16 || !n) return;
         size_t k = n, word = 0;
         while (k && flat[k - 1] != ' ') k--;
@@ -674,15 +674,16 @@ static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char 
         cut = true;
     }
 }
-// One glyph shorter, still ending "…"; false once only "…" is left.
-static bool arc_prop_trim(char *text)
+// One glyph shorter, still ending "…" (unless `bare`); false once nothing but "…" is left.
+static bool arc_prop_trim(char *text, bool bare)
 {
     size_t n = strlen(text);
     if (n >= 3 && !strcmp(text + n - 3, "\xe2\x80\xa6")) n -= 3;
     size_t kept = n;
     if (n) do n--; while (n && ((uint8_t)text[n] & 0xc0) == 0x80);
     while (n && text[n - 1] == ' ') n--;
-    strcpy(text + n, "\xe2\x80\xa6");
+    if (bare) text[n] = 0;
+    else strcpy(text + n, "\xe2\x80\xa6");
     return kept != 0;
 }
 enum { ARC_HALF = HT_ARC_WIDTH / 2, ARC_MASK_BYTES = 9216 };
@@ -733,7 +734,7 @@ static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
     char visible[HT_TEXT_BYTES];
     if (face->prop) {
         // The run carries the pfont's base as its font; a proportional run is fitted by the caller.
-        arc_prop_fit(visible, sizeof visible, face->prop, text);
+        arc_prop_fit(visible, sizeof visible, face->prop, text, face->bare);
         if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_WIDTH, &face->prop->base, fg, s->background, visible)) return;
     } else {
         bool complete = ht_display_text(visible,sizeof visible,text,face->mono);
@@ -751,9 +752,10 @@ static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
     r->y = bottom ? HT_HEIGHT - HT_ARC_Y - HT_ARC_HEIGHT : HT_ARC_Y;
     r->w = HT_ARC_WIDTH;
     if (face->prop) {
+        r->arc_mid = face->mid;
         // A mask that would not fit would blank the label: cut it shorter instead, until it does.
         arc_span_t spans[HT_ARC_HEIGHT][2];
-        while (arc_prop_geometry(r, face->prop, spans) > ARC_MASK_BYTES && arc_prop_trim(r->text)) {}
+        while (arc_prop_geometry(r, face->prop, spans) > ARC_MASK_BYTES && arc_prop_trim(r->text, face->bare)) {}
         // The tight bounds, laid out once here: a pure function of the run's text, face and position.
         arc_union_t u = {HT_ARC_WIDTH, HT_ARC_HEIGHT, 0, 0};
         arc_prop_walk(r, face->prop, arc_union_visit, &u);
@@ -1184,7 +1186,7 @@ static const uint16_t *glyph_cached(uint32_t c, const uint8_t *glyph,
 // Scenes retain immutable text, allowing old scenes to rasterize correctly.
 // A proportional label's mask keeps its 4-bit coverage (two pixels a byte, `bpp` 4) instead of the mono
 // atlases' two bits, so the same cache entry holds either. 9216 holds every label arc_text lets through:
-// the worst real one (stacked Vietnamese capitals, 24 glyphs) needs 8904, and arc_text re-fits any label
+// the worst real one (stacked Vietnamese capitals, 24 glyphs) needs 9116 in Literata, and arc_text re-fits any label
 // whose mask would not fit shorter (with "…") rather than drawing nothing; the mono ones need 4538.
 typedef struct {
     uint8_t mask[ARC_MASK_BYTES];
@@ -1195,6 +1197,7 @@ typedef struct {
     const ht_arc_face_t *face; // the face the mask was built for; NULL = empty
     const ht_pfont_t *prop;    // its pfont when proportional (the run's font is that face's base)
     uint8_t bpp;               // 2 for the mono faces, 4 for a proportional one
+    uint8_t mid;               // a proportional mask's mid-caps offset (the face's `mid`: the curve carries the glyphs there)
     uint8_t gain[HT_ARC_GAINS];   // a proportional mask's per-glyph gains (255 = plain)
 } arc_cache_t;
 _Static_assert(ARC_HALF <= UINT8_MAX, "arc span coordinates must fit in a byte");
@@ -1317,9 +1320,10 @@ static void arc_prepare_prop(const ht_run_t *r, arc_cache_t *cache, const ht_pfo
 {
     uint8_t gain[HT_ARC_GAINS];
     for (int i = 0; i < HT_ARC_GAINS; i++) gain[i] = r->gained ? r->gain[i] : 255;
-    if (cache->prop == pf && cache->bpp == 4 && !strcmp(cache->text, r->text) &&
+    if (cache->prop == pf && cache->bpp == 4 && cache->mid == r->arc_mid && !strcmp(cache->text, r->text) &&
         !memcmp(cache->gain, gain, sizeof gain)) return;
     strcpy(cache->text, r->text);
+    cache->mid = r->arc_mid;
     memcpy(cache->gain, gain, sizeof gain);
     cache->face = NULL; cache->prop = pf; cache->bpp = 4; cache->columns = 0; arc_builds++;
     unsigned used = arc_prop_geometry(r, pf, cache->spans);
