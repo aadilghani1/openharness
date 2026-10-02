@@ -27,6 +27,7 @@ import 'package:harness/terminal/terminal_text.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/workspace_bar_control.dart';
+import 'package:harness/widgets/pane_header_text_button.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
@@ -227,10 +228,40 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
         for (final pane in app.panes) {
           final cell = find.byKey(pane.cellKey);
+          final selectors = find.descendant(
+            of: cell,
+            matching: find.byType(PaneHeaderTextButton),
+          );
+          expect(selectors, findsNWidgets(2));
+          final labels = tester
+              .widgetList<Text>(
+                find.descendant(of: selectors, matching: find.byType(Text)),
+              )
+              .toList();
+          for (final label in labels) {
+            expect(label.style!.fontFamily, labels.first.style!.fontFamily);
+            expect(label.style!.fontSize, 13);
+            expect(label.style!.fontWeight, FontWeight.normal);
+            expect(label.style!.height, labels.first.style!.height);
+          }
+          expect(labels[0].style!.fontWeight, FontWeight.normal);
+          expect(
+            find.descendant(of: selectors, matching: find.byType(Icon)),
+            findsNothing,
+          );
           final controls = [
             find.byKey(ValueKey(('pane-model', 'm', pane.agentId!))),
             find.descendant(of: cell, matching: find.byType(PaneCloseButton)),
           ];
+          expect(find.byKey(const ValueKey('pane-zoom')), findsNothing);
+          for (final key in ['pane-split-down', 'pane-split-right']) {
+            expect(
+              find
+                  .descendant(of: cell, matching: find.byKey(ValueKey(key)))
+                  .hitTestable(),
+              findsNothing,
+            );
+          }
           for (var i = 1; i < controls.length; i++) {
             final previous = tester.getRect(controls[i - 1]);
             final rect = tester.getRect(controls[i]);
@@ -245,6 +276,26 @@ void main() {
         expect(tester.takeException(), isNull);
         await tester.pump(const Duration(milliseconds: 100));
         await captureControls(tester, 'pane-toolbar-$count-${brightness.name}');
+        final first = tester.getRect(find.byKey(app.panes.first.cellKey));
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: first.center);
+        for (final direction in ['right', 'down']) {
+          await mouse.moveTo(
+            direction == 'right'
+                ? Offset(first.right - 2, first.center.dy)
+                : Offset(first.center.dx, first.bottom - 2),
+          );
+          await tester.pump(const Duration(milliseconds: 150));
+          expect(
+            find.byKey(ValueKey('pane-split-$direction')).hitTestable(),
+            findsOneWidget,
+          );
+          await captureControls(
+            tester,
+            'pane-edge-$direction-$count-${brightness.name}',
+          );
+        }
+        await mouse.removePointer();
         await tester.pumpWidget(const SizedBox());
         app.dispose();
       });

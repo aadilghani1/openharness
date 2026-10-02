@@ -173,7 +173,7 @@ void main() {
           );
           expect(rect.right, closeTo(agent.left, 1));
           expect(agent.right, closeTo(model.left, 1));
-          expect(model.right, closeTo(controls.first.left, 1));
+          expect(model.right + 8, closeTo(controls.first.left, 1));
           for (var i = 1; i < controls.length; i++) {
             expect(controls[i - 1].right, closeTo(controls[i].left, 1));
           }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -11,6 +12,7 @@ import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'support/harness_monitor.dart';
@@ -541,16 +543,26 @@ void main() {
     (tester) async {
       final app = createApp();
       app.stateOf('m')!.nodeOnline = true;
-      app.adoptSessionForTest(terminal('a0', []));
+      final frames = <TerminalBinaryFrame>[];
+      final pane = app.adoptSessionForTest(terminal('a0', frames));
       await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('pane-agent-control')));
-      await tester.pump();
-      final field = tester.widget<TextField>(
-        find.byKey(const ValueKey('swarm-search-input')),
-      );
-      expect(field.controller!.text.trim(), '&');
-      expect(find.text('OpenCode'), findsWidgets);
-      expect(tester.takeException(), isNull);
+      for (final width in [1280.0, 480.0]) {
+        tester.view.physicalSize = Size(width, 800);
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('pane-agent-control')));
+        await tester.pump();
+        final field = tester.widget<TextField>(
+          find.byKey(const ValueKey('swarm-search-input')),
+        );
+        expect(field.controller!.text.trim(), '&');
+        expect(find.text('OpenCode'), findsWidgets);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        expect(app.panes.single, same(pane));
+        expect(frames, isEmpty);
+        expect(tester.takeException(), isNull);
+      }
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

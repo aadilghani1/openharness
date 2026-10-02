@@ -33,11 +33,16 @@ Tooltips explain icon actions and resolve shortcuts from the live keymap.
 The footer shows a global harness count, local host CPU/RAM/GPU and subscription
 allowance used on the left, all in neutral ink with whole percentages. Its
 right-hand context follows the focused pane: machine, project, branch and PR.
-Each terminal pane header ends with agent, model and close, in that order. The
-close icon stays visible with quiet ink and no button chrome. Split and zoom
-remain available through commands, menus and keyboard shortcuts. Splitting
-opens New Harness with the focused pane's agent, machine and project. Clicking
-the agent opens the shared `&` Agents picker; clicking the model opens Models;
+Each terminal pane header ends with agent, model and close at every width.
+Hovering the right edge reveals split right; hovering the bottom edge reveals
+split down. These icons sit inside the pane, clear of resize gaps. The header
+has no split, add or zoom icons; zoom remains in menus and shortcuts.
+Agent and model use the same plain-text selector with no pill or chevron. Their
+hover/focus changes ink, not weight or size. The left side keeps the session name
+and activity; only a distinct domain-harness icon remains beside it, rather than
+repeating the named coding agent. Splitting opens New Harness directly with that pane's agent, machine,
+and project, then creates into the chosen split on submission. Clicking the
+agent opens the shared `&` Agents picker; clicking the model opens the shared Models picker for that harness;
 the footer does not repeat model or effort. Agent switching saves the original
 session before starting its replacement in the same project. Its pane and layout
 survive peer cleanup of the stopped source. Agents that accept an initial message
@@ -46,7 +51,12 @@ retries; the saved original session keeps the full transcript. Do not show workt
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.
 
-![Terminal header with agent, model and close controls](review/2026-10-01-agent-switch-header.png)
+The captures below use synthetic pane names. Agent and model remain plain text;
+only the hovered edge reveals a split control.
+
+![Four panes with split right revealed in the dark theme](review/2026-10-02-pane-edge-right.png)
+
+![Nine panes with split down revealed in the light theme](review/2026-10-02-pane-edge-down.png)
 
 Machine opens its scope, Project opens related harnesses, Branch opens the
 existing branches/PR history, and the PR opens its URL. These are navigation,

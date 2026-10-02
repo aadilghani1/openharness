@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 
 /// Pane-local model selection and optional standalone terminal context.
@@ -35,29 +37,35 @@ class PaneHeaderActions extends StatelessWidget {
           ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: constraints.maxWidth.isFinite
-                  ? constraints.maxWidth *
-                        (details != null || trailing != null ? .3 : .5)
+                  ? math.min(
+                      140,
+                      details != null || trailing != null
+                          ? constraints.maxWidth * .3
+                          : math.max(
+                              0,
+                              constraints.maxWidth -
+                                  (modelPicker != null ? 56 : 0),
+                            ),
+                    )
                   : 140,
             ),
             child: agentPicker!,
           ),
         if (modelPicker != null) ...[
           if (details != null || trailing != null) const SizedBox(width: 8),
-          // Let a short model use only its natural width, leaving the remaining
-          // space for context. Cap it when context shares a narrow header.
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: constraints.maxWidth.isFinite
-                  ? constraints.maxWidth *
-                        (details != null || trailing != null
-                            ? .4
-                            : agentPicker != null
-                            ? .5
-                            : 1)
-                  : 232,
-            ),
-            child: modelPicker!,
-          ),
+          if (details != null || trailing != null)
+            // Short model names leave room for the standalone pane's context.
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: constraints.maxWidth.isFinite
+                    ? constraints.maxWidth * .4
+                    : 232,
+              ),
+              child: modelPicker!,
+            )
+          else
+            // The model uses the room left by the agent's natural width.
+            Flexible(child: modelPicker!),
         ],
       ],
     ),
