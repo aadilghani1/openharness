@@ -228,6 +228,11 @@ jobs:
       node-version: ${{ needs.cli-contracts.outputs.node-version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # This job reads only the shard reports and this stdlib-only verifier.
+          # Avoid fetching/materializing the app, fixtures and performance assets again.
+          sparse-checkout: scripts/verify-cli-test-shards.py
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           pattern: cli-shard-*
