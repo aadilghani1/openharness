@@ -11067,10 +11067,15 @@ class AppNotifier extends ChangeNotifier {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
     }
+    // Devices ships with the portable runtime but is deliberately omitted
+    // from dsh_list. Its absence from the public catalog does not restrict
+    // an existing Devices conversation to the engine it started with.
     final supported = source.dsh == null
         ? allEngines.map((engine) => engine.id).toList()
         : stateOf(machineId)?.dsh[source.dsh!]?.supportedEngines ??
-              [source.engine ?? ''];
+              (source.dsh == 'autonomous/devices'
+                  ? allEngines.map((engine) => engine.id).toList()
+                  : [source.engine ?? '']);
     return [
       if (supported.contains('opencode')) 'opencode',
       ...supported.where((id) => id != 'opencode'),
