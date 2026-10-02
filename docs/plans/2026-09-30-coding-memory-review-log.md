@@ -853,3 +853,30 @@ intelligence, learner and queue over more than an hour, then resume on a new con
 dropping source evidence. These checks establish refusal handling, not semantic extraction quality,
 live user learning, or improved coding outcomes. The selected external route was not retried or
 bypassed, and real-session quality evaluation remains incomplete.
+
+### Clarify extraction fields after actual local model failures — October 2
+
+Offline reference models exposed ambiguity that the mocked transport checks could
+not: evidence paths pointed into source text instead of the proposed memory,
+required topic identifiers were null, and verification and validity dates were
+invented. The extraction prompt now gives one explicit field contract, including
+the difference between required scope/topic IDs and host-owned record identity.
+It preserves episode boundaries, source roles, bounded-context restrictions,
+scope, exact quotations, contradiction handling and unknowns. Storage, admission,
+recall and inference selection are unchanged.
+
+The [local comparison](../research/2026-10-02-memory-local-extraction.md) records
+both gains and failures. On the six frozen cases, the same cached 27B model went
+from three completed negative cases and no stored memories to six completed
+cases, with two of three memories judged supported/useful and correctly recalled.
+All seven negative recall probes passed. The third memory still invented an
+implementation-only condition for an unconditional preference. A separate frozen
+batch check retained both personal preferences correctly, but another batch failed
+the unchanged field-coverage guard. Its unrun probes remain unmeasured.
+
+These are attributed agent judgments over synthetic model outputs, not independent
+human review, selected-companion certification, real-user learning or coding-task
+benefit. The programmer perspectives continue to mean source-grounded design
+reviews. No private transcript, live memory, account setting, app or firmware was
+changed. The experimental implementation has clearer instructions; the full
+memory-quality gates remain unmet.
