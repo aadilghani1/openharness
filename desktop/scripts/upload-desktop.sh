@@ -132,11 +132,12 @@ gcloud storage --help >/dev/null 2>&1 || {
   exit 1
 }
 
-# gcs_cp <src> <dst> [cache-control] [content-type] — either side may be gs:// or a local path or `-`.
+# gcs_cp <src> <dst> [cache-control] [content-type] [generation-match].
 gcs_cp() {
-  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" args=(storage cp)
+  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" generation="${5:-}" args=(storage cp)
   if [ -n "$cc" ]; then args+=("--cache-control=$cc"); fi
   if [ -n "$ct" ]; then args+=("--content-type=$ct"); fi
+  if [ -n "$generation" ]; then args+=("--if-generation-match=$generation"); fi
   gcloud "${args[@]}" "$src" "$dst"
 }
 
@@ -318,10 +319,10 @@ echo ">> uploading release $VER"
 # max-age here is what actually lets the CDN cache these instead of hitting GCS on every install/update.
 echo "   zip: gs://${GCS_BUCKET}/${GCS_PATH}  ($SIZE bytes, sha256=$SHA)"
 gcs_refuse_republish "gs://${GCS_BUCKET}/${GCS_PATH}"
-gcs_cp "$ZIP" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable"
+gcs_cp "$ZIP" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable" "" 0
 echo "   dmg: gs://${GCS_BUCKET}/${DMG_GCS_PATH}  ($DMG_SIZE bytes, sha256=$DMG_SHA)"
 gcs_refuse_republish "gs://${GCS_BUCKET}/${DMG_GCS_PATH}"
-gcs_cp "$DMG" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}" "public, max-age=31536000, immutable"
+gcs_cp "$DMG" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}" "public, max-age=31536000, immutable" "" 0
 
 echo ">> merging manifest: gs://${GCS_BUCKET}/${METADATA_PATH}  (${OTA_KEY}, ${DMG_KEY})"
 SRC="$(mktemp)"; DST="$(mktemp)"   # removed by cleanup() on EXIT

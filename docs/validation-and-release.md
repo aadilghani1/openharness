@@ -151,14 +151,36 @@ tag and source through completion:
 make release-desktop ARGS="--notes-file /path/to/reviewed-notes.md --wait"
 ```
 
-The workflow's `verify` job downloads all six public artifacts three at a time,
+The workflow's `publish` job downloads all six public artifacts three at a time,
 using the updater's Dart user agent, and checks every version, full SHA-256, and
-size. It starts immediately after publication, alongside release-page creation.
+size. It starts immediately after publication on the same runner.
 Each transfer has a total deadline; any failure makes the workflow fail and keeps
 the JSON receipt in the `desktop-release-verification` artifact. A successful
 verification satisfies that release's download checks: report completion instead
 of downloading everything again locally. The watcher requires this job to pass
 and checks the tag's full SHA, so another release's success cannot satisfy it.
+
+Different Desktop versions may build concurrently. The shared release lock covers
+publication and its public verification, so a second workflow cannot change the
+live version midway through that check. Versions are checked before building and
+again immediately before publication. A late older version fails as superseded;
+do not retry it over a newer live release. All four platform manifests must contain
+exactly the six expected entries for one version. Artifact writes are create-only,
+and the final manifest write requires the GCS generation read by the publisher.
+Concurrent external changes therefore cause a failure instead of being lost.
+
+For publication changes, run the local process suite and the disposable GCS
+contract check on the candidate branch:
+
+```bash
+gh workflow run release-desktop.yml --ref BRANCH -f version=0.0.0 -f test_publication=true
+```
+
+This mode skips all product build/release jobs. It uses tiny public fixture objects
+under `harness/desktop/.publication-check/<run>-<attempt>/`, checks actual GCS
+preconditions and downloads, and removes only that run's prefix. It exercises
+normal publication, duplicate/older versions, incomplete platform sets, concurrent
+manifest writes, and immutable artifact collisions. It cannot publish an app.
 
 For a release made before that job existed, or to investigate a download failure:
 

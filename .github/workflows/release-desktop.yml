@@ -59,16 +59,19 @@ on:
         description: 'Manifest to write. Leave as-is for a real release; metadata-test.json for a dry run.'
         required: false
         default: harness/desktop/metadata.json
+      test_publication:
+        description: 'Only test publication against disposable fixture objects; no app build or product release'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   id-token: write   # only used by the Workload Identity Federation variant of the auth steps below
 
 concurrency:
-  # Two releases overlapping would interleave their manifest writes. Never cancelled in progress:
-  # a half-published release leaves the manifest describing one platform's new build beside
-  # another's old one.
-  group: desktop-release
+  # Different versions build concurrently. Only publish+verification takes the
+  # shared manifest lock below; a whole-workflow lock added 4m35s to 1.2.47.
+  group: desktop-release-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
 env:
@@ -89,6 +92,7 @@ jobs:
   # Resolve and validate before anything expensive starts. A malformed tag fails here in seconds
   # rather than 25 minutes into a notarized build.
   version:
+    if: ${{ !inputs.test_publication }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
@@ -118,11 +122,12 @@ jobs:
           echo "scratch_prefix=harness/desktop/.ci/${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "Publishing **$ver** to \`$meta\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Uploading is the last thing each build job does, ~25 minutes in. Proving the credential now
-  # means a broken one costs seconds. Runs beside `version`, so it is free in wall clock.
+  # Reject duplicate/older versions and broken credentials before expensive builds.
   preflight:
+    needs: version
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       # GCP auth, WITHOUT a long-lived key — the same pattern release.yml and production-be-build.yaml
       # already run. A service-account JSON key is a bearer credential with no expiry: it is only as
       # safe as every place it has ever been copied to. Workload Identity Federation replaces it with
@@ -143,6 +148,18 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
+      - name: Reject a version already published or superseded
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$METADATA_PATH" != harness/desktop/metadata.json ]]; then
+            args+=(--allow-initialize)
+          fi
+          python3 scripts/publish-desktop-manifest.py "$VERSION" \
+            "gs://${GCS_BUCKET}/${METADATA_PATH}" --check-only "${args[@]}"
       - name: Verify GCS write access
         run: |
           set -euo pipefail
@@ -307,10 +324,21 @@ jobs:
   publish:
     needs: [version, build-macos, build-linux]
     runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      # Include verification: another release must not advance the live manifest
+      # between this publication and its six-download check. GCS's generation
+      # condition also protects against writers outside this workflow.
+      # Keep the historical group so a release already using the older workflow
+      # still serializes with this publisher during the transition.
+      group: desktop-release
+      cancel-in-progress: false
     env:
       METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
       SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v7
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
@@ -323,76 +351,23 @@ jobs:
           set -euo pipefail
           mkdir -p parts
           gcloud storage cp "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}/*.json" parts/
-          echo "::group::scratch manifests"; ls -la parts; echo "::endgroup::"
-
-          src="$(mktemp)"; dst="$(mktemp)"
-          if ! gcloud storage cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$src" 2>/dev/null; then
-            echo "   (no existing manifest at ${METADATA_PATH} — creating a new one)"
-            printf '{}' > "$src"
+          args=()
+          if [[ "$METADATA_PATH" != harness/desktop/metadata.json ]]; then
+            args+=(--allow-initialize)
           fi
-          # Paths through argv, NEVER piped into this heredoc — the heredoc claims stdin, so a pipe
-          # would be silently dropped and the merge would blank the manifest.
-          python3 - "$src" "$dst" parts <<'PY'
-          import json, os, sys
-
-          src, dst, parts = sys.argv[1:4]
-          try:
-              with open(src) as f:
-                  raw = f.read()
-              data = json.loads(raw) if raw.strip() else {}
-          except (OSError, json.JSONDecodeError):
-              data = {}
-          if not isinstance(data, dict):
-              data = {}
-
-          merged = 0
-          for name in sorted(os.listdir(parts)):
-              if not name.endswith(".json"):
-                  continue
-              with open(os.path.join(parts, name)) as f:
-                  part = json.load(f)
-              if not isinstance(part, dict):
-                  sys.exit(f"error: {name} is not a JSON object")
-              for key, entry in part.items():
-                  data[key] = entry
-                  merged += 1
-                  print(f"  {key} -> {entry.get('version')}")
-
-          # An empty merge would quietly re-upload the manifest unchanged and report success, which
-          # is indistinguishable from a release that published nothing.
-          if merged == 0:
-              sys.exit("error: no manifest entries found — did the build jobs upload anything?")
-
-          with open(dst, "w") as f:
-              json.dump(data, f, indent=2)
-              f.write("\n")
-          PY
-          gcloud storage cp --content-type=application/json \
-                 --cache-control="no-cache, no-store, must-revalidate" \
-                 "$dst" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+          python3 scripts/publish-desktop-manifest.py "$VERSION" \
+            "gs://${GCS_BUCKET}/${METADATA_PATH}" --parts parts "${args[@]}"
           echo "Published to \`${METADATA_PATH}\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Start as soon as the public manifest is live, beside release-page creation.
-  # A green workflow is the six-download verification receipt; do not download them
-  # all again locally just to finish the release task.
-  verify:
-    needs: [version, publish]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
+      # Same worker and publication lock: no extra runner startup and no chance
+      # of another workflow changing the live version during this verification.
       - name: Verify all public artifacts as the updater
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
         run: |
           python3 scripts/verify-desktop-release.py "$VERSION" \
             --manifest-url "https://storage.googleapis.com/${GCS_BUCKET}/${METADATA_PATH}" \
             --receipt desktop-release-verification.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && hashFiles('desktop-release-verification.json') != '' }}
         with:
           name: desktop-release-verification
           path: desktop-release-verification.json
@@ -486,7 +461,7 @@ jobs:
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
     needs: [version, build-macos, build-linux, publish]
-    if: always()
+    if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Authenticate to GCP (workload identity federation)
@@ -499,3 +474,19 @@ jobs:
         env:
           SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
         run: gcloud storage rm -r "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}" || true
+
+  # This mode exercises actual GCS generation preconditions using tiny fixture
+  # artifacts under its own run prefix. All product build/publish jobs are skipped.
+  publication-test:
+    if: ${{ inputs.test_publication }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Exercise publication against a disposable GCS prefix
+        run: python3 scripts/check-desktop-publication-gcs.py "$GCS_BUCKET"
