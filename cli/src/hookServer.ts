@@ -13,6 +13,7 @@ import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
+import type { GateVerdict } from './lib/actionPolicy.js'
 import { LOCAL_WEB_HTML } from './webui.js'
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
@@ -115,7 +116,15 @@ export interface HookServerHandlers {
     toolUseId: string
     toolName: string
     input: unknown
-  }) => void
+  }) => void | GateVerdict | Promise<void | GateVerdict>
+  /** GET /api/attention: every agent's attention state for the bar widget and other local readers. */
+  onAttention?: () => unknown
+  /** GET /api/subscriptions: every plan's weekly used, banked, reset and the next-plan verdict. */
+  onSubscriptions?: () => Promise<unknown>
+  /** POST /api/stop-all: cancel every agent's turn except one (the panic stop). */
+  onStopAll?: (exceptAgentId: string | null) => Promise<{ cancelled: string[] }>
+  /** POST /api/fleet {action, ...args}: the local command surface behind the fleet `harness` commands. */
+  onFleet?: (action: string, args: Record<string, unknown>) => Promise<unknown>
   onTurnStop?: (body: {
     sessionId: string
     status?: string
@@ -147,7 +156,11 @@ export interface HookServerHandlers {
    *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
   onDevicesList?: () => Promise<PairOutcome>
   onDevicesRemove?: (pub: string) => Promise<PairOutcome>
-  onDevicesRebaseline?: (confirm: boolean) => Promise<PairOutcome>
+  onDevicesRebaseline?: (confirm: boolean, head?: { seq: number; hash: string }) => Promise<PairOutcome>
+  /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
+  onDevicesHistory?: () => Promise<PairOutcome>
+  /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
+  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
@@ -496,6 +509,38 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/status') {
         json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
       }
+      // Attention snapshot for the bar widget and any local reader: loopback only, read-only, no
+      // secrets (names, engines, states). Same trust as /api/status.
+      if (req.method === 'GET' && url === '/api/attention') {
+        json(200, handlers.onAttention ? handlers.onAttention() : { agents: [] }); return
+      }
+      if (req.method === 'GET' && (url === '/api/subscriptions' || url.startsWith('/api/subscriptions?'))) {
+        if (!handlers.onSubscriptions) { json(503, { error: 'UNAVAILABLE' }); return }
+        try { json(200, await handlers.onSubscriptions()) } catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
+        return
+      }
+      // Panic stop: every agent's turn is cancelled except the one named. Mutating, so the same
+      // same-origin guard as the other local mutations.
+      if (req.method === 'POST' && url === '/api/stop-all') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onStopAll) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { except?: string } = {}
+        try { const raw = await readBody(req); body = raw ? JSON.parse(raw) as { except?: string } : {} } catch { json(400, { error: 'bad json' }); return }
+        try { json(200, await handlers.onStopAll(typeof body.except === 'string' && body.except ? body.except : null)) }
+        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
+        return
+      }
+      if (req.method === 'POST' && url === '/api/fleet') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onFleet) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { action?: unknown } & Record<string, unknown>
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        if (typeof body.action !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(body.action)) { json(400, { error: 'MISSING_ACTION' }); return }
+        const { action, ...args } = body
+        try { json(200, { ok: true, result: await handlers.onFleet(action, args) }) }
+        catch (e) { json(400, { ok: false, error: e instanceof Error ? e.message : String(e) }) }
+        return
+      }
       if (req.method === 'GET' && url === '/api/logs') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
       }
@@ -668,16 +713,24 @@ export function startHookServer(
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
         if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
+        let gate: GateVerdict | undefined
         if (body.sessionId && body.toolUseId && body.toolName) {
           console.log(`[hooks] ${sid(body.sessionId)} tool-start · tool=${body.toolName}`)
-          handlers.onToolStart?.({
-            sessionId: body.sessionId,
-            toolUseId: body.toolUseId,
-            toolName: body.toolName,
-            input: body.input,
-          })
+          try {
+            const verdict = await handlers.onToolStart?.({
+              sessionId: body.sessionId,
+              toolUseId: body.toolUseId,
+              toolName: body.toolName,
+              input: body.input,
+            })
+            if (verdict && verdict.decision !== 'allow') gate = verdict
+          } catch (e) {
+            console.error('[hooks] tool-start handler failed:', e instanceof Error ? e.message : e)
+          }
         }
-        json(200, { ok: true })
+        // The gate verdict rides back to the hook script, which turns it into the engine's own
+        // permission prompt. Allow is the absence of the field, so an older script sees `{ok:true}`.
+        json(200, gate ? { ok: true, gate } : { ok: true })
         return
       }
 
@@ -805,9 +858,43 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/devices/rebaseline') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onDevicesRebaseline) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { confirm?: unknown }
+        let body: { confirm?: unknown; head?: unknown }
         try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        const out = await handlers.onDevicesRebaseline(body.confirm === true); json(out.status, out.body); return
+        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
+        // The head the person was shown in the preview: a confirm only goes ahead on that same list.
+        let head: { seq: number; hash: string } | undefined
+        if (body.head !== undefined) {
+          const h = body.head as { seq?: unknown; hash?: unknown } | null
+          if (!h || typeof h !== 'object' || typeof h.seq !== 'number' || !Number.isSafeInteger(h.seq) || h.seq < 0
+            || typeof h.hash !== 'string' || h.hash.length > 128) { json(400, { error: 'BAD_HEAD' }); return }
+          head = { seq: h.seq, hash: h.hash }
+        }
+        const out = await handlers.onDevicesRebaseline(body.confirm === true, head); json(out.status, out.body); return
+      }
+
+      // `harness devices history` → the log's adds and removes, newest first. Local only: it is the
+      // account's whole device story, and the fetch behind it is a backend call as this machine.
+      if (req.method === 'GET' && url === '/api/devices/history') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDevicesHistory) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = await handlers.onDevicesHistory(); json(out.status, out.body); return
+      }
+      // `harness devices dismiss [<fp>]` / "It's mine" / "Got it" → new devices marked as seen here.
+      if (req.method === 'POST' && url === '/api/devices/dismiss') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDevicesDismiss) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { pub?: unknown; pubs?: unknown; baseline?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
+        if (body.pub !== undefined && (typeof body.pub !== 'string' || !body.pub)) { json(400, { error: 'MISSING_PUB' }); return }
+        // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
+        if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
+          || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
+        const out = handlers.onDevicesDismiss({
+          ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
+          ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
+          ...(body.baseline === true ? { baseline: true } : {}),
+        }); json(out.status, out.body); return
       }
 
       // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same

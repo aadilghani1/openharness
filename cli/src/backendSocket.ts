@@ -1,3 +1,4 @@
+import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
@@ -185,6 +186,11 @@ const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including t
 const DEVICE_ELLIPSIS = '…'
 
 export type Frame = Record<string, unknown>
+
+/** A `clip_push` payload after validation (fleet/control.ts; first written by Fred Nix in the nixfred fork). */
+export interface ClipPush { text?: string; file?: { name: string; base64: string }; from: string }
+export const CLIP_TEXT_MAX = 1_000_000
+export const CLIP_FILE_MAX_B64 = 34_000_000 // ~25 MB decoded
 type OutboundEnvelope = Record<string, unknown>
 
 export interface LocalClientSink {
@@ -509,6 +515,7 @@ export class BackendSocket {
   /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
    *  process and forgets the session. Keeps recap + agent name. */
   onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
+  purgeAgentService: PurgeAgentService | null = null
   closeAgentService: CloseAgentService | null = null
   cleanupPreview: (() => Promise<Record<string, unknown>>) | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
@@ -554,6 +561,8 @@ export class BackendSocket {
     Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }>) | null = null
   /** Called on `dsh_remove` — cli.ts uninstalls the harness from this machine. */
   onDshRemove: ((id: string) => { ok: true } | { ok: false; error: string; detail: string }) | null = null
+  /** A paired peer pushed text or a file to this machine's clipboard / drop folder (`harness clip push`). */
+  onClipPush: ((push: ClipPush) => Promise<{ ok: true; detail: string } | { ok: false; error: string }>) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
@@ -799,6 +808,9 @@ export class BackendSocket {
   onDeviceKeysChanged: (() => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
   onDeviceRemoved: ((pub: string) => void) | null = null
+  /** Whether [pub] is this machine's own device key. Set, a `machine_revoked` naming another key (an earlier
+   *  install under the same machine id) does not sign this one out. Null: every removal signs out. */
+  isOwnDeviceKey: ((pub: string) => boolean) | null = null
   /** The link to the backend just came up (each reconnect too). */
   onLinkUp: (() => void) | null = null
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
@@ -1847,6 +1859,11 @@ export class BackendSocket {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
+    const lifecycleTarget = (frame.payload as { agentId?: unknown } | undefined)?.agentId
+    if (typeof lifecycleTarget === 'string' && this.purgeAgentService?.busy(lifecycleTarget)
+      && ['agent_close', 'agent_delete', 'agent_resume', 'agent_restart', 'agent_retarget', 'agent_update'].includes(type)) {
+      reply(type, (frame.payload as { requestId?: unknown }).requestId, { error: 'DELETE_IN_PROGRESS' }); return
+    }
     if (SHARE_REQUEST_TYPES.has(type)) {
       const p = (frame.payload ?? {}) as Record<string, unknown>
       const result = await this.harnessSharing?.manage(type, p).catch(() => ({ error: 'SHARING_UNAVAILABLE', detail: 'Sharing is temporarily unavailable. Try again.' }))
@@ -1902,9 +1919,16 @@ export class BackendSocket {
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. `closed` blocks the reconnect that would otherwise fire on socket drop.
     if (type === 'machine_revoked') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
+      // Another key under this machine id was removed — an earlier install of this computer that this one
+      // waits behind (`device_conflict`). The frame goes to the machine id, so it reaches this install too:
+      // that removal is what lets this key register, not a sign-out. Re-read the log instead.
+      if (p.reason === 'device_removed' && typeof p.pub === 'string' && this.isOwnDeviceKey && !this.isOwnDeviceKey(p.pub)) {
+        this.onDeviceKeysChanged?.()
+        return
+      }
       this.closed = true
       // Removed from the account's device key log (not just signed out): the key itself is spent.
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
       if (p.reason === 'device_removed' && typeof p.pub === 'string') {
         try { this.onDeviceRemoved?.(p.pub) } catch { /* signing out still happens */ }
       }
@@ -2183,9 +2207,8 @@ export class BackendSocket {
           const projects = await Promise.all(sessions.map((s) => this.toProject(s)))
           // Older clients/devices keep their live-only contract. The desktop picker
           // explicitly asks for stopped work and receives no stale terminal routes.
-          if (payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device') {
-            projects.push(...await Promise.all(stoppedAgents.available(registry.advertised()).map(s => this.toStoppedProject(s))))
-          }
+          const savedSessions = payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device' ? stoppedAgents.available(sessions) : []
+          projects.push(...await Promise.all(savedSessions.map(s => this.toStoppedProject(s))))
           // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
           // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
           // order is TOTAL: without it two agents registered in the same millisecond fall through to array
@@ -2202,7 +2225,7 @@ export class BackendSocket {
             void (async () => {
               const [snapshot, storage] = await Promise.all([
                 this.harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
-                this.harnessStorageReader(sessions).catch(() => new Map()),
+                this.harnessStorageReader([...sessions, ...savedSessions]).catch(() => new Map()),
               ])
               const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
               const byId = new Map(sessions.map(s => [s.agentId, s]))
@@ -2544,6 +2567,21 @@ export class BackendSocket {
           void refreshDshRegistry()
             .then(catalog => reply(type, requestId, { dsh: dshListRows(undefined, catalog) }))
             .catch(error => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
+          return
+        }
+
+        case 'clip_push': {
+          // Sealed end to end (a MACHINE_REQUESTS type), so only a paired peer reaches here. Sizes are
+          // bounded before anything touches the clipboard or the disk.
+          if (!this.onClipPush) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const text = typeof payload.text === 'string' ? payload.text : undefined
+          const file = payload.file && typeof payload.file === 'object' ? payload.file as { name?: unknown; base64?: unknown } : undefined
+          if (text !== undefined && text.length > CLIP_TEXT_MAX) { reply(type, requestId, { error: 'CLIP_TOO_LARGE', detail: `text over ${CLIP_TEXT_MAX} chars` }); return }
+          if (file && (typeof file.name !== 'string' || typeof file.base64 !== 'string' || file.base64.length > CLIP_FILE_MAX_B64)) { reply(type, requestId, { error: 'CLIP_TOO_LARGE', detail: `file over ${Math.round(CLIP_FILE_MAX_B64 * 3 / 4 / 1048576)} MB or malformed` }); return }
+          if (text === undefined && !file) { reply(type, requestId, { error: 'CLIP_EMPTY' }); return }
+          void this.onClipPush({ text, file: file ? { name: file.name as string, base64: file.base64 as string } : undefined, from: typeof payload.from === 'string' ? payload.from.slice(0, 64) : 'peer' })
+            .then((out) => reply(type, requestId, out))
+            .catch((error) => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
           return
         }
 
@@ -3094,6 +3132,35 @@ export class BackendSocket {
           void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
             ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
             .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
+          return
+        }
+        case 'agent_worktree_delete':
+        case 'agent_purge': {
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          if (!this.purgeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges, choices, includeWorktree } = payload
+          const selected = choices && typeof choices === 'object' ? choices as Record<string, unknown> : null
+          if (typeof agentId !== 'string' || !(sessionId === null || typeof sessionId === 'string')
+            || typeof createdAt !== 'number' || !Number.isFinite(createdAt)
+            || (mode !== 'inspect' && mode !== 'delete' && !(type === 'agent_worktree_delete' && mode === 'describe'))
+            || (mode === 'delete' && typeof reviewId !== 'string')
+            || (choices !== undefined && (!selected
+              || typeof selected.sessionData !== 'boolean' || typeof selected.worktreeData !== 'boolean'))) {
+            reply(type, requestId, { error: 'INVALID_DELETE_REQUEST' }); return
+          }
+          const deletion = { agentId, sessionId, createdAt, mode: mode as 'inspect' | 'delete',
+            ...(typeof reviewId === 'string' ? { reviewId } : {}),
+            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true,
+            includeWorktree: includeWorktree === true,
+            ...(selected ? { choices: { sessionData: selected.sessionData as boolean, worktreeData: selected.worktreeData as boolean } } : {}) }
+          const operation = type === 'agent_worktree_delete'
+            ? this.purgeAgentService.worktreeRequest({ ...deletion, mode: mode as 'describe' | 'inspect' | 'delete' })
+            : this.purgeAgentService.request(deletion)
+          void operation
+            .then(result => {
+              if (result.deleted === true || result.worktreeDeleted === true) void this.harnessStorageReader([], true)
+              reply(type, requestId, result)
+            }, () => reply(type, requestId, { error: 'DELETE_FAILED' }))
           return
         }
         case 'agent_delete': {

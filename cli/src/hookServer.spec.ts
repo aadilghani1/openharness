@@ -754,3 +754,92 @@ describe('the daemon socket', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe('the device history and dismiss endpoints', () => {
+  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+
+  it('history needs the local header', async () => {
+    const onDevicesHistory = vi.fn(async () => ({ status: 200, body: { rows: [], complete: true, frozen: null } }))
+    const { base } = await start({ onDevicesHistory })
+    expect((await fetch(`${base}/api/devices/history`)).status).toBe(403)
+    expect(onDevicesHistory).not.toHaveBeenCalled()
+    const ok = await fetch(`${base}/api/devices/history`, { headers: local })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ rows: [], complete: true, frozen: null })
+  })
+
+  it('dismiss needs the local header, parses the body and refuses bad JSON', async () => {
+    const onDevicesDismiss = vi.fn(() => ({ status: 200, body: { ok: true } }))
+    const { base } = await start({ onDevicesDismiss })
+    const post = (body: string, headers: Record<string, string> = local) => fetch(`${base}/api/devices/dismiss`, { method: 'POST', headers, body })
+    expect((await post('{}', { 'content-type': 'application/json' })).status).toBe(403)
+    expect(onDevicesDismiss).not.toHaveBeenCalled()
+    expect((await post('{bad')).status).toBe(400)
+    expect((await post(JSON.stringify({ pub: 5 }))).status).toBe(400)
+    expect((await post(JSON.stringify({ pub: 'k' }))).status).toBe(200)
+    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pub: 'k' })
+    expect((await post(JSON.stringify({ baseline: true }))).status).toBe(200)
+    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ baseline: true })
+    expect((await post('{}')).status).toBe(200)
+    expect(onDevicesDismiss).toHaveBeenLastCalledWith({})
+    // The keys a window displayed: a list of strings, bounded.
+    expect((await post(JSON.stringify({ pubs: ['a', 'b'] }))).status).toBe(200)
+    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pubs: ['a', 'b'] })
+    expect((await post(JSON.stringify({ pubs: 'a' }))).status).toBe(400)
+    expect((await post(JSON.stringify({ pubs: ['a', 5] }))).status).toBe(400)
+    expect((await post(JSON.stringify({ pubs: Array.from({ length: 257 }, (_, i) => `k${i}`) }))).status).toBe(400)
+  })
+
+  it('rebaseline passes the previewed head on, and refuses a malformed one', async () => {
+    const onDevicesRebaseline = vi.fn(async () => ({ status: 200, body: {} }))
+    const { base } = await start({ onDevicesRebaseline })
+    const post = (body: unknown) => fetch(`${base}/api/devices/rebaseline`, { method: 'POST', headers: local, body: JSON.stringify(body) })
+    expect((await post({ confirm: true, head: { seq: 3, hash: 'h' } })).status).toBe(200)
+    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, { seq: 3, hash: 'h' })
+    expect((await post({ confirm: true })).status).toBe(200)
+    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, undefined)
+    expect((await post({ confirm: true, head: { seq: -1, hash: 'h' } })).status).toBe(400)
+    expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
+  })
+})
+
+describe('fleet controls: /api/attention, /api/stop-all, /api/fleet', () => {
+  const local = { 'content-type': 'application/json', 'x-adapter-local': '1' }
+  it('serves the attention snapshot read-only, and an empty one when nothing is wired', async () => {
+    const { base } = await start({ onAttention: () => ({ agents: [{ agentId: 'a', state: 'waiting' }] }) })
+    expect(await (await fetch(`${base}/api/attention`)).json()).toEqual({ agents: [{ agentId: 'a', state: 'waiting' }] })
+    server?.close()
+    const bare = await start()
+    expect(await (await fetch(`${bare.base}/api/attention`)).json()).toEqual({ agents: [] })
+  })
+  it('runs the panic stop only for a local caller, keeping the agent named', async () => {
+    const onStopAll = vi.fn(async () => ({ cancelled: ['b'] }))
+    const { base } = await start({ onStopAll })
+    expect((await fetch(`${base}/api/stop-all`, { method: 'POST', body: '{}' })).status).toBe(403)
+    expect(onStopAll).not.toHaveBeenCalled()
+    const res = await fetch(`${base}/api/stop-all`, { method: 'POST', headers: local, body: JSON.stringify({ except: 'a' }) })
+    expect(await res.json()).toEqual({ cancelled: ['b'] })
+    expect(onStopAll).toHaveBeenCalledExactlyOnceWith('a')
+  })
+  it('hands a named action to the fleet handler and reports its error', async () => {
+    const onFleet = vi.fn(async (action: string) => { if (action === 'boom') throw new Error('no such thing'); return { action } })
+    const { base } = await start({ onFleet })
+    const ok = await fetch(`${base}/api/fleet`, { method: 'POST', headers: local, body: JSON.stringify({ action: 'attention', x: 1 }) })
+    expect(await ok.json()).toEqual({ ok: true, result: { action: 'attention' } })
+    expect(onFleet).toHaveBeenCalledWith('attention', { x: 1 })
+    const bad = await fetch(`${base}/api/fleet`, { method: 'POST', headers: local, body: JSON.stringify({ action: 'boom' }) })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ ok: false, error: 'no such thing' })
+    expect((await fetch(`${base}/api/fleet`, { method: 'POST', headers: local, body: JSON.stringify({}) })).status).toBe(400)
+  })
+})
+
+describe('fleet controls: /api/subscriptions', () => {
+  it('serves the plans when wired, and says unavailable otherwise', async () => {
+    const { base } = await start({ onSubscriptions: async () => ({ subs: [{ id: 'claude', used: 0.4 }] }) })
+    expect(await (await fetch(`${base}/api/subscriptions?force=0`)).json()).toEqual({ subs: [{ id: 'claude', used: 0.4 }] })
+    server?.close()
+    const bare = await start()
+    expect((await fetch(`${bare.base}/api/subscriptions`)).status).toBe(503)
+  })
+})
