@@ -47,7 +47,10 @@ export async function inspectWorktree(s: RegisteredSession, sessions: readonly R
     const path = await realpath(other.cwd).catch(() => resolve(other.cwd!))
     if (within(root, path) || within(path, root)) throw new Error('Another harness uses this worktree or an overlapping folder. Its files must be kept.')
   }
-  for (const protectedPath of [env.ADAPTER_DATA_DIR, s.transcriptPath, s.codexHome, s.hermesHome]) {
+  for (const protectedPath of [env.ADAPTER_DATA_DIR, env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME,
+    env.OPENCODE_DATA_DIR, env.KILO_DATA_DIR, env.HERMES_HOME, env.DEVIN_HOME, env.CURSOR_HOME,
+    env.PI_HOME, env.COMMANDCODE_HOME, env.MUSE_HOME, env.GROK_HOME, env.AGY_HOME,
+    env.COPILOT_HOME, env.AMP_SESSIONS_DIR, s.transcriptPath, s.codexHome, s.hermesHome]) {
     if (protectedPath && within(root, await realpath(protectedPath).catch(() => resolve(protectedPath)))) {
       throw new Error('Session history or shared application data is inside this worktree. It cannot be removed here.')
     }

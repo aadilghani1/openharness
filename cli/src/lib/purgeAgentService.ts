@@ -26,7 +26,7 @@ function file(path: string): File {
   const info = lstatSync(path)
   if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1
     || (process.getuid && info.uid !== process.getuid())) fail('The session data is not a private regular file. Nothing was deleted.')
-  return { path: realpathSync(path), dev: info.dev, ino: info.ino, bytes: info.blocks * 512 }
+  return { path: realpathSync(path), dev: info.dev, ino: info.ino, bytes: Number.isFinite(info.blocks) ? info.blocks * 512 : info.size }
 }
 
 /** Known native history layouts only. A shared database is never removed or vacuumed. */
