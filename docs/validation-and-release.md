@@ -31,6 +31,19 @@ bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its nat
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
 
+For repository process tooling only, `scope=process` runs its Python regression
+tests without installing or building unrelated components. It does not validate
+application changes. Workflow edits also need `actionlint` and a run exercising
+the changed workflow behavior, such as the desktop cache preparation checks.
+
+Desktop SDK and pub caches are prepared on `main` when their inputs change by
+**Prepare desktop caches**. Run that workflow on `main` after cache eviction if
+needed; it does not publish anything. Release tags restore those caches without
+saving another tag-specific copy. Cache misses still install the pinned SDK and
+resolve dependencies normally. macOS enables Swift Package Manager before pub get.
+The shared keys include SDK version/commit, OS/architecture, and the dependency
+lockfiles for pub. Signing, notarization and artifact checks remain required.
+
 Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
 cache hits still run every test. The ten native TUI fixtures run two at a time,
@@ -130,6 +143,32 @@ gate after shipping. Record these UTC timestamps in the PR or release task:
 - Request received; implementation ready; required validation started/completed.
 - Merge; each product's release trigger and live publication; completion reported.
 - Pauses and waiting, with their known reason. Mark missing data unknown.
+
+For Desktop, use the existing release command with `--wait` to follow the exact
+tag and source through completion:
+
+```bash
+make release-desktop ARGS="--notes-file /path/to/reviewed-notes.md --wait"
+```
+
+The workflow's `verify` job downloads all six public artifacts three at a time,
+using the updater's Dart user agent, and checks every version, full SHA-256, and
+size. It starts immediately after publication, alongside release-page creation.
+Each transfer has a total deadline; any failure makes the workflow fail and keeps
+the JSON receipt in the `desktop-release-verification` artifact. A successful
+verification satisfies that release's download checks: report completion instead
+of downloading everything again locally. The watcher requires this job to pass
+and checks the tag's full SHA, so another release's success cannot satisfy it.
+
+For a release made before that job existed, or to investigate a download failure:
+
+```bash
+python3 scripts/verify-desktop-release.py 1.2.51
+```
+
+This is read-only. A failed verification after publication means the release may
+already be live; inspect the receipt and fix the cause rather than blindly
+retagging or retrying immutable artifact uploads.
 
 Report both total elapsed time and its stages. For small changes, aim to return to
 the team's previous 10–15 minute merge/release overhead; publishing duration alone

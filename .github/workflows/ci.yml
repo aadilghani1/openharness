@@ -19,7 +19,7 @@ on:
       scope:
         description: 'Affected components (full for shared protocols or uncertain impact)'
         type: choice
-        options: [full, cli, tui, backend]
+        options: [full, cli, tui, backend, process]
         default: full
   # Callable as a reusable workflow. release.yml used to gate on this and take the Node pin from
   # its output; it no longer does (see the note above `publish` there) and pins the same version
@@ -27,7 +27,7 @@ on:
   workflow_call:
     inputs:
       scope:
-        description: 'full, cli, tui, or backend'
+        description: 'full, cli, tui, backend, or process (repository tooling only)'
         type: string
         default: full
     outputs:
@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   process-checks:
-    if: ${{ contains(fromJSON('["full","cli","tui","backend"]'), inputs.scope || 'full') }}
+    if: ${{ contains(fromJSON('["full","cli","tui","backend","process"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -57,10 +57,10 @@ jobs:
   # workflow_dispatch restricts the choice; reusable callers can pass any string.
   # Fail invalid calls rather than reporting success after skipping every check.
   invalid-scope:
-    if: ${{ !contains(fromJSON('["full","cli","tui","backend"]'), inputs.scope || 'full') }}
+    if: ${{ !contains(fromJSON('["full","cli","tui","backend","process"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo '::error::scope must be full, cli, tui, or backend'; exit 1
+      - run: echo '::error::scope must be full, cli, tui, backend, or process'; exit 1
 
   # tty.ReadStream uses libuv's native TTY handle. Exercise descriptor ownership,
   # binary backpressure and unplug behavior on both supported OSes and runtimes.
