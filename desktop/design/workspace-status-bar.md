@@ -42,7 +42,8 @@ workspace ink at every usage level. Do not pad numbers or add dots, decimal figu
 CPU is the sum of attributable process-tree interval use; 100% is one core, so multicore and fleet
 totals can exceed 100%. RAM is process-tree resident memory. Nested harness roots are excluded from
 the parent and shared Codex servers count once; shared memory pages may still overlap. GPU uses
-summed reported process utilization; multiple processes/devices can exceed 100%. macOS and unsupported drivers show —;
+process GPU time per interval on supported macOS drivers and process utilization on Linux NVIDIA.
+Multiple contexts/devices can exceed 100%. First samples and unavailable counters show —;
 whole-host GPU activity is not a substitute for attribution. Cloud inference is not local GPU use.
 
 RAM and SSD use rounded whole MB/GB, such as `RAM 10 GB` and `SSD 1 GB` (10.4 rounds to 10).

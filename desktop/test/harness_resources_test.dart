@@ -226,12 +226,12 @@ void main() {
     await monitor.refresh();
     expect(monitor.live.map((r) => r.agent.id), ['a0', 'starting']);
     expect(monitor.label, 'Harnesses 2');
-    expect(monitor.metricsLabel(), 'CPU ≥7%   RAM ≥1 GB   GPU —   SSD ≥2 GB');
+    expect(monitor.metricsLabel(), 'CPU 7%   RAM 1 GB   GPU —   SSD 2 GB');
     expect(
       monitor.resourceDetail,
       contains('Totals cover these harnesses only'),
     );
-    expect(monitor.resourceDetail, contains('macOS readings are unavailable'));
+    expect(monitor.resourceDetail, contains('supported macOS and Linux NVIDIA'));
     expect(connection.calls, [
       {'type': 'machine_resources', 'harnesses': true, 'storage': true},
     ]);

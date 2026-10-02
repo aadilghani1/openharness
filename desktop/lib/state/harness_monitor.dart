@@ -130,7 +130,7 @@ class HarnessMonitor extends ChangeNotifier {
       '${live.length} open harnesses across connected machines. Totals cover these harnesses only.\n'
       '${metricsLabel()}\n'
       'CPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\n'
-      'GPU: per-process utilization on supported Linux NVIDIA drivers. macOS readings are unavailable (—). Cloud model GPU usage is not reported.\n'
+      'GPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show —. Cloud model GPU usage is not reported.\n'
       'SSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\n'
       'Totals include available readings and may be partial. — means unavailable. Click to open Harness Monitor.';
 

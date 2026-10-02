@@ -12,7 +12,7 @@ const dom = {
   stopCancel: el('stop-cancel'), stopConfirm: el('stop-confirm'),
 }
 const token = document.querySelector('meta[name="hps-token"]').content
-const STORAGE_KEY = 'harness-monitor.process-table.v3'
+const STORAGE_KEY = 'harness-monitor.process-table.v4'
 let saved = {}
 try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') || {} } catch { /* optional preference storage */ }
 const state = {
@@ -119,7 +119,7 @@ function createRow(row) {
   tr.ondblclick = event => { if (!event.target.closest('button')) inspect(row.id) }
   for (const col of activeColumns()) {
     const td = element('td', null, col.numeric ? 'numeric' : ''); td.dataset.key = col.key
-    if (col.key === 'name') td.append(element('strong'), element('small'))
+    if (col.key === 'name') td.append(element('strong'))
     if (col.key === 'activity') { const span = element('span', null, 'status'); span.append(element('span', null, 'mark'), element('span')); td.append(span) }
     if (col.key === 'engine') {
       const span = element('span', null, 'engine'), img = element('img'); img.alt = ''; img.hidden = true
@@ -146,7 +146,7 @@ function updateRow(tr, row) {
         : row.unavailable || (row.canStop ? 'Close ' + row.name : 'This harness is not ready to close.')
       close.setAttribute('aria-busy', String(state.busy.has(row.id)))
     } else if (key === 'name') {
-      text(td.children[0], row.name); text(td.children[1], [row.project === '—' ? null : row.project, row.branch].filter(Boolean).join(' · ') || row.engine || 'Harness')
+      text(td.children[0], row.name)
       td.title = [row.name, row.home, row.model].filter(Boolean).join('\n')
     } else if (key === 'activity') {
       const [mark, label] = ACTIVITY[row.activity] || ACTIVITY.unknown
@@ -182,8 +182,8 @@ function summary() {
   for (const [label, total, format, hint] of [
     ['CPU', sumReading(resources, 'cpu'), n => Math.round(n) + '%', '100% is one core. Shared servers count once.'],
     ['RAM', sumReading(resources, 'rssBytes'), memory, 'Resident memory including child processes and shared servers once. Shared memory pages can overlap.'],
-    ['GPU', sumReading(resources, 'gpuPercent'), n => Math.round(n) + '%', 'Per-process GPU utilization on supported Linux NVIDIA drivers. macOS readings are unavailable (—). Cloud model GPU usage is not reported.'],
-    ['Storage', storageTotal(rows.map(r => r.online === false ? { ...r, workspaceBytes: null } : r)), bytes, 'Workspace disk space. Shared and nested folders count once per machine. Stopping does not delete files.'],
+    ['GPU', sumReading(resources, 'gpuPercent'), n => Math.round(n) + '%', 'Harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show —. Cloud model GPU usage is not reported.'],
+    ['SSD', storageTotal(rows.map(r => r.online === false ? { ...r, workspaceBytes: null } : r)), bytes, 'Workspace disk space. Shared and nested folders count once per machine. Stopping does not delete files.'],
     ['Tokens', sumReading(rows, 'tokens'), number, 'Conversation totals for shown sessions. Cached input is included once.'],
   ]) {
     const item = element('div', null, 'total'); item.title = hint + ' ≥ means a partial total.'

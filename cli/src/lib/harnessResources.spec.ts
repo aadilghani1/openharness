@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHarnessResourcesReader, parseResourceProcesses, type ResourceProcess } from './harnessResources.js'
+import type { ProcessTelemetry } from './harnessTelemetry.js'
 
 const start = 'Wed Sep 30 10:00:00 2026'
 const row = (pid: number, parent = 1, memoryBytes = 100, cpuMs = 10): ResourceProcess => ({ pid, parent, memoryBytes, cpuMs, start })
@@ -114,4 +115,32 @@ it('attributes GPU and disk rates only to owned trees and validates counter iden
   expect((await read()).agents[0]).toMatchObject({ diskReadBytesPerSecond: 200, diskWriteBytesPerSecond: 400, processCount: 2 })
   now += 5000; snapshot = [row(10), { ...row(11, 10), start: 'replacement' }]
   expect((await read()).agents[0].diskReadBytesPerSecond).toBeNull()
+})
+
+it('attributes macOS GPU intervals to harness children and shared servers once, never other apps or reused PIDs', async () => {
+  let now = 10_000, sampleAt = 1000, gpuNs = 0n
+  let snapshot = [row(10), row(11, 10), row(12, 11), row(20), row(50), row(90)]
+  const telemetry = vi.fn(async (pids: number[]) => new Map(pids.map(pid => [pid, {
+    readBytes: null, writeBytes: null, gpuMemoryBytes: null,
+    macGpu: { sampledAt: sampleAt, contexts: new Map(pid === 10 || pid === 20 ? [] : [[String(pid), gpuNs]]) },
+  } satisfies ProcessTelemetry])))
+  const read = createHarnessResourcesReader(() => [agent('a', 10), agent('nested', 12), agent('idle', 20)], {
+    now: () => now, sample: async () => snapshot, telemetry,
+  }, async () => [{ pid: 50, start, agentIds: ['a', 'idle'] }, { pid: 50, start, agentIds: ['a', 'idle'] }])
+  expect((await read()).agents.every(value => value.gpuPercent === null)).toBe(true)
+  now += 5000; sampleAt += 4000; gpuNs += 1000000000n
+  const measured = await read()
+  expect(measured.agents.map(value => value.gpuPercent)).toEqual([25, 25, 0])
+  expect(measured.shared).toHaveLength(1)
+  expect(measured.shared![0].gpuPercent).toBe(25)
+  expect(telemetry).toHaveBeenLastCalledWith([10, 11, 12, 20, 50])
+  expect(() => JSON.stringify(measured)).not.toThrow() // raw BigInt counters stay local
+  now += 5000; sampleAt += 5000; gpuNs += 1000000000n
+  snapshot = snapshot.map(value => value.pid === 11 ? { ...value, start: 'reused PID' } : value)
+  expect((await read()).agents[0].gpuPercent).toBeNull()
+  now += 5000
+  telemetry.mockRejectedValueOnce(new Error('unavailable'))
+  expect((await read()).agents[0].gpuPercent).toBeNull()
+  now += 5000; sampleAt += 10000
+  expect((await read()).agents[0].gpuPercent).toBeNull()
 })
