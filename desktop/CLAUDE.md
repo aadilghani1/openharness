@@ -282,8 +282,12 @@ An owned idle session saves its native conversation and terminal snapshot
 before releasing its process, regardless of other viewers. A ready, unused Claude/Codex chat with
 an empty composer also closes directly, saving its terminal snapshot without requiring a native
 conversation. Missing activity evidence for an existing chat remains unknown. Working,
-waiting-for-input, draft, or unknown sessions show one short sentence with Cancel and Close;
-there is no title or deferred-close button. Cancel is the default. Previously queued daemon close
+waiting-for-input, draft, or unknown sessions share one confirmation for the whole tab, with
+their names, activity, and the number of sessions that will stop. Its only choices are Cancel
+and Stop; Cancel is the default. Stop saves and stops every reviewed session before the tab
+closes. Idle-only closes retain the daemon's activity guard; newly active work gets one review
+of the remaining sessions. Failures keep the view and identify confirmed stops separately
+from uncertain ones. Previously queued daemon close
 plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 

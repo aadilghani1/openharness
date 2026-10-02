@@ -2569,20 +2569,33 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (restoreEntry) await _ensureEmptyEntry();
   }
 
-  Future<bool> _reviewSessionClose(List<(String, Agent)> targets) async {
-    final choices =
-        <(Agent, Future<Map<String, dynamic>> Function(String), String)>[];
-    Future<String?> choose(
-      Agent agent,
-      String activity, {
-      String? error,
-    }) async {
+  Future<bool> _reviewSessionClose(
+    List<(String, Agent)> targets, {
+    String? tabName,
+  }) async {
+    final requests = [
+      for (final (machine, agent) in targets)
+        app.prepareSessionClose(machine, agent),
+    ];
+    final activities = List.filled(targets.length, 'unknown');
+    final showMachines = targets.map((target) => target.$1).toSet().length > 1;
+    Future<String?> choose({String? error}) async {
       String? result;
       await _dialog(() async {
         result = await showSessionCloseDialog(
           context,
-          agent,
-          activity,
+          [
+            for (var i = 0; i < targets.length; i++)
+              SessionCloseItem(
+                name: targets[i].$2.displayName,
+                activity: activities[i],
+                machineName: showMachines
+                    ? app.stateOf(targets[i].$1)?.machine.displayName ??
+                          targets[i].$1
+                    : null,
+              ),
+          ],
+          tabName: tabName,
           keymap: _keymap,
           error: error,
         );
@@ -2590,51 +2603,54 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return result;
     }
 
-    // Review every working session before stopping any member of a whole tab.
-    for (final (machine, agent) in targets) {
-      if (!mounted) return false;
-      final request = app.prepareSessionClose(machine, agent);
-      final state = await request('inspect');
-      if (!mounted) return false;
-      if (state['error'] != null) {
-        await choose(
-          agent,
-          'unknown',
-          error:
-              state['detail'] as String? ??
-              'Could not check this session. It has been kept open.',
-        );
-        return false;
+    Future<bool> inspectFrom(int start) async {
+      for (var i = start; i < requests.length; i++) {
+        if (!mounted) return false;
+        final state = await requests[i]('inspect');
+        if (!mounted) return false;
+        if (state['error'] != null) {
+          await choose(
+            error:
+                state['detail'] as String? ??
+                'Could not check ${targets[i].$2.displayName}. Nothing else will be stopped.',
+          );
+          return false;
+        }
+        activities[i] = state['activity'] as String? ?? 'unknown';
       }
-      final activity = state['activity'] as String? ?? 'unknown';
-      final mode = activity == 'idle' ? 'idle' : await choose(agent, activity);
-      if (mode == null) return false;
-      choices.add((agent, request, mode));
+      return true;
     }
-    for (final (agent, request, mode) in choices) {
+
+    // Inspect the whole captured set before one decision, or any stop. Stop
+    // approves every listed session, including idle ones that start work while
+    // the prompt is open; an unprompted close keeps the daemon's idle guard.
+    if (!await inspectFrom(0)) return false;
+    var stopNow = activities.any((activity) => activity != 'idle');
+    if (stopNow && await choose() != 'now') return false;
+    for (var i = 0; i < requests.length; i++) {
       if (!mounted) return false;
-      var result = await request(mode);
+      var result = await requests[i](stopNow ? 'now' : 'idle');
       if (!mounted) return false;
-      // Work may have begun while the person was reviewing another session.
+      // An idle-only close may race with new work. Review every remaining
+      // session together, and disclose any sessions that already stopped.
       if (result['error'] == 'SESSION_NOT_IDLE') {
-        final next = await choose(
-          agent,
-          result['activity'] as String? ?? 'unknown',
-        );
-        if (next == null) return false;
-        result = await request(next);
+        activities[i] = result['activity'] as String? ?? 'unknown';
+        if (!await inspectFrom(i + 1)) return false;
+        if (await choose() != 'now') return false;
+        stopNow = true;
+        result = await requests[i]('now');
       }
       if (!mounted) return false;
       if (result['closed'] != true && result['deferred'] != true) {
+        activities[i] = 'unconfirmed';
         await choose(
-          agent,
-          'unknown',
           error:
               result['detail'] as String? ??
-              'Could not close this session safely. Its saved history is kept.',
+              'Could not confirm that ${targets[i].$2.displayName} stopped. Its saved history is kept.',
         );
         return false;
       }
+      activities[i] = result['closed'] == true ? 'stopped' : 'deferred';
     }
     return true;
   }

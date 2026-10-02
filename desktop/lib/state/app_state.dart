@@ -613,7 +613,8 @@ class AppNotifier extends ChangeNotifier {
   final _agentPauses = <(String, String), Future<String?>>{};
 
   /// The workspace supplies presentation; the model owns target identity and completion.
-  Future<bool> Function(List<(String, Agent)>)? reviewSessionClose;
+  Future<bool> Function(List<(String, Agent)>, {String? tabName})?
+  reviewSessionClose;
   final _viewCloseRequests = <String, Future<void>>{};
   final _closingViewAgents = <(String, String), int>{};
   final _agentForks = <(String, String), AgentForkAttempt>{};
@@ -2087,7 +2088,7 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       await closeSwarm(id);
-    });
+    }, tabName: tab.name);
   }
 
   Future<void> requestClosePane(int paneId) {
@@ -2114,8 +2115,9 @@ class AppNotifier extends ChangeNotifier {
     String key,
     Swarm tab,
     List<TerminalPane> closing,
-    Future<void> Function() finish,
-  ) {
+    Future<void> Function() finish, {
+    String? tabName,
+  }) {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     final targets = <(String, Agent)>[];
@@ -2150,7 +2152,7 @@ class AppNotifier extends ChangeNotifier {
         try {
           if (targets.isNotEmpty &&
               (reviewSessionClose == null ||
-                  !await reviewSessionClose!(targets))) {
+                  !await reviewSessionClose!(targets, tabName: tabName))) {
             return;
           }
           if (!_authWorkCurrent(revision) || !swarms.contains(tab)) return;
