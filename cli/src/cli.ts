@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { ensureBundledModelManager } from './dsh/builtins.js'
+import { ensureBundledDevices, ensureBundledModelManager } from './dsh/builtins.js'
+import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -2216,6 +2217,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   try { ensureBundledModelManager() }
   catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
+  try { ensureBundledDevices() }
+  catch (error) { console.warn('[devices] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
 
   // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
   // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
@@ -7285,6 +7288,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[device] ${line}`),
   })
 
+  let devicesStatusRevision = 0
   const cableHost = new DaemonCableHost({
     // Zoo selection is visual identity; it does not require consent to watch terminal activity.
     // Guest identity is only a fallback while signed out, never another account's cached choice.
@@ -7346,8 +7350,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The dial's swarm pick. Local-only like the two above: a tab is a thing THIS window has.
     swarmSelected: (swarmId) => backend.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => backend.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
-    // Local-only like the three above: which desk has a dial on it is a fact about THIS computer.
-    dialStatus: (status) => backend.sendLocal({ type: 'dial_status', payload: status }),
+    // Gestures remain local. Device inventory/settings also reach the owner's
+    // other machines through the encrypted device-management event.
+    dialStatus: (status) => {
+      devicesStatusRevision++
+      backend.sendLocal({ type: 'dial_status', payload: status })
+      backend.send({ type: 'harness_devices_changed', payload: { status, revision: devicesStatusRevision } })
+    },
     // Words spoken on the overview belong to whichever agent the window's palette picks.
     routeInWindow: (text, cmd) => windowRouter.ask(text, cmd),
     selectPassage: command => windowSelection.command(command),
@@ -7359,6 +7368,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[cable] ${line}`),
   }, fleet)
   cableHostRef = cableHost
+  backend.harnessDevices = {
+    status: () => cableHost.currentDialStatus(),
+    revision: () => devicesStatusRevision,
+    set: async (id, patch) => cableRef
+      ? cableRef.setSettings(id, patch)
+      : { ok: false, error: 'Device service unavailable' },
+  }
   // Anything the window said while this was still being built.
   cableHost.setDesk(appPaneAgents)
   cableHost.setSwarms(appSwarmsLatest)
@@ -8771,6 +8787,13 @@ switch (cmd) {
     break
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'hardware':
+    runDevicesCommand(rest, {
+      port: daemonPort(),
+      machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
+      connect: (url) => new NewCommandSocket(url),
+    }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair': {
     // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface

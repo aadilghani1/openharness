@@ -128,7 +128,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "devices", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -1007,6 +1007,7 @@ private class SwarmPlainIconButton: SwarmIconButton {
 /// A quiet filled pill, with the Store's colorful mark as its focal point.
 /// Drawing the content keeps the same spacing across AppKit button styles.
 private final class SwarmStoreButton: SwarmIconButton {
+  var monochrome = false
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
   var preferredWidth: CGFloat {
     ceil(workspaceBarTextWidth(title,
@@ -1024,9 +1025,16 @@ private final class SwarmStoreButton: SwarmIconButton {
     palette.accent.withAlphaComponent(hasKeyboardFocus && isEnabled ? 0.85 : 0.12).setStroke()
     shape.lineWidth = hasKeyboardFocus && isEnabled ? 1.5 : 1
     shape.stroke()
-    image?.draw(in: NSRect(x: 12, y: (bounds.height - 16) / 2, width: 16, height: 16),
+    let iconRect = NSRect(x: 12, y: (bounds.height - 16) / 2, width: 16, height: 16)
+    NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+    image?.draw(in: iconRect,
       from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+    if monochrome {
+      palette.accent.setFill()
+      iconRect.fill(using: .sourceIn)
+    }
+    NSGraphicsContext.current?.cgContext.endTransparencyLayer()
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     let attributes: [NSAttributedString.Key: Any] = [
@@ -1783,6 +1791,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let shareButton = SwarmShareButton()
   fileprivate let searchButton = SwarmPlainIconButton()
   fileprivate let storeButton = SwarmStoreButton()
+  fileprivate let devicesButton = SwarmStoreButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var resourceGroupGapCells: CGFloat = 2.5
@@ -1897,6 +1906,20 @@ private final class SwarmTabStrip: NSView {
     searchButton.action = #selector(openSearch)
     searchButton.setAccessibilityLabel("Open Harness")
     addSubview(searchButton)
+    devicesButton.isBordered = false
+    devicesButton.title = "Devices"
+    devicesButton.font = navigationFont
+    devicesButton.palette = palette
+    devicesButton.image = HarnessControlSymbols.image("circle")
+    devicesButton.monochrome = true
+    devicesButton.isEnabled = false
+    devicesButton.isHidden = true
+    devicesButton.focusRingType = .none
+    devicesButton.target = self
+    devicesButton.action = #selector(openDevices)
+    devicesButton.toolTip = "Manage Harness devices"
+    devicesButton.setAccessibilityLabel("Devices")
+    addSubview(devicesButton)
     storeButton.isBordered = false
     storeButton.title = "Harness Store"
     storeButton.font = navigationFont
@@ -2024,6 +2047,7 @@ private final class SwarmTabStrip: NSView {
     NSApp.appearance = NSAppearance(named: palette.dark ? .darkAqua : .aqua)
     storeButton.palette = palette
     newButton.contentTintColor = palette.accent
+    devicesButton.palette = palette
     newButton.foreground = palette.navigationForeground
     for tab in tabs {
       tab.palette = palette
@@ -2042,8 +2066,11 @@ private final class SwarmTabStrip: NSView {
     statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false || state["footerCovered"] as? Bool == true
     let passiveFooter = state["footerPassive"] as? Bool == true
     statusBar.setAccessibilityHidden(passiveFooter || statusBar.isHidden)
+    devicesButton.isHidden = state["devicesVisible"] as? Bool != true
+    devicesButton.setAccessibilityHidden(devicesButton.isHidden)
     setAccessibilityChildren(
-      [scroll, newButton, searchButton, storeButton] +
+      [scroll, newButton, searchButton] +
+      (devicesButton.isHidden ? [] : [devicesButton]) + [storeButton] +
       (statusBar.isHidden || passiveFooter ? [] : [statusBar]))
     reduceMotion = state["reduceMotion"] as? Bool == true
     if let style = state["barStyle"] as? [String: Any] {
@@ -2061,6 +2088,7 @@ private final class SwarmTabStrip: NSView {
     }
     storeButton.font = navigationFont
     storeButton.isEnabled = actionsEnabled
+    devicesButton.isEnabled = actionsEnabled && !devicesButton.isHidden
     searchButton.foreground = palette.navigationForeground
     searchButton.isEnabled = actionsEnabled
     searchButton.toolTip = state["searchTooltip"] as? String ?? "Open Harness"
@@ -2286,7 +2314,11 @@ private final class SwarmTabStrip: NSView {
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth,
       y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
     let iconWidth = cell * 4
-    searchButton.frame = NSRect(x: storeButton.frame.minX - iconWidth - 8,
+    let devicesWidth = devicesButton.isHidden ? 0 : devicesButton.preferredWidth
+    devicesButton.frame = NSRect(x: storeButton.frame.minX - devicesWidth - 8,
+      y: (bounds.height - toolHeight) / 2, width: devicesWidth, height: toolHeight)
+    let searchEdge = devicesButton.isHidden ? storeButton.frame.minX : devicesButton.frame.minX
+    searchButton.frame = NSRect(x: searchEdge - iconWidth - 8,
       y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
     // Only navigation actions share the tab row. Context has the full footer.
     let tabBudget = max(0, searchButton.frame.minX - cell * 6)
@@ -2413,6 +2445,10 @@ private final class SwarmTabStrip: NSView {
   }
   @objc private func openStore() {
     if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
+  }
+
+  @objc private func openDevices() {
+    if actionsEnabled && devicesButton.isEnabled && !devicesButton.isHidden { emit?("devices", nil) }
   }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {

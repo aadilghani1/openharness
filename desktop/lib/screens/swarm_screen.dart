@@ -92,6 +92,8 @@ import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
+import '../devices/devices_screen.dart';
+import '../devices/devices_harness_controller.dart';
 import '../widgets/harness_start_page.dart';
 import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
@@ -523,6 +525,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _shortcutsEnabled &&
       app.panes.isEmpty &&
       !app.activeSwarm.isStore &&
+      !app.activeSwarm.isDevices &&
       !app.activeSwarm.isOrchestrator &&
       _newHarness == null &&
       _search == null &&
@@ -778,6 +781,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _devicesHarness.dispose();
     _harnessMonitor.dispose();
     _machineResources.dispose();
     if (app.reviewSessionClose == _reviewSessionClose) {
@@ -1772,6 +1776,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'activeId': app.activeSwarmId,
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
+      'devicesVisible': app.devicesEnabled,
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
@@ -2281,6 +2286,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         await _openFocusedPullRequest(args['url'] as String?);
       case 'store':
         _openStore();
+      case 'devices':
+        _openDevices();
       case 'new':
         _newTab();
       case 'reopen':
@@ -2909,6 +2916,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         requestedSplit == null &&
         app.panes.isEmpty &&
         !app.activeSwarm.isStore &&
+        !app.activeSwarm.isDevices &&
         !app.activeSwarm.isOrchestrator;
     final welcomeOrigin = embedded
         ? _newHarnessDrafts.keys
@@ -3629,6 +3637,65 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _syncToolbarNotices();
     if (_menuHost && mounted) _syncNative();
   }
+
+  late final _devicesHarness = DevicesHarnessController(app);
+  String? _devicesAttemptedKey;
+
+  Widget _devicesViewer(BuildContext context) {
+    final key = '${app.currentUser?.id}:${app.activeSwarmId}';
+    if (app.activeSwarm.isDevices &&
+        app.devicesEnabled &&
+        _devicesAttemptedKey != key) {
+      _devicesAttemptedKey = key;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            app.activeSwarm.isDevices &&
+            app.devicesEnabled &&
+            key == '${app.currentUser?.id}:${app.activeSwarmId}') {
+          unawaited(_devicesHarness.open());
+        }
+      });
+    }
+    return ListenableBuilder(
+      listenable: _devicesHarness,
+      builder: (context, _) => DevicesTab(
+        key: ValueKey('devices-tab:${app.currentUser?.id}'),
+        notifier: app,
+        conversationOpening: _devicesHarness.opening,
+        conversationError: _devicesHarness.error,
+        onOpenConversation: _devicesHarness.open,
+      ),
+    );
+  }
+
+  void _openDevices() {
+    if (!_routeIsCurrent ||
+        _dialogOpen ||
+        _spokenPaletteOpen ||
+        !app.devicesEnabled) {
+      return;
+    }
+    if (_newHarness case final box?) {
+      if (box.locked) {
+        box.warn('Check the pending creation before opening Devices.');
+        return;
+      }
+      _closeNewHarness(restoreFocus: false);
+    }
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    app.openDevices();
+    unawaited(_devicesHarness.open());
+  }
+
+  Widget _devicesButton(BuildContext context) => WorkspaceStoreButton(
+    key: const ValueKey('swarm-devices-button'),
+    width: WorkspaceStoreButton.widthOf(context, devices: true),
+    devices: true,
+    tooltip: 'Manage Harness devices',
+    onPressed: _shortcutsEnabled ? _openDevices : null,
+  );
 
   // ── the daemon (daemons/README.md) ─────────────────────────────────────────
 
@@ -6454,6 +6521,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _searchButton(theme),
         _notificationsButton(theme),
         const SizedBox(width: DesktopChrome.controlGap),
+        if (app.devicesEnabled) ...[
+          _devicesButton(context),
+          const SizedBox(width: DesktopChrome.controlGap),
+        ],
         WorkspaceStoreButton(
           key: const ValueKey('swarm-store-button'),
           width: WorkspaceStoreButton.widthOf(context),
@@ -6659,6 +6730,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                       paneId: paneId,
                                                     ),
                                                   ),
+                                              devicesViewer: app.devicesEnabled
+                                                  ? _devicesViewer
+                                                  : null,
                                               companionViewer:
                                                   _creatureEnabled &&
                                                       _zoo.loaded
@@ -6911,6 +6985,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _harnessMonitor.live.isNotEmpty ||
       app.panes.isNotEmpty ||
       app.activeSwarm.isStore ||
+      app.activeSwarm.isDevices ||
       app.activeSwarm.isOrchestrator ||
       _footerPreviewCurrent;
 
@@ -7235,7 +7310,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // holds them.
       final actionsWidth = _titleBarActions
           ? 0.0
-          : storeWidth + cell.width * 8 + DesktopChrome.controlGap;
+          : storeWidth +
+                cell.width * 8 +
+                DesktopChrome.controlGap +
+                (app.devicesEnabled
+                    ? WorkspaceStoreButton.widthOf(context, devices: true) +
+                          DesktopChrome.controlGap
+                    : 0);
       final leadingWidth = chrome?.leadingWidth(context) ?? 0.0;
       final tabBudget = math.max(
         0.0,
@@ -7406,6 +7487,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 _searchButton(theme),
                 _notificationsButton(theme),
                 const SizedBox(width: DesktopChrome.controlGap),
+                if (app.devicesEnabled) ...[
+                  _devicesButton(context),
+                  const SizedBox(width: DesktopChrome.controlGap),
+                ],
                 WorkspaceStoreButton(
                   key: const ValueKey('swarm-store-button'),
                   width: storeWidth,

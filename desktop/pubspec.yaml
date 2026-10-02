@@ -148,6 +148,7 @@ flutter:
     - assets/model-icons/
     - assets/octicons/
     - assets/harness_device_studio.jpg
+    - assets/devices/
     - assets/harness_store_card.jpg
     - assets/swarm-wallpapers/
 

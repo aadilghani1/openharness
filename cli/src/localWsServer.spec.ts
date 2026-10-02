@@ -215,6 +215,32 @@ describe('local CLI WebSocket', () => {
     expect(backend.frames).toEqual([])
     ws.close()
   })
+  it('relays addressed device commands without sending legacy writes to the local cable', async () => {
+    const backend = new FakeBackend(), localSettings = vi.fn(), relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+    }
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test', onDialSettings: localSettings,
+      relayPool: relayPool as unknown as NonNullable<LocalWsServerOptions['relayPool']>,
+    }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'remote', localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'dial_settings', payload: { id: 'same-usb', brightness: 90 } }))
+    const addressed = { type: 'harness_device_settings', payload: { id: 'same-usb', patch: { brightness: 35 }, requestId: 'one' } }
+    ws.send(JSON.stringify(addressed))
+    await vi.waitFor(() => expect(relayed).toContainEqual(addressed))
+    expect(localSettings).not.toHaveBeenCalled()
+    expect(backend.frames).toEqual([])
+    expect(relayed).toHaveLength(1)
+    ws.close()
+  })
+
   it('accepts loopback, selects the exact machine, and routes JSON plus HTRL binary', async () => {
     const backend = new FakeBackend()
     const url = await start(backend)

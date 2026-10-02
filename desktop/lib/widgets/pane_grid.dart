@@ -56,6 +56,7 @@ class PaneGrid extends StatelessWidget {
     this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
+    this.devicesViewer,
   });
 
   final AppNotifier notifier;
@@ -72,6 +73,7 @@ class PaneGrid extends StatelessWidget {
 
   /// The built-in companion DSH viewer; its agent uses the ordinary terminal.
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? devicesViewer;
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +90,7 @@ class PaneGrid extends StatelessWidget {
             onSplitPane: onSplitPane,
             soloFocused: soloFocused,
             companionViewer: companionViewer,
+            devicesViewer: devicesViewer,
           );
         }
         final panes = notifier.panes;
@@ -105,6 +108,7 @@ class PaneGrid extends StatelessWidget {
           onOpenModels: onOpenModels,
           onSplitPane: onSplitPane,
           companionViewer: companionViewer,
+          devicesViewer: devicesViewer,
         );
         final cells = <Widget>[
           for (final pane in visible) cell(pane),
@@ -255,6 +259,7 @@ class _SwarmCanvas extends StatefulWidget {
     this.onSplitPane,
     this.soloFocused = false,
     this.companionViewer,
+    this.devicesViewer,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
@@ -264,6 +269,7 @@ class _SwarmCanvas extends StatefulWidget {
   final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final bool soloFocused;
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? devicesViewer;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -603,6 +609,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     onSplitPane: widget.onSplitPane,
                                     solo: widget.soloFocused,
                                     companionViewer: widget.companionViewer,
+                                    devicesViewer: widget.devicesViewer,
                                   ),
                                 ),
                               ),
@@ -1204,6 +1211,7 @@ class _PaneCell extends StatelessWidget {
     this.onSplitPane,
     this.solo = false,
     this.companionViewer,
+    this.devicesViewer,
   });
 
   final AppNotifier notifier;
@@ -1215,6 +1223,7 @@ class _PaneCell extends StatelessWidget {
   onOpenModels;
   final void Function(int paneId, PaneResizeAxis axis)? onSplitPane;
   final WidgetBuilder? companionViewer;
+  final WidgetBuilder? devicesViewer;
 
   /// Drawn alone under [PaneGrid.soloFocused]: it reads as the only view — no
   /// dimming or zoom, since it already fills the screen. The focused rim still
@@ -1321,7 +1330,10 @@ class _PaneCell extends StatelessWidget {
                       opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
                       child: child,
                     ),
-                    child: pane.isCompanion
+                    child: pane.isDevices
+                        ? devicesViewer?.call(context) ??
+                              const SizedBox.shrink()
+                        : pane.isCompanion
                         ? companionViewer?.call(context) ??
                               const SizedBox.shrink()
                         : _PaneContent(
@@ -2030,6 +2042,7 @@ class _SwapZone extends StatelessWidget {
                 // underneath keeps every click the rest of the time.
                 ignoring:
                     notifier.activeSwarm.isCompanions ||
+                    notifier.activeSwarm.isDevices ||
                     dragging == null ||
                     dragging.paneId == paneId,
                 child: DragTarget<PaneDragRef>(
@@ -2274,7 +2287,10 @@ class _DropZone extends StatelessWidget {
         child,
         Positioned.fill(
           child: IgnorePointer(
-            ignoring: notifier.activeSwarm.isCompanions || dragging == null,
+            ignoring:
+                notifier.activeSwarm.isCompanions ||
+                notifier.activeSwarm.isDevices ||
+                dragging == null,
             child: DragTarget<AgentDragRef>(
               onAcceptWithDetails: (details) => notifier.assignAgentToPane(
                 paneId,

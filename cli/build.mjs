@@ -2,11 +2,12 @@ import * as esbuild from 'esbuild'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
 import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
+const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 
 // Bake the version in so `node dist/cli.js version` works in the dev/per-file build too (parity with
 // build-bundle.mjs). The bundle build overrides this from ADAPTER_VERSION at release time.
@@ -48,6 +49,7 @@ try {
       __ADAPTER_VERSION__: JSON.stringify(version),
       __DSH_REGISTRY__: JSON.stringify(dshRegistry),
       __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
+      __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
       __PLATE_WORKER__: JSON.stringify(plateWorker),
       __MEMORY_WORKER__: JSON.stringify(memoryWorker),
     },

@@ -58,6 +58,8 @@ import '../core/serial_port_lease.dart';
 import '../autonomous_device/autonomous_device_cli.dart';
 import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
+import '../core/local_key_value_store.dart';
+import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
@@ -965,7 +967,11 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? _currentUser;
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
-    if (_currentUser?.id != profile?.id) _closeOwnerMemories();
+    if (_currentUser?.id != profile?.id) {
+      _closeOwnerMemories();
+      deviceHosts.clear();
+      _deviceReads.clear();
+    }
     _currentUser = profile;
     final id = profile?.id;
     experimentalFeatures.bind(
@@ -1084,6 +1090,7 @@ class AppNotifier extends ChangeNotifier {
 
   bool _canReopenSwarm(ClosedSwarm saved) {
     if (_disposed) return false;
+    if (saved.kind == 'devices' && !devicesEnabled) return false;
     final target = swarms.where((swarm) => swarm.id == saved.id).firstOrNull;
     if (target == null) return true;
     final present = {
@@ -1383,6 +1390,275 @@ class AppNotifier extends ChangeNotifier {
   }
 
   String? _pendingStoreHarness;
+
+  bool get devicesEnabled =>
+      ExperimentalFeature.devicesTab.available &&
+      experimentalFeatures.isAvailable(ExperimentalFeature.devicesTab) &&
+      experimentalFeatures.enabled(ExperimentalFeature.devicesTab);
+
+  LocalKeyValueStore? get deviceLibraryStorage => _paneLayout?.storage;
+  final deviceHosts = DeviceHosts();
+  final _deviceReads = <String, Future<void>>{};
+
+  void _syncDeviceHosts() {
+    deviceHosts.reconcile([
+      for (final machine in machineStates.values)
+        if (!machine.machine.isShared)
+          DeviceHost(
+            id: machine.machine.machineId,
+            name: machine.machine.displayName,
+            local: machine.isLocalMachine,
+            online:
+                machine.connectionStatus == ConnectionStatus.connected &&
+                !machine.isOffline &&
+                !machine.needsLink,
+            error: machine.needsLink
+                ? 'Link this computer in Machines to manage its devices.'
+                : null,
+          ),
+    ]);
+  }
+
+  /// Read each owned machine through its existing authenticated connection.
+  /// Reading devices never opens a terminal or powers on a stopped machine.
+  Future<void> refreshDevices() async {
+    if (!devicesEnabled || _disposed) return;
+    _syncDeviceHosts();
+    if (_pool == null && connectionForTest == null) return;
+    await Future.wait([
+      for (final machine in machineStates.values.toList())
+        if (!machine.machine.isShared &&
+            !machine.isOffline &&
+            !machine.needsLink)
+          _readDeviceHost(machine),
+    ]);
+  }
+
+  Future<void> _readDeviceHost(MachineState machine) {
+    final id = machine.machine.machineId;
+    final active = _deviceReads[id];
+    if (active != null) return active;
+    final account = currentUser?.id;
+    final experimentAccount = experimentalFeatures.accountId;
+    final revision = _authRevision;
+    bool current() =>
+        !_disposed &&
+        devicesEnabled &&
+        currentUser?.id == account &&
+        experimentalFeatures.accountId == experimentAccount &&
+        _authRevision == revision &&
+        identical(machineStates[id], machine);
+    late final Future<void> read;
+    read =
+        (() async {
+          try {
+            final connection = _conn(id);
+            await connection.waitUntilReady(
+              timeout: const Duration(seconds: 8),
+            );
+            if (!current()) return;
+            final result = await connection.request(
+              'harness_devices_list',
+              timeout: const Duration(seconds: 5),
+            );
+            if (!current() || machine.isOffline) return;
+            _syncDeviceHosts();
+            final status = result['status'];
+            if (status is! Map<String, dynamic>) {
+              throw const FormatException('Invalid device status');
+            }
+            deviceHosts.receive(
+              id,
+              DialStatus.fromJson(status),
+              revision: result['revision'] is int
+                  ? result['revision'] as int
+                  : null,
+            );
+          } catch (error) {
+            if (!current()) return;
+            // Older local daemons already send addressed cable status. Never use
+            // that fallback on a remote connection: dial_settings is local-only.
+            if (error is WsRequestFailure &&
+                error.code == 'UNSUPPORTED' &&
+                machine.isLocalMachine &&
+                dial.devices.isNotEmpty &&
+                !machine.isOffline) {
+              deviceHosts.receive(id, dial.status);
+            } else {
+              final unsupported =
+                  error is WsRequestFailure && error.code == 'UNSUPPORTED';
+              deviceHosts.failed(
+                id,
+                unsupported
+                    ? 'Update Harness on ${machine.machine.displayName} to manage its devices.'
+                    : 'Couldn’t reach ${machine.machine.displayName}. Reconnect or refresh to try again.',
+              );
+            }
+          }
+        })().whenComplete(() {
+          if (identical(_deviceReads[id], read)) _deviceReads.remove(id);
+        });
+    return _deviceReads[id] = read;
+  }
+
+  Future<bool> setHostDeviceSettings(
+    String machineId,
+    String id,
+    Map<String, Object?> patch,
+  ) async {
+    final machine = machineStates[machineId];
+    final host = deviceHosts.host(machineId);
+    final target = host?.devices.where((d) => d.id == id).firstOrNull;
+    if (!devicesEnabled ||
+        machine == null ||
+        machine.machine.isShared ||
+        machine.isOffline ||
+        machine.needsLink ||
+        host?.online != true ||
+        host?.available != true ||
+        target?.attached != true ||
+        target?.updating != null ||
+        patch.isEmpty ||
+        (_pool == null && connectionForTest == null)) {
+      return false;
+    }
+    final account = currentUser?.id;
+    try {
+      final reply = await _conn(machineId).request(
+        'harness_device_settings',
+        payload: {'id': id, 'patch': patch},
+        timeout: const Duration(seconds: 6),
+      );
+      if (_disposed ||
+          currentUser?.id != account ||
+          !identical(machineStates[machineId], machine)) {
+        return false;
+      }
+      if (reply['status'] case final Map<String, dynamic> status) {
+        deviceHosts.receive(
+          machineId,
+          DialStatus.fromJson(status),
+          revision: reply['revision'] is int ? reply['revision'] as int : null,
+        );
+      }
+      return reply['ok'] == true;
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'UNSUPPORTED' &&
+          machine.isLocalMachine &&
+          currentUser?.id == account) {
+        return setDeviceSettings(id, patch);
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// One utility tab for physical devices. The experiment must be explicitly
+  /// acknowledged before any entry point, including restored history, opens it.
+  void openDevices() {
+    if (!devicesEnabled) return;
+    final existing = swarms.where((s) => s.isDevices).firstOrNull;
+    if (existing != null) {
+      _ensureDevicesViewer(existing);
+      selectSwarm(existing.id);
+      return;
+    }
+    final current = activeSwarm;
+    if (current.isEmptyStarter && !current.isUtility) {
+      current
+        ..kind = 'devices'
+        ..name = Swarm.devicesName
+        ..nameIsCustom = false
+        ..isNewTabPage = false;
+      _draftSwarmReturns.remove(current.id);
+      _ensureDevicesViewer(current);
+      _persistLayout();
+      notifyListeners();
+      return;
+    }
+    while (swarms.any((s) => s.id == 'swarm-$_nextSwarmId')) {
+      _nextSwarmId++;
+    }
+    final tab = Swarm(
+      id: 'swarm-${_nextSwarmId++}',
+      name: Swarm.devicesName,
+      kind: 'devices',
+    );
+    _ensureDevicesViewer(tab);
+    swarms.add(tab);
+    selectSwarm(tab.id);
+  }
+
+  void _devicesExperimentChanged() {
+    if (devicesEnabled) return;
+    final historyCount = _closedHistory.length;
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.kind == 'devices',
+    );
+    if (!swarms.any((s) => s.isDevices)) {
+      if (historyCount != _closedHistory.length) notifyListeners();
+      return;
+    }
+    final removed = swarms.where((s) => s.isDevices).toList();
+    swarms.removeWhere((s) => s.isDevices);
+    for (final tab in removed) {
+      for (final pane in tab.panes) {
+        if (!allPanes.contains(pane)) {
+          unawaited(_detachSession(pane, sendClose: true));
+        }
+      }
+    }
+    if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
+    if (!experimentalFeatures.loaded) {
+      // Binding a different account hides its predecessor's page immediately,
+      // before that account's workspace is ready to be persisted or attached.
+      if (!swarms.any((s) => s.id == _activeSwarmId)) {
+        _activeSwarmId = profileSwarms.first.id;
+      }
+      notifyListeners();
+      return;
+    }
+    if (!swarms.any((s) => s.id == _activeSwarmId)) {
+      selectSwarm(profileSwarms.first.id);
+    } else {
+      _persistLayout();
+      notifyListeners();
+    }
+  }
+
+  void _ensureDevicesViewer(Swarm tab) {
+    if (!devicesEnabled || tab.panes.any((pane) => pane.isDevices)) return;
+    final pane = TerminalPane(
+      id: _nextPaneId++,
+      machineId: '',
+      kind: PaneKind.devices,
+    );
+    tab.panes.insert(0, pane);
+    tab.focusedPaneId ??= pane.id;
+  }
+
+  Future<void> showDevicesTerminal(String machineId, String agentId) async {
+    if (!devicesEnabled) return;
+    final tab = swarms.where((tab) => tab.isDevices).firstOrNull;
+    if (tab == null) return;
+    _ensureDevicesViewer(tab);
+    final viewer = tab.panes.firstWhere((pane) => pane.isDevices);
+    viewer.machineId = machineId;
+    viewer.ownerAgentId = agentId;
+    tab.paneSizes.putIfAbsent(
+      '2:manual',
+      () => PaneArrangement.viewerBesideTerminal,
+    );
+    await assignAgentToPane(
+      null,
+      machineId,
+      agentId,
+      swarmId: tab.id,
+      focus: false,
+      intent: tab == activeSwarm ? AttachIntent.person : AttachIntent.automatic,
+    );
+  }
 
   /// The companion's illustrated viewer and conversation, one per window.
   /// Its panes are bound only after the account's experimental gate is loaded.
@@ -1749,7 +2025,7 @@ class AppNotifier extends ChangeNotifier {
     final tab = activeSwarm;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
-    if (tab.isCompanions) return requestCloseSwarm(tab.id);
+    if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
     final captured = tab.panes
         .where(
           (p) =>
@@ -2373,6 +2649,7 @@ class AppNotifier extends ChangeNotifier {
   void _loginWaitingChanged() {
     if (!_disposed) notifyListeners();
   }
+
   bool openingLoginBrowser = false;
   String? loginBrowserError;
   int _loginBrowserRevision = 0;
@@ -2470,6 +2747,8 @@ class AppNotifier extends ChangeNotifier {
     // `this.` because the constructor's own parameter of the same name is in
     // scope here and is the nullable one.
     this.agentUnread.addListener(_announceUnreadToDial);
+    experimentalFeatures.addListener(_devicesExperimentChanged);
+    addListener(_syncDeviceHosts);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -3022,20 +3301,27 @@ class AppNotifier extends ChangeNotifier {
    * was set on. Only the named fields go — absent means unchanged, so two windows open on one device
    * cannot overwrite each other with whatever each of them last saw.
    *
-   * Nothing is awaited and nothing is written here optimistically. The device answers with what it now
-   * HOLDS, which arrives as the next `dial_status`; that is also what corrects this window when the
-   * change was refused.
+   * The return value confirms transport delivery only. Nothing is written here optimistically.
+   * The device answers with what it now HOLDS, which arrives as the next `dial_status`; that is
+   * also what corrects this window when the change was refused.
    */
-  void setDeviceSettings(String id, Map<String, Object?> patch) {
-    if (patch.isEmpty) return;
+  Future<bool> setDeviceSettings(String id, Map<String, Object?> patch) async {
+    if (patch.isEmpty) return false;
+    final target = dial.devices.where((device) => device.id == id).firstOrNull;
+    if (target == null || !target.attached || target.updating != null) {
+      return false;
+    }
     final machineId = localMachineState?.machine.machineId;
     final connection = machineId == null ? null : _pool?[machineId];
-    if (connection == null) return;
-    final pending = connection.sendTerminalFrame('dial_settings', {
-      'id': id,
-      ...patch,
-    });
-    unawaited(pending.catchError((_) => false));
+    if (connection == null) return false;
+    try {
+      return await connection.sendTerminalFrame('dial_settings', {
+        ...patch,
+        'id': id,
+      });
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Tell the daemon which agents have a tile on the grid, so the dial can stay
@@ -5166,6 +5452,7 @@ class AppNotifier extends ChangeNotifier {
           _clearMachineActivity(machine);
           if (machine.isLocalMachine) {
             machine.transportMode = MachineTransportMode.localOffline;
+            dial.disconnect();
           }
           // Same reasoning as above, mirrored: capture pendingOfflineAgentId from the currently-open
           // terminal (if any) so the connected branch above can reattach it, for every machine — this
@@ -8308,7 +8595,9 @@ class AppNotifier extends ChangeNotifier {
 
   Iterable<({String machineId, String agentId})> _visibleOnTab() {
     if (lifecycle() != AppLifecycleState.resumed) return const [];
-    if (activeSwarm.isStore || activeSwarm.isOrchestrator) return const [];
+    if (activeSwarm.isStore || activeSwarm.isOrchestrator) {
+      return const [];
+    }
     return [
       for (final pane in activeSwarm.panes)
         if (zoomedPaneId == null || pane.id == zoomedPaneId)
@@ -11651,7 +11940,10 @@ class AppNotifier extends ChangeNotifier {
       target.arranged = split.after;
       target.arrangedKey = key;
     }
-    if (firstAgent && !target.nameIsCustom && !target.isCompanions) {
+    if (firstAgent &&
+        !target.nameIsCustom &&
+        !target.isCompanions &&
+        !target.isDevices) {
       final agent = machine.agents
           .where((agent) => agent.id == agentId)
           .firstOrNull;
@@ -12300,7 +12592,7 @@ class AppNotifier extends ChangeNotifier {
     if (tab == null) return;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
-    if (tab.isCompanions) {
+    if (tab.isCompanions || tab.isDevices) {
       await closeSwarm(tab.id, persist: persist);
       return;
     }
@@ -13042,6 +13334,11 @@ class AppNotifier extends ChangeNotifier {
         if (isStore && restored.any((s) => s.isStore)) continue;
         final isCompanions = raw['kind'] == 'companions';
         if (isCompanions && restored.any((s) => s.isCompanions)) continue;
+        final isDevices = raw['kind'] == 'devices';
+        if (isDevices &&
+            (!devicesEnabled || restored.any((s) => s.isDevices))) {
+          continue;
+        }
         final swarm =
             Swarm(
                 id: id,
@@ -13056,6 +13353,8 @@ class AppNotifier extends ChangeNotifier {
                     : Swarm.defaultName,
                 kind: isStore
                     ? 'store'
+                    : isDevices
+                    ? 'devices'
                     : isCompanions
                     ? 'companions'
                     : raw['kind'] == 'orchestrator'
@@ -13079,11 +13378,13 @@ class AppNotifier extends ChangeNotifier {
             (swarm.titleAgentId == null &&
                 swarm.name != Swarm.defaultName &&
                 !(swarm.isStore && swarm.name == Swarm.storeName) &&
-                !(swarm.isCompanions && swarm.name == Swarm.companionsName));
+                !(swarm.isCompanions && swarm.name == Swarm.companionsName) &&
+                !(swarm.isDevices && swarm.name == Swarm.devicesName));
         for (final item
-            in (swarm.isCompanions ? const [] : raw['panes'] as List).take(
-              maxPanes,
-            )) {
+            in (swarm.isCompanions || swarm.isDevices
+                    ? const []
+                    : raw['panes'] as List)
+                .take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
           if (entry == null) continue;
           final key = '${entry.machineId}\u0000${entry.agentId}';
@@ -13134,6 +13435,7 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         swarm.paneSizes.addAll(PaneArrangement.readSaved(raw['paneSizes']));
+        if (swarm.isDevices) _ensureDevicesViewer(swarm);
         restored.add(swarm);
       }
       if (restored.isNotEmpty) {
@@ -13857,7 +14159,23 @@ class AppNotifier extends ChangeNotifier {
       case 'dial_status':
         // The dial came, went, or started taking an update. Its own notifier —
         // see [dial] — so nothing else in the window rebuilds for it.
+        if (!machine.isLocalMachine) return;
         dial.apply(DialStatus.fromJson(payload));
+        _syncDeviceHosts();
+        deviceHosts.receive(machineId, dial.status);
+        return;
+      case 'harness_devices_changed':
+        if (machine.machine.isShared) return;
+        if (payload['status'] case final Map<String, dynamic> status) {
+          _syncDeviceHosts();
+          deviceHosts.receive(
+            machineId,
+            DialStatus.fromJson(status),
+            revision: payload['revision'] is int
+                ? payload['revision'] as int
+                : null,
+          );
+        }
         return;
       case 'dial_scroll':
         // Straight through, including the reports carrying no travel — the ends of a stroke are the point
@@ -14478,6 +14796,7 @@ class AppNotifier extends ChangeNotifier {
     }
     _closeOwnerMemories();
     experimentalFeatures.dispose();
+    deviceHosts.dispose();
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();
