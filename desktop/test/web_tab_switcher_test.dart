@@ -249,6 +249,14 @@ void main() {
     expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('workspace-subscription-usage')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('workspace-machine-resources')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('workspace-harness-monitor')),
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('web-footer-menu-button')), findsNothing);
