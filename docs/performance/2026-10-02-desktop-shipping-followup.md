@@ -55,6 +55,16 @@ exact source selection, pending runs, failures and absent verification.
 The new read-only verifier checked the existing public 1.2.51 manifest and all
 six CDN artifacts in **9.814s**, with every hash and size matching. This is a
 measurement on this Mac/network, not a prediction of every CI run.
+The [JSON receipt](2026-10-02-desktop-download-verification.json) records the
+manifest digest, each artifact's expected/actual hash and byte count, and UTC times.
+
+On implementation commit `e3c38c4b8bca7a35b9a989fe03aaf368131770c2`,
+[process CI](https://github.com/autonomous-ai/openharness/actions/runs/37014248010)
+passed all 31 tests in a **25s workflow** (18s job), without component builds.
+[Cold preparation](https://github.com/autonomous-ai/openharness/actions/runs/37014247634)
+passed on both release runner types: macOS 2m46s, Linux 1m46s, including cache
+creation. This job runs separately from the release, so its cache saves do not
+delay publication.
 
 Removing release cache saves eliminates the observed 81s post-build cache phase.
 Warm restores should also reduce setup time, subject to restore throughput and
