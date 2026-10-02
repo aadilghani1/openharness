@@ -22,6 +22,14 @@ SPEC.loader.exec_module(validation)
 LOADER_ERROR = "Unable to connect to flutter_tester process: WebSocketException: Invalid WebSocket upgrade request"
 
 
+def default_workers():
+    cpus = os.cpu_count() or 2
+    # Twelve workers improved the complete suite on a 16-CPU host. Leave a
+    # quarter of large hosts free; retain the existing share on smaller hosts.
+    share = cpus * 3 // 4 if cpus >= 16 else cpus // 2
+    return min(12, max(1, share))
+
+
 def summarize(log, selected):
     """Fail closed on missing files/cases, hidden errors and incomplete reporters."""
     suites, tests, ends, errors, counts = {}, {}, {}, {}, {}
@@ -144,7 +152,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="desktop-relative test/foo_test.dart paths; default: every VM test")
     parser.add_argument("--flutter", default="flutter", help="Flutter executable (dependencies must already be installed)")
-    parser.add_argument("--workers", type=int, default=min(8, max(1, (os.cpu_count() or 2) // 2)))
+    parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--timeout", type=float, default=900, help="total attempt budget in seconds, including recovery (default: 900)")
     parser.add_argument("--no-loader-retry", action="store_true", help="retain the first failure without recovery")
     args = parser.parse_args(argv)

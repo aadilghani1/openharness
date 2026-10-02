@@ -114,8 +114,8 @@ checks can run together if memory/disk allow it. Put dependent operations in sep
 plans. A scoped desktop test command should name its affected files and start with
 `flutter test --no-pub --concurrency=2 --timeout=60s ...`. Two workers are a starting
 point, not a fixed cap for a full suite. Choose and record a worker count that fits
-the host and other running checks: eight VM workers were validated on a 16-core,
-64 GiB Mac in the [baseline repair](performance/2026-10-02-desktop-baseline-repair.md).
+the host and other running checks. The full-suite command below selects more
+workers on larger hosts; use an explicit lower count when other checks are active.
 Chrome and native integration tests ignore Flutter's concurrency option.
 Tests legitimately needing longer can declare that explicitly. Start a necessary
 broad desktop run early, with
@@ -126,8 +126,9 @@ not permission to turn failures into success.
 For Desktop VM tests, `make desktop-test` provides a bounded full-suite command.
 Use `make desktop-test ARGS="test/affected_test.dart --workers 2"` for named files,
 or add `--flutter /path/to/flutter` when the pinned SDK is not on `PATH`.
-It runs the selected files once, with half the host's logical CPUs capped at eight
-workers by default; lower `--workers` when memory or other running checks need it.
+It runs the selected files once. Hosts with at least 16 logical CPUs use three
+quarters of them, capped at 12 workers; smaller hosts use half their logical CPUs
+(at least one worker). Lower `--workers` when memory or other running checks need it.
 Its `--timeout 900` budget includes the initial test process and any recovery.
 Dependencies must already be installed. Browser files under `test/web/` and native
 integration checks remain separate; this command does not validate those platforms.

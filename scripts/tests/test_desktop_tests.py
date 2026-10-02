@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from desktop_vm_fixture import suite
 
@@ -14,6 +15,13 @@ SCRIPT = Path(__file__).resolve().parents[1] / "test-desktop.py"
 spec = importlib.util.spec_from_file_location("test_desktop", SCRIPT)
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
+
+
+class WorkerCountTests(unittest.TestCase):
+    def test_large_host_capacity_keeps_small_host_limits_and_an_upper_bound(self):
+        for cpus, expected in ((None, 1), (1, 1), (2, 1), (8, 4), (15, 7), (16, 12), (64, 12)):
+            with self.subTest(cpus=cpus), mock.patch.object(driver.os, "cpu_count", return_value=cpus):
+                self.assertEqual(driver.default_workers(), expected)
 
 
 class ReporterTests(unittest.TestCase):
