@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_link.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/desktop_window.dart';
 import 'package:harness/core/machine_resources.dart';
@@ -176,7 +177,7 @@ class _App extends AppNotifier {
   Future<void> retryMachines() async => notifyListeners();
 
   @override
-  Future<void> login({bool? qr}) async {
+  Future<void> login([SignInProvider? provider]) async {
     await Future<void>.delayed(const Duration(seconds: 1));
     signedIn = true;
     notifyListeners();
