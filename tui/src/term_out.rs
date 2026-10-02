@@ -36,6 +36,12 @@ fn risky(symbol: &str) -> bool {
         if n > 1 { return true }
         let u = c as u32;
         if (0x0E00..=0x0FFF).contains(&u) || (0x1000..=0x109F).contains(&u) || (0x1780..=0x17FF).contains(&u) { return true }
+        // One code point, but terminals and unicode-width part on it: private-use icons (Nerd
+        // Font), the arrows, shapes and dingbats of ambiguous width (⚡ ✓ ● ▶), and emoji.
+        // Box-drawing and block characters (U+2500–259F) are every border's and count alike.
+        if (0xE000..=0xF8FF).contains(&u) || (0xF0000..=0x10FFFF).contains(&u)
+            || ((0x2190..=0x2BFF).contains(&u) && !(0x2500..=0x259F).contains(&u))
+            || (0x1F000..=0x1FAFF).contains(&u) { return true }
     }
     false
 }
@@ -590,6 +596,19 @@ impl<W: Write> Backend for TmuxBackend<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_symbols_terminals_count_otherwise_are_risky_too() {
+        // Private-use icons (Nerd Font), arrows/shapes/dingbats of ambiguous width, and emoji
+        // written as one code point: terminals disagree on their width as they do on clusters.
+        for s in ["\u{e0a0}", "\u{f07b}", "\u{26a1}", "\u{2713}", "\u{25cf}", "\u{25b6}", "\u{1f44d}"] {
+            assert!(risky(s), "{s:?} should be written with its row");
+        }
+        // Text, the box-drawing and block characters of every border, and wide CJK are counted alike everywhere.
+        for s in ["a", "é", "中", "─", "│", "█", "▀"] {
+            assert!(!risky(s), "{s:?} should stay a cell-by-cell update");
+        }
+    }
 
     #[test]
     fn plain_echo_keeps_the_printed_cursor_and_needs_few_bytes() {

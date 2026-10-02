@@ -94,6 +94,14 @@ impl StartSession {
 
 /// The next in the order sessions are used in (a key, a switch, a new session): finer than
 /// #{session_activity}'s seconds, as tmux compares its activity times to the microsecond.
+/// How long the wheel must rest before the screen is written whole once more.
+pub const SCROLL_SETTLE: Duration = Duration::from_millis(250);
+
+/// How long until the settle repaint is due (None: no scroll to settle; zero: due now).
+pub fn scroll_settle_in(scrolled_at: Option<Instant>, now: Instant) -> Option<Duration> {
+    scrolled_at.map(|at| (at + SCROLL_SETTLE).saturating_duration_since(now))
+}
+
 pub fn use_order() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -470,6 +478,10 @@ pub struct App {
     pub repeat_until: Option<Instant>,
     /// Redraw everything next frame (refresh-client).
     pub redraw_all: bool,
+    /// When the wheel last turned. A scroll rewrites most of the screen cell by cell; once it stops
+    /// for SCROLL_SETTLE the whole screen is written once more, so a cell the terminal missed
+    /// (a ghost of the old text) is overwritten whatever the reason it was missed.
+    pub scrolled_at: Option<Instant>,
     /// tmux `status-position`.
     pub status_top: bool,
     pub mouse: bool,
@@ -954,6 +966,7 @@ impl App {
             look: Default::default(),
             repeat_until: None,
             redraw_all: false,
+            scrolled_at: None,
             status_top: false,
             mouse: true,
             loop_seen: Vec::new(),
@@ -5984,6 +5997,25 @@ pub fn hostname() -> String {
         let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         if raw.is_empty() { "this computer".into() } else { raw }
     }).clone()
+}
+
+#[cfg(test)]
+mod scroll_settle_tests {
+    use super::*;
+
+    #[test]
+    fn the_screen_is_written_whole_once_the_wheel_has_rested() {
+        let t0 = Instant::now();
+        // No scroll, nothing to settle.
+        assert_eq!(scroll_settle_in(None, t0), None);
+        // Just scrolled: the whole rest period is still owed.
+        assert_eq!(scroll_settle_in(Some(t0), t0), Some(SCROLL_SETTLE));
+        // Part of it has passed.
+        assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE / 2), Some(SCROLL_SETTLE / 2));
+        // Rested for long enough: due now (zero), and never negative.
+        assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE), Some(Duration::ZERO));
+        assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE * 4), Some(Duration::ZERO));
+    }
 }
 
 #[cfg(test)]

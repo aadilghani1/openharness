@@ -479,6 +479,8 @@ async fn run(config: config::Config) -> io::Result<()> {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
         let wait = next_repaint.map(|at| wait.min(at.saturating_duration_since(Instant::now()))).unwrap_or(wait);
+        // The wheel at rest: wake for the whole-screen repaint it owes.
+        let wait = app::scroll_settle_in(app.scrolled_at, Instant::now()).map(|d| wait.min(d)).unwrap_or(wait);
         let first = tokio::select! {
             event = rx.recv() => event,
             _ = tokio::time::sleep(wait) => None,
@@ -550,6 +552,9 @@ async fn run(config: config::Config) -> io::Result<()> {
         if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. } | modal::Modal::NewHarness(_))) { input::refill(&mut app) }
+        // A scroll that has rested: every cell of the screen written again, once. The terminal
+        // may have kept a ghost of old text through the cell-by-cell updates; this overwrites it.
+        if app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO) { app.scrolled_at = None; app.redraw_all = true }
         if std::mem::take(&mut app.redraw_all) { term.clear()?; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
             // (The backend makes each frame's changes one synchronized update, and writes nothing
