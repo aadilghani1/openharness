@@ -117,3 +117,38 @@ The target is to restore the team's previous 10–15 minute **merge/release over
 for small changes**, without counting only the build. Request-to-completion time
 also includes implementation and review. Measure the next ten tasks end to end
 before claiming the target is achieved.
+
+## Follow-up: reducing the remaining validation/build path
+
+[PR #605](https://github.com/autonomous-ai/openharness/pull/605) adds dependency
+caching, tests/builds the same musl target, runs all ten isolated native fixtures
+two at a time, and builds TUI platforms alongside unit tests. Release native tests
+exercise the actual Linux artifact. Publication still requires unit tests and all
+platform/native checks. The cache action is pinned to its v2.9.2 commit; its
+[documented keys](https://github.com/Swatinem/rust-cache#cache-details) include the
+Rust toolchain and Cargo inputs, with a separate key for each target.
+
+| Measured phase | Before | First optimized run | With restored caches |
+| --- | --- | --- | --- |
+| CI dispatch through both native architectures completing | 7m44s | 5m42s | 4m53s |
+| Ten native fixtures, x64 | 3m01s | 1m30s | 1m31s |
+| TUI release dispatch through tests/builds ready to publish | 6m27s | 3m43s | 3m11s |
+
+The complete build-only release workflows finished in 3m44s and 3m12s. No production
+publication was performed for these measurements. Both optimized CI runs passed
+the complete native fixture set on x64 and ARM; all four release platforms passed
+twice. Cache restoration was confirmed in the logs. All 20 process/publication
+regressions and actionlint passed. The implementation tested was
+`3874d7c07bcd498a202952abc0936e8503ade472`; the subsequent commit adds comments and
+this documentation only.
+
+The [timing records](2026-10-02-native-validation-timings.json) link all six runs.
+The old full CI was dominated by native checks; the optimized runs selected the
+TUI scope because the other jobs were unchanged. The TUI source, fixtures, Cargo
+inputs, and CLI lockfile match the previous CI baseline. These are observed
+workflow improvements, not a measured reduction in total request-to-completion
+time, and runner/queue variation still applies. A small change ready to ship has
+a planning target of roughly 5–10 minutes for PR validation/merge and 15–20 minutes
+including a Desktop release; implementation, review, and actual failures must
+still be recorded in the total. The earlier 45–65 minute task estimate is not an
+acceptable target for routine shipping overhead.

@@ -31,6 +31,23 @@ bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its nat
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
 
+Native TUI CI tests and builds the shipped musl target in the same Cargo output
+directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
+cache hits still run every test. The ten native TUI fixtures run two at a time,
+using their own homes, socket names, and mock ports. CI retains each fixture's log
+and validation receipt as an artifact. To run the same set locally after building:
+
+```bash
+python3 scripts/validate-tui-native.py tui/target/release/harness-tui
+```
+
+This needs tmux, the pinned Node runtime, and the CLI's installed dependencies.
+Do not run another copy on the same host at the same time: each fixture has a
+separate port, but separate invocations use the same reserved fixture ports.
+TUI release platform builds run alongside unit tests. Native release checks run
+against the actual Linux artifact, and publication waits for both unit tests and
+all platform builds/native checks. A build-only run uses `publish=false`.
+
 ## Bound checks and preserve the result
 
 `make validate ARGS=".harness/validation-plan.json"` runs an explicit plan, at most
