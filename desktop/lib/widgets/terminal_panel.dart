@@ -320,6 +320,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     WidgetsBinding.instance.addObserver(this);
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
+    widget.session.remoteCursorVisibility.addListener(_syncCursorBlink);
     terminalFontStore.addListener(_onFontChanged);
     // Colours repaint the view in place — no relayout, no resize frame — but
     // they still need a rebuild to reach it, and this widget reads the store
@@ -411,9 +412,11 @@ class _TerminalPanelState extends State<TerminalPanel>
       _previewProgress = null;
       oldWidget.session.setCursorBlinkPhase(true);
       oldWidget.session.removeListener(_onSessionChanged);
+      oldWidget.session.remoteCursorVisibility.removeListener(_syncCursorBlink);
       oldWidget.session.detachViewport(this);
       widget.session.attachViewport(this);
       widget.session.addListener(_onSessionChanged);
+      widget.session.remoteCursorVisibility.addListener(_syncCursorBlink);
       _composerFocusPending = false;
       _cancelDialInertia();
       _controller.clearSelection();
@@ -500,6 +503,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _observeLinkModifiers(false);
     widget.session.setCursorBlinkPhase(true);
     widget.session.removeListener(_onSessionChanged);
+    widget.session.remoteCursorVisibility.removeListener(_syncCursorBlink);
     widget.session.detachViewport(this);
     terminalFontStore.removeListener(_onFontChanged);
     terminalThemeStore.removeListener(_onFontChanged);
@@ -947,6 +951,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         !widget.readOnly &&
         _focusNode.hasFocus &&
         widget.session.acceptsInput &&
+        widget.session.remoteCursorVisibility.value &&
         (_tickerMode?.value.enabled ?? false) &&
         (lifecycle == null || lifecycle == AppLifecycleState.resumed);
     if (!enabled) {
@@ -968,8 +973,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _setCursorBlinkVisible(bool visible) {
     if (visible == _cursorBlinkVisible) return;
     _cursorBlinkVisible = visible;
-    widget.session.setCursorBlinkPhase(visible);
-    _repaintTerminalCursor();
+    if (widget.session.setCursorBlinkPhase(visible)) {
+      _repaintTerminalCursor();
+    }
   }
 
   void _repaintTerminalCursor() {
