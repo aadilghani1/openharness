@@ -38,6 +38,25 @@ The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
 
+## Footer spacing refinement — 2026-10-02
+
+Resource totals now show their available number without a ≥ prefix; partial
+coverage remains explained in the tooltip. Flutter and AppKit share 0.75-cell
+spaces within components and two-cell gaps between components. The companion's
+existing artwork gutter replaces the preceding control's trailing padding,
+removing the extra visible gap while retaining its fixed 44-point click target.
+
+Production AppKit controls were rendered with synthetic values in
+[dark](images/workspace-footer-compact-dark.png) and
+[light](images/workspace-footer-compact-light.png) appearances at 1280 points,
+plus a 520-point window and 26-point status text. The captures use 2× backing
+resolution; text baselines, visible gaps and narrow truncation were inspected.
+Validation passed: 50 targeted Flutter tests, 4,344 native titlebar checks, and
+static analysis of the four changed Dart files. The native checks exercise
+stable daemon geometry, hover, focus and existing actions. These are isolated
+production-view renders; the installed app and physical VoiceOver were not
+exercised for this refinement.
+
 ## Notification overview refinement — 2026-10-01
 
 The earlier overview repeated a status caption and tab/machine context under

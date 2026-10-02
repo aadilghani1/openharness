@@ -10,9 +10,11 @@ class WorkspaceHarnessResources extends StatelessWidget {
     super.key,
     required this.monitor,
     this.onPressed,
+    this.trailingPadding,
   });
   final HarnessMonitor monitor;
   final VoidCallback? onPressed;
+  final double? trailingPadding;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -20,6 +22,10 @@ class WorkspaceHarnessResources extends StatelessWidget {
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final cell = workspaceBarCellSizeOf(context).width;
+        final padding = EdgeInsets.only(
+          left: cell,
+          right: trailingPadding ?? cell,
+        );
         var label = monitor.metricsLabel(
           ram: false,
           gpu: false,
@@ -31,7 +37,7 @@ class WorkspaceHarnessResources extends StatelessWidget {
           monitor.metricsLabel(gpu: false, storage: false),
         ]) {
           if (workspaceBarTextSizeOf(context, candidate, grouped: true).width +
-                  cell * 2 <=
+                  padding.horizontal <=
               constraints.maxWidth) {
             label = candidate;
             break;
@@ -42,7 +48,7 @@ class WorkspaceHarnessResources extends StatelessWidget {
           tooltip: monitor.resourceDetail,
           onPressed: onPressed,
           builder: (context, emphasized) => Padding(
-            padding: EdgeInsets.symmetric(horizontal: cell),
+            padding: padding,
             child: SizedBox(
               height: workspaceBarControlHeight(context),
               child: Center(

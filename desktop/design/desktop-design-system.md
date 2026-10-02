@@ -358,15 +358,19 @@ folders count once per machine. See [workspace status bar](workspace-status-bar.
 Titles stay quiet when several panes are visible. Do not repeat branches in pane headers or
 model/effort in the footer. Context honors the selected status face, fields, colors and shell/
 Powerline treatment. Recent-harness context uses its monochrome presentation.
-Use whole figures, one space between title and value, and 2.5 character cells between parts:
+Use whole figures, spaces of 0.75 character cells within components, and two cells between parts:
 `Harnesses 118   CPU 20%   RAM 10 GB   GPU 10%   SSD 1 GB   Claude 100%   Codex 90%`.
 Labels and numbers use neutral readable ink; no severity color, dot separators, trailing plus or
-decimal figures. Harness metrics show — when unavailable and ≥ for partial totals. Subscription
-figures mean allowance used and preserve Models' deduplicated accounts, limiting window and
+decimal figures. Harness metrics show — when unavailable; partial totals show the available number
+without a prefix, with coverage explained in the tooltip. Subscription figures mean allowance
+used and preserve Models' deduplicated accounts, limiting window and
 freshness rules. Hover explains scope and units. Clicking subscription usage opens Subscriptions
 without switching a model. Narrow widths hide complete groups: SSD, then GPU, then RAM.
 
-Companion and sharing controls follow usage. See the full [status bar contract](workspace-status-bar.md).
+Companion and sharing controls follow usage. The companion uses the same gap between controls as
+the resource and subscription groups; the gutter in its fixed slot replaces the preceding control's
+trailing padding so the artwork has the same visible separation as text. See the full
+[status bar contract](workspace-status-bar.md).
 
 **Settings, Store and supporting screens** — the same type, colors and controls
 at page scale. Related settings use grouping and whitespace. Existing artwork,

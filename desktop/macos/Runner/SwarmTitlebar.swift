@@ -978,6 +978,7 @@ private func workspaceBarTextWidth(_ text: String, font: NSFont) -> CGFloat {
 }
 
 private let workspaceBarGroupSeparator = "   "
+private let workspaceBarSpacing = try! NSRegularExpression(pattern: " {3}| ")
 
 /// Plain toolbar icons emphasize the glyph without a button well.
 private class SwarmPlainIconButton: SwarmIconButton {
@@ -1261,6 +1262,8 @@ private final class SwarmContextButton: SwarmIconButton {
   private var text = ""
   var textAlignment: NSTextAlignment = .right
   var contentPadding: CGFloat = 0
+  var trailingContentPadding: CGFloat?
+  var valueGapCells: CGFloat?
   var groupGapCells: CGFloat?
   private var detail: String?
   private var iconAsset: String?
@@ -1278,20 +1281,25 @@ private final class SwarmContextButton: SwarmIconButton {
   fileprivate var actionURL: String?
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
-  private var groupSpacingAdjustment: CGFloat {
-    guard let groupGapCells else { return 0 }
-    return cellWidth * (groupGapCells - CGFloat(workspaceBarGroupSeparator.count))
+  private func spacingAdjustments(_ value: String) -> [(NSRange, CGFloat)] {
+    guard valueGapCells != nil || groupGapCells != nil else { return [] }
+    return workspaceBarSpacing.matches(in: value, range: NSRange(value.startIndex..., in: value)).map { match in
+      let length = CGFloat(match.range.length)
+      let cells = match.range.length == workspaceBarGroupSeparator.count ? groupGapCells : valueGapCells
+      return (match.range, cellWidth * ((cells ?? length) - length))
+    }
   }
   private var naturalWidths: [CGFloat] {
     segments.enumerated().map { index, segment in
       workspaceBarTextWidth(segment.text, font: textFont) + (segment.branchSymbol ? cellWidth * 2 : 0)
-        + CGFloat(segment.text.components(separatedBy: workspaceBarGroupSeparator).count - 1) * groupSpacingAdjustment
+        + spacingAdjustments(segment.text).reduce(0) { $0 + $1.1 }
         + (index == 0 ? iconWidth : 0)
     }
   }
   var preferredWidth: CGFloat {
     if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
-    return ceil(naturalWidths.reduce(0, +) + contentPadding * 2 + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
+    return ceil(naturalWidths.reduce(0, +) + contentPadding + (trailingContentPadding ?? contentPadding)
+      + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
   }
 
   func update(_ context: [String: Any]?, enabled: Bool) {
@@ -1398,15 +1406,8 @@ private final class SwarmContextButton: SwarmIconButton {
         ? workspaceBarEmphasisFont(textFont) : textFont,
       .foregroundColor: color, .paragraphStyle: paragraph,
     ])
-    if groupGapCells != nil {
-      let text = value as NSString
-      var search = NSRange(location: 0, length: text.length)
-      while search.length > 0 {
-        let range = text.range(of: workspaceBarGroupSeparator, options: [], range: search)
-        if range.location == NSNotFound { break }
-        line.addAttribute(.kern, value: groupSpacingAdjustment / CGFloat(range.length), range: range)
-        search = NSRange(location: NSMaxRange(range), length: text.length - NSMaxRange(range))
-      }
+    for (range, adjustment) in spacingAdjustments(value) where adjustment != 0 {
+      line.addAttribute(.kern, value: adjustment / CGFloat(range.length), range: range)
     }
     return line
   }
@@ -1449,9 +1450,10 @@ private final class SwarmContextButton: SwarmIconButton {
         }
       }
       let inset = min(contentPadding, bounds.width / 2)
+      let trailingInset = min(trailingContentPadding ?? contentPadding, bounds.width - inset)
       drawPullRequestIcon(x: inset, color: iconColor)
       line.draw(in: NSRect(x: inset + iconWidth, y: (bounds.height - line.size().height) / 2,
-        width: max(0, bounds.width - inset * 2 - iconWidth), height: line.size().height))
+        width: max(0, bounds.width - inset - trailingInset - iconWidth), height: line.size().height))
       return
     }
     let natural = naturalWidths
@@ -1785,7 +1787,8 @@ private final class SwarmTabStrip: NSView {
   fileprivate let storeButton = SwarmStoreButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-  private var resourceGroupGapCells: CGFloat = 2.5
+  private var resourceValueGapCells: CGFloat = 0.75
+  private var resourceGroupGapCells: CGFloat = 2
   private let navigationFont = NSFont.systemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
   private var daemonArt = SwarmDaemonArt()
@@ -2054,7 +2057,8 @@ private final class SwarmTabStrip: NSView {
       barFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
-      resourceGroupGapCells = CGFloat(max(2, (style["groupGapCells"] as? NSNumber)?.doubleValue ?? 2.5))
+      resourceValueGapCells = CGFloat(max(0.5, (style["valueGapCells"] as? NSNumber)?.doubleValue ?? 0.75))
+      resourceGroupGapCells = CGFloat(max(2, (style["groupGapCells"] as? NSNumber)?.doubleValue ?? 2))
     }
     for control in [newButton] {
       control.font = navigationFont
@@ -2072,6 +2076,7 @@ private final class SwarmTabStrip: NSView {
     subscriptionUsageButton.font = barFont
     subscriptionUsageButton.foreground = terminalForeground
     subscriptionUsageButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
+    subscriptionUsageButton.valueGapCells = resourceValueGapCells
     subscriptionUsageButton.groupGapCells = resourceGroupGapCells
     subscriptionUsageState = state["subscriptionUsage"] as? [String: Any]
     subscriptionUsageButton.update(subscriptionUsageState, enabled: actionsEnabled)
@@ -2079,12 +2084,14 @@ private final class SwarmTabStrip: NSView {
     harnessMonitorButton.font = barFont
     harnessMonitorButton.foreground = terminalForeground
     harnessMonitorButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
+    harnessMonitorButton.valueGapCells = resourceValueGapCells
     harnessMonitorButton.update(state["harnessMonitor"] as? [String: Any], enabled: actionsEnabled)
     harnessMonitorButton.isHidden = state["harnessMonitor"] == nil
     machineResourcesState = state["machineResources"] as? [String: Any]
     machineResourcesLabel.font = barFont
     machineResourcesLabel.foreground = terminalForeground
     machineResourcesLabel.contentPadding = harnessMonitorButton.contentPadding
+    machineResourcesLabel.valueGapCells = resourceValueGapCells
     machineResourcesLabel.groupGapCells = resourceGroupGapCells
     machineResourcesLabel.update(machineResourcesState, enabled: actionsEnabled)
     machineResourcesLabel.isHidden = machineResourcesState == nil
@@ -2326,6 +2333,10 @@ private final class SwarmTabStrip: NSView {
     let y = (statusBar.bounds.height - height) / 2
     let available = max(0, statusBar.bounds.width - cell * 2)
     let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
+    let showsUsage = hasSubscriptionUsage && (harnessMonitorButton.isHidden || statusBar.bounds.width >= 1050)
+    // The fixed companion slot already has an optical gutter around its art.
+    subscriptionUsageButton.trailingContentPadding = daemonWidth > 0 ? 0 : nil
+    machineResourcesLabel.trailingContentPadding = daemonWidth > 0 && !showsUsage ? 0 : nil
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
     let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4 - resourceGap * 2)
     let monitorWidth = harnessMonitorButton.isHidden ? 0 : min(harnessMonitorButton.preferredWidth, usageBudget * 0.4)
@@ -2340,14 +2351,14 @@ private final class SwarmTabStrip: NSView {
     }
     let hardwareWidth = machineResourcesLabel.isHidden ? 0 : min(machineResourcesLabel.preferredWidth, hardwareBudget)
     harnessMonitorButton.frame = NSRect(x: cell, y: y, width: monitorWidth, height: height)
-    let usageWidth = hasSubscriptionUsage && (monitorWidth == 0 || statusBar.bounds.width >= 1050)
+    let usageWidth = showsUsage
       ? min(subscriptionUsageButton.preferredWidth, usageBudget * (monitorWidth == 0 ? 0.45 : 0.22)) : 0
     subscriptionUsageButton.isHidden = usageWidth == 0
     machineResourcesLabel.frame = NSRect(x: cell + monitorWidth + (monitorWidth > 0 && hardwareWidth > 0 ? resourceGap : 0),
       y: y, width: hardwareWidth, height: height)
     subscriptionUsageButton.frame = NSRect(x: machineResourcesLabel.frame.maxX + (usageWidth > 0 && (monitorWidth > 0 || hardwareWidth > 0) ? resourceGap : 0),
       y: y, width: usageWidth, height: height)
-    let daemonLeft = subscriptionUsageButton.frame.maxX + (usageWidth > 0 ? cell * 2 : 0)
+    let daemonLeft = subscriptionUsageButton.frame.maxX + (daemonWidth > 0 ? resourceGap : (usageWidth > 0 ? cell * 2 : 0))
     daemonButton.frame = NSRect(x: daemonLeft, y: y, width: daemonWidth, height: height)
     let shareLeft = daemonButton.frame.maxX + (daemonWidth > 0 ? cell : 0)
     shareButton.frame = NSRect(x: shareLeft, y: y, width: shareWidth, height: height)

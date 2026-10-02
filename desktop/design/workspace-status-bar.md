@@ -31,9 +31,11 @@ and machines. Create one only when absent. Clicking does not open a separate res
 Saved sessions and open/resume actions belong in Open Harness (Cmd-P). The monitor itself starts
 with active sessions, sortable resource and AI metrics, an inspector and a reviewed Stop action.
 
-Use one space between title and value and 2.5 character cells between complete groups, including
-the count. Adjacent controls contribute one cell of horizontal padding plus half a cell between
-controls. The shared `workspaceBarGroupGapCells` keeps Flutter and native views aligned. Use neutral
+Use spaces of 0.75 character cells within components and two cells between complete groups,
+including the count. Adjacent controls contribute one cell of horizontal padding on each side;
+before the fixed companion slot, omit the preceding control's trailing cell because the artwork
+already has its own optical gutter. Do not add extra separation. The shared `workspaceBarValueGapCells`
+and `workspaceBarGroupGapCells` keep Flutter and native views aligned. Use neutral
 workspace ink at every usage level. Do not pad numbers or add dots, decimal figures or plus suffixes.
 
 CPU is the sum of attributable process-tree interval use; 100% is one core, so multicore and fleet
@@ -47,9 +49,10 @@ SSD means allocated workspace disk space, including existing files. Shared and n
 folders count once per machine. It is not free space, capacity or a claim that every host uses an
 SSD. Stopping a process keeps its files. Directory sizes use bounded reads cached for one minute.
 
-Unknown readings show —, with valid zero preserved. A partial total is prefixed ≥. The tooltip
-explains scope, units and shared accounting. Samples expire after 45 seconds. The count and resource
-totals cover the same connected owned sessions and never substitute whole-machine utilization.
+Unknown readings show —, with valid zero preserved. Partial totals show the available number without
+a prefix. The tooltip explains partial coverage, scope, units and shared accounting. Samples expire
+after 45 seconds. The count and resource totals cover the same connected owned sessions and never
+substitute whole-machine utilization.
 
 Sample connected owners every fifteen seconds while the app is foregrounded. Clear readings and
 stop polling when hidden; refresh on return. Coalesce process samples in the owning daemon, verify
@@ -61,7 +64,9 @@ Native and Flutter footers share data, tooltips and button behavior. At narrow w
 then GPU, then RAM as complete groups, keeping CPU and the full tooltip. Subscription usage remains
 visible in wide windows and accessible through Models at every size. Preserve focused context.
 
-![Harness resource footer with synthetic readings](images/harness-monitor-footer.png)
+![Compact footer and companion with synthetic readings, dark](images/workspace-footer-compact-dark.png)
+
+![Compact footer and companion with synthetic readings, light](images/workspace-footer-compact-light.png)
 
 The previous capture below documents spacing; its whole-machine percentages have been superseded:
 
