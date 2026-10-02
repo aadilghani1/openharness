@@ -63,7 +63,10 @@ needed; it does not publish anything. Release tags restore those caches without
 saving another tag-specific copy. Cache misses still install the pinned SDK and
 resolve dependencies normally. macOS enables Swift Package Manager before pub get.
 The shared keys include SDK version/commit, OS/architecture, and the dependency
-lockfiles for pub. Signing, notarization and artifact checks remain required.
+lockfiles for pub. Desktop SDK caches omit Android/iOS engine artifacts and use
+their own key, with the full SDK for the exact same version as a fallback. Cache
+preparation covers macOS and both Linux architectures. Signing, notarization and
+artifact checks remain required.
 
 Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
