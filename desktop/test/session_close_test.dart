@@ -25,22 +25,33 @@ class _CloseConnection extends WsConn {
   late AppNotifier app;
   final closes = <Map<String, dynamic>>[];
   final activities = <String, String>{};
+  final failures = <String, Map<String, dynamic>>{};
+  final requests = <String>[];
   Completer<Map<String, dynamic>>? inspecting;
-  Map<String, dynamic>? failure;
   @override
   Future<Map<String, dynamic>> request(
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    requests.add(type);
     if (type != 'agent_close') return {};
     closes.add(Map.of(payload));
     final mode = payload['mode'];
+    if (failures[mode] case final failure?) {
+      // Real WsConn throws refusals; returning a map would skip the production
+      // error path and hide the bug that called every refusal a lost reply.
+      throw WsRequestFailure(
+        responseType: 'agent_close_result',
+        code: failure['error'] as String,
+        detail: failure['detail'] as String?,
+        payload: failure,
+      );
+    }
     if (mode == 'inspect') {
       return inspecting?.future ??
           Future.value({'activity': activities[payload['agentId']] ?? 'idle'});
     }
-    if (failure != null) return failure!;
     if (mode == 'after_task') return {'deferred': true};
     if (mode == 'cancel') return {'cancelled': true};
     await app.handleEventForTest('m', {
@@ -218,7 +229,7 @@ void main() {
   testWidgets('a failed disk checkpoint leaves the pane and explains why', (
     tester,
   ) async {
-    connection.failure = {
+    connection.failures['idle'] = {
       'error': 'HISTORY_NOT_SAVED',
       'detail': 'Not enough free disk space.',
     };
@@ -232,6 +243,59 @@ void main() {
     expect(app.panes, [pane]);
     expect(app.closedHistory, isEmpty);
     expect(modes(), ['inspect', 'idle']);
+    expect(connection.requests, isNot(contains('agents_list')));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final closeTab in [false, true]) {
+    testWidgets(
+      'a session that starts working can still close its ${closeTab ? 'tab' : 'pane'} after review',
+      (tester) async {
+        connection.failures['idle'] = {
+          'error': 'SESSION_NOT_IDLE',
+          'activity': 'working',
+        };
+        final pane = app.adoptSessionForTest(terminal('a0', []));
+        await mount(tester, app);
+        unawaited(
+          closeTab
+              ? app.requestCloseSwarm(app.activeSwarmId)
+              : app.requestClosePane(pane.id),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Still working. Close anyway?'), findsOneWidget);
+        expect(app.panes, [pane]);
+        expect(modes(), ['inspect', 'idle']);
+        await tester.tap(find.byKey(const Key('session-close-now')));
+        await tester.pumpAndSettle();
+        expect(modes(), ['inspect', 'idle', 'now']);
+        expect(app.allPanes, isEmpty);
+        expect(app.closedHistory, hasLength(1));
+        expect(connection.requests, isNot(contains('agents_list')));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('Cancel after activity changes leaves the session running', (
+    tester,
+  ) async {
+    connection.failures['idle'] = {
+      'error': 'SESSION_NOT_IDLE',
+      'activity': 'draft',
+    };
+    final pane = app.adoptSessionForTest(terminal('a0', []));
+    await mount(tester, app);
+    unawaited(app.requestClosePane(pane.id));
+    await tester.pumpAndSettle();
+    expect(find.text('Unsent text. Close anyway?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(modes(), ['inspect', 'idle']);
+    expect(app.panes, [pane]);
+    expect(app.closedHistory, isEmpty);
+    expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
     await tester.pumpWidget(const SizedBox());
   });
 

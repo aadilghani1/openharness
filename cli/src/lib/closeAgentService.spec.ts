@@ -226,6 +226,7 @@ it.each([
 it.each([
   { sessionId: 'existing-conversation' },
   { transcriptPath: '/tmp/existing-conversation.jsonl' },
+  { boundAt: 1 },
   { resumeOnly: true as const },
   { launch: { state: 'starting' as const } },
   { launch: { state: 'failed' as const, error: 'START_FAILED' } },

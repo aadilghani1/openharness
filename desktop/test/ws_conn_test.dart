@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:harness/core/models.dart' show ConnectionStatus;
+import 'package:harness/core/models.dart' show Agent, ConnectionStatus;
 import 'package:harness/ws/ws_conn.dart';
 import 'package:harness/ws/ws_pool.dart';
 import 'package:harness/logging/app_log.dart';
@@ -10,6 +10,8 @@ import 'package:harness/logging/log_file.dart';
 import 'package:harness/logging/log_stream.dart';
 import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'swarm_state_test.dart' show createApp;
 
 class FakeHub {
   final HttpServer server;
@@ -20,6 +22,7 @@ class FakeHub {
   final List<String?> environments = [];
   final Map<String, int> machineSelected = {};
   final List<WebSocket> clients = [];
+  Map<String, dynamic> closeResponse = {'activity': 'idle'};
 
   FakeHub._(this.server, this.rejectOldToken, this.closeCodeOnSelect);
   int get port => server.port;
@@ -76,6 +79,16 @@ class FakeHub {
                 'requestId': (frame['payload'] as Map)['requestId'],
                 'error': 'UNSUPPORTED_ON_REMOTE',
                 'detail': 'this machine cannot create agents',
+              },
+            }),
+          );
+        } else if (frame['type'] == 'agent_close') {
+          ws.add(
+            jsonEncode({
+              'type': 'agent_close_result',
+              'payload': {
+                'requestId': (frame['payload'] as Map)['requestId'],
+                ...hub.closeResponse,
               },
             }),
           );
@@ -271,6 +284,47 @@ void main() {
       expect((result['agents'] as List).first['id'], 'a1');
     },
   );
+
+  for (final failure in [
+    {'error': 'SESSION_NOT_IDLE', 'activity': 'working'},
+    {'error': 'HISTORY_NOT_SAVED', 'detail': 'Not enough free disk space.'},
+  ]) {
+    test('close preserves ${failure['error']} across the real WebSocket', () async {
+      hub = await FakeHub.start();
+      hub.closeResponse = failure;
+      conn = WsConn(
+        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+      );
+      final app = createApp(connected: true, connectionForTest: (_) => conn!);
+      addTearDown(app.dispose);
+      final agent = Agent(
+        id: 'a0',
+        engine: 'codex',
+        name: 'Work',
+        sessionId: 'conversation-a0',
+        createdAt: DateTime.utc(2026, 10, 1),
+        closeSupported: true,
+        terminalAvailable: true,
+      );
+      app.stateOf('m')!.agents = [agent];
+      await conn!.connect();
+      final result = await app.prepareSessionClose('m', agent)('idle');
+      for (final entry in failure.entries) {
+        expect(result[entry.key], entry.value);
+      }
+      expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
+      expect(hub.frames.where((f) => f['type'] == 'agent_close'), hasLength(1));
+      expect(hub.frames.where((f) => f['type'] == 'agents_list'), isEmpty);
+    });
+  }
 
   test('forceReconnect() sends forceReconnect:true on the next machine_select, only for local transport', () async {
     hub = await FakeHub.start();

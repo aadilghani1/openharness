@@ -20,7 +20,13 @@ export type AgentClosePlan = {
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean }
 export type AgentCloseResult = { closed?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
-type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'launch' | 'resumeOnly'>
+type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
+
+function unusedChat(session: CloseSession): boolean {
+  return (session.engine === 'claude' || session.engine === 'codex')
+    && !session.sessionId && !session.transcriptPath && session.boundAt == null && !session.resumeOnly
+    && (session.launch == null || session.launch.state === 'ready')
+}
 
 /** An empty new chat has no turn state yet. Existing chats still require that state,
  * and neither kind is idle without a recognized empty composer. */
@@ -37,10 +43,7 @@ export function inspectCloseActivity(session: CloseSession, screen: string | nul
   const hold = teamWriteHold(engine, screen)
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
-  const unusedChat = (engine === 'claude' || engine === 'codex')
-    && !session.sessionId && !session.transcriptPath && !session.resumeOnly
-    && (session.launch == null || session.launch.state === 'ready')
-  if (hold || (turnOpen === undefined && !unusedChat)) return 'unknown'
+  if (hold || (turnOpen === undefined && !unusedChat(session))) return 'unknown'
   return 'idle'
 }
 
@@ -140,6 +143,16 @@ export class CloseAgentService {
       await this.deps.stop(s.agentId, {
         current: () => !!current(),
         checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
+        confirmUnusedConversation: async captured => {
+          // A missing ID alone could be failed discovery of active work. Only
+          // an unused chat with a freshly observed empty composer can skip the
+          // shared-server conversation stop, after its screen is checkpointed.
+          const latest = current()
+          if (!latest || !unusedChat(captured) || !unusedChat(latest)) return false
+          const activity = await this.deps.activity(latest)
+          const after = current()
+          return activity === 'idle' && !!after && unusedChat(after)
+        },
         beforeStop: async () => {
           const latest = current()
           if (!latest) throw new Error('The session changed while saving. Please try again.')

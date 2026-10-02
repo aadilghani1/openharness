@@ -2213,6 +2213,14 @@ class AppNotifier extends ChangeNotifier {
             'mode': mode,
           },
         );
+      } on WsRequestFailure catch (failure) {
+        // A refusal is an answer, not a lost connection. Keep its activity so
+        // SESSION_NOT_IDLE can be reviewed, and its save/stop detail for the user.
+        result = {
+          ...failure.payload,
+          'error': failure.code,
+          if (failure.detail != null) 'detail': failure.detail,
+        };
       } catch (_) {
         // A lost reply never causes a second Stop. Authoritative saved inventory
         // can confirm it; otherwise keep the pane and report uncertainty.

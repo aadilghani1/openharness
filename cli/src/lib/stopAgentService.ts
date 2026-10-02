@@ -37,6 +37,8 @@ export interface StopAgentOptions {
   beforeStop?(session: RegisteredSession): Promise<void>
   /** Retain native history before exit, then include anything the engine flushed while exiting. */
   checkpoint?(session: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  /** Fresh proof that an unbound chat has never started and its composer is empty. */
+  confirmUnusedConversation?(session: RegisteredSession): Promise<boolean>
 }
 
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object
@@ -85,7 +87,8 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       try {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
-        await stopSharedCodexSession(s, () => sameTarget() && options.current?.() !== false)
+        await stopSharedCodexSession(s, () => sameTarget() && options.current?.() !== false,
+          undefined, options.confirmUnusedConversation)
         // Keep the terminal alive while the engine handles SIGTERM and flushes
         // its native store. Killing tmux in parallel can deliver SIGHUP first.
         const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
