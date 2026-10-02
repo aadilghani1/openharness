@@ -652,3 +652,42 @@ These are synthetic integration results. The host's ownership/consent inputs are
 fixture and tested separately through the real hook server. The installed review app, its settings,
 and personal memories remain unchanged. OpenCode source capture and prompt recall, real-user
 extraction quality and the broader task-benefit/rollout requirements are still open.
+
+### OpenCode native capture and collection recall
+
+OpenCode 1.18.34 conversations now enter the same consent-controlled capture queue as Claude
+and Codex. The host supplies the database and current session/workspace identity; the reader
+checks native ownership, parent-session exclusion, version and directory before reading that
+session. SQL bounds both returned JSON bytes and part counts. The persisted cursor survives
+host restarts, detects database replacement and changed/deleted messages, and keeps a monotonic
+position after native undo cleanup. Learn-off, session exclusion and project exclusion intervals
+are not backfilled when re-enabled.
+
+Forked messages retain their original native timestamps despite receiving new row IDs and SQL
+insertion times. Comparing those timestamps with the new session's creation time excludes copied
+history. Generated summaries, compaction markers, synthetic prompts, ignored parts and reasoning
+are not fresh user evidence. Quoted user material remains a reference; tool calls and results
+have separate roles and do not manufacture verification. Streaming replies wait for native
+completion. Interrupted or incomplete context admits only the queue's existing bounded-context
+rules, preserving readable instructions around oversized results.
+
+The verified OpenCode collection session can now retrieve shared personal memories through its
+existing scoped MCP tool. Receipt/activity schemas and desktop labels recognize OpenCode.
+Automatic prompt delivery remains disabled for OpenCode pending an outgoing native-model-request
+test; capture and extraction transport do not establish prompt delivery or useful recall.
+
+The reproducible `cli/scripts/memory-native-opencode-source-probe.mjs` uses the real 1.18.34
+binary, an isolated HOME/database, fixture-only file permission and synthetic localhost responses.
+It recorded a native completed `read` call, fork, manual compaction and undo, then exercised the
+actual capture implementation against the running database: six original role-separated sources,
+zero duplicates on a repeated poll, zero copied-fork sources, two fresh fork sources, zero summary
+sources, and capture suspended while undo was active. The sanitized source recording is committed
+under `cli/src/memory/__fixtures__`; no personal conversations or credentials are included.
+
+Validation: 401 memory checks, TypeScript checking, CLI bundling, 56 desktop memory widget checks
+and targeted Flutter analysis passed. The full CLI suite ran 8,480 tests: 8,433 passed, 45 skipped,
+and two unrelated tmux probes failed near their timeouts while another suite was active on this Mac.
+Both complete tmux suites then passed all 36 checks with one worker. The required isolated native
+tmux suite passed nine checks and skipped nine unavailable engine rows. No app, firmware or release
+was installed by this increment. Real-user extraction quality remains unmeasured: the prepared
+private sample is waiting for explicit approval of its selected external model destination.

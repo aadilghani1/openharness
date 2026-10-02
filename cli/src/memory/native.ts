@@ -23,21 +23,7 @@ export function decodeMemoryRecord(engine: 'claude' | 'codex', text: string): Na
     result.parts.push({ nativeEventId: digest([engine, native, index++, role]), role, text: value, observedAt: at })
   }
   const user = (value: string): void => {
-    const kind = askKind(value)
-    if (kind === 'notice') return
-    if (kind === 'agent') { add('reference', value); return }
-    const cleaned = stripBashModeBlocks(stripSystemBlocks(stripContextSummary(personAsk(value)) ?? ''))
-      .replace(/<(?:environment_context|user_instructions|user-prompt-submit-hook|turn_aborted)>[\s\S]*?<\/(?:environment_context|user_instructions|user-prompt-submit-hook|turn_aborted)>/g, '')
-    // Fenced code, block quotes, and explicit paste regions retain a separate, lower-trust role.
-    // Other ambiguous quotations remain an extraction judgement, never proven personal preference by this parser.
-    const quoted = /<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>|^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)|^(?:[ \t]*>[^\n]*(?:\n|$))+/gm
-    let end = 0
-    for (const match of cleaned.matchAll(quoted)) {
-      add('user', cleaned.slice(end, match.index))
-      add('reference', match[0])
-      end = match.index! + match[0].length
-    }
-    add('user', cleaned.slice(end))
+    for (const part of memoryUserParts(value)) add(part.role, part.text)
   }
 
   if (engine === 'claude') {
@@ -79,6 +65,25 @@ export function decodeMemoryRecord(engine: 'claude' | 'codex', text: string): Na
   }
   if (result.parts.length > 64) return { parts: [], ended: result.ended, incomplete: true }
   return result
+}
+
+/** Shared role boundaries for native user text; provider-specific synthetic flags are checked first. */
+export function memoryUserParts(value: string): Array<{ role: 'user' | 'reference'; text: string }> {
+  const kind = askKind(value)
+  if (kind === 'notice') return []
+  if (kind === 'agent') return [{ role: 'reference', text: value }]
+  const cleaned = stripBashModeBlocks(stripSystemBlocks(stripContextSummary(personAsk(value)) ?? ''))
+    .replace(/<(?:environment_context|user_instructions|user-prompt-submit-hook|turn_aborted)>[\s\S]*?<\/(?:environment_context|user_instructions|user-prompt-submit-hook|turn_aborted)>/g, '')
+  // Pasted/fenced material is evidence about its contents, not a preference of the person quoting it.
+  const quoted = /<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>|^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)|^(?:[ \t]*>[^\n]*(?:\n|$))+/gm
+  const result: Array<{ role: 'user' | 'reference'; text: string }> = []
+  let end = 0
+  for (const match of cleaned.matchAll(quoted)) {
+    result.push({ role: 'user', text: cleaned.slice(end, match.index) }, { role: 'reference', text: match[0] })
+    end = match.index! + match[0].length
+  }
+  result.push({ role: 'user', text: cleaned.slice(end) })
+  return result.filter(part => part.text.trim())
 }
 
 function object(value: unknown): Record<string, unknown> {

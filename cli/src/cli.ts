@@ -4979,7 +4979,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   } })
   companionProfileChanged = () => { companionIntelligence.status(); pairBrain?.stateChanged() }
   {
-    const roster = new MemorySessionRoster(homedir())
+    const roster = new MemorySessionRoster(homedir(), Date.now, { opencode: OPENCODE_DB })
     codingMemory = new CodingMemoryRuntime({
       directory: join(env.ADAPTER_DATA_DIR, 'coding-memory'),
       context: () => {
