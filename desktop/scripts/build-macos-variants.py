@@ -61,10 +61,39 @@ def phase(checks, desktop, output, receipt):
         raise RuntimeError("macOS phase failed; see the per-variant results")
 
 
+def flutter_timings(path):
+    """Keep only SDK target timings, never arbitrary diagnostic fields or argv."""
+    try:
+        data = json.loads(path.read_text())
+        targets = data["targets"]
+        if not isinstance(targets, list) or not targets:
+            raise ValueError("no target timings")
+        result = []
+        for target in targets:
+            name = target["name"]
+            elapsed = target["elapsedMilliseconds"]
+            if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name)
+                    or type(elapsed) is not int or elapsed < 0
+                    or type(target["skipped"]) is not bool or type(target["succeeded"]) is not bool):
+                raise ValueError("invalid target timing")
+            result.append({key: target[key] for key in ("name", "elapsedMilliseconds", "skipped", "succeeded")})
+        return dict(status="recorded", targets=result)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Profiling is diagnostic, not an additional publication gate. The actual
+        # build/signing/artifact checks still determine the coordinator's result.
+        return dict(status="unavailable")
+
+
 def build(version, defines, desktop, output, receipt):
     variant_script = str(desktop / "scripts/publish-macos-variant.sh")
-    phase([check("universal-build", ["bash", variant_script, "apple-silicon", version, "--build-only", *defines], 1800)],
-          desktop, output, receipt)
+    profile = output / "flutter-build.json"
+    profile.unlink(missing_ok=True)
+    try:
+        phase([check("universal-build", ["bash", variant_script, "apple-silicon", version, "--build-only",
+                                         f"--performance-measurement-file={profile}", *defines], 1800)],
+              desktop, output, receipt)
+    finally:
+        receipt["flutter_build"] = flutter_timings(profile)
     source = desktop / "build/macos/Build/Products/Release/Harness.app"
     copies = []
     for variant in VARIANTS:

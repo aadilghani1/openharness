@@ -40,6 +40,9 @@ else:
     counter=Path("compile-count")
     counter.write_text(str(int(counter.read_text())+1) if counter.exists() else "1")
     Path("build-args.json").write_text(__import__("json").dumps(args))
+    if not os.environ.get("COORDINATOR_NO_PROFILE"):
+        profile=next(arg.split("=",1)[1] for arg in args if arg.startswith("--performance-measurement-file="))
+        Path(profile).write_text(__import__("json").dumps({"targets":[{"name":"release_macos_bundle_flutter_assets","elapsedMilliseconds":1234,"skipped":False,"succeeded":True}]}))
     app=Path("build/macos/Build/Products/Release/Harness.app")
     app.mkdir(parents=True,exist_ok=True)
     app.joinpath("version").write_text(version)
@@ -88,12 +91,42 @@ print("published fixture")
         self.assertEqual((self.desktop / "compile-count").read_text(), "1")
         self.assertIn("--dart-define=PRIVATE_FIXTURE=do-not-record-this", json.loads((self.desktop / "build-args.json").read_text()))
         self.assertNotIn("do-not-record-this", json.dumps(receipt))
+        self.assertEqual(receipt["flutter_build"], dict(status="recorded", targets=[dict(
+            name="release_macos_bundle_flutter_assets", elapsedMilliseconds=1234, skipped=False, succeeded=True)]))
         for variant in variants.VARIANTS:
             app = self.output / variant / "Harness.app"
             self.assertEqual((app / "renderer").read_text(), variant)
             self.assertEqual((app / "payload").read_text(), "shared compiled bytes")
         self.assertFalse((self.desktop / "build/macos/Build/Products/Release/Harness.app/renderer").exists())
         self.assertFalse(list(self.desktop.glob("*-publication.json")), "build-only published artifacts")
+
+    def test_profiling_never_reuses_a_previous_builds_report(self):
+        self.output.mkdir(parents=True)
+        (self.output / "flutter-build.json").write_text('{"targets": [{"stale": true}]}')
+        with mock.patch.dict(os.environ, COORDINATOR_NO_PROFILE="1"):
+            result, receipt = self.run_build()
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt["flutter_build"], dict(status="unavailable"))
+        self.assertFalse((self.output / "flutter-build.json").exists())
+
+    def test_profile_retains_timings_without_arbitrary_diagnostic_fields(self):
+        path = self.desktop / "profile.json"
+        target = dict(name="kernel_snapshot_program", elapsedMilliseconds=123, skipped=False, succeeded=True)
+        path.write_text(json.dumps(dict(targets=[dict(target, argv="private-argument")], environment="private-env")))
+        self.assertEqual(variants.flutter_timings(path), dict(status="recorded", targets=[target]))
+
+    def test_missing_or_invalid_profiles_are_explicitly_unavailable(self):
+        path = self.desktop / "profile.json"
+        self.assertEqual(variants.flutter_timings(path), dict(status="unavailable"))
+        valid = dict(name="kernel_snapshot_program", elapsedMilliseconds=123, skipped=False, succeeded=True)
+        invalid = [None, {}, {"targets": []}, {"targets": [None]}, {"targets": [{"name": "incomplete"}]}]
+        for field, value in (("name", "name\\nprivate=value"), ("elapsedMilliseconds", -1),
+                             ("elapsedMilliseconds", True), ("skipped", "false"), ("succeeded", None)):
+            invalid.append(dict(targets=[dict(valid, **{field: value})]))
+        for value in invalid:
+            with self.subTest(value=value):
+                path.write_text(json.dumps(value))
+                self.assertEqual(variants.flutter_timings(path), dict(status="unavailable"))
 
     def test_publications_overlap_without_sharing_artifact_or_manifest_paths(self):
         result, receipt = self.run_build("--metadata-prefix", "harness/desktop/.ci/123")
