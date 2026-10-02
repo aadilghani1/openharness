@@ -1084,6 +1084,46 @@ void main() {
     },
   );
 
+  testWidgets('native Cmd-N focuses the restored task without a click', (
+    tester,
+  ) async {
+    final connection = _CreationConnection();
+    final app = createApp(connectionForTest: (_) => connection);
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    seedMixedAgents(app);
+    app.machineStates['m']!
+      ..localOnly = true
+      ..terminalCapabilityAvailable = true;
+    await app.agentPreference.remember('codex');
+    await app.agentPreference.selectLaunch('terminal');
+    final terminalInput = <TerminalBinaryFrame>[];
+    app.adoptSessionForTest(terminal('a0', terminalInput));
+    addTearDown(app.dispose);
+    addTearDown(connection.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: SwarmScreen(notifier: app, nativeTabs: true),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    final field = find.byKey(const ValueKey('new-harness-task'));
+    expect(tester.widget<TextField>(field).focusNode!.hasPrimaryFocus, isTrue);
+    final box = tester
+        .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+        .controller;
+    expect(box.engine, 'codex');
+    await tester.enterText(field, 'Ready to type');
+    expect(box.task, 'Ready to type');
+    expect(connection.creates, isEmpty);
+    expect(terminalInput, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'native first workspace offers the shared composer without starting work',
     (tester) async {
