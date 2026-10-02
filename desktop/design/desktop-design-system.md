@@ -64,9 +64,9 @@ from the control that owns it.
 | What should happen? | Prompt, then the terminal's work | The task remains the focal point |
 | Where is the project? | Project selector; machine inside its search row | A folder belongs to a machine; its path is not globally interchangeable |
 | Which agent or specialized harness? | Agent selector, with its real mark | A specialized harness can run with an agent framework: “Run Blender with” |
-| Which model and effort? | Model control and its options | Available models belong to the selected agent and connection |
+| Which model? | Model control and its options | Available models belong to the selected agent and connection |
 | What may it do? | Visible approvals control | Preserve the explicit setting; never hide a permission change behind styling |
-| How is the work isolated? | Worktree and branch together | Fresh main default, remembered worktree choice, reviewed draft kept intact |
+| How is the work isolated? | Worktree and branch together | Fresh main default, worktree remembered after a successful Git launch |
 | Which work am I returning to? | Session name in tabs/search, with machine/project context when useful | Session identity stays stable when its model or activity changes |
 
 The footer describes the focused work. Creation controls describe the next
@@ -304,11 +304,12 @@ while finding machines. While saved defaults load, show “Preparing your harnes
 in the same quiet hierarchy, then hand focus to the existing composer. Startup
 must not leave a blank page or imply that a harness has already started.
 
-Fresh forms focus the prompt and use the last explicit agent, project,
-approvals and worktree choices. Fresh branches default to main; reopening a
-draft preserves its selected branch. Enter submits except during composition.
-Escape and outside click dismiss the innermost picker first, then the dialog;
-they preserve its draft. Pending operations retain their existing close guards.
+Fresh forms focus an empty prompt. The last focused real project supplies its
+machine and folder; the global last successful launch supplies agent, model,
+approvals, account and worktree choice. Fresh branches default to main. Enter
+submits even with an empty prompt, except during composition. Escape and outside
+click dismiss the innermost picker first, then the dialog. Closing discards ordinary
+edits; pending operations retain their close guards and exact recovery values.
 Opening any form or preview must never start work.
 The GitHub entry starts with only “Enter GitHub URL”; a valid address reveals
 its clone action and an invalid submission reveals inline validation. Do not

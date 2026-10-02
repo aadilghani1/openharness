@@ -1920,7 +1920,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 onTapOutside: (_) {},
                 decoration: InputDecoration(
                   hintText: box.takesTask
-                      ? 'Harness anything'
+                      ? 'What would you like to work on?'
                       : 'Open a terminal in this repo',
                   hintStyle: DesktopChrome.text(
                     size: 15,

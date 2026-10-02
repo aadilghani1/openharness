@@ -384,7 +384,7 @@ void main() {
         expect(find.text('New Harness'), findsOneWidget);
         expect(
           tester.widget<TextField>(_task).decoration!.hintText,
-          'Harness anything',
+          'What would you like to work on?',
         );
         expect(find.text('Options'), findsNothing);
         expect(find.text('Add task'), findsNothing);

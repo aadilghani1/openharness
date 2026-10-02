@@ -18,6 +18,7 @@ import '../api/api_client.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
+import '../core/launch_setup.dart';
 import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
 import '../models/api_connections_controller.dart' show agentOnApiModel;
@@ -428,10 +429,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   OverlayEntry? _newHarnessOverlay;
   var _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
 
-  /// Escape keeps unfinished work with the machine/project/agent it started
-  /// from. Switching context must not carry a task into the wrong project or
-  /// silently reset its edited permissions. These buffers live for this window.
+  /// Only unconfirmed launches survive closing. Ordinary forms start fresh.
   final _newHarnessDrafts = <_NewHarnessContext, NewHarnessDraft>{};
+  ({String machineId, String folder})? _workingProject;
   _NewHarnessContext? _newHarnessContext;
   (String, bool, String, HarnessPlacement?)? _searchHeaderState;
   FocusNode? _searchReturnFocus;
@@ -1057,7 +1057,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final target = _search!.targetId;
       final split = _search!.split;
       final placement = _search!.placement;
-      final fallbackTask = _search!.createTask;
       final selected = _search!.selected;
       final machineId =
           _search!.scopedMachineId ??
@@ -1069,7 +1068,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           swarmId: target,
           split: split,
           placement: placement,
-          fallbackTask: fallbackTask,
         ),
       );
       return;
@@ -1091,6 +1089,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _recordNavigation() {
+    _rememberWorkingProject();
     _scheduleCompanionWorkspace();
     _navigation.record(app);
     if (_hasCommandBar && _commandBarOpen) {
@@ -2871,6 +2870,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
         placement: HarnessPlacement.newTab,
       );
 
+  void _rememberWorkingProject() {
+    if (app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator) return;
+    final pane = app.focusedPane;
+    if (pane == null) return;
+    final machine = app.stateOf(pane.machineId);
+    final agentId = pane.agentId ?? pane.ownerAgentId;
+    final agent = machine?.agents
+        .where((item) => item.id == agentId)
+        .firstOrNull;
+    if (agent == null || isInternalLaunchHarness(agent.dsh)) return;
+    final folder = machine?.projectOf(agent)?.cwd;
+    if (folder == null || folder.isEmpty || isInternalLaunchFolder(folder)) {
+      return;
+    }
+    _workingProject = (machineId: pane.machineId, folder: folder);
+  }
+
   Future<void> _newAgent({
     String? machineId,
     String? folder,
@@ -2879,7 +2895,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? engine,
     String? projectName,
     String? task,
-    String? fallbackTask,
     HarnessPlacement? placement,
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
@@ -2904,13 +2919,26 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     final target = swarmId ?? search?.targetId ?? app.activeSwarmId;
     final requestedSplit = split ?? search?.split;
-    // Search text seeds a fresh composer, but switching back with ⌘N must not
-    // replace a draft. Explicit create rows and Store examples pass task.
-    if (newHarnessOpensInBox) fallbackTask ??= search?.createTask;
     if (app.activeSwarmId != target) return;
-    // A fresh launcher uses saved choices on this computer. Only an explicit
-    // split inherits its source pane; changing focus never changes Cmd-N's
-    // defaults.
+    _rememberWorkingProject();
+    await Future.wait([app.agentPreference.load(), app.projectHistory.load()]);
+    if (!mounted ||
+        app.activeSwarmId != target ||
+        stillCurrent?.call() == false) {
+      return;
+    }
+    final rememberedProject = [_workingProject, app.projectHistory.lastLaunched]
+        .nonNulls
+        .where((project) => app.stateOf(project.machineId) != null)
+        .firstOrNull;
+    final working =
+        source == _NewHarnessSource.workspace &&
+            newHarnessOpensInBox &&
+            rememberedProject != null
+        ? rememberedProject
+        : null;
+    // Only a split inherits the source agent. Cmd-N combines the working
+    // project's location with the one global successful launch setup.
     final draftSource = source == _NewHarnessSource.workspace
         ? app.focusedPane ?? _newTabSources[target]
         : null;
@@ -2922,6 +2950,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final id =
         machineId ??
         machine?.machine.machineId ??
+        working?.machineId ??
         app.machineStates.values
             .where((machine) => machine.isLocalMachine)
             .firstOrNull
@@ -2937,19 +2966,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       await _openMachines();
       return;
     }
-    await Future.wait([app.agentPreference.load(), app.projectHistory.load()]);
-    if (!mounted ||
-        app.activeSwarmId != target ||
-        stillCurrent?.call() == false) {
-      return;
-    }
     final initialFolder =
         folder ??
         paneProject?.cwd ??
-        (newHarnessOpensInBox && source == _NewHarnessSource.workspace
-            ? app.projectHistory.selected(id) ??
-                  app.projectHistory.recent(id).firstOrNull
-            : null);
+        (working?.machineId == id ? working?.folder : null);
     final inherited = agent?.engine;
     if (!newHarnessOpensInBox) {
       await _newAgentForm(
@@ -2959,7 +2979,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         split: requestedSplit,
         engine: engine ?? (isTerminalEngine(inherited) ? null : inherited),
         placement: placement,
-        task: task ?? fallbackTask,
+        task: task,
       );
       return;
     }
@@ -2982,12 +3002,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       harnessId: engine == null ? agent?.dsh : null,
       folder: initialFolder,
       projectName: projectName,
-      autoProject:
-          projectName == null &&
-          initialFolder == null &&
-          source == _NewHarnessSource.product,
+      autoProject: projectName == null && initialFolder == null,
       task: task,
-      fallbackTask: fallbackTask,
       embedded: embedded,
       draftContext:
           welcomeOrigin ??
@@ -3077,7 +3093,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? projectName,
     bool autoProject = false,
     String? task,
-    String? fallbackTask,
     NewHarnessDraft? draft,
     _NewHarnessContext? draftContext,
     required String swarmId,
@@ -3140,8 +3155,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _newHarnessEmbedded = embedded;
     _canvasFocus.descendantsAreFocusable = embedded;
     _newHarnessContext = origin;
-    // Consume once. ⌘N resumes this context's whole draft, even after typing
-    // in search. Only an explicit new-task action replaces ordinary edits.
+    // Consume an unresolved receipt once. Ordinary dismissed forms are fresh.
     final savedDraft = _newHarnessDrafts[origin];
     // A lost reply always restores its exact receipt. Otherwise explicit
     // product/machine choices and explicit task requests win over old defaults.
@@ -3160,7 +3174,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       harnessId: harnessId,
       folder: folder,
       projectName: projectName,
-      task: task ?? (resumed == null ? fallbackTask : null),
+      task: task,
       draft: resumed,
       autoProject: autoProject,
       offersStore: true,
@@ -3399,7 +3413,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _NewHarnessContext origin,
     NewHarnessDraft draft,
   ) {
-    // Choosing defaults is useful work even before the first task is typed.
+    // An uncertain reply must retain its receipt to avoid duplicate creation.
+    // Closing an ordinary composer cancels that task and its choices.
+    if (draft.attempt?.awaitingConfirmation != true) return;
     _newHarnessDrafts.remove(origin);
     _newHarnessDrafts[origin] = draft;
     while (_newHarnessDrafts.length > 32) {

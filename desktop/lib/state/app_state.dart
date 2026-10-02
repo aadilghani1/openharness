@@ -40,6 +40,7 @@ import '../core/sleep_aware.dart';
 import '../core/agent_git_context.dart';
 import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
+import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/engine_availability.dart';
@@ -7410,7 +7411,9 @@ class AppNotifier extends ChangeNotifier {
       if (!connection.isReady) return null;
       final reply = await connection.request(
         'machine_resources',
-        payload: harnesses ? const {'harnesses': true, 'storage': true} : const {},
+        payload: harnesses
+            ? const {'harnesses': true, 'storage': true}
+            : const {},
         timeout: const Duration(seconds: 3),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision) ||
@@ -10096,8 +10099,11 @@ class AppNotifier extends ChangeNotifier {
         agent.project?.cwd ??
         creation.preparedFolder ??
         choices['cwd'];
-    if (projectPath is String && projectPath.isNotEmpty) {
-      unawaited(projectHistory.select(machineId, projectPath));
+    if (!creation.background &&
+        !isInternalLaunchHarness(agent.dsh ?? choices['dsh'] as String?) &&
+        projectPath is String &&
+        projectPath.isNotEmpty) {
+      unawaited(projectHistory.select(machineId, projectPath, launched: true));
     }
     harnessStats.onAgentSpawned();
     notifyListeners();
