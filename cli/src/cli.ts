@@ -146,6 +146,7 @@ import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { createSessionSync } from './lib/sessionSync.js'
 import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
@@ -2006,27 +2007,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!daemons.on()) return null
     try { return runtimeLessons(lessonStore, workspace) } catch { return null }
   }
-  const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
-    // A terminal is not the dial's business (see `deviceAgentRow`): it is never upserted there, and
-    // the one time it must be REMOVED from there — the engine it adopted has exited — the caller
-    // sends that `agent_deleted` itself, because this row is still very much alive for the app.
-    if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
-    if (!registry.terminalAvailable(s.agentId)) {
-      pairSensor.removed(s.agentId)
-      lessonSignals.forget(s.agentId)
-      backendRef?.send({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
-      return
-    }
-    if (s.launch?.state === 'failed') pairSensor.failed(s.agentId, s.launch.detail ?? s.launch.error)
-    void projectFrame(s, runtimeProfiles.selectedModel(s))
-      .then((project) => {
-        const frame = { type: 'agent_synced', payload: { agent: project } }
-        backendRef?.send(frame)
-        if (opts.device !== false) backendRef?.sendCommander(frame)
-      })
-      .catch((err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err))
-  }
+  const syncSession = createSessionSync({
+    terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
+    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s)),
+    send: (frame) => backendRef?.send(frame),
+    sendCommander: (frame) => backendRef?.sendCommander(frame),
+    onUnavailable: (agentId) => {
+      pairSensor.removed(agentId)
+      lessonSignals.forget(agentId)
+    },
+    onFailed: (agentId, detail) => pairSensor.failed(agentId, detail),
+    warn: (err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err),
+  })
   const announceRename = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
     const name = projectDisplayName(s)
