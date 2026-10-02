@@ -143,6 +143,11 @@ class MachineState {
   /// that moment the list is the machine's own and nothing is provisional.
   bool agentsFromCache = false;
 
+  /// When this machine last answered `agents_list` over the socket it is on now — null before the
+  /// first answer, and again once that socket drops, since the pushes that keep a list current
+  /// went nowhere while it was down. What Find asks before asking again (`_listStillCurrent`).
+  DateTime? agentsListedAt;
+
   AgentLoadStatus agentLoadStatus = AgentLoadStatus.idle;
   bool agentsRefreshing = false;
   String? agentsLoadError;
@@ -1210,9 +1215,16 @@ class AppNotifier extends ChangeNotifier {
     lastOpenedAgent.prefetch();
     final cache = _machineCache;
     if (cache != null) {
+      // Read before the first frame by `startHarness` — see [_preDialFromHint].
+      _launchHint = MachineCache.takeLaunchHint();
       _launchCacheRead = StartupTrace.time(
         'boot.machineCacheRead',
         cache.readRaw,
+      );
+      // The small one beside it, which the launch's own machine is drawn from first.
+      _launchRecordRead = StartupTrace.time(
+        'boot.machineLaunchRead',
+        cache.readLaunchRaw,
       );
     }
     try {
@@ -1247,12 +1259,47 @@ class AppNotifier extends ChangeNotifier {
     } finally {
       // Taken by the warm start when signed in; otherwise last run's text has no reader.
       _launchCacheRead = null;
+      _launchRecordRead = null;
+      _launchHint = null;
     }
+  }
+
+  /// The machine the launch hint names ([MachineCache.preloadLaunchHint]), for [_preDialFromHint]
+  /// — during the bootstrap that took it, and only then.
+  String? _launchHint;
+
+  /// The machine [_preDialFromHint] dialled, until the warm start has read which agent the launch
+  /// reopens and either keeps that dial as its own or lets it go ([_warmStartMachines]).
+  String? _preDialled;
+
+  /// Dial the machine the launch hint names, now — before the first frame, before anything else is
+  /// read — when the launch is signed in and nothing is on screen yet.
+  ///
+  /// ⚠️ **A head start, not a decision (owner, 2026-10-02).** Which agent the launch reopens is
+  /// still [lastOpenedAgent]'s to say, and the hold on the other machines is still the warm start's
+  /// to make; this only puts the socket — TCP, TLS, the upgrade — under way ~400ms sooner than the
+  /// warm start could, which had to wait out the first frame to read anything. The warm start takes
+  /// the dial over when the agent it reopens is on this machine, which is what the hint is written
+  /// for; otherwise the socket is closed again, one dial wasted, as a hint behind a crash is.
+  void _preDialFromHint() {
+    final hint = _launchHint;
+    _launchHint = null;
+    if (hint == null || _pool == null || _disposed) return;
+    if (machines.isNotEmpty || machineStates.isNotEmpty) return;
+    _preDialled = hint;
+    StartupTrace.mark(
+      'launch: dialling ${_shortId(hint)} from the launch hint',
+    );
+    _conn(hint);
   }
 
   /// The machine cache as [bootstrap] began reading it, for the launch's [_warmStartMachines] —
   /// once, and only during the bootstrap that started it.
   Future<String?>? _launchCacheRead;
+
+  /// The cache's launch record ([MachineCache.readLaunchRaw]), read beside [_launchCacheRead] and
+  /// on the same terms.
+  Future<String?>? _launchRecordRead;
 
   /// Whether this device is signed in, and everything behind the login screen when it is — what
   /// `bootstrap()` does once its config is loaded.
@@ -1338,6 +1385,8 @@ class AppNotifier extends ChangeNotifier {
     // that await, where the existing handler words it for the user and offers
     // the retry.
     _ensurePool();
+    // The launch's machine first of all, from the hint read before the first frame.
+    _preDialFromHint();
     final machineRefresh = StartupTrace.time<Object?>(
       'boot.refreshMachines',
       () async {
@@ -1749,6 +1798,10 @@ class AppNotifier extends ChangeNotifier {
       unawaited(_syncGroup(machineId));
     } else if (nextStatus == ConnectionStatus.reconnecting ||
         nextStatus == ConnectionStatus.disconnected) {
+      // A dial that failed is a turn spent: the next machine need not wait out its limit.
+      _endReleaseTurn(machineId, 'dial failed');
+      // Pushes sent while this socket is down reach nobody: the list is no longer current.
+      machine.agentsListedAt = null;
       _stopAgentSyncTimer(machineId);
       _clearMachineActivity(machine);
       // Same reasoning as above, mirrored: capture pendingOfflineAgentId from the currently-open
@@ -1877,15 +1930,21 @@ class AppNotifier extends ChangeNotifier {
     // awaited: it is a hint for a future run and must not add a disk write to
     // the one a person is waiting on right now.
     final cache = _machineCache;
-    if (cache != null) {
-      unawaited(
-        cache.save(
-          machines,
-          isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
-        ),
-      );
-    }
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
+  }
+
+  /// [cache] written out with this run's machines, and the launch record for the machine the next
+  /// launch reopens ([MachineCache.save]). Never awaited: it is for a future launch, and must not
+  /// add a disk write to anything a person is waiting on now.
+  void _writeMachineCache(MachineCache cache) {
+    unawaited(
+      cache.save(
+        machines,
+        isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
+        launchMachineId: lastOpenedAgent.current?.machineId,
+      ),
+    );
   }
 
   // The daemon reports `connected` only once its own backend socket is open, but
@@ -2009,6 +2068,12 @@ class AppNotifier extends ChangeNotifier {
       final agents = rawAgents
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
           .toList();
+      // Answered over this socket, changed or not: the list is current as of now. Only once the
+      // machine's list has been confirmed — a tick never stands in for that first one.
+      if (machine.agentLoadStatus == AgentLoadStatus.loaded &&
+          !machine.agentsFromCache) {
+        machine.agentsListedAt = DateTime.now();
+      }
       if (agentsEqual(machine.agents, agents)) return;
       // The machine's own list for the next launch too: what changed reached this phone without a
       // push (one sent while the socket was away). A harness added or gone goes out soon, the rest
@@ -2162,12 +2227,15 @@ class AppNotifier extends ChangeNotifier {
         newDevices.add(m);
         devicesRevision++;
         final name = m.label.isEmpty ? 'A device' : m.label;
-        unawaited(agentNotices.system.showAccountNotice(
-          key: m.pub,
-          title: 'New device on your account',
-          body: '$name ${m.kind == 'machine' ? 'joined' : 'signed in to'} your account and can reach '
-              'your machines. Not yours? Remove it in Settings ▸ Your devices.',
-        ));
+        unawaited(
+          agentNotices.system.showAccountNotice(
+            key: m.pub,
+            title: 'New device on your account',
+            body:
+                '$name ${m.kind == 'machine' ? 'joined' : 'signed in to'} your account and can reach '
+                'your machines. Not yours? Remove it in Settings ▸ Your devices.',
+          ),
+        );
         if (!_disposed) notifyListeners();
       },
       onSignedOut: () async {
@@ -2574,7 +2642,7 @@ class AppNotifier extends ChangeNotifier {
       // Held until the launch's own terminal is up — see [_launchMachineId]. The cached ones were
       // held by the warm start already; this catches the machines the cache did not know.
       if (_heldForLaunch(machine.machineId)) {
-        _heldMachines.add(machine.machineId);
+        _holdForLaunch(machine.machineId);
         continue;
       }
       _connectMachine(state);
@@ -2828,34 +2896,153 @@ class AppNotifier extends ChangeNotifier {
   Timer? _heldMachinesTimer;
   static const _heldMachinesRelease = Duration(seconds: 5);
 
-  /// Whether [machineId] is one the launch is holding back — see [_launchMachineId].
+  /// Whether [machineId] is one the launch is holding back — see [_launchMachineId] — or one it has
+  /// let go of that is still waiting for its turn to dial ([_releaseQueue]).
   bool _heldForLaunch(String machineId) =>
-      _launchMachineId != null && machineId != _launchMachineId;
+      (_launchMachineId != null && machineId != _launchMachineId) ||
+      _releaseQueue.contains(machineId);
 
-  /// Dial every machine the launch held back. Idempotent; [why] goes to the startup timeline.
-  void _releaseHeldMachines(String why) {
-    if (_launchMachineId == null) return;
-    _launchMachineId = null;
-    _heldMachinesTimer?.cancel();
-    _heldMachinesTimer = null;
-    final held = _heldMachines.toList();
-    _heldMachines.clear();
-    if (_disposed) return;
-    StartupTrace.mark('launch: dialling ${held.length} held machine(s) · $why');
-    for (final machineId in held) {
-      final state = machineStates[machineId];
-      // Gone from the account since — `_refreshMachines` dropped it.
-      if (state == null) continue;
-      final listed = machines
-          .where((machine) => machine.machineId == machineId)
-          .firstOrNull;
-      // Down as the account last said: the launch skips those too ([_autoConnectAndLoadMachines]).
-      if (listed != null && _nodeOnlineFromStatus(listed.status) == false) {
-        continue;
+  /// Hold [machineId] back for the launch — a machine [_heldForLaunch] says is held. Nothing to do
+  /// for one already let go: it is waiting in [_releaseQueue], which dials it in its turn.
+  void _holdForLaunch(String machineId) {
+    if (_launchMachineId != null) _heldMachines.add(machineId);
+  }
+
+  /// The machines the launch let go of that have not dialled yet, in the order they go — see
+  /// [_dialReleasedInTurn].
+  final List<String> _releaseQueue = [];
+
+  /// The let-go machines dialling now, each with the timer that ends its turn if nothing else does
+  /// first ([_endReleaseTurn]).
+  final Map<String, Timer> _releaseTurns = {};
+
+  /// How many let-go machines dial at once, and how long one may hold its turn.
+  static const _releaseTurnsAtOnce = 3;
+  static const _releaseTurnLimit = Duration(seconds: 4);
+
+  /// Since the launch let its held machines go — the offsets in their timeline lines.
+  Stopwatch? _releaseClock;
+
+  /// Let go of every machine the launch held back. Idempotent; [why] goes to the startup timeline.
+  ///
+  /// [atOnce] dials all of them now, and with them any still waiting their turn — for a person
+  /// asking for every machine (Find), and for a launch that turned out to have nothing to put
+  /// first. Otherwise they dial a few at a time ([_dialReleasedInTurn]).
+  void _releaseHeldMachines(String why, {bool atOnce = false}) {
+    if (_launchMachineId != null) {
+      _launchMachineId = null;
+      _heldMachinesTimer?.cancel();
+      _heldMachinesTimer = null;
+      final held = _heldMachines.toList();
+      _heldMachines.clear();
+      if (_disposed) return;
+      StartupTrace.mark(
+        'launch: letting ${held.length} held machine(s) go '
+        '${atOnce ? 'at once' : '$_releaseTurnsAtOnce at a time'} · $why',
+      );
+      for (final machineId in held) {
+        if (!_releaseQueue.contains(machineId)) _releaseQueue.add(machineId);
       }
-      _connectMachine(state);
+      _releaseClock = Stopwatch()..start();
+    } else if (!atOnce || _releaseQueue.isEmpty || _disposed) {
+      return;
+    } else {
+      StartupTrace.mark(
+        'launch: dialling the ${_releaseQueue.length} machine(s) still '
+        'waiting their turn · $why',
+      );
+    }
+    if (!atOnce) {
+      _dialReleasedInTurn();
+      return;
+    }
+    final waiting = _releaseQueue.toList();
+    _releaseQueue.clear();
+    for (final timer in _releaseTurns.values) {
+      timer.cancel();
+    }
+    _releaseTurns.clear();
+    _releaseClock = null;
+    for (final machineId in waiting) {
+      _dialReleased(machineId);
     }
   }
+
+  /// Dial the next let-go machines while fewer than [_releaseTurnsAtOnce] are dialling.
+  ///
+  /// ⚠️ **Why a few at a time (owner, 2026-10-02).** Let go all at once, the six to nine other
+  /// machines of a large account each made a credential, a key mint and a signature, decrypted and
+  /// parsed an agent list, and wrote the machine cache — all on the UI thread, in the same second,
+  /// right after the terminal somebody had just opened came up. That second is the stutter in the
+  /// terminal at the start of every launch. A turn is over when the machine's list has been read
+  /// or its dial failed ([_endReleaseTurn]), or after [_releaseTurnLimit] whatever happens: a slow
+  /// machine never stops the next from dialling.
+  ///
+  /// What it costs: the last of ten machines dials a few seconds later than it did. Anything that
+  /// asks for a machine still waiting dials it on the spot — opening one of its agents ([_conn]),
+  /// Find ([reachAllMachines]), a pull to refresh ([retryMachines]).
+  void _dialReleasedInTurn() {
+    while (!_disposed &&
+        _releaseTurns.length < _releaseTurnsAtOnce &&
+        _releaseQueue.isNotEmpty) {
+      final machineId = _releaseQueue.removeAt(0);
+      if (!_dialReleased(machineId)) continue;
+      StartupTrace.mark(
+        'launch: dialling ${_shortId(machineId)} · ${_releaseQueue.length} '
+        'still waiting${_sinceRelease()}',
+      );
+      _releaseTurns[machineId] = Timer(
+        _releaseTurnLimit,
+        () => _endReleaseTurn(machineId, 'turn limit'),
+      );
+    }
+    if (_releaseQueue.isEmpty &&
+        _releaseTurns.isEmpty &&
+        _releaseClock != null) {
+      StartupTrace.mark('launch: every held machine dialled${_sinceRelease()}');
+      _releaseClock = null;
+    }
+  }
+
+  /// [machineId]'s turn is over — its list landed, its dial failed, or its time ran out ([why]) —
+  /// and the next machine may dial. Nothing for a machine that has no turn.
+  void _endReleaseTurn(String machineId, String why) {
+    final turn = _releaseTurns.remove(machineId);
+    if (turn == null) return;
+    turn.cancel();
+    StartupTrace.mark(
+      'launch: ${_shortId(machineId)} turn over · $why${_sinceRelease()}',
+    );
+    _dialReleasedInTurn();
+  }
+
+  /// Dial one let-go machine. True when that started a dial; false for a machine gone from the
+  /// account, one it reports down, and one something else has dialled already.
+  bool _dialReleased(String machineId) {
+    final state = machineStates[machineId];
+    // Gone from the account since — `_refreshMachines` dropped it.
+    if (state == null) return false;
+    final listed = machines
+        .where((machine) => machine.machineId == machineId)
+        .firstOrNull;
+    // Down as the account last said: the launch skips those too ([_autoConnectAndLoadMachines]).
+    if (listed != null && _nodeOnlineFromStatus(listed.status) == false) {
+      return false;
+    }
+    final dialledAlready = _pool?[machineId] != null;
+    _connectMachine(state);
+    return !dialledAlready && _pool?[machineId] != null;
+  }
+
+  String _sinceRelease() {
+    final clock = _releaseClock;
+    return clock == null ? '' : ' +${clock.elapsedMilliseconds}ms';
+  }
+
+  /// The first eight characters of a machine id — enough to tell an account's machines apart in
+  /// a log line.
+  static String _shortId(String machineId) =>
+      machineId.length <= 8 ? machineId : machineId.substring(0, 8);
 
   /// A state just made for a machine whose socket the app ALREADY holds — dialled before there was
   /// a state to report to (`_warmStartMachines` dials the launch's machine ahead of the cache parse).
@@ -2875,10 +3062,17 @@ class AppNotifier extends ChangeNotifier {
 
   /// Drop the launch's hold without dialling anything — signing out, or the notifier going away.
   void _forgetLaunchHold() {
+    _preDialled = null;
     _launchMachineId = null;
     _heldMachines.clear();
     _heldMachinesTimer?.cancel();
     _heldMachinesTimer = null;
+    _releaseQueue.clear();
+    for (final turn in _releaseTurns.values) {
+      turn.cancel();
+    }
+    _releaseTurns.clear();
+    _releaseClock = null;
   }
 
   /// Let the held machines go once [terminal] shows its first frame — the screen a launch is for
@@ -2988,7 +3182,7 @@ class AppNotifier extends ChangeNotifier {
     final cache = _machineCache;
     if (cache == null || _disposed) return;
     final revision = _authRevision;
-    // Both reads were started at the top of [bootstrap] and are normally in hand by now. Taken
+    // The reads were started at the top of [bootstrap] and are normally in hand by now. Taken
     // before any await; the cache's once, so a later warm start (a sign-in in this run) reads what
     // is on disk then.
     final launchRead = lastOpenedAgent.prefetched;
@@ -2996,8 +3190,10 @@ class AppNotifier extends ChangeNotifier {
         _launchCacheRead ??
         StartupTrace.time('boot.machineCacheRead', cache.readRaw);
     _launchCacheRead = null;
-    final raw = await pendingRaw;
-    if (raw == null || _disposed || !_authWorkCurrent(revision)) return;
+    final pendingRecord =
+        _launchRecordRead ??
+        StartupTrace.time('boot.machineLaunchRead', cache.readLaunchRaw);
+    _launchRecordRead = null;
     AgentRef? launchAgent;
     if (launchRead != null) {
       try {
@@ -3024,26 +3220,25 @@ class AppNotifier extends ChangeNotifier {
     // `/api/machines` can land while the cache is still being parsed, and the dial-everything it
     // does then ([_autoConnectAndLoadMachines]) has to find the hold already in place.
     String? dialledEarly;
-    if (launchMachine != null &&
-        machines.isEmpty &&
-        machineStates.isEmpty &&
-        raw.contains('"$launchMachine"')) {
-      _launchMachineId = launchMachine;
+    void holdAndDialEarly(String machineId, String source) {
+      _launchMachineId = machineId;
       _heldMachinesTimer?.cancel();
       _heldMachinesTimer = Timer(
         _heldMachinesRelease,
         () => _releaseHeldMachines('launch budget spent'),
       );
       if (_pool != null) {
-        dialledEarly = launchMachine;
-        StartupTrace.mark('launch: dialling its machine before the cache parse');
-        _conn(launchMachine);
+        final already = dialledEarly == machineId;
+        dialledEarly = machineId;
+        StartupTrace.mark(
+          already
+              ? 'launch: its machine is already dialling from the hint · $source'
+              : 'launch: dialling its machine before the cache parse · $source',
+        );
+        _conn(machineId);
       }
     }
-    final cached = await StartupTrace.time(
-      'boot.machineCache',
-      () => cache.parse(raw),
-    );
+
     // A socket dialled above for a machine nothing went on to make a state for — closed, or it
     // would redial for the rest of the session with nobody listening.
     void dropUnclaimedDial() {
@@ -3053,6 +3248,97 @@ class AppNotifier extends ChangeNotifier {
       }
     }
 
+    bool nothingYet() => machines.isEmpty && machineStates.isEmpty;
+
+    // The hint's dial ([_preDialFromHint]): this launch's early dial when the agent it reopens is
+    // on that machine — kept, adopted with its state below, closed by [dropUnclaimedDial] if no
+    // state ever claims it. A hint naming another machine was a guess that missed: let go.
+    final preDialled = _preDialled;
+    _preDialled = null;
+    if (preDialled != null) {
+      if (preDialled == launchMachine) {
+        dialledEarly = preDialled;
+      } else if (!machineStates.containsKey(preDialled)) {
+        StartupTrace.mark(
+          'launch: the hint dialled ${_shortId(preDialled)}, the agent reopened '
+          'is elsewhere — closing it',
+        );
+        unawaited(_pool?.closeMachine(preDialled));
+      }
+    }
+
+    // ⚠️ **The launch's own machine first, from the launch record (owner, 2026-10-02).** The
+    // record holds that one machine — its agents and its capabilities — and nothing else, so it is
+    // read and parsed in a fraction of the time the whole cache takes (see
+    // [MachineCache.parseLaunch]). Its terminal is drawn from it, and the rest of the account
+    // follows when the whole cache has been parsed below. Only when the record has the very agent
+    // being reopened: anything less, and the launch waits for the whole cache as it did before.
+    final record = await pendingRecord;
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    CachedMachine? first;
+    List<Machine>? firstMachines;
+    if (launchAgent != null &&
+        record != null &&
+        nothingYet() &&
+        record.contains('"${launchAgent.machineId}"')) {
+      holdAndDialEarly(launchAgent.machineId, 'launch record');
+      first = await StartupTrace.time(
+        'boot.machineLaunchParse',
+        () => cache.parseLaunch(
+          record,
+          machineId: launchAgent!.machineId,
+          agentId: launchAgent.agentId,
+        ),
+      );
+      if (_disposed || !_authWorkCurrent(revision)) {
+        dropUnclaimedDial();
+        return;
+      }
+      // The fetch landed during the parse: it is the truth, and made the state itself.
+      if (first != null && !nothingYet()) first = null;
+      if (first != null) {
+        final machine = first.machine;
+        final state = machineStates.putIfAbsent(
+          machine.machineId,
+          () => MachineState(machine),
+        );
+        _warmFromCache(state, first);
+        // Not held: it is the machine the hold puts first.
+        _connectMachine(state);
+        if (machine.machineId == dialledEarly) _adoptConnection(state);
+        // Kept to tell, after the parse below, whether the fetch has replaced it since.
+        firstMachines = [machine];
+        machines = firstMachines;
+        StartupTrace.mark(
+          'warm-started its machine from the launch record, '
+          '${first.agents.length} agent(s)',
+        );
+        notifyListeners();
+      }
+    }
+    final raw = await pendingRaw;
+    if (_disposed || !_authWorkCurrent(revision)) {
+      dropUnclaimedDial();
+      return;
+    }
+    if (raw == null) {
+      // No cache beside the record: whatever the record started is all there is. A hold it put in
+      // place has nothing else to hold — the fetch dials the rest.
+      _releaseHeldMachines('cache unreadable', atOnce: true);
+      dropUnclaimedDial();
+      return;
+    }
+    if (dialledEarly == null &&
+        _launchMachineId == null &&
+        launchMachine != null &&
+        nothingYet() &&
+        raw.contains('"$launchMachine"')) {
+      holdAndDialEarly(launchMachine, 'cache');
+    }
+    final cached = await StartupTrace.time(
+      'boot.machineCache',
+      () => cache.parse(raw),
+    );
     if (_disposed || !_authWorkCurrent(revision)) {
       dropUnclaimedDial();
       return;
@@ -3060,30 +3346,36 @@ class AppNotifier extends ChangeNotifier {
     if (cached.isEmpty) {
       // Nothing usable after all: the hold has no machine to put first, so it is let go — the
       // fetch dials everything, as a launch with no cache always did.
-      _releaseHeldMachines('cache unreadable');
+      _releaseHeldMachines('cache unreadable', atOnce: true);
       dropUnclaimedDial();
       return;
     }
     // The fetch got there first — it is the truth, and this has nothing to add. Its own dial
-    // honoured the hold; a launch machine the account no longer lists ends it.
-    if (machines.isNotEmpty || machineStates.isNotEmpty) {
-      final first = _launchMachineId;
-      if (first != null && !machineStates.containsKey(first)) {
-        _releaseHeldMachines('launch machine not on the account');
+    // honoured the hold; a launch machine the account no longer lists ends it. With the launch
+    // record drawn, `machines` is that record's list until the fetch replaces it.
+    final fetchLanded = firstMachines == null
+        ? !nothingYet()
+        : !identical(machines, firstMachines);
+    if (fetchLanded) {
+      final held = _launchMachineId;
+      if (held != null && !machineStates.containsKey(held)) {
+        _releaseHeldMachines('launch machine not on the account', atOnce: true);
       }
       dropUnclaimedDial();
       return;
     }
     // The text named the launch machine, but the parse did not list it as one to dial — a match
-    // elsewhere in the document. Nothing to put first, then.
-    final first = _launchMachineId;
-    if (first != null &&
+    // elsewhere in the document. Nothing to put first, then. Not once the record has drawn it:
+    // that machine is real, and dialling.
+    final held = _launchMachineId;
+    if (first == null &&
+        held != null &&
         !cached.any(
           (entry) =>
-              entry.machine.machineId == first &&
+              entry.machine.machineId == held &&
               entry.machine.authMode == MachineAuthMode.remote,
         )) {
-      _releaseHeldMachines('launch machine not cached');
+      _releaseHeldMachines('launch machine not cached', atOnce: true);
     }
     var warmed = 0;
     var warmedAgents = 0;
@@ -3094,48 +3386,19 @@ class AppNotifier extends ChangeNotifier {
       // claims to be this computer has no meaning on a phone and no local
       // endpoint to dial, so it waits for the fetch like it always did.
       if (machine.authMode != MachineAuthMode.remote) continue;
+      // Drawn already, from the launch record, and dialling: kept where the cache lists it.
+      if (first != null && machine.machineId == first.machine.machineId) {
+        warmMachines.add(first.machine);
+        warmed++;
+        warmedAgents += first.agents.length;
+        continue;
+      }
       final state = machineStates.putIfAbsent(
         machine.machineId,
         () => MachineState(machine),
       );
-      // ⚠️ **The agents go in as PROVISIONAL, and the flag below is what keeps
-      // them honest.** With them the phone draws its terminal — the right
-      // agent's name on it, from the record it already had — while the real list
-      // is still crossing the network, instead of showing a spinner for two
-      // seconds and then the same screen.
-      //
-      // `agentLoadStatus` stays `loading`, not `loaded`: every screen reads that
-      // to mean the machine still owes a list, so the refresh indicators, the
-      // empty states and `_machineStillComing` all keep behaving as though
-      // nothing had arrived — which is the truth. What these give is a name to
-      // draw and an id to open, not a claim that the list is settled.
-      if (entry.agents.isNotEmpty) {
-        state.agents = entry.agents;
-        state.agentsFromCache = true;
-        warmedAgents += entry.agents.length;
-      }
-      // ⚠️ **The capability reply is replayed so a terminal can attach without
-      // waiting for the negotiation round-trip.** `_canAttachAgent` requires
-      // `terminalCapabilityAvailable`, which is otherwise only true once
-      // `terminal_capabilities` has crossed the network — the last gate on the
-      // launch, and worth about 700ms of it.
-      //
-      // Safe in the direction that matters. Only a reply that SAID the terminal
-      // works is ever cached, the live negotiation runs regardless and
-      // overwrites this within the second, and a machine that has genuinely lost
-      // its tmux answers `available: false` — at which point
-      // `_applyTerminalCapabilities` clears the flag and every screen reverts to
-      // what it would have shown anyway. The narrow cost of being wrong is one
-      // `terminal_open` that fails and is retried, against a second saved on
-      // every launch that is right.
-      final capabilities = entry.capabilities;
-      if (capabilities != null) {
-        _applyTerminalCapabilities(state, capabilities);
-        // ⚠️ NOT `terminalCapabilityLoaded`-as-settled: the live negotiation
-        // still has to run, and `_loadTerminalCapabilities` keys off its own
-        // in-flight future rather than this flag, so replaying here cannot
-        // suppress it.
-      }
+      _warmFromCache(state, entry);
+      warmedAgents += entry.agents.length;
       // ⚠️ **The dial, and ONLY the dial. No `_loadMachineData` here.**
       //
       // Asking for the agent list at this point was a real bug, and an ugly one
@@ -3162,7 +3425,7 @@ class AppNotifier extends ChangeNotifier {
       // Except for a machine the launch holds back — see [_launchMachineId]. Its cached
       // agents are on screen all the same; only the socket waits.
       if (_heldForLaunch(machine.machineId)) {
-        _heldMachines.add(machine.machineId);
+        _holdForLaunch(machine.machineId);
       } else {
         _connectMachine(state);
         // Its socket may have come up before this state existed — see `dialledEarly` above.
@@ -3172,6 +3435,13 @@ class AppNotifier extends ChangeNotifier {
       warmed++;
     }
     dropUnclaimedDial();
+    // The record's machine, which a cache from another write may not list: still on screen.
+    if (first != null &&
+        !warmMachines.any(
+          (machine) => machine.machineId == first!.machine.machineId,
+        )) {
+      warmMachines.insert(0, first.machine);
+    }
     if (warmed == 0) return;
     // ⚠️ Published to `machines` as well, because every screen indexes agents
     // through THAT list (`agentIndex`, `filterableMachines`) rather than through
@@ -3186,6 +3456,48 @@ class AppNotifier extends ChangeNotifier {
       'warm-started $warmed machine(s), $warmedAgents agent(s)',
     );
     notifyListeners();
+  }
+
+  /// What last run cached for [state]'s machine — its agents and its capability reply — put in
+  /// place for the launch to draw from ([_warmStartMachines]).
+  void _warmFromCache(MachineState state, CachedMachine entry) {
+    // ⚠️ **The agents go in as PROVISIONAL, and the flag below is what keeps
+    // them honest.** With them the phone draws its terminal — the right
+    // agent's name on it, from the record it already had — while the real list
+    // is still crossing the network, instead of showing a spinner for two
+    // seconds and then the same screen.
+    //
+    // `agentLoadStatus` stays `loading`, not `loaded`: every screen reads that
+    // to mean the machine still owes a list, so the refresh indicators, the
+    // empty states and `_machineStillComing` all keep behaving as though
+    // nothing had arrived — which is the truth. What these give is a name to
+    // draw and an id to open, not a claim that the list is settled.
+    if (entry.agents.isNotEmpty) {
+      state.agents = entry.agents;
+      state.agentsFromCache = true;
+    }
+    // ⚠️ **The capability reply is replayed so a terminal can attach without
+    // waiting for the negotiation round-trip.** `_canAttachAgent` requires
+    // `terminalCapabilityAvailable`, which is otherwise only true once
+    // `terminal_capabilities` has crossed the network — the last gate on the
+    // launch, and worth about 700ms of it.
+    //
+    // Safe in the direction that matters. Only a reply that SAID the terminal
+    // works is ever cached, the live negotiation runs regardless and
+    // overwrites this within the second, and a machine that has genuinely lost
+    // its tmux answers `available: false` — at which point
+    // `_applyTerminalCapabilities` clears the flag and every screen reverts to
+    // what it would have shown anyway. The narrow cost of being wrong is one
+    // `terminal_open` that fails and is retried, against a second saved on
+    // every launch that is right.
+    final capabilities = entry.capabilities;
+    if (capabilities != null) {
+      _applyTerminalCapabilities(state, capabilities);
+      // ⚠️ NOT `terminalCapabilityLoaded`-as-settled: the live negotiation
+      // still has to run, and `_loadTerminalCapabilities` keys off its own
+      // in-flight future rather than this flag, so replaying here cannot
+      // suppress it.
+    }
   }
 
   /// The least time `agents_list` gets, however long the handshake before it
@@ -3209,6 +3521,14 @@ class AppNotifier extends ChangeNotifier {
       if (identical(machine.agentsLoadInFlight, load)) {
         machine.agentsLoadInFlight = null;
       }
+      // A machine the launch let go of has had its say: the next one may dial
+      // ([_dialReleasedInTurn]).
+      _endReleaseTurn(
+        machine.machine.machineId,
+        machine.agentLoadStatus == AgentLoadStatus.loaded
+            ? 'listed ${machine.agents.length} agent(s)'
+            : 'list not read',
+      );
     });
     machine.agentsLoadInFlight = load;
     return load;
@@ -3297,9 +3617,13 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_machineWorkCurrent(machine, revision)) return;
       final rawAgents = response['agents'] as List<dynamic>? ?? [];
-      final agents = rawAgents
-          .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-          .toList();
+      final agents = StartupTrace.timeSync(
+        'agents.parse ${_shortId(machine.machine.machineId)} '
+        '(${rawAgents.length} agent(s))',
+        () => rawAgents
+            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      );
       // Kept for the next launch, as the daemon sent it — see [MachineCache].
       //
       // ⚠️ Written out HERE, not left to the next refresh. The machine list is
@@ -3314,15 +3638,13 @@ class AppNotifier extends ChangeNotifier {
           for (final item in rawAgents)
             if (item is Map<String, dynamic>) item,
         ]);
-        unawaited(
-          cache.save(
-            machines,
-            isOnline: (item) => _nodeOnlineFromStatus(item.status) == true,
-          ),
-        );
+        // Several machines answering together write once: a save asked for while an older one
+        // still waits replaces it, and the encode is off the UI thread ([MachineCache.save]).
+        _writeMachineCache(cache);
       }
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
+      machine.agentsListedAt = DateTime.now();
       machine.agentsRefreshing = false;
       machine.agentsLoadError = null;
       debugPrint(
@@ -3901,8 +4223,21 @@ class AppNotifier extends ChangeNotifier {
     await _loadMachineData(machine, force: true);
   }
 
-  /// Dial and re-ask EVERY machine on the account, whatever the account last
-  /// said about any of them.
+  /// Dial and re-ask every machine on the account whose list is not already current, whatever the
+  /// account last said about any of them.
+  ///
+  /// ⚠️ **Not the ones already current, nor the ones waiting for a password (owner, 2026-10-02).**
+  /// Every opening of Find asked every machine for its whole agent list again — stopped work
+  /// included, 1.1–1.4s and ~400KB for 167 agents, decrypted and parsed on the phone — though a
+  /// machine on a live socket keeps its list current by itself: `agent_synced`, `agent_created`,
+  /// `agent_deleted` and the turn events land as they happen, and [_syncAgentsIfChanged] re-reads
+  /// it every [agentSyncInterval] to catch what they miss. So a machine that answered over the
+  /// socket it is on now, within that interval and a margin, is left as it is ([_listStillCurrent]);
+  /// everything this method was written for — a machine launch skipped, one not answering, one back
+  /// from a dropped socket — has no such answer, and is asked as before. A machine that refused this
+  /// phone for want of a link is not dialled again: a password, a code or the group dials it the
+  /// moment one lands (`connectWithPassword`, `_afterGroupSync`, `_redialNewlyTrusted`), and until
+  /// then a dial can only be refused again.
   ///
   /// For the screen that offers the whole fleet in one list — the search, which
   /// is the one place somebody asks "where is that agent" without knowing which
@@ -3940,11 +4275,47 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || (_pool == null && connectionForTest == null)) return;
     // Somebody is looking for a session, on any machine: the launch's hold is over — see
     // [_launchMachineId]. Before the reloads below, so the held ones dial with the rest.
-    _releaseHeldMachines('search opened');
+    _releaseHeldMachines('search opened', atOnce: true);
+    final now = DateTime.now();
+    final asking = <String>[];
+    var current = 0;
+    var locked = 0;
+    for (final machine in machines) {
+      final state = machineStates[machine.machineId];
+      if (state != null && state.needsLink) {
+        locked++;
+      } else if (state != null && _listStillCurrent(state, now)) {
+        current++;
+      } else {
+        asking.add(machine.machineId);
+      }
+    }
+    appLog.info(
+      'search',
+      'Find asks ${asking.length} machine(s) for their lists · '
+          '$current current already, $locked waiting for a password',
+    );
     await Future.wait([
-      for (final machine in machines) reloadMachineData(machine.machineId),
+      for (final machineId in asking) reloadMachineData(machineId),
     ]);
   }
+
+  /// Whether [state]'s list was answered over the socket it is on now, recently enough that the
+  /// pushes since have kept it current — see [reachAllMachines].
+  bool _listStillCurrent(MachineState state, DateTime now) {
+    final listedAt = state.agentsListedAt;
+    // Asked first, so a machine with no answer yet never reaches [_connectionReady].
+    if (listedAt == null) return false;
+    return state.agentLoadStatus == AgentLoadStatus.loaded &&
+        !state.agentsFromCache &&
+        state.connectionStatus == ConnectionStatus.connected &&
+        _connectionReady(state.machine.machineId) &&
+        now.difference(listedAt) < agentSyncInterval + _listCurrentMargin;
+  }
+
+  /// How far past one [agentSyncInterval] a list still counts as current: a sync tick lands a little
+  /// late, or a slow machine answers it late, and that is not a list gone stale.
+  static const _listCurrentMargin = Duration(seconds: 30);
 
   /// What every connected machine's agent accounts have spent, asked in
   /// parallel and read there with that machine's own credentials (`usage_read`).
@@ -5143,6 +5514,8 @@ class AppNotifier extends ChangeNotifier {
       _startOfflineRetry(machine);
     } else {
       _stopOfflineRetry(machineId);
+      // A socket waiting for this machine to come back need wait no longer ([_parkUntilOnline]).
+      _pool?[machineId]?.wake('reported online');
       if (wasOnline == false) {
         for (final pane in panesFor(machineId)) {
           pane.session?.transportLost(
@@ -5190,6 +5563,40 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// The relay said [machine] is offline: a socket of the app's that never reached it waits for
+  /// it to come back instead of redialling on its backoff ([WsConn.parkUntilOnline]). It is woken
+  /// by any word that the machine is back — `machines_status` down any socket
+  /// ([_wakeMachinesBackOnline]), its own `node_status`, `/api/machines` ([_applyNodeStatus]) — and
+  /// by a person opening one of its agents ([_redialNow] → [WsConn.reconnectNow] once the parked
+  /// socket is gone, or the parked socket itself answering).
+  ///
+  /// Nothing for a socket that is up: a live session's machine going away is [_applyNodeStatus]'s.
+  void _parkUntilOnline(MachineState machine) {
+    final machineId = machine.machine.machineId;
+    final connection = _pool?[machineId];
+    if (connection == null || connection.isReady) return;
+    connection.parkUntilOnline();
+    // Waiting on a machine that is off is no reason to keep the next one from dialling.
+    if (connection.isParked) _endReleaseTurn(machineId, 'parked: offline');
+  }
+
+  /// `machines_status` — the relay's word on every machine of the account, sent down every socket
+  /// as it changes. Read for one thing: a machine reported online whose socket is parked waiting
+  /// for it ([_parkUntilOnline]) dials now.
+  ///
+  /// ⚠️ **Not applied as each machine's status.** That stays with `/api/machines` and each
+  /// socket's own `node_status`, as it was; this frame was ignored before, and taking it up for
+  /// everything would change what every machine's row says on a feed nothing here was built on.
+  void _wakeMachinesBackOnline(Object? statuses) {
+    if (statuses is! List) return;
+    for (final status in statuses) {
+      if (status is! Map || status['online'] != true) continue;
+      final machineId = status['machineId'];
+      if (machineId is! String || machineId.isEmpty) continue;
+      _pool?[machineId]?.wake('the relay says it is online');
+    }
   }
 
   Future<void> _recoverPendingAgent(
@@ -5874,18 +6281,20 @@ class AppNotifier extends ChangeNotifier {
     _machineCacheSaveTimer?.cancel();
     _machineCacheSaveTimer = null;
     final cache = _machineCache;
-    if (cache == null || _disposed || !cache.hasUnsaved) return;
+    if (cache == null || _disposed) return;
+    // Nothing learned, and the launch record already names the machine the next launch reopens:
+    // nothing to write. A person who moved to another machine's agent since is a launch record
+    // to rewrite, even with every list unchanged.
+    if (!cache.hasUnsaved &&
+        !cache.launchRecordStale(lastOpenedAgent.current?.machineId)) {
+      return;
+    }
     // Signed out, or not yet signed in: the file is the account's, and [logout] clears it.
     if (status != AppStatus.authenticated) return;
     // A list not there to write would write the cache EMPTY — every machine gone from the next
     // launch's warm start. The fetch that fills it saves on landing anyway.
     if (machines.isEmpty) return;
-    unawaited(
-      cache.save(
-        machines,
-        isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
-      ),
-    );
+    _writeMachineCache(cache);
   }
 
   Future<void> _closeAllPanes({bool persist = true}) async {
@@ -6263,8 +6672,13 @@ class AppNotifier extends ChangeNotifier {
         return;
       case 'node_status':
         final online = payload['online'] == true;
+        if (!online) _parkUntilOnline(machine);
         await _applyNodeStatus(machine, online);
         break;
+      case 'machines_status':
+        // Read only to wake a parked socket, and nothing else changed here: no redraw.
+        _wakeMachinesBackOnline(payload['statuses']);
+        return;
       case 'machine_select_error':
         _lastError =
             'Machine selection failed: ${payload['error'] ?? 'unknown error'}';

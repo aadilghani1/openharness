@@ -9,9 +9,11 @@ import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
 import 'shared/theme/appearance_prefs_store.dart';
+import 'core/machine_cache.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
+import 'logging/launch_frames.dart';
 import 'logging/startup_trace.dart';
 
 /// A screen the app puts up for one of its states — signed in, signed out, starting.
@@ -52,7 +54,13 @@ Future<void> startHarness({
   // and its watchers, beside the appearance. Nothing on the phone reads a keymap
   // — no key is ever matched against one — so the file a touchscreen could not
   // have edited is not read either.
-  await StartupTrace.time('settings.load', loadPersistedSettings);
+  // Beside the preferences, the machine the launch reopens — so the app can dial it before the
+  // first frame rather than after it (`MachineCache.preloadLaunchHint`). Here and not in
+  // [loadPersistedSettings], which tests call: this reads the real cache directory.
+  await Future.wait([
+    StartupTrace.time('settings.load', loadPersistedSettings),
+    StartupTrace.time('launchHint.read', MachineCache.preloadLaunchHint),
+  ]);
   // ⚠️ **The app's state is made here, before the first frame, not by the first build that reads
   // it (owner, 2026-10-01).** Its bootstrap starts the reads the launch's dial waits on
   // (`AppNotifier.bootstrap`); made by `RootShell`'s build, they began only after MaterialApp's
@@ -77,6 +85,8 @@ Future<void> startHarness({
   WidgetsBinding.instance.addPostFrameCallback(
     (_) => StartupTrace.mark('firstFrame'),
   );
+  // And the twenty seconds after it, frame by frame — whether the launch stuttered.
+  LaunchFrames.watch();
 }
 
 class HarnessApp extends StatelessWidget {

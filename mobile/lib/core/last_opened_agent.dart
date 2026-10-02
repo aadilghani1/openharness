@@ -28,6 +28,13 @@ class LastOpenedAgent {
 
   AgentRef? _value;
   String? _tab;
+
+  /// The agent this record names right now, as far as this run knows — the last one [remember]ed,
+  /// or what the previous run left once a read has brought it in. Null when neither has happened.
+  /// For the machine cache's launch record (`MachineCache.save`), which is written for the machine
+  /// the NEXT launch reopens.
+  AgentRef? get current => _value ?? _readBack;
+  AgentRef? _readBack;
   Future<void> _writes = Future.value();
   Future<AgentRef?>? _read;
 
@@ -75,7 +82,9 @@ class LastOpenedAgent {
       final agentId = decoded['agentId'];
       if (machineId is! String || machineId.isEmpty) return null;
       if (agentId is! String || agentId.isEmpty) return null;
-      return (machineId: machineId, agentId: agentId);
+      final read = (machineId: machineId, agentId: agentId);
+      _readBack = read;
+      return read;
     } catch (_) {
       return null;
     }
