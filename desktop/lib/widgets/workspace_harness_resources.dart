@@ -21,20 +21,21 @@ class WorkspaceHarnessResources extends StatelessWidget {
     listenable: monitor,
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
+        final summary = monitor.summary;
         final cell = workspaceBarCellSizeOf(context).width;
         final padding = EdgeInsets.only(
           left: cell,
           right: trailingPadding ?? cell,
         );
-        var label = monitor.metricsLabel(
+        var label = summary.metricsLabel(
           ram: false,
           gpu: false,
           storage: false,
         );
         for (final candidate in [
-          monitor.metricsLabel(),
-          monitor.metricsLabel(storage: false),
-          monitor.metricsLabel(gpu: false, storage: false),
+          summary.metricsLabel(),
+          summary.metricsLabel(storage: false),
+          summary.metricsLabel(gpu: false, storage: false),
         ]) {
           if (workspaceBarTextSizeOf(context, candidate, grouped: true).width +
                   padding.horizontal <=
@@ -44,8 +45,8 @@ class WorkspaceHarnessResources extends StatelessWidget {
           }
         }
         return WorkspaceBarControl(
-          label: monitor.resourceDetail,
-          tooltip: monitor.resourceDetail,
+          label: summary.resourceDetail,
+          tooltip: summary.resourceDetail,
           onPressed: onPressed,
           builder: (context, emphasized) => Padding(
             padding: padding,

@@ -1762,6 +1762,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _syncNative() {
     _syncMachines();
+    final monitor = _harnessMonitor.summary;
     final focused = WorkspacePaneContext.focused(app);
     final prefs = appearancePrefsStore.value.prompt;
     final parts = focused?.format(prefs);
@@ -1812,30 +1813,30 @@ class _SwarmScreenState extends State<SwarmScreen> {
         'interactive': _shortcutsEnabled,
       },
       'harnessMonitor': {
-        'text': _harnessMonitor.label,
-        'label': _harnessMonitor.detail,
-        'detail': _harnessMonitor.detail,
+        'text': monitor.label,
+        'label': monitor.detail,
+        'detail': monitor.detail,
         'segments': [
-          {'text': _harnessMonitor.label},
+          {'text': monitor.label},
         ],
         'interactive': _shortcutsEnabled,
       },
       'machineResources': {
-        'text': _harnessMonitor.metricsLabel(),
-        'label': _harnessMonitor.resourceDetail,
-        'detail': _harnessMonitor.resourceDetail,
+        'text': monitor.metricsLabel(),
+        'label': monitor.resourceDetail,
+        'detail': monitor.resourceDetail,
         'segments': [
-          {'text': _harnessMonitor.metricsLabel()},
+          {'text': monitor.metricsLabel()},
         ],
         'noStorageSegments': [
-          {'text': _harnessMonitor.metricsLabel(storage: false)},
+          {'text': monitor.metricsLabel(storage: false)},
         ],
         'compactSegments': [
-          {'text': _harnessMonitor.metricsLabel(gpu: false, storage: false)},
+          {'text': monitor.metricsLabel(gpu: false, storage: false)},
         ],
         'minimalSegments': [
           {
-            'text': _harnessMonitor.metricsLabel(
+            'text': monitor.metricsLabel(
               ram: false,
               gpu: false,
               storage: false,
@@ -7317,34 +7318,37 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   constraints: BoxConstraints(maxWidth: monitorWidth),
                   child: ListenableBuilder(
                     listenable: _harnessMonitor,
-                    builder: (context, _) => WorkspaceBarControl(
-                      key: const ValueKey('workspace-harness-monitor'),
-                      label: _harnessMonitor.detail,
-                      tooltip: _harnessMonitor.detail,
-                      onPressed: _shortcutsEnabled
-                          ? () => _toggleHarnessControls()
-                          : null,
-                      builder: (context, emphasized) => Padding(
-                        padding: EdgeInsets.symmetric(horizontal: cell.width),
-                        child: SizedBox(
-                          height: workspaceBarControlHeight(context),
-                          child: Center(
-                            widthFactor: 1,
-                            child: Text.rich(
-                              workspaceBarGroupTextSpan(
-                                _harnessMonitor.label,
-                                cellWidth: cell.width,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: workspaceBarTextStyle(
-                                emphasized: emphasized,
+                    builder: (context, _) {
+                      final summary = _harnessMonitor.summary;
+                      return WorkspaceBarControl(
+                        key: const ValueKey('workspace-harness-monitor'),
+                        label: summary.detail,
+                        tooltip: summary.detail,
+                        onPressed: _shortcutsEnabled
+                            ? () => _toggleHarnessControls()
+                            : null,
+                        builder: (context, emphasized) => Padding(
+                          padding: EdgeInsets.symmetric(horizontal: cell.width),
+                          child: SizedBox(
+                            height: workspaceBarControlHeight(context),
+                            child: Center(
+                              widthFactor: 1,
+                              child: Text.rich(
+                                workspaceBarGroupTextSpan(
+                                  summary.label,
+                                  cellWidth: cell.width,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: workspaceBarTextStyle(
+                                  emphasized: emphasized,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ),
                 SizedBox(width: resourceGap),
