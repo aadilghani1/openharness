@@ -2002,13 +2002,14 @@
   "date": "2026-10-02",
   "source": {
     "baseline_commit": "afea68e8f2f802fed5a7886f6c76ae07fdbb18e1",
-    "candidate_commit": "437cb64c540a2dd2a4af813c25a746c0945c3220",
+    "candidate_commit": "3c715b8057a8c5102fe9789af3376f997bb096a0",
     "files_sha256": {
       "cli/src/lib/agentProject.ts": "e8aa22c64d830d27fcc63aedcc81418a398c027d1dec344dc0c9fdc074c899da",
       "cli/src/lib/agentProject.spec.ts": "a7da0eb8c1b2799bb34115faaa97d480efaf70cdd33103c1bca1419b71bf1a97",
       "cli/scripts/benchmark-project-reads.mjs": "e3718f16f88b6887c6a40a42a9756f4c7e94cb7cdd76ccd5ee6184e286af7ce4",
       "cli/package-lock.json": "5c69dffb1423173dfab75c0aa493b5c601784ff3efd16b9bfbb41ef9ad1c4d2b"
-    }
+    },
+    "pre_rebase_candidate_commit": "437cb64c540a2dd2a4af813c25a746c0945c3220"
   },
   "validation": {
     "tests_passed": 107,
@@ -2133,7 +2134,51 @@
       "status": "passed",
       "finished_at": "2026-10-02T16:38:56.043334+00:00",
       "duration_seconds": 18.838
-    }
+    },
+    "rebased_typecheck": {
+      "receipt_sha256": "cb1c2c89db24b6e4f9dce3e2c373e1702fc9590ff4bb3d7fd8b0ea2848499358",
+      "receipt": {
+        "schema": 2,
+        "started_at": "2026-10-02T16:45:33.085694+00:00",
+        "reason": "Rebase adds only memory extraction prompt changes outside the tested project-reader graph. Verify whole-CLI compilation on the combined source; unchanged Git behavior tests and benchmark retain their evidence.",
+        "source": {
+          "commit": "818e43e4249f1f2cd74532b66b8435077d555e51",
+          "tree": "4820ccee1199419aedfcd96c4478919b231f0a0b",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "checks": [
+          {
+            "name": "cli-types",
+            "cwd": "cli",
+            "argv": [
+              "<NODE_22_23_2>",
+              "node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "timeout_seconds": 180,
+            "started_at": "2026-10-02T16:45:33.313021+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T164533.085339Z-81673/cli-types.log",
+            "exit_code": 0,
+            "duration_seconds": 2.856,
+            "finished_at": "2026-10-02T16:45:36.187658+00:00",
+            "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "free_gib_before": 10.379,
+        "source_after": {
+          "commit": "818e43e4249f1f2cd74532b66b8435077d555e51",
+          "tree": "4820ccee1199419aedfcd96c4478919b231f0a0b",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T16:45:36.389058+00:00",
+        "duration_seconds": 3.076
+      }
+    },
+    "reuse_after_rebase": "Main added only cli/src/memory/learner.ts prompt strings and research records. All cli/src/lib files, benchmark, dependency locks, test setup/config and tsconfig are byte-identical to the tested source. Reused 107 Git-consumer tests and benchmark; reran whole-CLI typecheck on the rebased source."
   },
   "benchmark_file_sha256": "d7e3ccd2fa4262177aa61c421912bbf52333aae8bd220f24004011db2f1768bc",
   "fixture_repositories_removed": true,

@@ -68,8 +68,13 @@ ran through the benchmark above. Those earlier failed receipts are recorded rath
 than counted as passing evidence.
 
 Final validation ran from 16:38:37 to 16:38:56 UTC on October 2. Tested implementation
-commit: `437cb64c540a2dd2a4af813c25a746c0945c3220`; the receipt also records the preceding dirty-source
+commit: `3c715b8057a8c5102fe9789af3376f997bb096a0`; the receipt also records the preceding dirty-source
 fingerprint. Only evidence documentation was added afterward. Original request
 time is unavailable in this continuation; GitHub records PR and merge times.
 This work is PR/merge only under the user's release hold. It has not been installed
 in the running daemon or released.
+
+Main then added memory extraction prompt changes outside the project-reader graph.
+The rebase preserved all tested Git inputs byte for byte; whole-CLI typecheck
+passed again at 16:45:36 UTC. The 107 behavior tests and benchmark retain their
+original evidence.
