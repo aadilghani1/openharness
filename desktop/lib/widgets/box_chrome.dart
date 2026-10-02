@@ -14,7 +14,7 @@ BorderSide terminalPaneBorder({bool focused = false, bool remote = false}) =>
       color: !focused
           ? grid.AppPalette.divider
           : remote
-          ? grid.AppPalette.teal
+          ? grid.AppPalette.remotePaneFocus
           : grid.AppPalette.accentOnSurface,
       width: 1,
     );

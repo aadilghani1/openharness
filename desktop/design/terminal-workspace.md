@@ -32,14 +32,21 @@ Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
 The footer shows a global harness count, local host CPU/RAM/GPU and subscription
 allowance used on the left, all in neutral ink with whole percentages. Its
-right-hand context follows the focused pane: machine, project, branch and PR. Each pane header ends with agent, model, split down, split right, zoom,
-and close, in that order. The icons stay visible with quiet ink and no button
-chrome. Splitting opens New Harness directly with that pane's agent, machine,
-and project, then creates into the chosen split on submission. Clicking the
-agent opens the shared `&` Agents picker; clicking the model opens the shared Models picker for that harness;
-the footer does not repeat model or effort. Do not show worktree implementation
+right-hand context follows the focused pane: machine, project, branch and PR.
+Each terminal pane header ends with agent, model and close, in that order. The
+close icon stays visible with quiet ink and no button chrome. Split and zoom
+remain available through commands, menus and keyboard shortcuts. Splitting
+opens New Harness with the focused pane's agent, machine and project. Clicking
+the agent opens the shared `&` Agents picker; clicking the model opens Models;
+the footer does not repeat model or effort. Agent switching saves the original
+session before starting its replacement in the same project. Its pane and layout
+survive peer cleanup of the stopped source. Agents that accept an initial message
+receive bounded recent requests and saved answers, preserving the handoff across
+retries; the saved original session keeps the full transcript. Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.
+
+![Terminal header with agent, model and close controls](review/2026-10-01-agent-switch-header.png)
 
 Machine opens its scope, Project opens related harnesses, Branch opens the
 existing branches/PR history, and the PR opens its URL. These are navigation,
@@ -57,10 +64,13 @@ keyboard focus. Waiting-question borders remain visible above the veil.
 The overlay does not consume the first click or alter terminal state.
 
 Only the focused pane gets a location-colored rim: blue on this computer,
-teal on a known remote machine, including a single or zoomed pane. Unfocused
-panes keep their neutral rim. The existing amber waiting-question border takes
-precedence over the focus color. Location uses machine identity, independently
-of the connection's transport mode.
+muted teal-gray (`AppPalette.remotePaneFocus`) on a known remote machine,
+including a single or zoomed pane. Both use the same solid 1-point boundary.
+Remote location is a quiet cue with less emphasis than local focus blue;
+the footer identifies the machine in text. Unfocused panes keep their neutral
+rim. The existing amber waiting-question border takes precedence over the
+focus color. Location uses machine identity, independently of the connection's
+transport mode.
 
 ## Input and review
 

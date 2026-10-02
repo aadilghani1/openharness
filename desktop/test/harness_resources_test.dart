@@ -142,7 +142,7 @@ void main() {
     expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
     app.machineStates['m']!.agents.add(
       const Agent(id: 'unknown', name: 'Unknown', terminalAvailable: true));
-    expect(monitor.metricsLabel(), 'CPU ≥130%   RAM ≥11 GB   GPU ≥24%   SSD ≥1 GB');
+    expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
     expect(monitor.resourceDetail, contains('Files remain after stopping'));
   });
 

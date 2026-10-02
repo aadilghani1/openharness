@@ -38,6 +38,25 @@ The standalone MachinesManager, old machine-link dialog, and generic
 team-creation presenter have no production caller in this tree. They are not
 counted as completed user journeys. Shared controls still serve their tests.
 
+## Footer spacing refinement — 2026-10-02
+
+Resource totals now show their available number without a ≥ prefix; partial
+coverage remains explained in the tooltip. Flutter and AppKit share 0.75-cell
+spaces within components and two-cell gaps between components. The companion's
+existing artwork gutter replaces the preceding control's trailing padding,
+removing the extra visible gap while retaining its fixed 44-point click target.
+
+Production AppKit controls were rendered with synthetic values in
+[dark](images/workspace-footer-compact-dark.png) and
+[light](images/workspace-footer-compact-light.png) appearances at 1280 points,
+plus a 520-point window and 26-point status text. The captures use 2× backing
+resolution; text baselines, visible gaps and narrow truncation were inspected.
+Validation passed: 50 targeted Flutter tests, 4,344 native titlebar checks, and
+static analysis of the four changed Dart files. The native checks exercise
+stable daemon geometry, hover, focus and existing actions. These are isolated
+production-view renders; the installed app and physical VoiceOver were not
+exercised for this refinement.
+
 ## Notification overview refinement — 2026-10-01
 
 The earlier overview repeated a status caption and tab/machine context under
@@ -459,6 +478,75 @@ unmerged.
   [narrow light](../../docs/research/2026-10-01-session-close/light-2.0x.png).
   Live native interaction and VoiceOver are not claimed by these widget renders.
 
+### Experimental Devices DSH, 2026-10-01
+
+- Devices is an account-scoped experiment, off by default. After the server
+  acknowledges opt-in, navigation reads Search → Devices → Harness Store in
+  AppKit and Flutter. Clicking Devices opens the bundled `autonomous/devices`
+  DSH: the native dashboard on the left and an ordinary agent terminal on the
+  right, using the shared pane layout, resizing, focus and terminal controllers.
+  Restoring the tab recovers that conversation after the experimental gate loads.
+  Turning the experiment off closes its workspace and removes history entries.
+  Older servers leave Devices unavailable without breaking existing experiments.
+- The DSH is bundled in the CLI and unlisted in the Store and picker. It chooses
+  an installed Codex, Claude Code or OpenCode engine, preserves creation receipts
+  after a lost response, waits for existing agent discovery before creating, and
+  reuses/resumes its conversation. Opening it does not submit an unsolicited
+  prompt. Its `harness hardware list/set` tools use the same device RPCs as the
+  dashboard; the existing `harness devices` account-key commands remain intact.
+- The list spans owned, linked computers. Each card names its host. Settings
+  travel through that computer's authenticated daemon, with encrypted requests,
+  results and device-status events. Duplicate USB ids on different computers
+  stay separate. Shared harness access does not grant device control. Offline
+  computers and unsupported daemons keep last readings visible with controls
+  disabled; edits are never queued for later. Gestures remain local to the desk.
+- Original [product photography](https://www.autonomous.ai/harness-device), shared
+  settings rows and light/dark surfaces frame the library, selected device,
+  USB setup and empty-state Shop entry. Names and model labels are saved locally
+  per account. Firmware does not identify a retail SKU; Harness/Pro is explicitly
+  chosen during setup, never inferred from display dimensions. The library adds
+  no wireless pairing, battery reading or invented Pro capability.
+- Settings follow production firmware on `origin/main`: brightness, sound,
+  reverse scrolling and voice language, with one Focus face and room for future
+  faces. Sparse writes name both host and device. The UI and agent tools wait for
+  reported settings; acceptance alone is not firmware confirmation. Disconnects,
+  firmware updates, stale responses, account changes and errors cannot complete
+  an unrelated save.
+- Combined the useful behavior from `ab-mac-3` in the read-only `brave-spruce`
+  worktree: platform/server gating, account-transition cleanup, retained offline
+  readings, fresh-settings requirements after reconnect, firmware-update handling,
+  native icon tint and the disposable interactive review controls. Product photos
+  and this worktree's dashboard design remain the shared presentation.
+- Validation: **168 unique desktop tests** across the regression and focused
+  follow-up runs; **76 CLI tests** (device service, DSH tools/package, ownership,
+  cable fleet and local/remote WebSocket routing); **7 backend settings tests**.
+  Scoped Dart analysis, CLI/backend type checking, development and release CLI
+  builds, and the icon audit pass. Repeated selections are not added to these
+  counts. The final native macOS integration test passes on Apple Silicon's
+  Impeller renderer, using five sample devices across three computers.
+- Native captures: [light DSH](../../docs/research/2026-10-01-devices/light-devices-dsh.png),
+  [dark DSH](../../docs/research/2026-10-01-devices/dark-devices-dsh.png), and
+  [offline host](../../docs/research/2026-10-01-devices/offline-devices-dsh.png).
+  Real-font widget coverage also includes the [empty state](../../docs/research/2026-10-01-devices/light-empty.png)
+  and [narrow settings at 200% text](../../docs/research/2026-10-01-devices/narrow-enlarged.png).
+  All hardware, accounts and conversation content in the review are fixtures.
+  The native test injects the titlebar method-channel action; it does not prove
+  physical AppKit keyboard/IME interaction, real USB hardware, live multi-machine
+  operation or VoiceOver. Those remain unverified.
+- `scripts/build-devices-review.sh` produces a separate `Devices Review.app`
+  with sample-data controls, then rebuilds `lib/main.dart` for the regular app.
+  Both builds and their signature verification passed; the combined review app
+  and the light/dark DSH captures were opened for review.
+  The review entrypoint requires both `HARNESS_TEST=true` and
+  `DEVICES_REVIEW=true` in a debug build. No installed CLI, daemon or production
+  service is changed by the review.
+- After integrating current main for the PR, **212 desktop regression tests**,
+  **4,352 native titlebar checks**, backend settings tests, scoped Dart analysis,
+  TypeScript checks, the regular signed macOS build, release CLI bundle, package
+  conformance and Store catalog validation pass. The native checks exercise the
+  hidden default, opted-in ordering and action, modal blocking and disabling.
+  Added the package README and refreshed the protocol checksum with explicit
+  encrypted-device request/event coverage after the full CLI suite found them.
 
 ### Harness Monitor and resource footer, 2026-10-01
 

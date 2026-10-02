@@ -167,15 +167,7 @@ void main() {
           final model = tester.getRect(
             find.byKey(const ValueKey(('pane-model', 'local', 'agent-1'))),
           );
-          final controls = [
-            for (final key in [
-              'pane-split-down',
-              'pane-split-right',
-              'pane-zoom',
-            ])
-              tester.getRect(find.byKey(ValueKey(key))),
-            tester.getRect(find.byType(PaneCloseButton)),
-          ];
+          final controls = [tester.getRect(find.byType(PaneCloseButton))];
           final agent = tester.getRect(
             find.byKey(const ValueKey('pane-agent-control')),
           );

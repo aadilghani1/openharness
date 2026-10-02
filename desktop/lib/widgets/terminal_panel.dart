@@ -7,7 +7,6 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/shared/theme/app_pane_icon.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -2735,11 +2734,7 @@ class _TerminalHeader extends StatelessWidget {
     // The picker: a model id up to 220px and its padding.
     final pickerWidth =
         (showModelPicker ? 250.0 : 0.0) + (agent != null ? 90.0 : 0.0);
-    final showSplit = compact || onSplitDown != null || onSplitRight != null;
-    final showZoom = compact || onToggleZoom != null;
-    final controlsWidth =
-        ((showSplit ? 2 : 0) + (showZoom ? 1 : 0) + (onClose != null ? 1 : 0)) *
-        PaneHeaderButton.width;
+    final controlsWidth = onClose != null ? PaneHeaderButton.width : 0.0;
     final actionsWidth = pickerWidth + controlsWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
@@ -3111,30 +3106,6 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
-                if (showSplit) ...[
-                  PaneHeaderButton(
-                    key: const ValueKey('pane-split-down'),
-                    label: 'New Pane Below',
-                    command: 'pane.split_down',
-                    icon: AppPaneSymbol.splitDown,
-                    onPressed: onSplitDown,
-                  ),
-                  PaneHeaderButton(
-                    key: const ValueKey('pane-split-right'),
-                    label: 'New Pane to the Right',
-                    command: 'pane.split_right',
-                    icon: AppPaneSymbol.splitRight,
-                    onPressed: onSplitRight,
-                  ),
-                ],
-                if (showZoom)
-                  PaneHeaderButton(
-                    key: const ValueKey('pane-zoom'),
-                    label: zoomed ? 'Restore Pane' : 'Zoom Pane',
-                    command: 'pane.zoom',
-                    icon: zoomed ? AppPaneSymbol.restore : AppPaneSymbol.zoom,
-                    onPressed: onToggleZoom,
-                  ),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );

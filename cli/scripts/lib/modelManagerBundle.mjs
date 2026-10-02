@@ -4,6 +4,10 @@ import { join } from 'node:path'
 // Ship the manager itself with the CLI. No clone, package manager, or model
 // download is needed to make its conversation and viewer available.
 export function readModelManagerBundle(root) {
+  return readBuiltinBundle(root, ['harness.json', 'AGENTS.md', 'LICENSE', 'VERSIONS', 'viewer.sh', 'viewer.mjs', 'viewer', 'lib', 'toolchain', 'template', 'skills'])
+}
+
+export function readBuiltinBundle(root, paths) {
   const files = {}
   const visit = relative => {
     const path = join(root, relative)
@@ -14,6 +18,6 @@ export function readModelManagerBundle(root) {
       files[relative] = { content: readFileSync(path, 'utf8'), executable: Boolean(stat.mode & 0o111) }
     }
   }
-  for (const path of ['harness.json', 'AGENTS.md', 'LICENSE', 'VERSIONS', 'viewer.sh', 'viewer.mjs', 'viewer', 'lib', 'toolchain', 'template', 'skills']) visit(path)
+  for (const path of paths) visit(path)
   return files
 }

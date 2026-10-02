@@ -33,13 +33,14 @@ import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
-import { isHiddenBuiltin } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
 import { LocalModels } from './lib/localModels.js'
+import { appEngineOps, scanAppModels } from './lib/appModels.js'
 import { ApiConnectionError, ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis, resolveApiTarget } from './lib/apiModels.js'
 import { gridCapableEngines, isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
@@ -55,6 +56,7 @@ import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
+import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
@@ -435,6 +437,7 @@ function gridModelsPayload(gridName: string | null, sections: GridSection[], row
 }
 
 export class BackendSocket {
+  harnessDevices: HarnessDevicesService | null = null
   private readonly gridFleet = new GridFleetRpc()
   // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
   // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
@@ -444,6 +447,10 @@ export class BackendSocket {
     machineName: () => this.machineDisplayName,
     inventory: gridInventory,
     onChanged: () => { forgetGridModels(); void this.pushGridModels() },
+    // Models Ollama, LM Studio and llama.cpp downloaded here, found by the Model Manager's own scan (the
+    // bundled harness), so the picker and that harness agree on what is here and what starts it.
+    appModels: () => scanAppModels({ node: process.execPath, packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
+    appEngines: appEngineOps(process.env),
   })
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
@@ -2140,8 +2147,9 @@ export class BackendSocket {
           // ⚠️ Run against grid AS IT STANDS — never set up first. A Grid harness session issues these
           // on its own the moment its viewer comes up (every open one, on every daemon start), so
           // setting grid up here signed a machine in to grid right after a Harness-only sign-in,
-          // with nobody asking. A person sets grid up through the picker's Set up or by opening the
-          // Model Manager; until then grid answers these in its own words.
+          // with nobody asking. Grid is set up by the picker's Set up, by making or opening a Model
+          // Manager, and by that harness's own `harness grid setup`; until then grid answers these in
+          // its own words.
           void this.gridFleet.run(connId, requestId, request)
             .then(result => reply(type, requestId, { ...result }))
             .catch(() => reply(type, requestId, { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }))
@@ -3394,6 +3402,17 @@ export class BackendSocket {
           const tail = await this.sessionTailProvider(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
           if (!tail) { reply(type, requestId, { error: 'NOT_INDEXED', sessionId }); return }
           reply(type, requestId, { ...tail })
+          return
+        }
+
+        // Physical devices belong to this machine; only its owner or loopback tools may manage them.
+        case 'harness_devices_list':
+        case 'harness_device_settings': {
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') {
+            reply(type, requestId, { error: 'OWNER_REQUIRED' })
+            return
+          }
+          reply(type, requestId, await harnessDevicesRequest(this.harnessDevices, type, payload))
           return
         }
 

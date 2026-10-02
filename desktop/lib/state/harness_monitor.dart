@@ -68,7 +68,7 @@ class HarnessMonitor extends ChangeNotifier {
   String get label => 'Harnesses ${live.length}';
 
   /// CPU percentages share a denominator (one core), not host capacities.
-  /// Missing sessions make a known sum a lower bound, never a complete total.
+  /// Totals include available readings; the tooltip explains partial coverage.
   String metricsLabel({bool ram = true, bool gpu = true, bool storage = true}) {
     final readings = [...live.map(reading), ...sharedReadings];
     String total(
@@ -81,7 +81,7 @@ class HarnessMonitor extends ChangeNotifier {
           .toList();
       if (readings.isEmpty) return format(0);
       if (known.isEmpty) return '—';
-      return '${known.length < readings.length ? '≥' : ''}${format(known.fold(0, (a, b) => a + b))}';
+      return format(known.fold(0, (a, b) => a + b));
     }
 
     final cpu = total((r) => r.cpuPercent, (v) => '${v.round()}%');
@@ -99,11 +99,9 @@ class HarnessMonitor extends ChangeNotifier {
 
   String _storageLabel() {
     final folders = <String, Map<String, double?>>{};
-    var missing = false;
     for (final row in live) {
       final resource = reading(row), path = resource?.workspacePath;
       if (path == null || resource?.workspaceBytes == null) {
-        missing = true;
         continue;
       }
       (folders[row.machineId] ??= {})[path] = resource!.workspaceBytes;
@@ -125,7 +123,7 @@ class HarnessMonitor extends ChangeNotifier {
       }
     }
     if (live.isNotEmpty && count == 0) return '—';
-    return '${missing ? '≥' : ''}${_wholeBytes(bytes)}';
+    return _wholeBytes(bytes);
   }
 
   String get resourceDetail =>
@@ -134,7 +132,7 @@ class HarnessMonitor extends ChangeNotifier {
       'CPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\n'
       'GPU: summed process utilization; can exceed 100% across processes or devices. Unsupported counters are unavailable. Cloud inference is not local GPU usage.\n'
       'SSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\n'
-      '≥ means a partial total. — means unavailable. Click to open Harness Monitor.';
+      'Totals include available readings and may be partial. — means unavailable. Click to open Harness Monitor.';
 
   String get detail =>
       '${live.length} running across connected machines. Click to open Harness Monitor.\n'

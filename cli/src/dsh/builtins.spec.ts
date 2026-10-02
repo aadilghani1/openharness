@@ -3,12 +3,25 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { ensureBundledModelManager, MODEL_MANAGER_ID } from './builtins.js'
+import { ensureBundledDevices, ensureBundledModelManager, DEVICES_HARNESS_ID, MODEL_MANAGER_ID } from './builtins.js'
+import { dshListRows } from './wire.js'
 import { installedDsh, invalidateInstalledDsh, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
 
 let root: string
 let original: string
+it('ships Devices as an unlisted DSH with the shared daemon commands and reusable workspace', () => {
+  const files = Object.fromEntries(['harness.json', 'AGENTS.md', 'template/devices.json'].map(path => [path,
+    { content: readFileSync(new URL(`../../../store/agents/devices/${path}`, import.meta.url), 'utf8'), executable: false }]))
+  expect(ensureBundledDevices(files)).toBe(true)
+  const installed = installedDsh(DEVICES_HARNESS_ID)!
+  expect(installed.manifest.workspace?.marker).toBe('devices.json')
+  expect(installed.manifest.agent?.env?.DSH_PERMISSION_MODE).toBe('ask')
+  expect(dshListRows([installed], [])).toEqual([])
+  expect(files['AGENTS.md']!.content).toContain('harness hardware list --json')
+  expect(ensureBundledDevices(files)).toBe(true)
+  expect(installedDsh(DEVICES_HARNESS_ID)?.dir).toBe(installed.dir)
+})
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'model-manager-bundle-'))
   original = env.DSH_DIR

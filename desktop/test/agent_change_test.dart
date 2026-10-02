@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/state/agent_switch_handoff.dart';
 import 'package:harness/state/desk_sync.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/models.dart';
@@ -21,6 +22,8 @@ class SwitchConnection extends MonitorConnection {
   final events = <String>[];
   String? closeError;
   Completer<void>? holdClose;
+  Map<String, dynamic> recent = {'asks': <String>[], 'events': <Object>[]};
+  int recentReads = 0;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -28,6 +31,10 @@ class SwitchConnection extends MonitorConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    if (type == 'agent_recent') {
+      if (payload['n'] == 5) recentReads++;
+      return recent;
+    }
     if (type == 'agent_close') {
       events.add('save/stop');
       expect(payload['mode'], 'now');
@@ -69,13 +76,14 @@ AppNotifier fixture(
   SwitchConnection connection, {
   bool viewer = false,
   bool companion = false,
+  String sourceEngine = 'codex',
 }) {
   final app = createApp(connectionForTest: (_) => connection, connected: true);
   connection.app = app;
   final source = Agent(
     id: 'a0',
     name: 'Work',
-    engine: 'codex',
+    engine: sourceEngine,
     sessionId: 'saved-conversation',
     createdAt: DateTime.utc(2026, 10, 1),
     closeSupported: true,
@@ -127,6 +135,80 @@ class SwitchDeskApi extends ApiClient {
 }
 
 void main() {
+  for (final (source, target) in [
+    ('claude', 'opencode'),
+    ('claude', 'codex'),
+    ('opencode', 'codex'),
+    ('opencode', 'claude'),
+    ('codex', 'opencode'),
+    ('codex', 'claude'),
+  ]) {
+    test(
+      'hands recent context from $source to $target exactly once on retry',
+      () async {
+        final connection = SwitchConnection()
+          ..loseFirstReply = true
+          ..recent = {
+            'asks': [
+              'Remember maple-42; next append step 2.',
+              'Create progress.txt.',
+            ],
+            'events': [
+              {'kind': 'reasoning', 'fullText': 'private reasoning'},
+              {
+                'kind': 'summary',
+                'fullText': 'Created progress.txt with step 1.',
+              },
+            ],
+          };
+        final app = fixture(connection, sourceEngine: source);
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        expect(await app.changeAgent('m', 'a0', target), isNotNull);
+        connection.recent = {
+          'asks': ['Changed after dispatch'],
+        };
+        expect(await app.changeAgent('m', 'a0', target), isNull);
+        expect(connection.recentReads, 1);
+        final prompt = connection.creations.single['prompt'] as String;
+        expect(prompt, contains('maple-42'));
+        expect(prompt, contains('Created progress.txt with step 1.'));
+        expect(prompt, isNot(contains('private reasoning')));
+        expect(prompt, contains('wait for instructions'));
+      },
+    );
+  }
+
+  test('an unreadable handoff leaves the original agent running', () async {
+    final connection = SwitchConnection()..recent = {'error': 'UNAVAILABLE'};
+    final app = fixture(connection);
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    expect(await app.changeAgent('m', 'a0', 'claude'), contains('handoff'));
+    expect(connection.events, isEmpty);
+    expect(app.panes.single.agentId, 'a0');
+  });
+
+  test(
+    'handoff clips long context to the wire limit, excluding tool output',
+    () {
+      final prompt = agentSwitchHandoff('claude', {
+        'asks': ['latest ${'🍁' * 1600}', 'older ' * 600],
+        'events': [
+          {'kind': 'tool', 'fullText': 'tool secrets'},
+          {'kind': 'summary', 'fullText': 'answer ' * 900},
+        ],
+      })!;
+      expect(prompt.length, lessThanOrEqualTo(2000));
+      expect(prompt, contains('latest'));
+      expect(prompt, contains('Latest saved answer:'));
+      expect(prompt, isNot(contains('tool secrets')));
+      expect(prompt, endsWith('or repeat completed work.'));
+      expect(prompt, startsWith('Context handoff only.'));
+      expect(agentSwitchHandoff('claude', {}), isNull);
+    },
+  );
+
   for (final entireTab in [true, false]) {
     test(
       'switch keeps its slot when a peer prunes ${entireTab ? 'the tab' : 'the pane'}',
@@ -194,6 +276,64 @@ void main() {
           api.doc.tabs.expand((t) => t.panes).where((p) => p.agentId == 'a0'),
           isEmpty,
         );
+      },
+    );
+  }
+
+  for (final otherPane in [false, true]) {
+    test(
+      'late source cleanup cannot close the replacement (other pane: $otherPane)',
+      () async {
+        final connection = SwitchConnection();
+        final app = fixture(connection);
+        final api = SwitchDeskApi();
+        app.api = api;
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        if (otherPane) await app.addAgentToSwarm('m', 'a1');
+        await app.deskStartForTest();
+        final tab = app.swarms.single;
+        final oldId = tab.id;
+        final pane = tab.panes.first;
+        final sizes = Map.of(tab.paneSizes);
+        expect(await app.changeAgent('m', 'a0', 'opencode'), isNull);
+        await app.deskFlushForTest();
+        expect(tab.id == oldId, otherPane);
+        // This was queued by an old window when it saw the source stop,
+        // then arrived after our replacement was already acknowledged.
+        api.doc = DeskDoc(
+          revision: api.doc.revision + 1,
+          tabs: applyDeskOps(api.doc.tabs, [
+            if (otherPane)
+              {
+                'op': 'pane.remove',
+                'tabId': oldId,
+                'machineId': 'm',
+                'agentId': 'a0',
+              }
+            else
+              {'op': 'tab.close', 'id': oldId},
+          ]),
+        );
+        await app.deskFetchForTest();
+        expect(app.swarms.single, same(tab));
+        expect(tab.panes.first, same(pane));
+        expect(pane.agentId, 'local-session');
+        expect(tab.paneSizes, sizes);
+        expect(app.activeSwarmId, tab.id);
+        expect(
+          api.doc.tabs.single.panes.map((p) => p.agentId),
+          contains('local-session'),
+        );
+        // A subsequent deliberate close of the replacement still works.
+        api.doc = DeskDoc(
+          revision: api.doc.revision + 1,
+          tabs: applyDeskOps(api.doc.tabs, [
+            {'op': 'tab.close', 'id': tab.id},
+          ]),
+        );
+        await app.deskFetchForTest();
+        expect(app.allPanes, isNot(contains(pane)));
       },
     );
   }

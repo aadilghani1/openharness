@@ -6,7 +6,10 @@ import { lockDsh } from './lock.js'
 import { readDshManifest } from './manifest.js'
 
 declare const __MODEL_MANAGER_BUNDLE__: string
+declare const __DEVICES_BUNDLE__: string
 export const MODEL_MANAGER_ID = 'autonomous/autonomous-grid'
+export const DEVICES_HARNESS_ID = 'autonomous/devices'
+export const DEVICES_BUILTIN_SOURCE = 'builtin:devices'
 export type BundledFiles = Record<string, { content: string; executable: boolean }>
 
 /** Install the trusted, release-bundled harness. Runtime provisioning remains
@@ -18,6 +21,13 @@ export function ensureBundledModelManager(files?: BundledFiles): boolean {
   return installBuiltin({ id: MODEL_MANAGER_ID, source: 'builtin:model-manager', folder: 'model-manager', files, what: 'Model Manager' })
 }
 
+/** An unlisted first-party DSH. Its viewer is native; its agent uses the same daemon API. */
+export function ensureBundledDevices(files?: BundledFiles): boolean {
+  files ??= typeof __DEVICES_BUNDLE__ === 'string' ? JSON.parse(__DEVICES_BUNDLE__) as BundledFiles : undefined
+  if (!files?.['harness.json']) return false
+  return installBuiltin({ id: DEVICES_HARNESS_ID, source: DEVICES_BUILTIN_SOURCE, folder: 'devices', files, what: 'Devices' })
+}
+
 /** The pair harness (pair/pairHarness.ts): generated on this machine, never listed in the Store or the picker. */
 export const PAIR_BUILTIN_SOURCE = 'builtin:pair'
 
@@ -27,9 +37,9 @@ export function ensureBuiltinPair(id: string, files: BundledFiles): boolean {
   return installBuiltin({ id, source: PAIR_BUILTIN_SOURCE, folder: 'pair', files, what: 'pair harness' })
 }
 
-/** A built-in that is the daemon's own and no person's to pick: the pair harness. */
+/** Built-ins opened through their own product entry points, absent from the public picker. */
 export function isHiddenBuiltin(record: { source?: string | null }): boolean {
-  return record.source === PAIR_BUILTIN_SOURCE
+  return record.source === PAIR_BUILTIN_SOURCE || record.source === DEVICES_BUILTIN_SOURCE
 }
 
 /** Materialize `files` under `.bundled/<folder>/<revision>` and point the index at it. Idempotent per revision. */

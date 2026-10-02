@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
 import { CompanionZoo, readCompanionIdentity, type CompanionIdentity } from './cable/companionIdentity.js'
-import { ensureBundledModelManager } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID, ensureBundledDevices, ensureBundledModelManager } from './dsh/builtins.js'
+import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -80,7 +81,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess, setUpWithin } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable, managedGridPath } from './lib/gridExec.js'
@@ -201,6 +202,7 @@ import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDi
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
+import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
   terminalActionNotStarted,
@@ -407,6 +409,11 @@ const PROXY_BACKEND_TIMEOUT_MS = 20_000
  *  stalled control-plane connection cannot hold it open. */
 const GRID_MINT_TIMEOUT_MS = 10_000
 
+/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
+ *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
+ *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
+const MODEL_MANAGER_GRID_WAIT_MS = 8_000
+
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
@@ -467,6 +474,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                no second browser, no second approval
   harness grid login --force   sign the harness in as a different account first, then the grid
   harness grid login --json    emit the same machine-readable NDJSON \`harness login --json\` emits
+  harness grid setup           have grid ready here through the running daemon: installed, signed in
+                               with THIS computer's Harness account, and the account's grid made
   harness grid logout [flags]  sign out of your grid — the whole of \`grid logout\`, which stops what
                                this box is serving BEFORE deleting anything. Flags go straight to it:
                                --force signs out over a serve child it could not confirm stopped
@@ -2211,6 +2220,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   try { ensureBundledModelManager() }
   catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
+  try { ensureBundledDevices() }
+  catch (error) { console.warn('[devices] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
 
   // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
   // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
@@ -6266,6 +6277,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
+      // models picker): grid is set up before the workspace asks it which grid is this account's.
+      const ensureGrid = backend.ensureGrid
+      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
+        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
+      }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
         // Asked BEFORE the template goes in: afterwards every folder has content.
@@ -7315,6 +7333,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[device] ${line}`),
   })
 
+  let devicesStatusRevision = 0
   const cableHost = new DaemonCableHost({
     // Zoo selection is visual identity; it does not require consent to watch terminal activity.
     // Guest identity is only a fallback while signed out, never another account's cached choice.
@@ -7376,8 +7395,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The dial's swarm pick. Local-only like the two above: a tab is a thing THIS window has.
     swarmSelected: (swarmId) => backend.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => backend.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
-    // Local-only like the three above: which desk has a dial on it is a fact about THIS computer.
-    dialStatus: (status) => backend.sendLocal({ type: 'dial_status', payload: status }),
+    // Gestures remain local. Device inventory/settings also reach the owner's
+    // other machines through the encrypted device-management event.
+    dialStatus: (status) => {
+      devicesStatusRevision++
+      backend.sendLocal({ type: 'dial_status', payload: status })
+      backend.send({ type: 'harness_devices_changed', payload: { status, revision: devicesStatusRevision } })
+    },
     // Words spoken on the overview belong to whichever agent the window's palette picks.
     routeInWindow: (text, cmd) => windowRouter.ask(text, cmd),
     selectPassage: command => windowSelection.command(command),
@@ -7389,6 +7413,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[cable] ${line}`),
   }, fleet)
   cableHostRef = cableHost
+  backend.harnessDevices = {
+    status: () => cableHost.currentDialStatus(),
+    revision: () => devicesStatusRevision,
+    set: async (id, patch) => cableRef
+      ? cableRef.setSettings(id, patch)
+      : { ok: false, error: 'Device service unavailable' },
+  }
   // Anything the window said while this was still being built.
   cableHost.setDesk(appPaneAgents)
   cableHost.setSwarms(appSwarmsLatest)
@@ -8802,6 +8833,13 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'hardware':
+    runDevicesCommand(rest, {
+      port: daemonPort(),
+      machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
+      connect: (url) => new NewCommandSocket(url),
+    }).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'pair': {
     // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface
     // (pair/client.ts). No pairing code is ever one of the verbs.
@@ -8853,6 +8891,16 @@ switch (cmd) {
     break
   case 'grid':
     if (args[0] === 'login') gridLoginCommand(flags.includes('--force'), flags.includes('--json')).catch(onError)
+    else if (args[0] === 'setup') {
+      gridSetupCommand({
+        port: daemonPort(),
+        localMachineId: readAuthSession()?.machineId ?? null,
+        daemonRunning: isDaemonRunning,
+        connect: (url) => new NewCommandSocket(url),
+        output: (line) => console.log(line),
+        error: (line) => console.error(line),
+      }).then((code) => { process.exitCode = code }).catch(onError)
+    }
     // Everything but the verb, in the order it was typed — a passthrough that allow-listed flags
     // would be a second place that has to know what `grid logout` accepts. Only the FIRST `logout`
     // token goes: filtering by value instead would eat an option's *value* the day `grid logout`
